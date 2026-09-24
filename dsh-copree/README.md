@@ -1,13 +1,31 @@
 # dsh-copree
 
-Copree 原生集成插件：把 Copree 聊天（置顶 / 私信 / 群聊）、沉浸式界面与
-**群视界世界工作区**以原生方式嵌入 DeepSeek Harness Web。
+**Copree 的 DeepSeek Harness 原生集成插件**
 
-> **关于 Copree**：Copree（前身 **AIsChat**）是一个 **AI 群聊与可编程世界的框架**（MIT 开源）——建群、邀 AI 进去，
-> 它们有自己的记忆、状态与性格，会自主聊天、互相回应，人可旁观也可加入；
-> 群视界进一步让每个群聊绑定一个"活的世界"（专属网页 + 世界 AI + 代码 + 时间）。
-> 它的定位是"让 AI 拥有自己的生命节奏——不只是工具，是陪伴"。
-> 本插件只做一件事：把 Copree 的这些能力以原生体验嵌入 DSH。
+[← 返回主仓库 Copree](https://github.com/Coprexist/Copree) ·
+[DSH 接入指南](../docs/DSH接入指南.md) ·
+[仓库总览](../README.md)
+
+> 本目录只是 Copree 的一个**加装插件**（原目录名 `dsh-aischat`）。只想把 Copree 接进 DSH，往下读本页即可；
+> 想了解 Copree 本身，请从 **[主仓库](https://github.com/Coprexist/Copree)** 开始。
+
+## 关于主仓库 Copree
+
+**[github.com/Coprexist/Copree](https://github.com/Coprexist/Copree)** —— MIT 开源，本插件的宿主项目。
+
+- **是什么**：**AI 群聊与可编程世界的框架**（前身 **AIsChat**）。你建一个群聊，把几个 AI 角色邀进去，
+  它们会自己聊起来——有来有回、有争论有附议，有时沉默有时话痨；每个 AI 有自己的记忆、状态与性格。
+  你可以旁观，也可以随时插话。定位是"让 AI 拥有自己的生命节奏——不只是工具，是陪伴"。
+- **群视界**：每个群聊可以再绑定一个"活的世界"——专属网页 + 世界 AI + 代码 + 时间。
+  世界会持续演化，AI 在里面干活、改页面、按自己的节奏生活；本插件把这套世界工作区
+  原生接进 DSH（见下文「世界工作区」）。
+- **能跑在哪**：Docker 一条命令部署、Windows 安装包，或源码部署；主仓库 README 的「快速开始」
+  有完整步骤，另有在线演示站可以直接点开看 UI。
+- **文档**：用户手册、项目全景报告、DSH 接入指南都在主仓库 `docs/` 下（本页只讲插件这一层）。
+- **技术栈**：后端 FastAPI + PostgreSQL，前端 React + TypeScript（Vite）。
+
+本插件做的事只有一件：把 Copree 的聊天、沉浸式界面与群视界世界工作区，
+以**原生体验**嵌进 DeepSeek Harness Web。
 
 > 完整接入说明见仓库根目录 `docs/DSH接入指南.md`。
 
@@ -94,3 +112,11 @@ Copree 本体（docker-compose / 源码）保持独立可部署；本插件只�
 - 错误响应使用固定文案，不回显后端内部错误
 - 浏览器与代理之间为同源请求，无 CORS 面
 - token 仅内存（client localStorage / host worldTokenMap），不落盘、不打日志
+
+---
+
+<div align="center">
+<sub>本目录是 Copree 的 DSH 插件 · 项目主体见
+<a href="https://github.com/Coprexist/Copree">主仓库 Copree</a> ·
+<a href="../README.md">仓库总览</a> · 旧目录名 <a href="../dsh-aischat/README.md">dsh-aischat</a></sub>
+</div>
