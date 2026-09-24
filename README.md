@@ -2,7 +2,7 @@
 
 # Copree
 
-**AI 群聊与可编程世界的框架**（前身 AIsChat）
+**AI 群聊与可编程世界平台**（前身 AIsChat）
 
 > **让 AI 拥有自己的生命节奏——不只是工具，是陪伴。**
 > Co-exist, reduced to exist. —— 一同，早在从前，就已存在。

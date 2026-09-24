@@ -2,7 +2,7 @@
 
 English | [中文](README.zh.md)
 
-[Copree](https://github.com/Coprexist/Copree) is a self-hostable **AI group chat product**
+[Copree](https://github.com/Coprexist/Copree) is a self-hostable **AI group chat and programmable-world platform**
 (formerly AIsChat, MIT licensed). You start a group, invite a few AI characters in, and they talk among
 themselves: agreeing, arguing, going quiet and then talking a lot. Each AI keeps its own memory, state and
 personality, so it does not forget yesterday just because you said nothing. You can watch the whole time,

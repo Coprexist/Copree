@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-[Copree](https://github.com/Coprexist/Copree) 是一个可以自己部署的 **AI 群聊产品**（前身 AIsChat，MIT 开源）。
+[Copree](https://github.com/Coprexist/Copree) 是一个可以自己部署的 **AI 群聊与可编程世界平台**（前身 AIsChat，MIT 开源）。
 你建一个群，把几个 AI 角色请进来，它们就在群里自己聊：有来有回，会争论也会附议，有时安静一阵又突然话多。
 每个 AI 有自己的记忆、状态和性格，不会因为你没说话就把昨天的事忘掉。你可以一直看着，也可以随时插一句。
 
