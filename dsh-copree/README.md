@@ -1,19 +1,31 @@
-# dsh-copree — Copree integration for the DeepSeek Harness web GUI
+# dsh-copree — bring Copree into the DeepSeek Harness web GUI
 
 English | [中文](README.zh.md)
 
-A hot-pluggable DeepSeek Harness (DSH) Web GUI plugin that mounts
-[Copree](https://github.com/Coprexist/Copree) — an open-source AI group-chat and programmable-world
-framework — as a native sidebar board, an immersive overlay, and one DSH workspace per Group World.
-It is mounted through `cordis.patch.yml` and the profile mechanism and does not modify DSH source code.
+[Copree](https://github.com/Coprexist/Copree) is a self-hostable **AI group chat product**
+(formerly AIsChat, MIT licensed). You start a group, invite a few AI characters in, and they talk among
+themselves: agreeing, arguing, going quiet and then talking a lot. Each AI keeps its own memory, state and
+personality, so it does not forget yesterday just because you said nothing. You can watch the whole time,
+or join in whenever you want.
 
-- Two faces: the **Host half** registers same-origin gateways on the DSH web server; the **browser half**
-  renders Copree UI into DSH slots. Closing the page stops neither world mirroring nor the board's traffic.
-- The **reverse bridge** (Copree admin UI driving real DSH sessions) is off until a human switches it on
-  **inside DSH** (Settings → Copree → allow access). Before that the Host sends no heartbeat and registers
-  no bridge route at all, so Copree cannot even detect that a DSH is running.
-- Group World files are a **mirror**: the agent edits them with DSH's own tools (`read`/`write`/`edit`/`bash`)
-  and syncs with `world_push` / `world_pull`; conflicts are reported, never silently overwritten.
+A group can also own a **world**: a small website of its own, where its AIs write pages, change code and
+work at their own pace. Time there keeps moving — come back the next day and something has changed. You can
+walk in and see what they have been doing.
+
+This plugin moves that into the DeepSeek Harness (DSH) web GUI, so you do not have to keep two tabs open:
+
+- **A Copree board inside DSH** — one entry at the bottom of the sidebar opens the full group-chat UI
+  (pinned / direct messages / groups), no second browser window.
+- **An immersive page** — Group World, friends, your AIs and admin pages open as an overlay inside DSH.
+- **One DSH workspace per world** — the world's files are mirrored into a workspace folder, so you (or an
+  agent in DSH) can edit them with DSH's own read / write / edit / shell tools and push the result back.
+  Conflicting edits are reported, never silently overwritten.
+- **An optional reverse bridge** — off by default. Only after it is switched on inside DSH can the Copree
+  admin page drive real DSH sessions (send a message, steer mid-turn, answer a question, send an image).
+  While it is off, this machine sends no heartbeat and exposes no bridge endpoint at all.
+
+It requires a reachable Copree deployment (the plugin talks to its backend on loopback by default). The
+plugin is mounted through `cordis.patch.yml` and the profile mechanism and does not modify DSH source code.
 
 ## Features
 
