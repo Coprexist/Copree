@@ -1,122 +1,176 @@
-# dsh-copree
+# dsh-copree — Copree integration for the DeepSeek Harness web GUI
 
-**Copree 的 DeepSeek Harness 原生集成插件**
+English | [中文](README.zh.md)
 
-[← 返回主仓库 Copree](https://github.com/Coprexist/Copree) ·
-[DSH 接入指南](../docs/DSH接入指南.md) ·
-[仓库总览](../README.md)
+A hot-pluggable DeepSeek Harness (DSH) Web GUI plugin that mounts
+[Copree](https://github.com/Coprexist/Copree) — an open-source AI group-chat and programmable-world
+framework — as a native sidebar board, an immersive overlay, and one DSH workspace per Group World.
+It is mounted through `cordis.patch.yml` and the profile mechanism and does not modify DSH source code.
 
-> 本目录只是 Copree 的一个**加装插件**（原目录名 `dsh-aischat`）。只想把 Copree 接进 DSH，往下读本页即可；
-> 想了解 Copree 本身，请从 **[主仓库](https://github.com/Coprexist/Copree)** 开始。
+- Two faces: the **Host half** registers same-origin gateways on the DSH web server; the **browser half**
+  renders Copree UI into DSH slots. Closing the page stops neither world mirroring nor the board's traffic.
+- The **reverse bridge** (Copree admin UI driving real DSH sessions) is off until a human switches it on
+  **inside DSH** (Settings → Copree → allow access). Before that the Host sends no heartbeat and registers
+  no bridge route at all, so Copree cannot even detect that a DSH is running.
+- Group World files are a **mirror**: the agent edits them with DSH's own tools (`read`/`write`/`edit`/`bash`)
+  and syncs with `world_push` / `world_pull`; conflicts are reported, never silently overwritten.
 
-## 关于主仓库 Copree
+## Features
 
-**[github.com/Coprexist/Copree](https://github.com/Coprexist/Copree)** —— MIT 开源，本插件的宿主项目。
+- **Copree board**: a sidebar footer entry toggles a full-frame board with a left rail (pinned / DMs / groups)
+  beside the conversation column; opening it hides the Workspace board and closing it restores DSH.
+- **Immersive overlay**: `shell.overlay` page for a group's immersive view and the AIC pages
+  (Group World / friends / my AIs / admin / settings), rendered from the Copree frontend shipped in `dist/`.
+- **Settings section**: a `settings.section` page with Copree sign-in/out, plugin version and update status,
+  and the **Copree access switch** (see Features above and Security model below). The switch sits above the
+  sign-in gate on purpose: whether this machine admits Copree is independent of whether you have a Copree account.
+- **Group World workspaces**: signing in or opening the board creates one workspace folder per world
+  (`Copree群视界-<world>`) plus a session, reports the world token to the Host, and pulls gently
+  — only when the local mirror is clean and the world has changes.
+- **Eleven `world_*` tools**: file operations, world API, group chat, lifecycle, sync and sandbox runs,
+  routed to the owning world by the session's `cwd`.
+- **Same-origin gateway**: browser and proxies talk to the local Copree backend through DSH's own origin —
+  no public address participates, no CORS surface exists.
+- **Reverse bridge (opt-in)**: with the switch on, the Host exposes `/copree-bridge/*` and heartbeats its
+  reachable address to the Copree backend; the Copree admin page then drives real DSH sessions.
+- **Declared tool cards**: the bridge renders each tool call from its own declaration
+  (`presentCall`/`presentResult`), including PTC sub-operations — it never guesses labels from tool names.
+- **Questions and approvals**: DSH's blocking `ask_user_question` and approval prompts are forwarded to the
+  open Copree conversation page, and the answer is handed back to DSH; with nobody watching they fall back
+  to DSH's own UI by design.
+- **Self-update endpoints**: status, atomic apply and rollback under `/copree-plugin/*`.
+- **System prompt section**: world sessions get guidance describing mirror mode (DSH-native tools plus
+  `world_push`/`world_pull`).
 
-- **是什么**：**AI 群聊与可编程世界的框架**（前身 **AIsChat**）。你建一个群聊，把几个 AI 角色邀进去，
-  它们会自己聊起来——有来有回、有争论有附议，有时沉默有时话痨；每个 AI 有自己的记忆、状态与性格。
-  你可以旁观，也可以随时插话。定位是"让 AI 拥有自己的生命节奏——不只是工具，是陪伴"。
-- **群视界**：每个群聊可以再绑定一个"活的世界"——专属网页 + 世界 AI + 代码 + 时间。
-  世界会持续演化，AI 在里面干活、改页面、按自己的节奏生活；本插件把这套世界工作区
-  原生接进 DSH（见下文「世界工作区」）。
-- **能跑在哪**：Docker 一条命令部署、Windows 安装包，或源码部署；主仓库 README 的「快速开始」
-  有完整步骤，另有在线演示站可以直接点开看 UI。
-- **文档**：用户手册、项目全景报告、DSH 接入指南都在主仓库 `docs/` 下（本页只讲插件这一层）。
-- **技术栈**：后端 FastAPI + PostgreSQL，前端 React + TypeScript（Vite）。
+## Architecture and protocol
 
-本插件做的事只有一件：把 Copree 的聊天、沉浸式界面与群视界世界工作区，
-以**原生体验**嵌进 DeepSeek Harness Web。
+```
+browser ── /copree-api/* ─┐
+        ── /copree-ws ────┤ DSH web server (Host half) ── local Copree backend (FastAPI)
+        ── /copree-ui/* ──┘
+Copree admin ── /admin/dsh/* ── Copree backend ── /copree-bridge/* ── DSH sessionController
+```
 
-> 完整接入说明见仓库根目录 `docs/DSH接入指南.md`。
+- `src/index.ts` mounts the plugin through the official DSH SDKs and registers the Host routes.
+- `src/client.ts` (browser half) injects the sidebar entry, the board, the overlay and the settings section.
+- `src/bridge.ts` (reverse bridge) authenticates with a shared secret, translates DSH session events into a
+  small frame vocabulary (`snapshot`/`user`/`step`/`delta`/`think`/`say`/`tool`/`toolDone`/`turnEnd`/`error`/
+  `ask`/`askDone`), and exposes `/copree-consent` for the access switch.
+- Host routes: `/copree-api/*` (HTTP proxy), `/copree-ws` (WebSocket upgrade proxy), `/copree-ui/*`
+  (static SPA with path-traversal guard), `/copree-worlds/*` (world workspace directory / token / status / pull),
+  `/copree-plugin/*` (self-update), `/copree-bridge/*` (reverse bridge, only while the switch is on)
+  and `/copree-consent` (the switch itself).
+- Attachments travel as references: the browser sends `fileId`s, the plugin fetches bytes from
+  `/dsh-bridge/attachment/{fileId}` and drops them into the session workspace, so response bodies stay small.
+- Bridge frames for tool calls carry the tool's own declared card (`card`/`title`/`kind`) and, on completion,
+  one line per sub-operation, so a PTC `run_code` shows up as several rows on the Copree page.
 
-## 架构
+## Install
 
-双面插件：
+```sh
+# 1. build (from this directory; needs the DSH SDK packages resolvable, e.g. via the frontend workspace)
+node scripts/build.mjs        # produces lib/index.js + lib/client.js (+ manifest.json)
 
-- **Host 半**（`lib/index.js`）：在 DSH Web 服务上注册同源网关 + 世界工作区
-  - `GET/POST /copree-api/*` → 代理到本机 Copree 后端（默认 `http://127.0.0.1:5228`，可配置）
-  - `/copree-ws?token=...` → WebSocket 升级代理到后端 `/ws`
-  - `/copree-ui/*` → Copree 前端静态托管（SPA 回退 + 路径穿越防护）
-  - `/copree-worlds/*` → 世界工作区端点（dir 建目录 / token 上报 / status 诊断 / pull 拉取）
-  - **11 个 `world_*` 工具**（文件/API/群聊/生命周期/同步/沙箱运行），按会话 cwd 自动路由到所属世界
-  - systemPrompt 注册世界会话引导段（镜像模式：用 DSH 原生工具 + world_push 同步）
-- **Client 半**（`lib/client.js`）：原生界面 + 世界同步
-  - 侧边栏底部入口（`sidebar.footer.action`）+ 全屏 board（联系人 + 对话 + composer）
-  - 沉浸式覆盖层（`shell.overlay`）：群聊"沉浸式"、AIC 功能页（群视界/好友/我的AI/管理/设置）
-  - 世界同步：登录/打开面板时建 `Copree群视界-*` 工作区文件夹 + 会话 + 上报 token（按 worldId）+
-    温和自动拉取（仅本地干净且世界有改动才拉，绝不覆盖本地修改）
-  - 设置页（`settings.section`）：登录 / 退出 / 状态说明
-
-登录 token 仅保存在浏览器 localStorage（client 侧 `aisc.token`）；host 内存 `worldTokenMap`
-按 worldId 存一份供 owner 鉴权写操作（不落盘、不打日志）。
-
-## 安装
-
-```bash
-# 1. 构建
-pnpm install   # 或复用已有 node_modules（frontend 下）
-node scripts/build.mjs   # 产出 lib/index.js + lib/client.js
-
-# 2. 装入 DSH web profile
+# 2. mount into a DSH profile
 dsh plugin --profile web add file:/path/to/dsh-copree
 
-# 3. 重启 DSH web 进程使插件生效
+# 3. restart the DSH web process (Host-half changes always need this)
 ```
 
-开发态改动：改 `src/*.ts` → `node scripts/build.mjs` → 复制 `lib/` 与 `dist/` 到 profile 的
-`node_modules/dsh-copree/`；Host 改动需重启 dsh-web，Client 改动刷新页面即可。
+Development loop: edit `src/*.ts` → `node scripts/build.mjs` → copy `lib/` (and `dist/`) into the profile's
+`node_modules/dsh-copree/`. Host-half changes need a `dsh web` restart; browser-half changes only need a page reload.
 
-前端产物（`dist/`）也会被插件打包分发，所以改了 `frontend/` 下的东西要重新同步，
-且**只走一个入口**——它会排除只属于仓库的素材（`docs/assets` 的 README/推广图）：
+The Copree frontend build is bundled as well, so changes under `frontend/` must be re-synced through one entry
+point (it excludes repository-only assets):
 
-```bash
+```sh
 docker exec -w /app ai_group_frontend sh -c "BASE_URL=/copree-ui/ node_modules/.bin/vite build"
 node scripts/sync-dist.mjs
-node scripts/build.mjs   # 重建清单里的产物哈希
+node scripts/build.mjs        # rebuild the manifest hashes
 ```
 
-## 配置
+## Configuration
 
-插件配置（`cordis.patch.yml` 或 profile 覆盖）：
+| Key | Default | Behaviour |
+| --- | --- | --- |
+| `backendUrl` | `http://127.0.0.1:5228` | Local Copree backend. Loopback/private addresses only; it is a proxy target, never taken from a request. |
+| `pluginSourceDir` | `""` | Source directory for the self-update endpoints. Empty falls back to the install origin recorded in the profile. |
+| `bridgeEnabled` | `true` | Master switch for the reverse bridge feature. The Copree access switch is still required before anything is exposed. |
+| `bridgeSecret` | `""` | Shared secret with the Copree backend (`DSH_BRIDGE_SECRET`). Empty disables the bridge entirely. |
+| `bridgeAdvertiseUrl` | `""` | Address the Copree backend calls back on. Empty disables the bridge entirely. |
+| `bridgeHeartbeatMs` | `20000` | Bridge heartbeat interval. Copree's registration TTL is three times this value, and consent changes take effect within one interval. |
 
-```yaml
-- insert:
-    - id: dsh-copree
-      name: dsh-copree
-      config:
-        backendUrl: http://127.0.0.1:5228
+Config is read from `cordis.patch.yml` or a profile override; restart the Host after changing it.
+
+## Data and state
+
+- `$DSH_HOME/dsh-copree-consent.json` — the Copree access switch (`{ "copree": true | false }`, mode `0600`).
+  Missing or unreadable means **not consented**.
+- `$DSH_HOME/copree-worlds/<world>/` — the local mirror of each Group World, with `.copree-sync.json`
+  holding the last-synced snapshot for three-way comparison (added / changedRemote / changedLocal / conflict).
+- Browser: the Copree login token lives in `localStorage` (`aisc.token`) only. Host: `worldTokenMap` keeps one
+  world token per world in memory for owner-authorised writes — never written to disk, never logged.
+- Build outputs: `lib/index.js`, `lib/client.js`, `lib/manifest.json` and the bundled Copree frontend in `dist/`.
+
+## Security model
+
+- **The Copree access switch is the only gate, and it lives in DSH.** Until a human turns it on, the Host
+  registers no `/copree-bridge` route and sends no heartbeat, so Copree sees nothing to connect to; turning it
+  off removes the routes and stops the heartbeat again. There is deliberately no second approval on the Copree
+  side: that would protect Copree from an operator who already has to be an administrator to send anything.
+- The bridge authenticates every request with the shared secret (constant-time compare) and answers `401`
+  otherwise; with no configured secret the whole feature stays off.
+- The Copree-side entry points are administrator-only on the Copree backend, which also keeps the registration
+  in memory only (the plugin refreshes it every heartbeat).
+- Proxy targets come from plugin config only and default to loopback; hop-by-hop headers are stripped before
+  forwarding, so a request cannot smuggle connection semantics through the gateway.
+- Error responses use fixed text and never echo backend internals; browser and proxy are same-origin, so there
+  is no CORS surface.
+- Session content is not stored by the plugin: sessions, messages and tool calls remain in DSH (and in Copree
+  for Copree's own data). The bridge only relays frames.
+
+## Build and test
+
+```sh
+node scripts/build.mjs          # bundle Host + browser halves
+node scripts/bridge-smoke.mjs   # 51 assertions: auth, session trimming, prompt/steer, SSE frames,
+                                # declared tool cards, PTC sub-operations, attachments, ask/approval
+                                # round-trips, consent gate, secret-less disable
 ```
 
-`backendUrl` 仅限本机回环/内网地址，不参与公网。
+The Copree repository's frontend checks (`tsc --noEmit`, `node scripts/check-i18n.mjs`) are run from
+`frontend/` when page-side changes are involved.
 
-## 世界工作区（GitHub 式双向同步）
+## Manual verification
 
-每个 Copree 世界 = DSH 工作区文件夹 `Copree群视界-世界名`，目录即世界文件的
-**本地镜像**（`$DSH_HOME/copree-worlds/`）。agent 用 **DSH 原生工具**
-（read/write/edit/bash）操作镜像，`world_push` 同步回世界，`world_pull` 拉最新。
+1. Install, restart `dsh web`, reload the page and confirm the sidebar footer entry opens the Copree board.
+2. Sign in with a Copree account and confirm the contacts rail lists pinned / DM / group conversations.
+3. Open a Group World and confirm a `Copree群视界-<world>` workspace plus session appear, then edit a file,
+   `world_push`, and confirm the world sees it.
+4. With the access switch **off**, confirm Copree's admin page reports "not detected" and
+   `/copree-bridge/status` answers `404`.
+5. Turn the switch **on** and confirm the Copree card flips to connected within one heartbeat; turn it off and
+   confirm it drops again.
+6. From the Copree DSH page: send a message, steer mid-turn, attach an image, and answer an
+   `ask_user_question` prompt that appears there.
+7. Run `node scripts/bridge-smoke.mjs`; it must be green on a second consecutive run as well.
 
-- `.copree-sync.json` 快照 + 三路对比（added/changedRemote/changedLocal/conflict）
-- 自动拉取仅当「本地无未推送修改且世界有改动」（温和，不覆盖 agent 工作文件）
-- 冲突文件不盲目覆盖：push/pull 默认跳过并报告，`force:true` 强制；AI 读两边内容裁决
-- 版本提示：world_* 工具结果附 `updateHint` / `conflictHint`
+## Known limitations
 
-## 与 Copree 独立部署的关系
+- The Copree-side conversation page is deliberately a **mirror with core features only** (chat, steer,
+  approvals, questions, images). Everything else — session management, settings, plugins — stays in the DSH web UI.
+- The bridge relays text and attachment references; it does not reproduce DSH's full UI, so anything a tool
+  renders beyond its declared card is not visible in Copree.
+- With nobody viewing a conversation in Copree, questions and approvals fall back to DSH's own UI; that is the
+  designed behaviour, not a lost prompt.
+- The world mirror is one-way per operation: `world_push` / `world_pull` skip conflicting files by default and
+  report them; `force` overrides and can lose the other side's changes.
+- The Host half must be restarted for Host-side changes; the browser half is picked up on reload.
 
-Copree 本体（docker-compose / 源码）保持独立可部署；本插件只是一个加装层，
-不改动 Copree 的部署方式。后端世界文件仍在后端，DSH 侧只是镜像 + 同步。
+## Links
 
-## 安全要点
+- Copree (main repository): <https://github.com/Coprexist/Copree>
+- Integration guide (Chinese): [`docs/DSH接入指南.md`](../docs/DSH接入指南.md)
+- Repository overview: [`README.md`](../README.md) · this directory was previously named `dsh-aischat`
 
-- 代理目标默认回环地址，且只来自插件配置，不接受客户端输入
-- 转发前剥离 hop-by-hop 头（Connection / Transfer-Encoding 等），防请求走私
-- 错误响应使用固定文案，不回显后端内部错误
-- 浏览器与代理之间为同源请求，无 CORS 面
-- token 仅内存（client localStorage / host worldTokenMap），不落盘、不打日志
-
----
-
-<div align="center">
-<sub>本目录是 Copree 的 DSH 插件 · 项目主体见
-<a href="https://github.com/Coprexist/Copree">主仓库 Copree</a> ·
-<a href="../README.md">仓库总览</a> · 旧目录名 <a href="../dsh-aischat/README.md">dsh-aischat</a></sub>
-</div>
+MIT licensed, like the project it plugs into.
