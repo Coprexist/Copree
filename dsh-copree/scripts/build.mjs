@@ -18,7 +18,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const root = join(__dirname, '..')
 
 const ID = 'dsh-copree'
-const HOST_EXTERNALS = ['@deepseek-ai/schemastery', '@deepseek-ai/dsh-settings']
+const HOST_EXTERNALS = ['@deepseek-ai/schemastery', '@deepseek-ai/dsh-settings', '@deepseek-ai/dsh-scope']
 // Client externals stay external at bundle time and resolve through the web
 // ModuleLoader at runtime (same mechanism the shipped ui-* bundles use).
 const CLIENT_EXTERNALS = [

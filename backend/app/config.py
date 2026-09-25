@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     # 旧配置兼容别名
     default_embedding_model: str = "text-embedding-3-small"
 
+    # ── DSH 桥接（Copree 管理端 ↔ DSH 本体会话）──
+    # 与 DSH 侧 dsh-copree 插件的 bridgeSecret 同值。DSH 侧未配置密钥就不会来注册，
+    # 这里也就什么都检测不到 —— 「DSH 先同意，Copree 才看得见」由这条不对称保证。
+    dsh_bridge_secret: str = ""
+    # 注册表存活窗口（秒）：DSH 插件每 20 秒心跳一次，超过窗口未心跳即视为掉线。
+    dsh_bridge_ttl_seconds: int = 90
+
     @field_validator("db_backend", "embedding_backend", mode="before")
     @classmethod
     def _lowercase(cls, v: str) -> str:

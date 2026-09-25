@@ -1,7 +1,7 @@
 {
   "name": "dsh-copree",
-  "version": "0.1.0",
-  "description": "Copree（前身 AIsChat，AI 群聊与可编程世界框架）原生集成插件：Host 侧同源代理 Copree 后端 API 与 WebSocket，Client 侧提供原生侧边栏入口、聊天视图（置顶/私信/群聊）、沉浸式页面与群视界世界工作区。",
+  "version": "0.7.1",
+  "description": "Copree（前身 AIsChat，AI 群聊与可编程世界平台）原生集成插件：Host 侧同源代理 Copree 后端 API 与 WebSocket，Client 侧提供原生侧边栏入口、聊天视图（置顶/私信/群聊）、沉浸式页面与群视界世界工作区。",
   "type": "module",
   "main": "./lib/index.js",
   "exports": {

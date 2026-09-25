@@ -29,12 +29,20 @@ import { createReadStream, existsSync, statSync, mkdirSync, readFileSync, writeF
 import { join, normalize, extname, sep } from 'node:path'
 import os from 'node:os'
 import { PACKAGE_ROOT, registerPluginRoutes } from './plugin-update.js'
+import { HEARTBEAT_MS, registerBridge } from './bridge.js'
+import { readJsonBody, sendJson } from './http.js'
 
 /** Stable Cordis plugin name. */
 export const name = 'dsh-copree'
 
-/** 代理、世界工作区同步与世界操作工具都需要这些服务。 */
-export const inject = ['webServer', 'tools', 'systemPrompt']
+/** 代理、世界工作区同步、世界操作工具与反向桥接都需要这些服务。 */
+export const inject = ['webServer', 'tools', 'systemPrompt', 'sessionController', 'agents']
+
+/** 插件自身版本（随桥接注册报给 Copree 显示；读不到就退化成 0.0.0）。 */
+const PLUGIN_VERSION: string = (() => {
+  try { return String(JSON.parse(readFileSync(join(PACKAGE_ROOT, 'package.json'), 'utf8')).version ?? '0.0.0') }
+  catch { return '0.0.0' }
+})()
 
 /** Plugin config: backend base URL and an optional plugin update source. */
 export type Config = {
@@ -46,11 +54,33 @@ export type Config = {
    * 的 file: 规格，通常无需配置。
    */
   pluginSourceDir: string
+  /** 反向桥接总开关：关闭后不再向 Copree 注册，也不再暴露 /copree-bridge。 */
+  bridgeEnabled: boolean
+  /**
+   * 反向桥接共享密钥，与 Copree 后端的 DSH_BRIDGE_SECRET 同值。
+   * 留空则桥接不注册（宁可没有，也不开一个能改代码的匿名口子）。
+   */
+  bridgeSecret: string
+  /**
+   * 本插件对 Copree 侧宣告的可达地址（Copree 后端从这里回连 DSH）。
+   * 例：http://<宿主网关>:<DSH 桥接端口>。留空则不注册，仅本机自用。
+   */
+  bridgeAdvertiseUrl: string
+  /**
+   * 桥接心跳间隔（毫秒，默认 20000）。
+   * 为什么可调：Copree 侧的有效期是它的三倍（默认 90 秒），改小不会影响判活，
+   * 但「同意 / 撤销」的生效延迟就是这个间隔——自检与特殊网络下需要缩短。
+   */
+  bridgeHeartbeatMs: number
 }
 
 export const Config: z<Config> = z.object({
   backendUrl: z.string().default('http://127.0.0.1:5228'),
   pluginSourceDir: z.string().default(''),
+  bridgeEnabled: z.boolean().default(true),
+  bridgeSecret: z.string().default(''),
+  bridgeAdvertiseUrl: z.string().default(''),
+  bridgeHeartbeatMs: z.natural().default(HEARTBEAT_MS),
 })
 
 // 自更新原语对外导出：scripts/update-test.mjs 离线验证用，也可供运维脚本按需调用。
@@ -331,24 +361,6 @@ const sessionTokenMap = new Map<string, string>()
 /** 目录名清理：去掉文件系统非法字符，保留中文。 */
 function sanitizeDirName(name: string): string {
   return String(name || '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim() || '未命名世界'
-}
-
-/** 读取请求 JSON body（小体量，限制 256KB）。 */
-function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
-  return new Promise((resolve, reject) => {
-    let size = 0
-    const chunks: Buffer[] = []
-    req.on('data', (c: Buffer) => {
-      size += c.length
-      if (size > 262144) { reject(new Error('body too large')); req.destroy(); return }
-      chunks.push(c)
-    })
-    req.on('end', () => {
-      try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')) }
-      catch { reject(new Error('invalid json')) }
-    })
-    req.on('error', reject)
-  })
 }
 
 /** 向 Copree 后端发一个请求，返回状态与文本。 */
@@ -753,16 +765,24 @@ export function apply(ctx: Context, config: Config): void {
     log: (message) => ctx.logger?.info?.(message),
   })
 
+  // ── 反向桥接（Copree 管理端 → DSH 本体会话） ────────────────────────
+  registerBridge(ctx, {
+    enabled: config.bridgeEnabled,
+    secret: config.bridgeSecret,
+    advertiseUrl: config.bridgeAdvertiseUrl.replace(/\/+$/, ''),
+    backendUrl,
+    version: PLUGIN_VERSION,
+    heartbeatMs: config.bridgeHeartbeatMs,
+    log: (message) => ctx.logger?.info?.(message),
+  })
+
   // ── 世界工作区同步端点 ──────────────────────────────────────────────
   ctx.webServer.register({
     kind: 'prefix',
     path: WORLDS_PREFIX,
     handler: (req, res) => {
       const route = (req.url ?? '/').split('?')[0]
-      const send = (status: number, json: unknown): void => {
-        res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
-        res.end(JSON.stringify(json))
-      }
+      const send = (status: number, json: unknown): void => sendJson(res, status, json)
       if (req.method === 'POST' && route === `${WORLDS_PREFIX}/dir`) {
         readJsonBody(req).then((body) => {
           const worldId = Number(body.worldId)

@@ -52,6 +52,8 @@ const API = '/copree-api'
 const WS_BASE = '/copree-ws'
 /** Plugin self-update endpoints answered by the host half (outside the Copree proxy prefix). */
 const PLUGIN_API = '/copree-plugin'
+// 桥接闸门的控制端点：与 /copree-bridge 刻意不共享前缀——没同意时那边整条都不存在
+const CONSENT_API = '/copree-consent'
 
 /** Browser-local storage keys (guarded read/write). */
 const K_TOKEN = 'aisc.token'
@@ -1100,6 +1102,80 @@ function AisChatBoard({ onClose }) {
   )
 }
 
+/**
+ * 桥接闸门：**只有在这里点同意，Copree 才连得进来**。
+ *
+ * 为什么放在登录之前：闸门管的是「本机允不允许 Copree 接入」，与「我在 Copree 有没有账号」
+ * 是两件事。放在登录判断之后，人就必须先登录 Copree 才能决定要不要让 Copree 进来。
+ * 同意前：host 半不发心跳、不注册任何桥接路由——Copree 连「检测到有台 DSH」都做不到。
+ */
+/**
+ * 读一次闸门状态。宿主半侧还没有这个端点时（插件刚更新、dsh-web 还没重启）会拿到 404/空响应，
+ * 这时必须给一句人话：直接 res.json() 抛的是 "Unexpected end of JSON input"，人只会以为插件坏了。
+ */
+async function readConsentState() {
+  const res = await fetch(CONSENT_API, { cache: 'no-store' })
+  const text = await res.text()
+  if (!res.ok || !text.trim()) throw new Error('HOST_STALE')
+  const data = JSON.parse(text)
+  return data.allowed === true
+}
+
+const CONSENT_STALE_HINT = '宿主半侧还没加载这个端点（插件刚更新过）：重启 dsh-web 后刷新本页即可'
+
+function BridgeConsent() {
+  const [allowed, setAllowed] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  useEffect(() => {
+    let alive = true
+    readConsentState()
+      .then((value) => { if (alive) { setAllowed(value); setErr('') } })
+      .catch((e) => { if (alive) { setAllowed(null); setErr(e.message === 'HOST_STALE' ? CONSENT_STALE_HINT : '读取失败：' + e.message) } })
+    return () => { alive = false }
+  }, [])
+  const set = async (next) => {
+    setBusy(true); setErr('')
+    try {
+      const res = await fetch(CONSENT_API, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ allowed: next }),
+      })
+      const text = await res.text()
+      let data = null
+      try { data = text ? JSON.parse(text) : null } catch { data = null }
+      if (!res.ok || !data || typeof data.allowed !== 'boolean') {
+        throw new Error(data && data.error ? data.error : (res.ok ? 'HOST_STALE' : String(res.status)))
+      }
+      setAllowed(data.allowed === true)
+    } catch (e) {
+      setErr(e.message === 'HOST_STALE' ? CONSENT_STALE_HINT : '切换失败：' + e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const state = allowed === null ? '状态未知' : allowed ? '已同意接入' : '未同意接入'
+  return h('div', { style: { border: '1px solid var(--dsw-alias-border-l2, #e4e4e7)', borderRadius: 10, padding: 12, marginBottom: 18 } },
+    h('div', { style: { fontSize: 13, fontWeight: 600, color: 'var(--dsw-alias-label-primary)' } }, 'Copree 反向接入'),
+    h('div', { style: { fontSize: 12, marginTop: 4, color: 'var(--dsw-alias-label-secondary)' } },
+      '同意后，Copree 管理端才能看到本机 DSH 并按管理员指令操作会话；未同意时本机不发心跳、不开放任何桥接端点。当前：' + state),
+    h('div', { style: { display: 'flex', gap: 8, marginTop: 10 } },
+      h('button', {
+        style: { ...style.smallBtn, opacity: busy || allowed === true ? 0.55 : 1 },
+        disabled: busy || allowed === true,
+        onClick: () => { void set(true) },
+      }, '同意接入'),
+      h('button', {
+        style: { ...style.smallBtn, opacity: busy || allowed === false ? 0.55 : 1 },
+        disabled: busy || allowed === false,
+        onClick: () => { void set(false) },
+      }, '撤销同意'),
+    ),
+    err ? h('div', { style: { ...style.hint, marginTop: 6 } }, err) : null,
+  )
+}
+
 function SettingsPage() {
   const [, force] = useState(0)
   const refresh = useCallback(() => force((n) => n + 1), [])
@@ -1147,6 +1223,8 @@ function SettingsPage() {
   if (!user || !store.token) {
     return h('div', { style: { padding: 20, maxWidth: 420 } },
       h('div', { style: { fontSize: 16, fontWeight: 600, marginBottom: 16, color: 'var(--dsw-alias-label-primary)' } }, 'Copree'),
+      // 闸门放登录之前：允不允许 Copree 接入，与"我在 Copree 有没有账号"是两件事
+      h(BridgeConsent, null),
       h('div', { style: { ...style.hint, marginTop: 0 } }, '登录 Copree 后即可在侧边栏使用聊天。凭据仅保存在本机浏览器。'),
       h(LoginForm, null),
     )
@@ -1154,6 +1232,7 @@ function SettingsPage() {
 
   return h('div', { style: { padding: 20, maxWidth: 480 } },
     h('div', { style: { fontSize: 16, fontWeight: 600, marginBottom: 16, color: 'var(--dsw-alias-label-primary)' } }, 'Copree'),
+    h(BridgeConsent, null),
     h('div', { style: { ...style.row, padding: '8px 0' } },
       h('span', { style: style.avatar }, initials(user.name)),
       h('div', { style: style.rowText },
