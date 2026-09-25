@@ -1,184 +1,17 @@
 import { memo, useState, useRef, useCallback, useMemo, forwardRef, useImperativeHandle, useEffect } from 'react'
-import { Send, Plus, X, ChevronRight, Brain, ArrowDown, FileText, Search, Globe, Terminal, Package, Clock, Wrench, Eraser, ChevronDown, Copy, RefreshCw, ShieldAlert, HelpCircle } from 'lucide-react'
+import { Send, Plus, ChevronRight, Brain, ArrowDown, ChevronDown, Copy, RefreshCw, ShieldAlert, HelpCircle } from 'lucide-react'
 import MarkdownContent from './shared/MarkdownContent'
 import CodeRenderer from './shared/CodeRenderer'
-import { Button, Dialog, IconButton, confirmAsync } from './ui'
+import { CONTENT_W_VAR, ToolBubble, toolIcon, useContentColumnWidth } from './shared/ChatPanelAtoms'
+import { ApprovalDialog, PendingQueuePanel } from './shared/ChatDialogs'
+import { IconButton, MenuPanel, MenuItem, INSET_CARD, confirmAsync } from './ui'
 import { useWorldChat, type Approval, type ChatMsg } from '../hooks/useWorldChat'
 import { useAttachmentUpload, isImageAttachment } from '../hooks/useAttachmentUpload'
 import { AttachmentChips, DropMask } from './AttachmentChips'
 import { api } from '../api/client'
 import { useT } from '../i18n/I18nContext'
 import { useElementWidth } from '../hooks/useElementWidth'
-
-// ── 对话内容列宽（学 DSH ConversationRoot / WidthHandle）──
-// 内容列居中，宽度是可拖的：上下限都按"列宽"推，保证两侧永远留着放拖条的留白。
-/** localStorage 键：拖动过的内容列宽（px），只存用户意图，渲染宽度每次按列宽重新收敛 */
-const CONTENT_W_KEY = 'world_chat_content_width'
-/** 内容列最小宽度：再窄代码块就没法看了（与 DSH 的 CONTENT_MIN 同值） */
-const CONTENT_MIN = 640
-/** 每侧必须留出的留白：24 内缩 + 40 拖条 + 24 安全区 —— 拖到头也还能拖回来 */
-const CONTENT_EDGE_BUDGET = 176
-/** 没有偏好时的自适应宽：列宽的 64%，夹在 680~920 之间（DSH 的同一套公式） */
-const CONTENT_ADAPTIVE_MIN = 680
-const CONTENT_ADAPTIVE_MAX = 920
-/** 内容列宽经 CSS 变量下发：拖拽期间直接改变量，不走 state，省下每帧重渲整段消息 */
-const CONTENT_W_VAR = '--world-chat-content-w'
-
-/** 读偏好：本地存储是"持久层边界"，坏值一律当没偏好 */
-function readContentWidthPref(): number | null {
-  try {
-    const raw = localStorage.getItem(CONTENT_W_KEY)
-    if (raw === null) return null
-    const v = Number(raw)
-    return Number.isFinite(v) && v > 0 ? v : null
-  } catch { return null }
-}
-
-/** 列宽 → 内容列宽：有偏好按偏好夹，没偏好按列宽自适应；上限 = 列宽 - 留白预算 */
-function resolveContentWidth(columnWidth: number, pref: number | null): number {
-  const max = Math.max(CONTENT_MIN, columnWidth - CONTENT_EDGE_BUDGET)
-  if (pref !== null) return Math.min(Math.max(pref, CONTENT_MIN), max)
-  return Math.max(CONTENT_ADAPTIVE_MIN, Math.min(columnWidth * 0.64, CONTENT_ADAPTIVE_MAX))
-}
-
-/**
- * 内容列宽拖拽。三件事照 DSH 的做法：
- *  1) 内容列居中，拖任一条边都是"两边各让一半"，所以宽度按 **2× 指针位移** 变，条才跟手；
- *  2) 拖动期间只写 CSS 变量，不 setState —— 消息列表每帧重渲的代价太大，松手才落库 + 回写状态；
- *  3) 上限由 resolveContentWidth 兜住（列宽 - 176），拖到贴边也留得下重拖的把手。
- */
-function useContentColumnWidth(columnWidth: number, hostRef: React.RefObject<HTMLDivElement | null>) {
-  const [pref, setPref] = useState<number | null>(() => readContentWidthPref())
-  const [dragging, setDragging] = useState(false)
-  const dragRef = useRef<{ x: number; base: number; outward: 1 | -1; latest: number; frame: number | null } | null>(null)
-
-  const onHandleDown = useCallback((side: 'left' | 'right') => (e: React.MouseEvent) => {
-    e.preventDefault()
-    dragRef.current = {
-      x: e.clientX,
-      base: resolveContentWidth(columnWidth, pref),
-      outward: side === 'right' ? 1 : -1,
-      latest: e.clientX,
-      frame: null,
-    }
-    setDragging(true)
-    document.body.style.cursor = 'col-resize'
-    document.body.style.userSelect = 'none'
-  }, [columnWidth, pref])
-
-  useEffect(() => {
-    if (!dragging) return
-    /** 指针位置 → 内容列宽（居中列：两边各让一半，所以按 2× 位移算） */
-    const widthAt = (clientX: number, d: NonNullable<typeof dragRef.current>) =>
-      resolveContentWidth(columnWidth, d.base + (d.outward === 1 ? clientX - d.x : d.x - clientX) * 2)
-    const onMove = (e: MouseEvent) => {
-      const d = dragRef.current
-      if (!d) return
-      d.latest = e.clientX
-      // mousemove 一帧可能来好几次，每帧最多写一次变量
-      if (d.frame !== null) return
-      d.frame = requestAnimationFrame(() => {
-        const cur = dragRef.current
-        if (!cur) return
-        cur.frame = null
-        hostRef.current?.style.setProperty(CONTENT_W_VAR, `${widthAt(cur.latest, cur)}px`)
-      })
-    }
-    const onUp = () => {
-      const d = dragRef.current
-      if (d) {
-        if (d.frame !== null) cancelAnimationFrame(d.frame)
-        if (d.latest !== d.x) {
-          const final = widthAt(d.latest, d)
-          try { localStorage.setItem(CONTENT_W_KEY, String(final)) } catch { /* 隐私模式等写不了就算了 */ }
-          // 回写状态：变量交还给声明式，列宽变化时也按新偏好重新收敛
-          hostRef.current?.style.setProperty(CONTENT_W_VAR, `${final}px`)
-          setPref(final)
-        }
-      }
-      dragRef.current = null
-      setDragging(false)
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-    }
-    document.addEventListener('mousemove', onMove)
-    document.addEventListener('mouseup', onUp)
-    return () => {
-      document.removeEventListener('mousemove', onMove)
-      document.removeEventListener('mouseup', onUp)
-    }
-  }, [dragging, columnWidth, hostRef])
-
-  return { contentWidth: resolveContentWidth(columnWidth, pref), dragging, onHandleDown }
-}
-
-// 工具气泡图标：按摘要内容关键词映射（后端文本不带 emoji，图标由前端渲染）
-function toolIcon(content: string) {
-  const s = content || ''
-  if (s.includes('接口文档')) return <FileText size={12} />
-  if (s.includes('记住') || s.includes('记忆') || s.includes('检索')) return <Brain size={12} />
-  if (s.includes('搜索')) return <Search size={12} />
-  if (s.includes('获取') || s.includes('http')) return <Globe size={12} />
-  if (s.includes('世界代码')) return <Terminal size={12} />
-  if (s.includes('压缩')) return <Package size={12} />
-  if (s.includes('清空')) return <Eraser size={12} />
-  if (s.includes('排队')) return <Clock size={12} />
-  return <Wrench size={12} />
-}
-
-/** 工具状态行（DSH 式 GenericCommandCard，2026-08-16 借鉴）：
- * 单行折叠条：图标 + 工具名 + 状态点(running/ok/error) + 摘要；可展开看详情
- */
-function ToolBubble({ name, label, detail, error, icon, running }: {
-  name?: string; label: string; detail?: string; error?: boolean; icon: React.ReactNode; running?: boolean
-}) {
-  const [expanded, setExpanded] = useState(false)
-  const state = error ? 'error' : running ? 'running' : 'ok'
-  // 运行中显示 "进行中…" 摘要；完成显示结果摘要（截断）
-  const summary = label.length > 60 ? label.slice(0, 60) + '…' : label
-  // 展开内容只有一个来源：优先详情；没有详情时，只有多行摘要才值得展开
-  const body = detail || (label.includes('\n') ? label : '')
-  const expandable = !!body
-  return (
-    <div
-      className={`world-msg max-w-[90%] mx-auto text-2xs rounded-control overflow-hidden border ${
-        state === 'error' ? 'bg-rose-500/10 border-rose-500/25' :
-        state === 'running' ? 'bg-mint-400/5 border-mint-400/20' :
-        'bg-mint-400/10 border-mint-400/20'
-      }`}
-    >
-      <div
-        className={`flex items-center gap-1.5 px-2 py-1 ${expandable ? 'cursor-pointer' : ''}`}
-        onClick={() => expandable && setExpanded((v) => !v)}
-      >
-        <span className="shrink-0 flex items-center justify-center w-3.5 h-3.5 rounded-full border border-current/20" style={{ color: state === 'error' ? 'rgb(var(--tw-rose-400))' : 'rgb(var(--tw-mint-400))' }}>
-          {running ? <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" /> :
-           error ? <span className="text-[9px] leading-none font-bold">!</span> :
-           <span className="text-[8px] leading-none">✓</span>}
-        </span>
-        <span className="shrink-0 flex items-center gap-1 text-current" style={{ color: state === 'error' ? 'rgb(var(--tw-rose-400))' : 'rgb(var(--tw-mint-400))' }}>
-          {icon}
-          <span className="font-medium">{running ? '执行中' : error ? '执行失败' : '已完成'}</span>
-        </span>
-        {name && (
-          <span className="shrink-0 px-1 rounded bg-current/10 font-medium" title={name}>{name}</span>
-        )}
-        <span className="shrink-0 w-px h-2.5 bg-current/20 mx-0.5" aria-hidden />
-        <span className="flex-1 min-w-0 truncate" style={{ color: state === 'error' ? 'rgb(var(--tw-rose-400))' : 'rgb(var(--tw-mint-400))' }}>
-          {summary}
-        </span>
-        {expandable && (
-          <ChevronDown size={11} className={`shrink-0 text-current/60 transition-transform ${expanded ? 'rotate-180' : ''}`} />
-        )}
-      </div>
-      {expanded && (
-        <div className="px-2 pb-1.5 whitespace-pre-wrap text-current max-h-48 overflow-y-auto border-t border-current/10 pt-1.5" style={{ color: state === 'error' ? 'rgb(var(--tw-rose-400))' : 'rgb(var(--tw-mint-400))' }}>
-          {body}
-        </div>
-      )}
-    </div>
-  )
-}
+import ExpressionModeSwitch from './ExpressionModeSwitch'
 
 // 运行模式三档（后端 world_ai_mode.MODES 是权威定义；这里只管展示与切换）
 // 顺序 = 菜单从上到下：计划 / 自动 / 审阅（2026-09-18 用户：计划模式提到第一位）
@@ -210,86 +43,23 @@ function ModePicker({ mode, busy, onChange }: { mode: string; busy: boolean; onC
       {open && (
         <>
           <div className="fixed inset-0 z-modal" onClick={() => setOpen(false)} />
-          <div className="absolute bottom-full left-0 mb-1 w-64 py-1 rounded-card bg-elevated border border-border shadow-xl z-toast">
+          <MenuPanel className="absolute bottom-full left-0 mb-1 w-64 py-1 z-toast">
             {MODE_ITEMS.map((m) => (
-              <button
+              <MenuItem
                 key={m.key}
+                active={m.key === mode}
                 onClick={() => { setOpen(false); if (m.key !== mode) onChange(m.key) }}
                 title={t(m.hintKey)}
-                className="w-full text-left px-3 py-1.5 transition-colors hover:bg-surface"
+                className="py-2"
               >
-                <span className={`text-2xs ${m.key === mode ? 'text-primary-400 font-semibold' : 'text-textSecondary'}`}>{t(m.labelKey)}</span>
+                <span className="text-2xs font-medium">{t(m.labelKey)}</span>
                 <span className="block text-3xs text-textMuted mt-0.5">{t(m.hintKey)}</span>
-              </button>
+              </MenuItem>
             ))}
-          </div>
+          </MenuPanel>
         </>
       )}
     </div>
-  )
-}
-
-/** 审批弹窗（审阅/计划模式）：AI 请求下载/删除/改动机制，等用户点按钮，选完服务端自动继续。
- *  事件类型关键词由后端按下发的 kind 渲染，用户一眼看清在批什么。 */
-function ApprovalDialog({ approval, onDecide }: { approval: Approval; onDecide: (ok: boolean, note: string) => void }) {
-  const t = useT()
-  const kindKey = `tool:world.kind.${approval.kind}`
-  const localized = t(kindKey)
-  const body = approval.body || ''
-  // 理由/补充要求（可选）：跟那一票一起发给 AI——不同意时说清为什么，同意时顺手加要求
-  const [note, setNote] = useState('')
-  return (
-    // 无 onClose：审批必须由用户明确点同意/不同意（ESC 与点遮罩都不放行），
-    // 但 Dialog 仍负责锁背景滚动 + 统一层级与遮罩
-    <Dialog className="world-msg flex items-center justify-center p-4">
-      <div className="w-full max-w-lg bg-surface border border-border rounded-dialog shadow-xl overflow-hidden">
-        <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border">
-          <ShieldAlert size={14} className="text-amber-400" />
-          <span className="text-sm font-medium">{t('tool:world.approval.title')}</span>
-          <span className="text-3xs px-2 py-0.5 rounded-full bg-elevated text-textMuted shrink-0">
-            {localized && localized !== kindKey ? localized : approval.kind}
-          </span>
-        </div>
-        <div className="px-4 py-3 max-h-[55vh] overflow-y-auto space-y-2">
-          <div className="text-sm font-medium">{approval.title}</div>
-          {approval.detail && <div className="text-xs text-textSecondary">{approval.detail}</div>}
-          {/* 正文按 AI 实际写的东西渲染：散文/计划走 markdown，代码走代码块（同日聊天同款渲染器） */}
-          {!!body && (
-            approval.body_format === 'code' ? (
-              <div className="max-h-[45vh] overflow-auto">
-                <CodeRenderer className={`language-${approval.body_lang || 'plaintext'}`}>{body}</CodeRenderer>
-              </div>
-            ) : approval.body_format === 'markdown' ? (
-              <div className="text-sm text-textPrimary">
-                <MarkdownContent content={body} />
-              </div>
-            ) : (
-              <pre className="text-2xs whitespace-pre-wrap break-words bg-elevated rounded-control p-2 text-textSecondary">{body}</pre>
-            )
-          )}
-        </div>
-        <div className="px-4 py-3 border-t border-border space-y-2">
-          {/* 输入框在按钮上方且不随正文滚动：想补一句时不必先把内容翻到底 */}
-          <textarea
-            className="field w-full text-xs"
-            rows={2}
-            maxLength={2000}
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder={t('tool:world.approval.notePlaceholder')}
-          />
-          <div className="flex items-center gap-2">
-            <span className="flex-1 text-3xs text-textMuted">{t('tool:world.approval.waiting')}</span>
-            <Button size="sm" variant="outline" onClick={() => onDecide(false, note)}>
-              {t('tool:world.approval.deny')}
-            </Button>
-            <Button size="sm" onClick={() => onDecide(true, note)}>
-              {t('tool:world.approval.approve')}
-            </Button>
-          </div>
-        </div>
-      </div>
-    </Dialog>
   )
 }
 
@@ -702,7 +472,7 @@ const WorldChatPanel = memo(forwardRef<WorldChatHandle, WorldChatPanelProps>(({ 
         {isLastAi && isInterrupted && !chat.chatSending && !chat.chatProcessing && (
           <div className="space-y-1.5 pl-1 w-full max-w-[420px]">
             <div className="text-3xs text-textMuted">你可以：</div>
-            <div className="flex items-stretch rounded-control bg-elevated border border-border overflow-hidden w-full">
+            <div className={`flex items-stretch ${INSET_CARD} overflow-hidden w-full`}>
               <button
                 onClick={() => handleSubmit('继续')}
                 className="flex-1 min-w-0 px-2.5 py-1.5 text-left text-xs text-textSecondary hover:bg-primary-500/20 hover:text-primary-500 dark:hover:text-primary-300 transition-colors truncate"
@@ -723,7 +493,7 @@ const WorldChatPanel = memo(forwardRef<WorldChatHandle, WorldChatPanelProps>(({ 
           <div className="space-y-1.5 pl-1 w-full max-w-[420px]">
             <div className="text-3xs text-textMuted">你可以：</div>
             {chat.suggestions.map((q, i) => (
-              <div key={i} className="flex items-stretch rounded-control bg-elevated border border-border overflow-hidden w-full">
+              <div key={i} className={`flex items-stretch ${INSET_CARD} overflow-hidden w-full`}>
                 <button
                   onClick={() => confirmAndSendSuggestion(q)}
                   className="flex-1 min-w-0 px-2.5 py-1.5 text-left text-xs text-textSecondary hover:bg-primary-500/20 hover:text-primary-500 dark:hover:text-primary-300 transition-colors truncate"
@@ -756,7 +526,7 @@ const WorldChatPanel = memo(forwardRef<WorldChatHandle, WorldChatPanelProps>(({ 
       {chat.suggestions.length > 0 && !chat.chatSending && !chat.chatProcessing && (
         <div className="flex flex-col items-center gap-1.5 w-full max-w-[420px]">
           {chat.suggestions.map((q, i) => (
-            <div key={i} className="flex items-stretch rounded-control bg-elevated border border-border overflow-hidden w-full">
+            <div key={i} className={`flex items-stretch ${INSET_CARD} overflow-hidden w-full`}>
               <button
                 onClick={() => confirmAndSendSuggestion(q)}
                 className="flex-1 min-w-0 px-2.5 py-1.5 text-left text-xs text-textSecondary hover:bg-primary-500/20 hover:text-primary-500 dark:hover:text-primary-300 transition-colors truncate"
@@ -783,18 +553,19 @@ const WorldChatPanel = memo(forwardRef<WorldChatHandle, WorldChatPanelProps>(({ 
 
   // ── 命令下拉菜单 ──
   const renderCmdMenu = () => (
-    <div className="absolute bottom-full left-3 mb-1 w-64 max-h-40 overflow-y-auto rounded-card bg-elevated border border-border shadow-xl z-modal">
+    <MenuPanel className="absolute bottom-full left-3 mb-1 w-64 max-h-40 overflow-y-auto py-1 z-modal">
       {localCmdFiltered.map((c, i) => (
-        <button
+        <MenuItem
           key={c.cmd}
-          className={`w-full text-left px-3 py-2 transition-colors ${i === localCmdIdx ? 'bg-primary-500/20 text-primary-400' : 'text-textPrimary hover:bg-hover'}`}
+          active={i === localCmdIdx}
+          className="py-2"
           onMouseDown={(e) => { e.preventDefault(); handleCmdSelect(c.cmd) }}
         >
-          <span className="font-mono text-xs">{c.cmd}</span>
+          <span className="font-mono text-xs text-textPrimary">{c.cmd}</span>
           <span className="block text-3xs text-textMuted">{c.desc}</span>
-        </button>
+        </MenuItem>
       ))}
-    </div>
+    </MenuPanel>
   )
 
   return (
@@ -867,28 +638,13 @@ const WorldChatPanel = memo(forwardRef<WorldChatHandle, WorldChatPanelProps>(({ 
       {/* 输入区（图片可直接拖进来放下，与点回形针等价） */}
       <div className="p-3 border-t border-border relative" {...attachments.zoneProps('input')} {...attachments.pasteProps}>
         <DropMask {...attachments.dropState('input')} label="拖动到此处上传图片" />
-        {/* 排队消息（AI 处理中，输入框上方弹窗展示） */}
-        {chat.pendingItems.length > 0 && (
-          <div className="absolute bottom-full left-3 right-3 mb-1 max-h-32 overflow-y-auto rounded-card bg-elevated border border-border shadow-xl z-modal">
-            <div className="px-3 py-1.5 text-3xs text-textMuted border-b border-border">
-              AI 处理中，以下 {chat.pendingItems.length} 条排队（普通消息将插入下一轮 AI 思考，命令等本轮结束执行）
-            </div>
-            {chat.pendingItems.map((it, i) => (
-              <div key={i} className="flex items-center gap-2 px-3 py-1.5 text-xs border-b border-border/40 last:border-b-0">
-                <span className={`truncate flex-1 ${it.kind === 'cmd' ? 'font-mono text-primary-400' : 'text-textPrimary'}`}>
-                  {it.text || (it.attachments?.length ? '（图片）' : '')}
-                  {!!it.attachments?.length && <span className="ml-1 text-3xs text-textMuted">+{it.attachments.length}图</span>}
-                </span>
-                <span className="shrink-0 text-3xs text-textMuted">{it.kind === 'cmd' ? '命令' : '消息'}</span>
-                <button
-                  onClick={() => chat.setPendingItems((items) => items.filter((_, j) => j !== i))}
-                  className="shrink-0 text-textMuted hover:text-rose-400 transition-colors"
-                  title="移除这条"
-                ><X size={12} /></button>
-              </div>
-            ))}
-          </div>
-        )}
+        {/* 排队消息（AI 处理中，输入框上方弹窗展示）：面板与群视界对话共用同一份零件
+            （components/shared/ChatDialogs），宽度仍按内容列宽口径对齐 */}
+        <PendingQueuePanel
+          items={chat.pendingItems}
+          onRemove={(i) => chat.setPendingItems((items) => items.filter((_, j) => j !== i))}
+          style={{ maxWidth: `calc(var(${CONTENT_W_VAR}) + 32px)` }}
+        />
         {localCmdActive && localCmdFiltered.length > 0 && renderCmdMenu()}
         <AttachmentChips items={attachments.items} onRemove={attachments.remove} />
         {/* 单层容器（学 DSH）：textarea 不再自带边框，聚焦高亮只在外层亮一次。
@@ -932,11 +688,12 @@ const WorldChatPanel = memo(forwardRef<WorldChatHandle, WorldChatPanelProps>(({ 
           placeholder={(chat.chatSending || chat.chatProcessing) ? t('tool:world.input.placeholder.busy') : t('tool:world.input.placeholder')}
           className="w-full bg-transparent text-sm px-3 pt-2.5 pb-1 outline-none resize-none placeholder:text-textMuted"
         />
-        {/* 底部一条：左＝＋附件 / 运行模式 / 说明，右＝发送。都挤在同一行，不另占一行高度 */}
+        {/* 底部一条：左＝＋附件 / 运行模式 / 通俗模式 / 说明，右＝发送。都挤在同一行，不另占一行高度 */}
         <div className="flex items-center gap-1 px-2 pb-1.5">
           <input ref={fileInputRef} type="file" multiple accept="image/*" className="hidden" onChange={handlePickFiles} />
           <IconButton size="sm" icon={<Plus size={14} />} label={t('tool:world.input.attach')} onClick={() => fileInputRef.current?.click()} />
           <ModePicker mode={mode} busy={modeBusy} onChange={switchMode} />
+          <ExpressionModeSwitch size="sm" />
           {/* 常驻说明收进 ? 的 title：绝大多数轮次用不到，不该天天占一行 */}
           <IconButton size="sm" icon={<HelpCircle size={12} />} label={t('tool:world.hint.billing')} />
           {(chat.chatSending || chat.chatProcessing) && (
@@ -962,6 +719,7 @@ const WorldChatPanel = memo(forwardRef<WorldChatHandle, WorldChatPanelProps>(({ 
           key={chat.approvals[0].approval_id}
           approval={chat.approvals[0]}
           onDecide={(ok, note) => chat.resolveApproval(chat.approvals[0].approval_id, ok, note)}
+          onTouch={chat.touchApproval}
         />
       )}
       </div>

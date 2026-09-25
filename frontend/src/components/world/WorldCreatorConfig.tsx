@@ -156,7 +156,11 @@ export default function WorldCreatorConfig({ wid, creator, usageStats, aiMode, o
 
   return (
     <Dialog onClose={onClose} className="flex items-center justify-center p-4">
-      <div className="w-full max-w-lg bg-surface border border-border rounded-dialog max-h-[85vh] flex flex-col shadow-xl" onClick={(e) => e.stopPropagation()}>
+      {/* 宽屏适配：里面有系统提示词编辑器与强注入段长文，max-w-lg 一条道走到黑太憋屈（用户 2026-09-19 反馈） */}
+      <div
+        className="w-full max-w-lg sm:max-w-2xl lg:max-w-4xl bg-surface border border-border rounded-dialog max-h-[85vh] flex flex-col shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* 头部 */}
         <div className="flex items-center justify-between p-4 pb-2 shrink-0">
           <div className="flex items-center gap-2 min-w-0">

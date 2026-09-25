@@ -11,6 +11,7 @@
  */
 import { memo, useEffect, useRef, useState } from 'react'
 import { Plus, MoreHorizontal, Pin } from 'lucide-react'
+import { MenuPanel, MenuItem } from '../ui'
 import { useLang, useT } from '../../i18n/I18nContext'
 import { formatRelativeTime } from '../../utils/time'
 
@@ -20,8 +21,6 @@ export interface WorldSessionInfo {
   last_active_at?: string
   pinned?: boolean
 }
-
-const MENU_ITEM = 'w-full text-left px-3 py-1.5 text-2xs text-textSecondary hover:bg-surface hover:text-textPrimary transition-colors'
 
 interface SessionRowProps {
   id: string
@@ -85,16 +84,16 @@ const SessionRow = memo(function SessionRow({
         </button>
         {menuOpen && (
           <>
-            <div className="absolute right-0 top-full mt-0.5 w-44 py-1 rounded-card bg-elevated border border-border shadow-xl z-toast">
-              <button className={MENU_ITEM} onClick={() => { setMenuOpen(false); onRename(id, title) }}>{t('tool:world.session.rename')}</button>
+            <MenuPanel className="absolute right-0 top-full mt-0.5 w-44 py-1 z-toast">
+              <MenuItem onClick={() => { setMenuOpen(false); onRename(id, title) }}>{t('tool:world.session.rename')}</MenuItem>
               {active && (
-                <button className={MENU_ITEM} onClick={() => { setMenuOpen(false); onTogglePin(id) }}>
+                <MenuItem onClick={() => { setMenuOpen(false); onTogglePin(id) }}>
                   {pinned ? t('tool:world.session.unpin') : t('tool:world.session.pin')}
-                </button>
+                </MenuItem>
               )}
-              <button className={MENU_ITEM} onClick={() => { setMenuOpen(false); onExport(id, 'md', title) }}>{t('tool:world.session.exportMd')}</button>
-              <button className={MENU_ITEM} onClick={() => { setMenuOpen(false); onExport(id, 'json', title) }}>{t('tool:world.session.exportJson')}</button>
-            </div>
+              <MenuItem onClick={() => { setMenuOpen(false); onExport(id, 'md', title) }}>{t('tool:world.session.exportMd')}</MenuItem>
+              <MenuItem onClick={() => { setMenuOpen(false); onExport(id, 'json', title) }}>{t('tool:world.session.exportJson')}</MenuItem>
+            </MenuPanel>
           </>
         )}
       </div>

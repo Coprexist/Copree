@@ -55,7 +55,8 @@ class FileEdit(ToolPlugin):
             "description": "（delete_lines 必填）要删除的结束行号（包含此行）",
         },
     }
-    required = ["path", "operation"]
+    # operation 不再必填：只给 old_string/new_string 时按 str_replace 处理（与同目录工具共用推断）
+    required = ["path"]
     states = ["active", "dnd"]
     admin_description = "增量编辑自己的文件（查找替换或行后插入），避免大文件全量重写的 token 开销。"
     trigger_condition = "AI 需要修改已有文件的局部内容时"
@@ -63,9 +64,10 @@ class FileEdit(ToolPlugin):
     async def execute(self, db: AsyncSession, agent_id: int, group_id: int | None,
                       arguments: dict, context: dict) -> dict:
         from app.services.content.file_service import ai_read_file, ai_write_file
+        from app.utils.pure.file_edit import infer_operation
 
         path = arguments["path"]
-        operation = arguments["operation"]
+        operation = infer_operation(arguments)
         new_string = arguments.get("new_string", "")
 
         try:

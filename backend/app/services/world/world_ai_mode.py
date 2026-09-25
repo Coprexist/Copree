@@ -63,11 +63,14 @@ SAFE_TOOLS = frozenset({
     "web_fetch", "web_search",
     "clear_context", "compact_context",
     "ask_user", "present_plan", "rename_session",   # 命名自己的对话：无副作用（只改会话元信息）
+    "request_read_budget",                          # 申请提额：审批入口本身不是动作
 })
 
-_APPROVAL_TIMEOUT = 300                 # 审阅/计划：等用户点按钮的上限（秒）；超时 = 不通过（安全默认）
+_APPROVAL_TIMEOUT = 600                 # 审阅/计划：**空闲**多久没人动才算超时（秒）；超时 = 不通过（安全默认）
+_APPROVAL_MAX = 1800                    # 同一条审批的总时长上限（秒）：打字能续期，但不能无限续
 _ASK_TIMEOUT = 600                      # 自动档：AI 主动提问等用户的上限（10 分钟，超时自行继续，对齐 DSH）
 _WAIT_FOR_VIEWER = 20                   # 没人在看时先等一小会儿（页面最多 10s 一次空闲轮询会接上）
+_TOUCH_SLICE = 5                        # 等待循环的切片（秒）：切片够短，打字心跳才能及时续期
 
 
 def get_mode(world) -> str:
@@ -164,6 +167,64 @@ def unattended_policy(world) -> tuple[bool, int]:
 _BODY_MAX = 8000
 
 
+class ApprovalTimeout(Exception):
+    """等用户等超了（空闲超时 / 总时长封顶）——由 request_approval 翻成「不通过」。"""
+
+
+def _human_duration(seconds: float) -> str:
+    """秒数说人话：不足 1 分钟就说秒（曾经写成 1 // 60 = 「0 分钟」）"""
+    return f"{int(seconds)} 秒" if seconds < 60 else f"{int(seconds) // 60} 分钟"
+
+
+def _idle_left(entry: dict, idle_timeout: int) -> float:
+    """距「上次活动」还剩多久（秒，可为负）"""
+    return idle_timeout - (time.monotonic() - entry["last_activity"])
+
+
+def remaining_seconds(entry: dict, idle_timeout: int = _APPROVAL_TIMEOUT,
+                      hard_cap: int = _APPROVAL_MAX) -> int:
+    """这条审批还剩多少秒——**唯一口径**：弹窗倒计时、状态轮询、等待循环都读它。
+
+    取「空闲剩余」与「总时长剩余」的较小值：打字能把空闲窗口续上，但续不过总上限。
+    """
+    left = min(_idle_left(entry, idle_timeout), hard_cap - (time.monotonic() - entry["started_at"]))
+    return max(0, int(left))
+
+
+def touch_approval(approval_id: str) -> int:
+    """用户正在弹窗里打字（心跳）：刷新活动时间，返回剩余秒数（0 = 该项已不在）。
+
+    打字不是「点按钮」，所以不在这里改结论——它只重置「多久没人动」这个计时，
+    免得用户还在写理由，那边已经按超时判了不通过。
+    """
+    entry = _pending.get(approval_id)
+    if entry is None or entry["future"].done():
+        return 0
+    entry["last_activity"] = time.monotonic()
+    return remaining_seconds(entry)
+
+
+async def _wait_decision(entry: dict, idle_timeout: int, hard_cap: int) -> bool:
+    """等用户点按钮：按「距上次活动」计时（打字就续期），总时长封顶。
+
+    future 必须 shield：asyncio.wait_for 超时会**取消**传入的 future，
+    而这条 future 是 resolve_approval 唯一的回执通道——被取消就再也接不到用户的点击。
+    """
+    while True:
+        left = min(_idle_left(entry, idle_timeout),
+                   hard_cap - (time.monotonic() - entry["started_at"]))
+        if left <= 0:
+            if _idle_left(entry, idle_timeout) <= 0:
+                raise ApprovalTimeout(f"等待用户确认超时（{_human_duration(idle_timeout)}没人操作）")
+            raise ApprovalTimeout(f"等待用户确认超时（已达 {_human_duration(hard_cap)}上限）")
+        try:
+            decided = await asyncio.wait_for(asyncio.shield(entry["future"]),
+                                             timeout=min(left, _TOUCH_SLICE))
+        except asyncio.TimeoutError:
+            continue                             # 切片到点：回去看有没有新活动（打字会续期）
+        return bool(decided)
+
+
 async def request_approval(
     world_id: int, turn_id: str, *, kind: str, title: str,
     detail: str = "", body: str = "", body_format: str = "text", body_lang: str = "",
@@ -173,6 +234,9 @@ async def request_approval(
 
     on_timeout = 没有人应答（没人看 / 等超时）时算不算放行——由调用方按模式声明，
     不要在这里猜：审阅/计划必须 False，自动档的 AI 主动提问才是 True。
+
+    timeout = **多久没人动**才算超时（秒），不是总时长：用户在弹窗里打字
+    （touch_approval 心跳）会把这段空闲窗口续上，总时长另由 _APPROVAL_MAX 封顶。
     """
     def _unattended(reason: str) -> Approval:
         if on_timeout:
@@ -195,7 +259,9 @@ async def request_approval(
         # 由前端按 body_format 走聊天同款渲染器（markdown / code / text）
         "title": title, "detail": (detail or "")[:4000],
         "body": (body or "")[:_BODY_MAX], "body_format": body_format, "body_lang": body_lang,
-        "created_at": time.time(),
+        "created_at": time.time(),                 # 墙上时间：给前端显示什么时候开始的
+        "started_at": time.monotonic(),            # 单调钟：算总时长上限（不受系统时间调整影响）
+        "last_activity": time.monotonic(),         # 用户最近一次动作（点按钮 / 打字心跳）
         "future": asyncio.get_running_loop().create_future(),
     }
     _pending[approval_id] = entry
@@ -203,6 +269,7 @@ async def request_approval(
         "approval_id": approval_id, "status": "pending", "kind": kind,
         "title": title, "detail": entry["detail"],
         "body": entry["body"], "body_format": entry["body_format"], "body_lang": entry["body_lang"],
+        "expires_in": remaining_seconds(entry),
     })
     # 未完成时的兜底结论（finally 里要广播回执，不能因为异常路径没赋值而炸）
     result = Approval(approved=False, attended=False, reason="审批未完成（按「不通过」处理）")
@@ -210,7 +277,7 @@ async def request_approval(
         for tb in tbs:
             await tb.broadcast(pending_event)
         logger.info(f"🔐 世界 #{world_id} 等待用户审批（{kind}）: {title[:60]}")
-        approved = bool(await asyncio.wait_for(entry["future"], timeout=timeout))
+        approved = await _wait_decision(entry, timeout, _APPROVAL_MAX)
         note = entry.get("note") or ""
         # 结论必在句子里：用户写了原话就原样附上（不改写用户的措辞），AI 才看得懂是"同意"还是"不同意"
         result = Approval(
@@ -218,8 +285,8 @@ async def request_approval(
             reason=("用户同意了" if approved else "用户选择不同意")
                    + (f"；用户补充说：{note}" if note else ""),
         )
-    except asyncio.TimeoutError:
-        result = _unattended(f"等待用户确认超时（{timeout // 60} 分钟）")
+    except ApprovalTimeout as e:
+        result = _unattended(str(e))
     except asyncio.CancelledError:
         result = Approval(approved=False, attended=False, reason="轮次被中断，审批未完成（按「不通过」处理）")
         raise
@@ -257,7 +324,9 @@ def pending_approvals(world_id: int) -> list[dict]:
         {"approval_id": e["id"], "kind": e["kind"], "title": e["title"],
          "detail": e["detail"], "body": e["body"],
          "body_format": e["body_format"], "body_lang": e["body_lang"],
-         "created_at": e["created_at"]}
+         "created_at": e["created_at"],
+         # 弹窗倒计时的唯一来源（刷新后照它接着走，不从头重数）
+         "expires_in": remaining_seconds(e)}
         for e in _pending.values() if e["world_id"] == world_id
     ]
 

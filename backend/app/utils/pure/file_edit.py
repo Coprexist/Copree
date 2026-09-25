@@ -8,6 +8,26 @@
 """
 
 
+def infer_operation(arguments: dict) -> str:
+    """operation 的缺省推断（唯一口径，主站与世界工具共用）。
+
+    模型只给 old_string/new_string（最常见的"改一处"）时会漏写 operation，
+    此时按参数形状补出意图，而不是直接打回让模型重来一次
+    （世界 AI 2026-09-21 反馈：这一漏一打回白耗一轮）。
+    返回空串表示无法推断，由调用方给出报错。
+    """
+    explicit = str(arguments.get("operation") or "").strip()
+    if explicit:
+        return explicit
+    if arguments.get("old_string") is not None:
+        return "str_replace"
+    if arguments.get("insert_line") is not None or arguments.get("line") is not None:
+        return "insert"
+    if arguments.get("start_line") is not None or arguments.get("end_line") is not None:
+        return "delete_lines"
+    return ""
+
+
 def apply_file_edit(old_content: str, operation: str, arguments: dict) -> tuple[str | None, str | None]:
     """应用一次增量编辑。成功返回 (新内容, None)；失败返回 (None, 错误信息)。"""
     new_string = str(arguments.get("new_string", ""))

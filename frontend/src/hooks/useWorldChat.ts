@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject, type Dispatch, type SetStateAction, type UIEvent } from 'react'
 import { api } from '../api/client'
 import type { ReadyAttachment } from './useAttachmentUpload'
+import { BOTTOM_THRESHOLD, useStickToBottom } from './useStickToBottom'
 
 // AI 处理中状态的初始值：状态检查（/chat/status）返回前一律按"处理中"对待，
 // 消息走插入队列，避免与仍在运行的 turn 冲突。
@@ -14,8 +15,7 @@ const CHAT_PROCESSING_INITIAL = true
 // 审阅模式的审批弹窗就是这么冒出来的——只在自己发消息后看状态会漏掉，所以空闲也要慢轮询。
 const IDLE_RECHECK_MS = 10000
 
-// 会让内容上移（用户往回看）的按键——用于同步断开滚动跟随
-const SCROLL_UP_KEYS = new Set(['PageUp', 'ArrowUp', 'Home'])
+
 
 // 世界 AI 对话消息（世界级会话，非 DM；reasoning = 思考过程；tool = 工具执行结果；note = 中间叙述）
 export interface ChatMsg {
@@ -75,6 +75,8 @@ export interface Approval {
   /** body 怎么渲染：markdown（散文/计划）| code（代码块）| text（纯文本） */
   body_format?: 'markdown' | 'code' | 'text'
   body_lang?: string
+  /** 距超时还剩多少秒（服务端唯一口径；输入框里打字的心跳会把它续回窗口大小） */
+  expires_in?: number
 }
 
 /** 解析 `[PREFIX]{json}` 事件体；前缀不匹配/JSON 坏返回 null */
@@ -119,6 +121,7 @@ export interface UseWorldChatReturn {
   chatProcessing: boolean
   chatHasMore: boolean
   chatLoadingOlder: boolean
+  /** 列表元素回调 ref（多个实例共存时逐个收集）——来自共享的 useStickToBottom */
   chatListRef: (el: HTMLDivElement | null) => void
   chatInputRef: RefObject<HTMLTextAreaElement | null>
   pendingItems: PendingItem[]
@@ -148,6 +151,8 @@ export interface UseWorldChatReturn {
   /** 待用户点按钮的审批项（队列，通常一次只有一条；刷新后由 /chat/status 恢复） */
   approvals: Approval[]
   resolveApproval: (approvalId: string, approved: boolean, note?: string) => Promise<void>
+  /** 审批心跳（打字时调用）：返回剩余秒数，0 = 已被处理 */
+  touchApproval: (approvalId: string) => Promise<number>
   /** 给会话改名（sessionId = 列表里任意一场）；返回规范化后的名字，'' = 已清除命名 */
   renameSession: (sessionId: string, title: string) => Promise<string>
   /** 下载会话记录（md / json）；文件名以服务端 Content-Disposition 为准 */
@@ -169,7 +174,20 @@ export function useWorldChat({ wid, onRefresh, onMsg }: UseWorldChatOptions) {
   const currentSessionRef = useRef(currentSession)
   currentSessionRef.current = currentSession
   // 供 WS 回调（onMessage 闭包）引用组件级滚动函数——[INSERT] 插入消息后滚到底部
-  const forceScrollToBottomRef = useRef<() => void>(() => {})
+  /**
+   * 贴底跟随：唯一实现见 hooks/useStickToBottom（DSH 对话页用同一份）。
+   * 解构成旧名字，是为了让下面既有的调用点不用动；onReachTop 走 ref，
+   * 因为 loadOlder 定义在后面（转发后运行时才取，避免「先用后声明」）。
+   */
+  const loadOlderFnRef = useRef<() => void>(() => {})
+  const stick = useStickToBottom({
+    onReachTop: () => loadOlderFnRef.current(),
+    onAtBottom: () => { unreadCountRef.current = 0; setUnreadCount(0) },
+  })
+  const {
+    listRef, listEls, eachList, firstList, isAtBottom, isAtBottomRef, canScroll: chatCanScroll,
+    scrollToBottom, forceScrollToBottom, follow, resetFollow, measure,
+  } = stick
   const sessionListRef = useRef(sessionList)
   sessionListRef.current = sessionList
   const chatProcessingRef = useRef(CHAT_PROCESSING_INITIAL)
@@ -181,30 +199,12 @@ export function useWorldChat({ wid, onRefresh, onMsg }: UseWorldChatOptions) {
   }, [])
   const [chatHasMore, setChatHasMore] = useState(false)
   const [chatLoadingOlder, setChatLoadingOlder] = useState(false)
-  // 移动/桌面双面板都渲染 renderChatInner → ref 收集所有实例，滚动作用在全部（否则只滚到隐藏的那个）
-  const listElsRef = useRef<HTMLDivElement[]>([])
-  const chatListRef = useCallback((el: HTMLDivElement | null) => {
-    if (el) {
-      if (!listElsRef.current.includes(el)) listElsRef.current.push(el)
-    } else {
-      listElsRef.current = listElsRef.current.filter((x) => x.isConnected)
-    }
-  }, [])
-  const eachList = useCallback((fn: (el: HTMLDivElement, i: number) => void) => {
-    listElsRef.current.forEach((el, i) => { if (el.isConnected) fn(el, i) })
-  }, [])
   const msgSeqRef = useRef(0)  // 本地临时消息 id（负数，避免与 DB id 碰撞）
   const chatInputRef = useRef<HTMLTextAreaElement>(null)
   // 工具执行完 → 世界文件可能被改 → 节流刷新（文件树/世界信息动态更新，不打断聊天流）
   const refreshTimerRef = useRef<number | null>(null)
   const onRefreshRef = useRef(onRefresh)
   onRefreshRef.current = onRefresh
-  // 滚动跟随：在底部 = 新消息自动滚到最新；不在底部 = 显示 ↓ 按钮
-  const [isAtBottom, setIsAtBottom] = useState(true)
-  const isAtBottomRef = useRef(true)
-  // 列表是否可滚动（内容溢出）：不可滚动时永远算"在底部"，但按钮入口仍要显示（没消息也要能直达底部）
-  const [chatCanScroll, setChatCanScroll] = useState(false)
-  const chatCanScrollRef = useRef(false)
   const [unreadCount, setUnreadCount] = useState(0)
   const unreadCountRef = useRef(0)
   const loadingHistoryRef = useRef(false)  // 标记是否在加载历史（prepend），不增加未读
@@ -232,7 +232,7 @@ export function useWorldChat({ wid, onRefresh, onMsg }: UseWorldChatOptions) {
     try {
       const q = opts?.before_id ? `?before_id=${opts.before_id}&limit=30` : '?limit=30'
       // 翻页时记录原滚动位置（prepend 后补回，作用于所有面板实例）
-      const heights = listElsRef.current.map((el) => el.scrollHeight)
+      const heights = listEls().map((el) => el.scrollHeight)
       const r = await api.get<{ messages: ChatMsg[]; has_more: boolean; current_session?: string; sessions?: { id: string; title?: string; last_active_at?: string; pinned?: boolean }[]; commands?: CmdSpec[] }>(`/worlds/${wid}/chat${q}`)
       if (r.current_session) setCurrentSession(r.current_session)
       if (Array.isArray(r.sessions)) setSessionList(r.sessions)
@@ -253,8 +253,8 @@ export function useWorldChat({ wid, onRefresh, onMsg }: UseWorldChatOptions) {
         // 区别在时机：本处运行在 setChatMsgs 之后、React 提交之前，量到的还是
         // 更新前的 DOM（= 用户此刻的真实位置）；跟随 effect 跑在提交之后，
         // 内容已撑高而 scrollTop 未跟上，量出来必然是"不在底部"。别把两者"统一"了。
-        const el = listElsRef.current.find((x) => x.isConnected)
-        const atBottomNow = el ? el.scrollHeight - el.scrollTop - el.clientHeight < 80 : false
+        const el = firstList()
+        const atBottomNow = el ? el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_THRESHOLD : false
         if (atBottomNow) {
           forceScrollToBottom()
         }
@@ -291,50 +291,12 @@ export function useWorldChat({ wid, onRefresh, onMsg }: UseWorldChatOptions) {
     }
   }, [chatLoadingOlder, chatHasMore, chatMsgs, loadChat])
 
-  // 滚动状态统一处理（rAF 节流）：capture 监听 window scroll（scroll 不冒泡但经捕获阶段，覆盖列表/页面任何滚动）
-  // ⚠️ 每帧最多一次布局读取 + 状态更新：滚动事件高频触发，若每次都读 scrollHeight/clientHeight（reflow）会卡
-  const loadOlderRef = useRef(loadOlder)
-  loadOlderRef.current = loadOlder
-  const scrollRafRef = useRef<number | null>(null)
-  const updateScrollState = useCallback(() => {
-    scrollRafRef.current = null
-    const el = listElsRef.current.find((x) => x.isConnected)
-    if (!el) return
-    if (el.scrollTop < 30) loadOlderRef.current()
-    // 只看列表元素滚动位置（不用 window.scrollY——列表占满视口时恒 0，误判在底部）
-    const listCanScroll = el.scrollHeight - el.clientHeight > 4
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80
-    isAtBottomRef.current = atBottom
-    setIsAtBottom(atBottom)
-    chatCanScrollRef.current = listCanScroll
-    setChatCanScroll(listCanScroll)
-    if (atBottom) {
-      unreadCountRef.current = 0
-      setUnreadCount(0)
-    }
-  }, [])
-  const onAnyScroll = useCallback(() => {
-    if (scrollRafRef.current !== null) return
-    scrollRafRef.current = requestAnimationFrame(updateScrollState)
-  }, [updateScrollState])
-  useEffect(() => {
-    window.addEventListener('scroll', onAnyScroll, true)
-    return () => {
-      window.removeEventListener('scroll', onAnyScroll, true)
-      if (scrollRafRef.current !== null) cancelAnimationFrame(scrollRafRef.current)
-    }
-  }, [onAnyScroll])
+  loadOlderFnRef.current = loadOlder
 
   // 消息/布局变化后重新测量可滚性（列表不可滚动时按钮仍显示入口）
   // ⚠️ 依赖 chatMsgs.length 而非 chatMsgs：气泡内容流式更新（每 token 一次）不触发测量，
   // 否则流式输出期间高频读取 scrollHeight/clientHeight 强制 reflow，底部滑动时卡顿
-  useEffect(() => {
-    const el = listElsRef.current.find((x) => x.isConnected)
-    if (!el) return
-    const can = el.scrollHeight - el.clientHeight > 4
-    chatCanScrollRef.current = can
-    setChatCanScroll(can)
-  }, [chatMsgs.length])
+  useEffect(() => { measure() }, [chatMsgs.length, measure])
 
   // 新消息到达时，如果不在底部，增加未读计数（历史加载时不增加）
   // ⚠️ 2026-08-13 修复：原来依赖 chatMsgs 变化——流式每 chunk 更新都触发（思考气泡逐字、
@@ -349,75 +311,11 @@ export function useWorldChat({ wid, onRefresh, onMsg }: UseWorldChatOptions) {
     }
   }, [chatMsgs])
 
-  // 滚到底部并校验：double rAF 等布局稳定 → 延时后仍不在底部再滚一次（兜底时序问题）
-  const forceScrollToBottom = useCallback(() => {
-    const settle = () => {
-      eachList((el) => { el.scrollTop = el.scrollHeight })
-      // 兜底：内容可能还在渲染（图片/代码块），稍后不在底部再滚一次
-      window.setTimeout(() => {
-        eachList((el) => {
-          if (el.scrollHeight - el.scrollTop - el.clientHeight > 10) el.scrollTop = el.scrollHeight
-        })
-      }, 250)
-    }
-    requestAnimationFrame(() => requestAnimationFrame(settle))
-  }, [eachList])
-  forceScrollToBottomRef.current = forceScrollToBottom
 
-  // 新消息 / 流式内容到达：在底部就跟随（首次瞬时等布局稳定；流式中用瞬时滚，避免 smooth 动画堆积打架）
-  //
-  // ⚠️ 判定跟随与否一律用 isAtBottomRef —— 与「回到底部」按钮**同一个真相源**：在底部就跟随，不在就不跟随。
-  // 绝不在这里重新测量 scrollHeight - scrollTop - clientHeight：本 effect 跑在 DOM 更新之后，
-  // 内容已经撑高而 scrollTop 还没跟上，会把"正在跟随"误判成"用户翻走了"，此后越差越多、跟随永久断掉
-  //（2026-09-13 修复：思考气泡一次性撑高超过 80px 即触发，表现为跟随在中途被打断）。
-  // 用户主动离开底部改由下方 wheel/touch/keydown **同步**判定，不依赖位置测量。
-  const loadedOnceRef = useRef(false)
-  useEffect(() => {
-    if (chatMsgs.length === 0 || !isAtBottomRef.current) return
-    if (!loadedOnceRef.current) {
-      loadedOnceRef.current = true
-      forceScrollToBottom()
-      return
-    }
-    // 条数与内容都跟随：流式是在同一条气泡里增长，条数不变但高度一直在涨
-    eachList((el) => { el.scrollTo({ top: el.scrollHeight, behavior: chatSending ? 'auto' : 'smooth' }) })
-  }, [chatMsgs, chatSending, eachList, forceScrollToBottom])
 
-  // 用户主动往上滚 → 立刻断开跟随（同步、不读布局）
-  // 必须同步：若等 rAF 节流的位置判断，中间这一帧若恰好来了流式分片，跟随会把视图拽回底部；
-  // 而这次回弹又触发 scroll 事件把 ref 置回 true，用户将再也滚不上去。
-  useEffect(() => {
-    const breakFollow = () => {
-      if (!isAtBottomRef.current) return
-      isAtBottomRef.current = false
-      setIsAtBottom(false)
-    }
-    const onWheel = (e: WheelEvent) => { if (e.deltaY < 0) breakFollow() }
-    const onKey = (e: KeyboardEvent) => { if (SCROLL_UP_KEYS.has(e.key)) breakFollow() }
-    let lastTouchY = 0
-    const onTouchStart = (e: TouchEvent) => { lastTouchY = e.touches[0]?.clientY ?? 0 }
-    const onTouchMove = (e: TouchEvent) => {
-      const y = e.touches[0]?.clientY ?? 0
-      if (y > lastTouchY) breakFollow()  // 手指下滑 = 内容上移 = 往回看
-      lastTouchY = y
-    }
-    window.addEventListener('wheel', onWheel, { capture: true, passive: true })
-    window.addEventListener('keydown', onKey, true)
-    window.addEventListener('touchstart', onTouchStart, { capture: true, passive: true })
-    window.addEventListener('touchmove', onTouchMove, { capture: true, passive: true })
-    return () => {
-      window.removeEventListener('wheel', onWheel, true)
-      window.removeEventListener('keydown', onKey, true)
-      window.removeEventListener('touchstart', onTouchStart, true)
-      window.removeEventListener('touchmove', onTouchMove, true)
-    }
-  }, [])
-
-  const scrollToBottom = useCallback((smooth = true) => {
-    isAtBottomRef.current = true
-    setIsAtBottom(true)
-    eachList((el) => { el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' }) })
-  }, [eachList])
+  // 新消息 / 流式内容到达 → 在底部才跟随（判定、首次落底、断开跟随都在共享 hook 里）
+  // 发送中用瞬时滚，避免 smooth 动画堆积打架
+  useEffect(() => { follow(!chatSending) }, [chatMsgs, chatSending, follow])
 
   // ── 订阅 turn 直播（SSE）：发消息后 / 刷新恢复 共用 ──
   // 断开自动重连（最多 2 次）；返回是否收到 [DONE]（false = 连接失败/重连耗尽，调用方拉历史收尾）
@@ -539,7 +437,7 @@ export function useWorldChat({ wid, onRefresh, onMsg }: UseWorldChatOptions) {
                 next[i] = { id: ins.msg_id, role: 'user', content: ins.content, attachments: ins.attachments }
                 return next
               })
-              requestAnimationFrame(() => forceScrollToBottomRef.current?.())
+              requestAnimationFrame(() => forceScrollToBottom())
             }
             continue
           }
@@ -554,6 +452,7 @@ export function useWorldChat({ wid, onRefresh, onMsg }: UseWorldChatOptions) {
                   : [...list, {
                     approval_id: ap.approval_id, kind: ap.kind, title: ap.title, detail: ap.detail,
                     body: ap.body, body_format: ap.body_format, body_lang: ap.body_lang,
+                    expires_in: ap.expires_in,
                   }])
             }
             continue
@@ -762,6 +661,19 @@ export function useWorldChat({ wid, onRefresh, onMsg }: UseWorldChatOptions) {
     }
   }, [wid, onMsg])
 
+  /** 审批弹窗心跳：用户正在输入框里打字 → 让服务端把「多久没人动」的计时重置。
+   *  返回剩余秒数（0 = 这条审批已被处理），弹窗据此把倒计时接着走下去。
+   *  它只是续期，绝不代替用户点按钮——门禁「超时一律不放行」的语义不变。 */
+  const touchApproval = useCallback(async (approvalId: string): Promise<number> => {
+    try {
+      const r = await api.post<{ success: boolean; expires_in: number }>(
+        `/worlds/${wid}/chat/approval/touch`, { approval_id: approvalId })
+      return r.expires_in
+    } catch {
+      return 0                       // 心跳失败不值得打扰用户：按「没续上」处理，倒计时照走
+    }
+  }, [wid])
+
   // ── 插入消息（AI 运行中中途发送的普通消息，不阻塞等整轮结束）──
   // 设计见 docs/group_world/design/group_world_design.md §7.7：
   //   普通消息 → 立即发后端进插入队列 → 后端在下一轮 LLM 调用前注入
@@ -885,12 +797,12 @@ export function useWorldChat({ wid, onRefresh, onMsg }: UseWorldChatOptions) {
     wid,
     chatMsgs, chatInput, setChatInput, setChatMsgs,
     chatSending, chatProcessing, chatHasMore, chatLoadingOlder,
-    chatListRef, chatInputRef, pendingItems, setPendingItems, suggestions,
+    chatListRef: listRef, chatInputRef, pendingItems, setPendingItems, suggestions,
     cmdActive, setCmdActive, cmdQuery, setCmdQuery, cmdIdx, setCmdIdx, cmdFiltered, worldCommands,
     submitText, insertSuggestion, isAtBottom, chatCanScroll, scrollToBottom, forceScrollToBottom,
     currentSession, sessionList, switchSession, newSession, togglePin, unreadCount,
     renameSession, exportSession,
-    approvals, resolveApproval,
+    approvals, resolveApproval, touchApproval,
   }
 }
 

@@ -55,6 +55,8 @@ FORCED_PROMPT_SEGMENTS = [
     # 注意事项（通用行为准则，浓缩版）
     "\n【建议按钮】要在回复里写「下面几个建议/下一步选项」时，先用 suggest_questions 把这几条交给平台——界面显示的才是你这几条；不调用而只在正文里写，界面显示的是平台预设，两者对不上。\n"
     "\n【注意事项】遇到含糊指令主动提问确认，不瞎猜；调用工具后不要在回复里重复工具原始输出，直接说做了什么；创建文件后告知路径；给建议时简要阐述每个建议是什么（别只丢列表）；收尾最后一句写实质内容，不用「等你定方向」这类空话。\n"
+    # 收尾清单（世界 AI 2026-09-21 反馈：改动收工靠记忆库补，容易漏同步）
+    "\n【收尾清单】一次改动收工前按序走完四步，缺一步都不算完成：① 落盘（改动写进文件；本地镜像改完要 world_push 同步回世界）② 自检（跑一次语法/静态检查或构建，把结果写进回复）③ 记忆（进度、坑、下一步写进 manage_records）④ 汇报（正文里说清做了什么、验证了什么、还欠什么）。文档、记忆与代码要同轮同步，别留到最后几轮。\n"
     "【对话命名】一个话题聊出眉目、或换了新话题时，用 rename_session 给这场对话起个 6~20 字的短名字"
     "（如「造卡牌对战界面」「修地缝掉落」）——用户在会话列表里靠名字认对话，别让它一直显示 w12:m:3f9a… 这种编号；"
     "用户说「这个对话叫 xxx」就照改。",
@@ -181,6 +183,17 @@ async def build_memory_map(world_repo: WorldRepository, world_id: int) -> str | 
     return "\n".join(lines)
 
 
+
+
+def turn_completed(full_content: str, had_error: bool) -> bool:
+    """这轮算不算**正常结束**（决定清不清「未完成工作流」记忆）。
+
+    只看"正文是否以「（」开头"是不够的：出错时正文被换成友好提示（「💰 …余额不足（402）…」、
+    「⏳ 请求太频繁…」），它**不以「（」开头** —— 那样会把刚写好的未完成工作流记忆清掉，
+    而那条提示里恰恰写着「已记录未完成的工作流，充值后说「继续」即可接着做」（用户 2026-09-23）。
+    """
+    text = str(full_content or "")
+    return bool(text) and not had_error and not text.startswith("（")
 
 
 def _friendly_llm_error(err) -> str:
@@ -327,12 +340,14 @@ WORLD_CHAT_KEEP_LAST = 10          # 压缩后保留的最近真实消息数
 # 少于 N 条不提示压缩。必须比保留窗口多 1：真实消息数 ≤ 保留窗口时压缩是**空操作**，
 # 否则会出现"提示 AI 去压缩、压了却无可压缩"（旧值 6 < 10，正好落在这个空区间里）
 WORLD_CONTEXT_MIN_MESSAGES = WORLD_CHAT_KEEP_LAST + 1
-DEFAULT_MAX_TOOL_ROUNDS = 50       # 工具循环默认上限（可在设计页配置 max_tool_rounds 覆盖）
-ROUND_BUDGET_CEILING = 200         # 单轮工具调用硬上限（含计划模式申请的提额）
+DEFAULT_MAX_TOOL_ROUNDS = 50       # 改动预算默认上限（可在设计页配置 max_tool_rounds 覆盖）
+ROUND_BUDGET_CEILING = 200         # 改动预算硬上限（含计划模式申请的提额）
+READ_ROUND_FACTOR = 2              # 只读预算 = 改动预算 × 2（默认 50 → 100）
+READ_ROUND_CEILING = 400           # 只读预算硬上限（申请提额也封在这里）
 
 
 def resolve_round_budget(ai_cfg: dict) -> int:
-    """单轮工具调用上限的**唯一口径**：世界配置 max_tool_rounds（默认 50，硬顶 200）"""
+    """**改动**预算的唯一口径：世界配置 max_tool_rounds（默认 50，硬顶 200）"""
     raw = (ai_cfg or {}).get("max_tool_rounds")
     if raw in (None, ""):
         return DEFAULT_MAX_TOOL_ROUNDS
@@ -342,22 +357,79 @@ def resolve_round_budget(ai_cfg: dict) -> int:
         return DEFAULT_MAX_TOOL_ROUNDS
 
 
+def resolve_read_budget(ai_cfg: dict) -> int:
+    """**只读**预算的唯一口径：改动预算 × 2，硬顶 400（用户 2026-09-23：搜文件不该吃改动额度）。"""
+    return min(resolve_round_budget(ai_cfg) * READ_ROUND_FACTOR, READ_ROUND_CEILING)
+
+
+def current_budgets(turn_state: dict, ai_cfg: dict) -> tuple[int, int]:
+    """本轮实际可用的 (改动, 只读) 预算。
+
+    **每轮都要重新读**：用户在弹窗里批准提额是写在 turn_state 上的，循环外只算一次的话
+    批准当轮就不生效（旧写法正是如此，present_plan 的 tool_rounds 提额从来没生效过）。
+    """
+    state = turn_state or {}
+    write = min(int(state.get("round_budget") or 0) or resolve_round_budget(ai_cfg), ROUND_BUDGET_CEILING)
+    read = min(int(state.get("read_round_budget") or 0) or resolve_read_budget(ai_cfg), READ_ROUND_CEILING)
+    return write, read
+
+
+def granted_read_budget(current_read: int, granted: int) -> int:
+    """批准增加只读预算后的新值：当前 + 申请量，硬顶封住（唯一算法）。"""
+    return min(int(current_read) + max(1, int(granted)), READ_ROUND_CEILING)
+
+
+def is_write_round(tool_names) -> bool:
+    """这一批工具算不算**改动轮**：只要有一个改动类工具就算（同批的只读免费跟着走）。
+
+    判定复用 world_ai_mode.action_of（SAFE_TOOLS = 无副作用）—— 只读名单只有一份。
+    """
+    from app.services.world.world_ai_mode import action_of
+    return any(action_of(str(name or "")) is not None for name in tool_names)
+
+
+def round_budget_error(tool_name: str, turn_state: dict, write_budget: int, read_budget: int) -> str | None:
+    """这个工具现在还能不能执行：预算见底的类型返回拒绝理由（进 tool 结果，不打断调用链）。
+
+    不抛异常、不算失败——悬空的 tool_calls 会让下一次请求直接 400（2026-09-14 事故）。
+    """
+    from app.services.world.world_ai_mode import action_of
+    state = turn_state or {}
+    if action_of(str(tool_name or "")) is not None:
+        if int(state.get("write_rounds", 0)) >= write_budget:
+            return (f"改动预算已用尽（{write_budget} 轮）：本轮不再执行任何改动类工具（写文件/删除/下载等）。"
+                    "请立刻收尾：把已完成的落盘，并在正文里写清还欠什么、下一步怎么做。")
+        return None
+    if int(state.get("read_rounds", 0)) >= read_budget:
+        return (f"只读预算已用尽（{read_budget} 轮）：本轮不再执行只读工具（读/搜/列目录等）。"
+                "确实还需要读，就用 request_read_budget 向用户申请增加（写清还要几轮、为什么），"
+                "用户批准当轮立刻生效；不需要就按现有信息收尾。")
+    return None
+
+
 def prefix_capability_sources(world_id: int) -> list[str]:
     """进前缀的能力源：compact / 清空上下文 / 会话起点解锁共用同一份口径（要改只改这里）"""
     return ["ai-skills", f"world-prompt-{world_id}", "forced-prompt", f"world-name-{world_id}"]
 
 
-def build_budget_prompt(max_rounds: int) -> str:
+def build_budget_prompt(max_rounds: int, read_rounds: int | None = None) -> str:
     """本轮预算段（进前缀；按世界配置稳定 → 缓存友好）。
 
     世界 AI 2026-09-18 反馈：「本轮末提示只剩 3 轮：大改容易卡在半途」——它到快用完才知道上限。
     开局就给数，它才能规划"先落盘再验证"，而不是撞墙。
+
+    2026-09-23 用户要求：**读的预算单独一本账**（搜文件不该吃掉改动额度），
+    不够可以申请提额 —— 所以开头就把两本账和申请入口一起讲清楚。
     """
+    read_rounds = resolve_read_budget({"max_tool_rounds": max_rounds}) if read_rounds is None else read_rounds
     return (
-        f"\n【本轮预算】本轮最多 {max_rounds} 轮工具调用（世界配置 max_tool_rounds）。"
-        "开局就按这个数规划：多轮的活先把已完成的部分落盘再验证，别把大改留到最后一轮；"
-        "剩 5 轮会提醒你收尾，剩 2 轮禁止开启新工作。"
-        f"任务明显超过上限时，计划模式下可在 present_plan 里带 tool_rounds 申请提额"
+        f"\n【本轮预算】两本账分开记，开局就按这个数规划：\n"
+        f"- 改动预算 {max_rounds} 轮：写文件、改文件、删除、下载这类**有副作用**的操作，一轮一个（同一轮里改几个文件也只算一轮）。\n"
+        f"- 读取预算 {read_rounds} 轮：整轮都是只读的（file_read / file_grep / file_list / view_api_doc 等）记在读取账上，"
+        "**不占改动预算**；一轮里夹了改动类工具就按改动轮记账。\n"
+        "每轮都会告诉你两本账各还剩多少。改动预算只剩 5 轮会提醒你收尾、剩 2 轮禁止开启新工作；"
+        f"读取预算不够时用 request_read_budget 向用户申请增加（写清还要几轮、为什么，用户批准当轮立刻生效，"
+        f"硬顶 {READ_ROUND_CEILING} 轮）；计划模式下也可在 present_plan 里带 tool_rounds 申请**改动**预算的提额"
         f"（上限 {ROUND_BUDGET_CEILING} 轮，用户批准计划即同时批准提额）。"
     )
 
@@ -979,7 +1051,7 @@ async def _inject_pending_user_messages(
 
 async def _run_one_tool_call(
     world_repo: WorldRepository, world, world_id: int, sid_db: str | None,
-    acc: dict, turn_state: dict, messages: list,
+    acc: dict, turn_state: dict, messages: list, budget_error: str | None = None,
 ):
     """执行单个工具调用：执行 → 摘要/详情 → 注入 AI 上下文 → 落库 → 状态事件。
 
@@ -1001,12 +1073,28 @@ async def _run_one_tool_call(
     # ⓪ 运行模式门禁（唯一入口）：审阅/计划模式下敏感操作在这里弹窗等用户点头；
     #    auto 直接放行并告知工具「平台已兜底」，工具不必自己再问一遍。
     from app.tools.world.shared import parse_args
-    allowed, approved, feedback = await gate_tool_call(
-        world, world_id, acc["name"], parse_args(acc.get("arguments") or ""), turn_state,
-    )
-    if not allowed:
-        result = {"success": False, "error": feedback, "blocked_by": "ai_mode"}
+    if budget_error:
+        # 预算见底的类型这一轮直接挡下：仍然给出 tool 结果（悬空 tool_call 会让下次请求 400）
+        allowed, approved, feedback = False, False, budget_error
+        result = {"success": False, "error": budget_error, "blocked_by": "round_budget"}
     else:
+        allowed, approved, feedback = await gate_tool_call(
+            world, world_id, acc["name"], parse_args(acc.get("arguments") or ""), turn_state,
+        )
+    if allowed:
+        try:
+            result = await execute_world_tool(
+                world_repo, world, acc["name"], acc["arguments"], turn_state,
+                on_progress=_on_progress, approved=approved,
+            )
+        except Exception as e:
+            # 工具/技能自己抛异常：如实回传错误，交给 AI 决定下一步（别重试——副作用可能已发生）
+            logger.warning(f"🌐 世界 #{world_id} 工具 {acc['name']} 执行失败: {e}")
+            result = {"success": False, "error": str(e)[:500]}
+        # 用户点同意时写的理由/补充要求必须进 AI 上下文（feedback 为空时原样返回）
+        result = with_user_note(result, feedback)
+    elif not result:
+        result = {"success": False, "error": feedback or "该工具未执行", "blocked_by": "ai_mode"}
         try:
             result = await execute_world_tool(
                 world_repo, world, acc["name"], acc["arguments"], turn_state,
@@ -1057,11 +1145,21 @@ async def _run_one_tool_call(
 async def _execute_tool_round(
     world_repo: WorldRepository, world, world_id: int, tool_call_acc: dict,
     messages: list, turn_state: dict, sid_db: str | None,
+    *, write_budget: int, read_budget: int,
 ):
-    """执行本轮所有工具调用：逐个交给 _run_one_tool_call，事件按序透传。"""
+    """执行本轮所有工具调用：逐个交给 _run_one_tool_call，事件按序透传。
+
+    顺便记一笔预算账：这一批里**只要有一个改动类工具**就算改动轮（同批的只读免费跟着走），
+    整批都是只读才算只读轮 —— 两本账分开，搜文件不再吃改动额度（用户 2026-09-23）。
+    """
+    names = [acc.get("name") for acc in tool_call_acc.values()]
+    write_round = is_write_round(names)
     for idx, acc in sorted(tool_call_acc.items()):
-        async for line in _run_one_tool_call(world_repo, world, world_id, sid_db, acc, turn_state, messages):
+        err = round_budget_error(acc.get("name") or "", turn_state, write_budget, read_budget)
+        async for line in _run_one_tool_call(world_repo, world, world_id, sid_db, acc, turn_state, messages, budget_error=err):
             yield line
+    key = "write_rounds" if write_round else "read_rounds"
+    turn_state[key] = int(turn_state.get(key, 0)) + 1
 
 
 def _parse_dsml_tool_calls(text: str) -> list[dict] | None:
@@ -1217,11 +1315,19 @@ async def _prepare_world_chat(
     system_prompt = world_context_block(world) + "\n\n" + eff_user_prompt
     system_prompt += eff_forced_prompt  # 强注入段：平台强约束，用户不可改
     system_prompt += build_mode_prompt(get_mode(world))  # 运行模式（自动/审阅/计划）
-    system_prompt += build_budget_prompt(resolve_round_budget(cfg))  # 轮次预算前置（前缀稳定，可缓存）
+    system_prompt += build_budget_prompt(resolve_round_budget(cfg), resolve_read_budget(cfg))  # 双预算前置（前缀稳定，可缓存）
     # 昵称也在前缀里（版本化保证缓存命中）：改名当轮只有尾部「世界AI昵称」变更通知，
     # 全文要等 compact / 清空上下文才刷新——所以这里给一条常驻的冲突裁决规则。
     system_prompt += (f"\n【名字】你的名字是「{eff_name}」，对外标识 world-{world_id}。"
                       "若收到「世界AI昵称」变更通知，以通知里的新名字为准（系统提示全文在下次 compact / 清空上下文后刷新）。")
+    # 通俗模式（用户级偏好）：跟着发消息的人走——同一个世界，新手看到的是带解释的话，老手看到的照旧
+    try:
+        from app.models.user import User as UserModel
+        from app.utils.pure.expression_style import build_expression_segment
+        _reader = await world_repo.get(UserModel, user_id) if user_id else None
+        system_prompt += build_expression_segment(_reader)
+    except Exception as e:
+        logger.warning(f"通俗模式注入失败（非致命）: {e}")
 
     notices = await take_pending_notices(world_repo, world_id)
     notice_lines = "\n".join(
@@ -1600,9 +1706,10 @@ async def _run_tool_loop(
             ],
             **({"reasoning_content": full_reasoning} if full_reasoning else {}),
         })
-        # 工具循环上限：世界配置 max_tool_rounds；计划模式获批提额时以 turn_state 里的预算为准
-        max_rounds = min(int(turn_state.get("round_budget") or 0) or resolve_round_budget(cfg),
-                         ROUND_BUDGET_CEILING)
+        # 双预算在 current_budgets 里定义（改动 / 只读各自一本账），**每轮重算**：
+        # 用户在弹窗里批准的提额当轮就生效（旧写法在循环外算一次 → present_plan 的提额从来没生效过）
+        turn_state.setdefault("write_rounds", 0)
+        turn_state.setdefault("read_rounds", 0)
         async def _exec_pending_tools():
             """执行「当前待执行的那一批工具」+ 注入插入消息。
 
@@ -1610,7 +1717,11 @@ async def _run_tool_loop(
             反了会把 user 消息插进 assistant(tool_calls) 与其 tool_response 之间，
             破坏 DeepSeek 消息链 → API 400。读的是外层当前绑定（每轮换新的一批）。
             """
-            async for event in _execute_tool_round(world_repo, world, world_id, tool_call_acc, messages, turn_state, sid_db):
+            _wb, _rb = current_budgets(turn_state, cfg)
+            async for event in _execute_tool_round(
+                world_repo, world, world_id, tool_call_acc, messages, turn_state, sid_db,
+                write_budget=_wb, read_budget=_rb,
+            ):
                 yield event
             # 此时 tool_response 已入 messages，user 追加在其后是合法链
             try:
@@ -1618,24 +1729,54 @@ async def _run_tool_loop(
             except Exception as e:
                 logger.warning(f"🌐 世界 #{world_id} 插入消息注入失败（非致命）: {e}")
 
+        # 进度口径（世界 AI 2026-09-21 反馈：只在剩 5 轮才提醒，来不及同步文档与记忆）：
+        # 两本账分开报 —— 改动见底要收尾，只读见底可以申请提额，混着报 AI 会误判还能不能干活。
         final = ""
-        for _r in range(max_rounds):
+        hit_limit = False
+        _r = 0
+        while True:
+            write_budget, read_budget = current_budgets(turn_state, cfg)
+            turn_state["round_budgets"] = (write_budget, read_budget)   # 供 request_read_budget 读当前值
+            write_left = write_budget - int(turn_state.get("write_rounds", 0))
+            read_left = read_budget - int(turn_state.get("read_rounds", 0))
+            # 两本账都见底（或总轮数触顶）才收工：改动见底时还可以只读查证
+            if (write_left <= 0 and read_left <= 0) or _r >= write_budget + read_budget:
+                hit_limit = True
+                break
             # 执行本轮所有工具调用（执行→落库→[TOOL] 事件）
             async for event in _exec_pending_tools():
                 yield event
 
+            # 记账后重算：这一轮记在哪本账上，由 _execute_tool_round 按「本批有没有改动类工具」定
+            write_budget, read_budget = current_budgets(turn_state, cfg)
+            write_left = write_budget - int(turn_state.get("write_rounds", 0))
+            read_left = read_budget - int(turn_state.get("read_rounds", 0))
             # 下一轮：继续带 tools，直到模型不再调用（同时捕获思考内容）
-            # 轮次收尾：最后 5 轮软提醒，最后 2 轮改成硬约束——软提醒在批量替换/大改里会被忽略，
+            # 轮次收尾：改动最后 5 轮软提醒，最后 2 轮改成硬约束——软提醒在批量替换/大改里会被忽略，
             # 结果是任务停在半途、下一轮还得重新摸文件（世界 AI 2026-09-18 反馈）
-            remaining = max_rounds - _r
-            if remaining <= 2:
+            if write_left <= 2:
                 messages.append({"role": "system", "content": (
-                    f"⛔ 只剩最后 {remaining} 轮：禁止开启任何新工作（不新建文件、不开始新模块、不做批量替换）。"
+                    f"⛔ 改动预算只剩 {max(0, write_left)} 轮：禁止开启任何新工作（不新建文件、不开始新模块、不做批量替换）。"
                     "立刻收尾落盘：把已完成/未完成的进度写进 manage_records，直接在回复正文里给出总结"
                     "（已完成什么、还欠什么、下一步怎么做），必要时做一次自检或构建验证。"
                 )})
-            elif remaining <= 5:
-                messages.append({"role": "system", "content": f"⚠️ 你还有最后 {remaining} 轮工具调用机会，请尽快结束当前工作并给出总结！"})
+            elif write_left <= 5:
+                messages.append({"role": "system", "content": f"⚠️ 改动预算还剩 {write_left} 轮（共 {write_budget}），请尽快结束当前工作并给出总结！"})
+            if read_left <= 0:
+                messages.append({"role": "system", "content": (
+                    f"📖 只读预算已用尽（{read_budget} 轮）：别再翻文件了。确实还需要读，就用 "
+                    "request_read_budget 向用户申请增加（写清还要几轮、为什么），用户批准当轮立刻生效；"
+                    "不需要就按现有信息收尾。"
+                )})
+            elif read_left <= 5:
+                messages.append({"role": "system", "content": (
+                    f"📖 只读预算还剩 {read_left} 轮（共 {read_budget}）：不够就提前用 request_read_budget 申请，别读到一半卡住。"
+                )})
+            elif (_r + 1) % 10 == 0 or (_r + 1) in {max(1, write_budget // 3), max(1, write_budget * 2 // 3)}:
+                messages.append({"role": "system", "content": (
+                    f"⏳ 进度：已用 {_r + 1} 轮（改动 {turn_state.get('write_rounds', 0)}/{write_budget}、只读 {turn_state.get('read_rounds', 0)}/{read_budget}）。"
+                    "按开局预算推进；文档与长期记忆跟着代码节奏同步，别攒到最后几轮。"
+                )})
             # 2026-08-13：工具轮流式化——逐 chunk 转发正文/思考（之前等整次调用结束一次性出）
             out: dict = {}
             async for event in _stream_llm_once(
@@ -1677,8 +1818,9 @@ async def _run_tool_loop(
                 i: {"id": tc.get("id", ""), "name": tc["function"]["name"], "arguments": tc["function"].get("arguments") or ""}
                 for i, tc in enumerate(tcs)
             }
-        else:
-            # 达到轮次上限：最后请求的那批工具也得执行——否则工作丢了，而且
+            _r += 1
+        if hit_limit:
+            # 预算用尽（两本账都见底）：最后请求的那批工具也得执行——否则工作丢了，而且
             # assistant(tool_calls) 悬空会让收尾轮被 API 直接拒掉（2026-09-14 修的 400）
             async for event in _exec_pending_tools():
                 yield event
@@ -1858,10 +2000,11 @@ async def stream_world_chat(
                     else:
                         full_content = _friendly_llm_error(turn_error) if turn_error else "（对话中断：工具执行出错，请重试或换个说法）"
                 await _save_ai_reply(world_repo, world, full_content, full_reasoning, session_id=sid_db)
-                # 工作流记忆：完整结束（有最终回复）→ 清除；中断 → 记录已做步骤，下次对话继续
+                # 工作流记忆：正常结束 → 清除；中断/出错（含余额不足这类"被迫终止"）→ 记录已做步骤，
+                # 下次说「继续」接着做（判定收在 turn_completed 一处：出错提示不算正常结束）
                 try:
                     cfg_all = dict(world.config or {})
-                    if full_content and not full_content.startswith("（"):
+                    if turn_completed(full_content, had_error):
                         cfg_all.pop("workflow_memory", None)
                     elif tool_call_acc:
                         cfg_all["workflow_memory"] = {

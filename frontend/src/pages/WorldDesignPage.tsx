@@ -6,7 +6,7 @@
  */
 import { useEffect, useLayoutEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
-import { ChevronLeft, ChevronRight, Folder, FolderOpen, FolderInput, Upload, Plus, Pencil, Eye, MessageCircle, Save, MoreHorizontal, FileText, Trash2, Settings, RefreshCw, ExternalLink, BookOpen, X, Download, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Folder, FolderOpen, FolderInput, Upload, Plus, Pencil, Eye, MessageCircle, Save, MoreHorizontal, FileText, Trash2, Settings, BookOpen, X, Download, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { api } from '../api/client'
 import { saveText } from '../utils/download'
 import GroupManagerModal from '../components/GroupManagerModal'
@@ -16,11 +16,11 @@ import WorldFileTree, { buildWorldTree, type WorldFile } from '../components/wor
 import WorldSessionList, { type WorldSessionInfo } from '../components/world/WorldSessionList'
 import FileContentPane, { fileTypeIcon } from '../components/world/FileContentPane'
 import WorldCreatorConfig, { type WorldCreator, type WorldUsageStats } from '../components/world/WorldCreatorConfig'
+import WorldPreviewFrame, { WorldPreviewActions } from '../components/world/WorldPreviewPane'
 import { getCodeLang, isMarkdownFile } from '../utils/mime'
-import { tryOpenWorldWindow } from '../utils/worldView'
 import { useResizableSidebar } from '../hooks/useResizableSidebar'
 import { useElementWidth } from '../hooks/useElementWidth'
-import { Button, Dialog, Input } from '../components/ui'
+import { Button, Dialog, IconButton, Input, MenuPanel, MenuItem } from '../components/ui'
 import { useT } from '../i18n/I18nContext'
 
 /**
@@ -154,6 +154,11 @@ export default function WorldDesignPage() {
   const [renaming, setRenaming] = useState<{ id: string } | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [previewKey, setPreviewKey] = useState(0)
+  // 专注模式下的预览覆盖层：中栏被收起后，看预览只要一次点击（走覆盖层而不是展开中栏，
+  // 这样对话列的宽度与滚动位置都不动）
+  const [previewOpen, setPreviewOpen] = useState(false)
+  // 退出专注时收掉覆盖层：否则回普通模式后它和中栏的预览会同时存在，两个"预览"打架
+  useEffect(() => { if (!chatFocus) setPreviewOpen(false) }, [chatFocus])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState('')
@@ -668,14 +673,14 @@ export default function WorldDesignPage() {
                 上传
               </button>
               {uploadMenuOpen && (
-                <div className="absolute right-0 top-full mt-1 w-56 bg-surface border border-border rounded-control shadow-lg p-1 z-modal">
-                  <button onClick={mobileUploadHere} className="w-full inline-flex items-center gap-1.5 text-left text-xs px-3 py-2 rounded hover:bg-elevated text-textPrimary">
-                    <Upload size={13} /> 上传到此位置（{mobileDir || '/'}）
-                  </button>
-                  <button onClick={mobileUploadElsewhere} className="w-full inline-flex items-center gap-1.5 text-left text-xs px-3 py-2 rounded hover:bg-elevated text-textPrimary">
-                    <FolderOpen size={13} /> 选择其它位置…
-                  </button>
-                </div>
+                <MenuPanel className="absolute right-0 top-full mt-1 w-56 p-1 z-modal">
+                  <MenuItem onClick={mobileUploadHere} className="inline-flex items-center gap-1.5 text-xs">
+                    <Upload size={13} /> {t('tool:world.files.uploadHere', { dir: mobileDir || '/' })}
+                  </MenuItem>
+                  <MenuItem onClick={mobileUploadElsewhere} className="inline-flex items-center gap-1.5 text-xs">
+                    <FolderOpen size={13} /> {t('tool:world.files.uploadElsewhere')}
+                  </MenuItem>
+                </MenuPanel>
               )}
             </div>
           )}
@@ -711,20 +716,12 @@ export default function WorldDesignPage() {
         ) : mobileTab === 'preview' ? (
           <div className="flex-1 flex flex-col min-h-0">
             <div className="px-3 py-1.5 text-xs text-textSecondary bg-surface/60 border-b border-border flex items-center gap-2">
-              <span className="truncate flex-1">世界预览（/world/{wid}/preview）</span>
-              <button onClick={() => setPreviewKey((k) => k + 1)} className="inline-flex items-center gap-1 text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 transition-colors shrink-0" title="刷新预览"><RefreshCw size={12} /> 刷新</button>
-              <button
-                onClick={() => { if (!tryOpenWorldWindow(wid)) navigate(`/world-view/${wid}`) }}
-                className="inline-flex items-center gap-1 text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 transition-colors shrink-0"
-                title="在沉浸界面新窗口打开（WebView 下自动应用内跳转）"
-              ><ExternalLink size={12} /> 沉浸窗口</button>
+              <span className="truncate flex-1">{t('tool:world.pane.previewTitle', { url: `/world/${wid}/preview` })}</span>
+              <WorldPreviewActions wid={wid} onRefresh={() => setPreviewKey((k) => k + 1)} />
             </div>
-            <iframe
-              key={previewKey}
-              src={`/world/${wid}/preview`}
-              className="w-full flex-1 bg-white dark:bg-gray-900"
-              title="世界预览"
-            />
+            <div className="flex-1 min-h-0">
+              <WorldPreviewFrame wid={wid} previewKey={previewKey} />
+            </div>
           </div>
         ) : mobileView === 'file' ? (
           <div className="flex-1 flex flex-col min-h-0">
@@ -879,6 +876,17 @@ export default function WorldDesignPage() {
           <div className="flex-1" />
           {msg && <span className="min-w-0 truncate text-xs text-accent-400">{msg}</span>}
           <input ref={importZipRef} type="file" accept=".zip" className="hidden" onChange={handleImportZip} />
+          {/* 专注模式下中栏（含 文件/预览 页签）被收起，这里留一个一步可达的预览入口；
+              普通模式仍用中栏的页签，不重复放第二个开关 */}
+          {chatFocus && (
+            <button
+              onClick={() => setPreviewOpen(true)}
+              className="shrink-0 inline-flex items-center gap-1 h-7 px-2 rounded-control text-xs bg-elevated hover:bg-border text-textSecondary transition-colors"
+              title={t('tool:world.preview.open')}
+            >
+              <Eye size={12} /> {t('tool:world.pane.preview')}
+            </button>
+          )}
           <button
             onClick={() => setShowCreatorForm((v) => !v)}
             className={`shrink-0 inline-flex items-center gap-1 h-7 px-2 rounded-control text-xs transition-colors ${showCreatorForm ? 'bg-primary-500/15 text-primary-400' : 'bg-elevated hover:bg-border text-textSecondary'}`}
@@ -894,7 +902,7 @@ export default function WorldDesignPage() {
               <>
                 {/* 透明遮罩收起：与页面里其它小菜单同一套做法，不挂 document 监听 */}
                 <div className="fixed inset-0 z-modal" onClick={() => setTopMenuOpen(false)} />
-                <div className="absolute right-0 top-full mt-1 w-52 py-1 rounded-card bg-elevated border border-border shadow-xl z-toast">
+                <MenuPanel className="absolute right-0 top-full mt-1 w-52 py-1 z-toast">
                   {([
                     { key: 'docs', icon: <BookOpen size={13} />, label: t('tool:world.top.docs'), run: openDocs },
                     { key: 'export', icon: <Download size={13} />, label: t('tool:world.top.export'), run: () => setWorldZipOpen(true) },
@@ -902,15 +910,15 @@ export default function WorldDesignPage() {
                     { key: 'publish', icon: <Upload size={13} />, label: t('tool:world.top.publish'), run: publishToMarket },
                     { key: 'groups', icon: <MessageCircle size={13} />, label: t('tool:world.top.groups'), run: () => setGroupManagerOpen(true) },
                   ]).map((it) => (
-                    <button
+                    <MenuItem
                       key={it.key}
                       onClick={() => { setTopMenuOpen(false); it.run() }}
-                      className="w-full inline-flex items-center gap-2 px-3 py-1.5 text-2xs text-textSecondary hover:bg-surface hover:text-textPrimary transition-colors"
+                      className="inline-flex items-center gap-2"
                     >
                       {it.icon} {it.label}
-                    </button>
+                    </MenuItem>
                   ))}
-                </div>
+                </MenuPanel>
               </>
             )}
           </div>
@@ -1071,16 +1079,7 @@ export default function WorldDesignPage() {
                     )}
                   </span>
                 )) : (
-                  <>
-                    <button onClick={() => setPreviewKey((k) => k + 1)} className="inline-flex items-center gap-1 text-xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 transition-colors shrink-0" title={t('tool:world.pane.refresh')}><RefreshCw size={12} /> {t('tool:world.pane.refresh')}</button>
-                    <button
-                      onClick={() => { if (!tryOpenWorldWindow(wid)) navigate(`/world-view/${wid}`) }}
-                      className="inline-flex items-center gap-1 text-xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 transition-colors shrink-0 pr-1"
-                      title="在沉浸界面新窗口打开（WebView 下自动应用内跳转）"
-                    >
-                      <ExternalLink size={12} /> {t('tool:world.pane.immersive')}
-                    </button>
-                  </>
+                  <WorldPreviewActions wid={wid} onRefresh={() => setPreviewKey((k) => k + 1)} />
                 )}
               </div>
               <div className="flex-1 min-h-0">
@@ -1089,12 +1088,7 @@ export default function WorldDesignPage() {
                     <FileContentPane wid={wid} currentFile={currentFile} content={content} setContent={setContent} viewMode={viewMode} canRender={canRender} isMdFile={isMdFile} fileCodeLang={fileCodeLang} isImgFile={isImgFile} />
                   </div>
                 ) : (
-                  <iframe
-                    key={previewKey}
-                    src={`/world/${wid}/preview`}
-                    className="w-full h-full bg-white dark:bg-gray-900"
-                    title="世界预览"
-                  />
+                  <WorldPreviewFrame wid={wid} previewKey={previewKey} />
                 )}
               </div>
             </div>
@@ -1283,11 +1277,35 @@ export default function WorldDesignPage() {
         />
       )}
 
+      {/* 专注模式的预览覆盖层：复用同一份预览实现与 z-modal 档浮层底座（Dialog 负责 ESC/点遮罩关闭）。
+          覆盖层不改任何对话状态——面板只是被盖住，不会被卸载 */}
+      {previewOpen && (
+        <Dialog layer="modal" onClose={() => setPreviewOpen(false)} className="flex items-center justify-center p-4">
+          <div
+            className="w-full max-w-5xl h-[80vh] bg-surface border border-border rounded-dialog shadow-xl overflow-hidden flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border shrink-0">
+              <Eye size={15} className="text-primary-400 shrink-0" />
+              <span className="text-sm font-semibold truncate min-w-0">
+                {t('tool:world.pane.previewTitle', { url: `/world/${wid}/preview` })}
+              </span>
+              <div className="flex-1" />
+              <WorldPreviewActions wid={wid} onRefresh={() => setPreviewKey((k) => k + 1)} />
+              <IconButton size="sm" icon={<X size={16} />} label={t('common.close')} onClick={() => setPreviewOpen(false)} />
+            </div>
+            <div className="flex-1 min-h-0">
+              <WorldPreviewFrame wid={wid} previewKey={previewKey} />
+            </div>
+          </div>
+        </Dialog>
+      )}
+
       {/* 会话改名弹窗（左栏会话列表的 ⋯ 里触发）：留空 = 清除命名，列表回落到会话编号 */}
       {renaming && (
         <Dialog className="flex items-center justify-center p-4" onClose={() => setRenaming(null)}>
           <div className="w-full max-w-sm bg-surface border border-border rounded-dialog shadow-xl p-4 space-y-3" onClick={(e) => e.stopPropagation()}>
-            <div className="text-sm font-medium">{t('tool:world.session.renameTitle')}</div>
+            <div className="text-sm font-semibold text-textPrimary">{t('tool:world.session.renameTitle')}</div>
             <Input
               autoFocus
               maxLength={20}

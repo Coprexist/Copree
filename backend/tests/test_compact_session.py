@@ -46,7 +46,14 @@ def _world(session: str | None = "w1:m:abc", config: dict | None = None) -> Simp
 
 
 def _rows(n: int) -> list[dict]:
-    return [{"role": "user" if i % 2 == 0 else "ai", "content": f"第{i}条"} for i in range(n)]
+    """替身必须和 collect_real_messages 的契约一致：真实采样**带 DB id**。
+
+    少了 id，compact 写 chat_summary_bounds 时会 KeyError——那是替身失真，不是产品 bug。
+    """
+    return [
+        {"id": i + 1, "role": "user" if i % 2 == 0 else "ai", "content": f"第{i}条"}
+        for i in range(n)
+    ]
 
 
 def test_window_plan_counts_only_what_the_model_carries():

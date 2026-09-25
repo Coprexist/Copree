@@ -86,7 +86,12 @@ async def execute_world_tool(world_repo, world, name: str, arguments: str,
             "skipped": True,
             "note": "该操作本次对话已执行过（5 分钟内且结果相同），请直接总结或执行新操作，不要重复。",
         }
-    executed[key] = {"result": result, "ts": now}
+    # 只缓存成功结果：失败常常是模型改一个字符后的重试，拦下来只会白耗一轮
+    # （世界 AI 2026-09-21 反馈）。键里已含参数，这里补的是"失败永不拦截"。
+    if result.get("success"):
+        executed[key] = {"result": result, "ts": now}
+    else:
+        executed.pop(key, None)
     return result
 
 

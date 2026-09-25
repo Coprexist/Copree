@@ -120,6 +120,11 @@ class ApprovalRequest(BaseModel):
                            description="用户写的理由或补充要求（可选，随同意/不同意一起交给 AI）")
 
 
+class ApprovalTouchRequest(BaseModel):
+    """审批弹窗心跳（用户正在输入框里打字：打字期间不计入超时）"""
+    approval_id: str = Field(..., description="弹窗事件里的 approval_id")
+
+
 class ChatSettingsUpdate(BaseModel):
     """会话生命周期设置（0 = 关闭对应项）"""
     auto_new_enabled: bool | None = None
@@ -1194,6 +1199,23 @@ async def resolve_chat_approval(
     if not resolve_approval(req.approval_id, req.approved, req.note or ""):
         raise HTTPException(status_code=404, detail="审批项不存在或已被处理")
     return {"success": True}
+
+
+@router.post("/{world_id}/chat/approval/touch")
+async def touch_chat_approval(
+    world_id: int,
+    req: ApprovalTouchRequest,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """审批弹窗心跳：用户正在输入框里打字 → 把「多久没人动」的计时重置（仅创建者）。
+
+    返回剩余秒数（0 = 该项已处理或已超时），前端据此接着走倒计时。
+    心跳不是回执：它只续期，绝不代替用户点按钮——门禁「超时不放行」的语义不变。
+    """
+    await _require_owner(db, world_id, current_user["user_id"])
+    from app.services.world.world_ai_mode import touch_approval
+    return {"success": True, "expires_in": touch_approval(req.approval_id)}
 
 
 
