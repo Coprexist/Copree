@@ -238,11 +238,23 @@
 - `app/prompts/core_identity.txt`：认知模型那条补"默认不留给后面的自己"；「收尾与连发」补结算规则。
 - **测试** `tests/test_end_turn_settlement.py`（2 条：默认不保留、显式保留 + key_note 去空白）。
 
+### 第四批 a：三档阈值落地（已完成 2026-09-25）
+
+- `services/memory/context_compression_service.py`：`CompressionThresholds`（`post` / `idle` / `hot`）
+  + `compression_thresholds(hot)` 由热阈值**一处推出三档**（调用点不各自乘系数）+ `IDLE_THRESHOLD_FRACTION = 1 / math.e`。
+  为什么 1/e 写在常量旁边（不是推导结论，定盘星是 `cached_tokens` 实测）。
+- `ai/executor.py`：`:458`（第一次 LLM 调用前的空闲检查）与 `:649`（工具循环里）两条路**各自过体积门槛**——
+  冷路径 `T_idle`、热路径 `T_hot`；`stale` 变量现在 = 空闲**且**超 `T_idle`，日志文案不变。
+- 测试 `tests/test_compression_thresholds.py`（3 条：区间内部 + 1/e 插值、三档随热阈值联动、`should_compress` 边界）。
+- **验证**：全量 265/0；容器重启后 `health=healthy restarts=0`；真库读到
+  `hot=0.60 → T_post=15.4K / T_idle=38.0K / T_hot=76.8K`；25 个真机会话体积全部 < `T_idle`（最大 34.7K）——
+  旧逻辑逢 12h 闲置必压一次，现在一个都不压（这就是这条门槛要拦的浪费）。
+
 ### 待落地
 
 - **第二批 b**：主站读账本渲染（`build_messages` / `build_dm_messages` 改成固定三段）+ 轮末封存
   （缺口事件写在批次前、补看 append）+ 便签/通知/建议回复改走条目。
 - **第三批**：世界 AI（新增同名 `end_turn` + 现有强制收尾轮并入 + 历史走同一套服务）。
 - **第四批**：两级压缩（确定性修剪器 + 摘要模板：关键想法 / 必留项 / 裁剪优先级）+ **三档阈值落地**
-  （`T_post` / `T_idle` / `T_hot`，`executor.py:641` 两路分用；数值用 `cached_tokens` 标定）+ 图片不降级。
+  （三档阈值已落地，见上；剩下**两级压缩器**与用 `cached_tokens` 标定数值）+ 图片不降级。
 - **第五批**：老会话迁移（状态栈 + 群视界历史一次性拆进历史 + 投递变更通知）+ 全量验证与文档收尾。

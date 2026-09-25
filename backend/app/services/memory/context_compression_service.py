@@ -13,8 +13,9 @@
 """
 
 import logging
+import math
 import re
-from typing import Optional
+from typing import NamedTuple, Optional
 
 from app.repositories.memory_repo import MemoryRepository, SQLAlchemyMemoryRepository
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,6 +45,30 @@ SUMMARY_MAX_TOKENS = 1500
 SUMMARY_RETRY_MAX_TOKENS = 6000
 # messages 总数低于此值不压缩
 MIN_MESSAGES_FOR_COMPRESSION = 8
+
+
+class CompressionThresholds(NamedTuple):
+    """三档阈值（占同一个上下文窗口的比例）——都从热阈值推出，见 docs/dev/conversation_history.md §6"""
+
+    post: float  # T_post：压完能落到多小的地板（摘要 ≤ 热阈值 × COMPRESSION_TARGET_MAX）
+    idle: float  # T_idle：久未活跃（缓存经济）触发线，取在 (T_post, T_hot) 内部
+    hot: float   # T_hot：热触发线，到了必须压（不压迟早爆窗口）
+
+
+# T_idle 在 [T_post, T_hot] 上的插值系数 = 1/e：从 T_post 起覆盖带宽 63.2%，一个单位衰减尺度。
+# 它**不是推导结论**（缓存经济学解不出 e 来），定盘星是 cached_tokens 实测；
+# 系数落在 (0, 1) 内就自动满足 T_post < T_idle < T_hot——贴 T_post 等于每次闲置都白跑一遍压缩，
+# 贴 T_hot 就退化成只有一个阈值。
+IDLE_THRESHOLD_FRACTION = 1 / math.e
+
+
+def compression_thresholds(hot: float) -> CompressionThresholds:
+    """由热阈值推出三档：压后地板 / 冷触发线 / 热触发线。
+
+    只用热阈值一个自变量——三档数值别在调用点各自乘系数，口径只留这一份。
+    """
+    post = hot * COMPRESSION_TARGET_MAX
+    return CompressionThresholds(post=post, idle=post + IDLE_THRESHOLD_FRACTION * (hot - post), hot=hot)
 
 
 # 中文（CJK/假名/全角）与其它字符的 token 密度差 2~3 倍：一律按 4 字符/token 会把

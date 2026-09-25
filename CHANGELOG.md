@@ -9,13 +9,17 @@
 
 ### 📐 设计定稿 + 第一批落地（见 [docs/dev/conversation_history.md](./docs/dev/conversation_history.md)）
 
-#### 已落地（2026-09-25，未提交）
+#### 已落地（2026-09-25）
 - 账本存储层：表 `agent_history_entries`（迁移 `f1e2d3c4b5a6`）+ `AgentHistoryEntry` 模型 +
   `utils/pure/history.py` 纯函数（缺口文案唯一来源、事件不可压、投影）+ `services/history/history_service.py`
   （append 统一分配 seq / read 支持 compact 边界 / clear 只给解锁点）；测试 7 条
 - `end_turn` 升级为**轮末结算**：新增 `keep_thinking`（默认不保留）+ `key_note`，描述写清删留规则/场景/边界；
   `executor` 收下结算值（账本封存落地后在同一处写条目）；`core_identity` 提示同步；测试 2 条
-- 验证：全量 260/0（18.1s）；真库迁移 head=`f1e2d3c4b5a6`；`health=healthy restarts=0`
+- **三档阈值落地**：`compression_thresholds(hot)` 做**单一入口**（`CompressionThresholds` +
+  `IDLE_THRESHOLD_FRACTION = 1/e`），`executor.py:458`（调用前）与 `:649`（工具循环）**两路分用** `T_idle` / `T_hot`——
+  原先两路共用 60%、且空闲那路没有体积门槛；测试 3 条
+- 验证：全量 **265/0**（18.3s）；真库 `hot=0.60 → T_post=15.4K / T_idle=38.0K / T_hot=76.8K`；
+  真机 25 个会话体积**全部 < `T_idle`**（最大 34.7K）→ 旧逻辑逢 12h 闲置必压，现在不压；`health=healthy restarts=0`
 
 #### 会话历史账本 + 轮末结算（2026-09-25 定，待落地）
 - 病根四条：能力变更通知没落库（说完就没了，AI 又按旧表述办事）；便签投递后来源侧还能撤回上下文；
