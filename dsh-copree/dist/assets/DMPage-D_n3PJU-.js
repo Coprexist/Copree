@@ -1,2 +1,0 @@
-import{b as s,j as e,N as a}from"./index-i0VFwFFy.js";function o(){const{sessionId:t}=s();return t?e.jsx(a,{to:`/chat/dm/${t}`,replace:!0}):e.jsx(a,{to:"/chat",replace:!0})}export{o as default};
-//# sourceMappingURL=DMPage-D_n3PJU-.js.map

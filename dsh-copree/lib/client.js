@@ -12,6 +12,7 @@ var MARKDOWN_LABELS = {
 var API = "/copree-api";
 var WS_BASE = "/copree-ws";
 var PLUGIN_API = "/copree-plugin";
+var CONSENT_API = "/copree-consent";
 var K_TOKEN = "aisc.token";
 var K_USER = "aisc.user";
 var store = {
@@ -997,6 +998,92 @@ function AisChatBoard({ onClose }) {
     })
   );
 }
+async function readConsentState() {
+  const res = await fetch(CONSENT_API, { cache: "no-store" });
+  const text = await res.text();
+  if (!res.ok || !text.trim()) throw new Error("HOST_STALE");
+  const data = JSON.parse(text);
+  return data.allowed === true;
+}
+var CONSENT_STALE_HINT = "\u5BBF\u4E3B\u534A\u4FA7\u8FD8\u6CA1\u52A0\u8F7D\u8FD9\u4E2A\u7AEF\u70B9\uFF08\u63D2\u4EF6\u521A\u66F4\u65B0\u8FC7\uFF09\uFF1A\u91CD\u542F dsh-web \u540E\u5237\u65B0\u672C\u9875\u5373\u53EF";
+function BridgeConsent() {
+  const [allowed, setAllowed] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    let alive = true;
+    readConsentState().then((value) => {
+      if (alive) {
+        setAllowed(value);
+        setErr("");
+      }
+    }).catch((e) => {
+      if (alive) {
+        setAllowed(null);
+        setErr(e.message === "HOST_STALE" ? CONSENT_STALE_HINT : "\u8BFB\u53D6\u5931\u8D25\uFF1A" + e.message);
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const set = async (next) => {
+    setBusy(true);
+    setErr("");
+    try {
+      const res = await fetch(CONSENT_API, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ allowed: next })
+      });
+      const text = await res.text();
+      let data = null;
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch {
+        data = null;
+      }
+      if (!res.ok || !data || typeof data.allowed !== "boolean") {
+        throw new Error(data && data.error ? data.error : res.ok ? "HOST_STALE" : String(res.status));
+      }
+      setAllowed(data.allowed === true);
+    } catch (e) {
+      setErr(e.message === "HOST_STALE" ? CONSENT_STALE_HINT : "\u5207\u6362\u5931\u8D25\uFF1A" + e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const state = allowed === null ? "\u72B6\u6001\u672A\u77E5" : allowed ? "\u5DF2\u540C\u610F\u63A5\u5165" : "\u672A\u540C\u610F\u63A5\u5165";
+  return h(
+    "div",
+    { style: { border: "1px solid var(--dsw-alias-border-l2, #e4e4e7)", borderRadius: 10, padding: 12, marginBottom: 18 } },
+    h("div", { style: { fontSize: 13, fontWeight: 600, color: "var(--dsw-alias-label-primary)" } }, "Copree \u53CD\u5411\u63A5\u5165"),
+    h(
+      "div",
+      { style: { fontSize: 12, marginTop: 4, color: "var(--dsw-alias-label-secondary)" } },
+      "\u540C\u610F\u540E\uFF0CCopree \u7BA1\u7406\u7AEF\u624D\u80FD\u770B\u5230\u672C\u673A DSH \u5E76\u6309\u7BA1\u7406\u5458\u6307\u4EE4\u64CD\u4F5C\u4F1A\u8BDD\uFF1B\u672A\u540C\u610F\u65F6\u672C\u673A\u4E0D\u53D1\u5FC3\u8DF3\u3001\u4E0D\u5F00\u653E\u4EFB\u4F55\u6865\u63A5\u7AEF\u70B9\u3002\u5F53\u524D\uFF1A" + state
+    ),
+    h(
+      "div",
+      { style: { display: "flex", gap: 8, marginTop: 10 } },
+      h("button", {
+        style: { ...style.smallBtn, opacity: busy || allowed === true ? 0.55 : 1 },
+        disabled: busy || allowed === true,
+        onClick: () => {
+          void set(true);
+        }
+      }, "\u540C\u610F\u63A5\u5165"),
+      h("button", {
+        style: { ...style.smallBtn, opacity: busy || allowed === false ? 0.55 : 1 },
+        disabled: busy || allowed === false,
+        onClick: () => {
+          void set(false);
+        }
+      }, "\u64A4\u9500\u540C\u610F")
+    ),
+    err ? h("div", { style: { ...style.hint, marginTop: 6 } }, err) : null
+  );
+}
 function SettingsPage() {
   const [, force] = useState(0);
   const refresh = useCallback(() => force((n) => n + 1), []);
@@ -1043,6 +1130,8 @@ function SettingsPage() {
       "div",
       { style: { padding: 20, maxWidth: 420 } },
       h("div", { style: { fontSize: 16, fontWeight: 600, marginBottom: 16, color: "var(--dsw-alias-label-primary)" } }, "Copree"),
+      // 闸门放登录之前：允不允许 Copree 接入，与"我在 Copree 有没有账号"是两件事
+      h(BridgeConsent, null),
       h("div", { style: { ...style.hint, marginTop: 0 } }, "\u767B\u5F55 Copree \u540E\u5373\u53EF\u5728\u4FA7\u8FB9\u680F\u4F7F\u7528\u804A\u5929\u3002\u51ED\u636E\u4EC5\u4FDD\u5B58\u5728\u672C\u673A\u6D4F\u89C8\u5668\u3002"),
       h(LoginForm, null)
     );
@@ -1051,6 +1140,7 @@ function SettingsPage() {
     "div",
     { style: { padding: 20, maxWidth: 480 } },
     h("div", { style: { fontSize: 16, fontWeight: 600, marginBottom: 16, color: "var(--dsw-alias-label-primary)" } }, "Copree"),
+    h(BridgeConsent, null),
     h(
       "div",
       { style: { ...style.row, padding: "8px 0" } },

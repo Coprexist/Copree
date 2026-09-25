@@ -1,8 +1,8 @@
 // src/index.ts
 import http from "node:http";
 import z from "@deepseek-ai/schemastery";
-import { createReadStream, existsSync as existsSync2, statSync, mkdirSync as mkdirSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync2, realpathSync, readdirSync, unlinkSync } from "node:fs";
-import { join as join2, normalize, extname, sep } from "node:path";
+import { createReadStream, existsSync as existsSync2, statSync, mkdirSync as mkdirSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync3, realpathSync, readdirSync, unlinkSync } from "node:fs";
+import { join as join3, normalize, extname, sep } from "node:path";
 import os from "node:os";
 
 // src/plugin-update.ts
@@ -318,17 +318,772 @@ function registerPluginRoutes(register, opts) {
   });
 }
 
+// src/bridge.ts
+import { randomUUID, timingSafeEqual } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import { mkdirSync as mkdirSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { basename as basename2, dirname as dirname2, join as join2 } from "node:path";
+import { homedir, tmpdir } from "node:os";
+
+// src/http.ts
+var DEFAULT_BODY_LIMIT = 262144;
+function readJsonBody(req, limit = DEFAULT_BODY_LIMIT) {
+  return new Promise((resolve2, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on("data", (c) => {
+      size += c.length;
+      if (size > limit) {
+        reject(new Error("body too large"));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on("end", () => {
+      try {
+        resolve2(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"));
+      } catch {
+        reject(new Error("invalid json"));
+      }
+    });
+    req.on("error", reject);
+  });
+}
+function sendJson(res, status, body) {
+  res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify(body));
+}
+
+// src/bridge.ts
+var BRIDGE_PREFIX = "/copree-bridge";
+var HEARTBEAT_MS = 2e4;
+var TEXT_LIMIT = 2e4;
+var ARGS_LIMIT = 2e3;
+var SUMMARY_LIMIT = 400;
+var ATTACHMENT_FENCE = "copree-attachments";
+var MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+var MAX_IMAGES_PER_PROMPT = 8;
+var PROMPT_BODY_LIMIT = 48 * 1024 * 1024;
+var ASK_TIMEOUT_MS = 10 * 6e4;
+var AskBroker = class {
+  streams = /* @__PURE__ */ new Map();
+  pending = /* @__PURE__ */ new Map();
+  /** 某个会话开了流：此后它就有"人在看"，新请求才会往 Copree 送 */
+  subscribe(sessionId, write) {
+    let set = this.streams.get(sessionId);
+    if (!set) {
+      set = /* @__PURE__ */ new Set();
+      this.streams.set(sessionId, set);
+    }
+    set.add(write);
+    for (const { ask } of this.pending.values()) {
+      if (ask.sessionId === sessionId) write({ k: "ask", ask });
+    }
+    return () => {
+      const current = this.streams.get(sessionId);
+      if (!current) return;
+      current.delete(write);
+      if (current.size === 0) this.streams.delete(sessionId);
+    };
+  }
+  /** 把请求送出去并等回答；没人在看返回 null（调用方据此交回默认链） */
+  ask(ask) {
+    const audience = this.streams.get(ask.sessionId);
+    if (!audience || audience.size === 0) return Promise.resolve(null);
+    return new Promise((resolve2) => {
+      const timer = setTimeout(() => {
+        this.settle(ask.id, null);
+      }, ASK_TIMEOUT_MS);
+      timer.unref?.();
+      this.pending.set(ask.id, { ask, resolve: resolve2, timer });
+      for (const write of audience) write({ k: "ask", ask });
+    });
+  }
+  /**
+   * 当前哪些会话开着流（谁在看）——诊断用。
+   * 提问帧只发给「正在看这条会话」的页面，没有观众就回落 DSH 默认链；
+   * 排查「我在页面里没看到提问」时，第一眼要能看出观众到底有没有。
+   */
+  watchers() {
+    return [...this.streams.entries()].map(([sessionId, set]) => ({ sessionId, subscribers: set.size }));
+  }
+  /** 页面回的决定：命中即唤醒等待方，并通知所有在看的页面把弹窗收掉 */
+  answer(id, decision) {
+    return this.settle(id, decision);
+  }
+  settle(id, decision) {
+    const entry = this.pending.get(id);
+    if (!entry) return false;
+    this.pending.delete(id);
+    clearTimeout(entry.timer);
+    const audience = this.streams.get(entry.ask.sessionId);
+    if (audience) for (const write of audience) write({ k: "askDone", id });
+    entry.resolve(decision);
+    return true;
+  }
+};
+var askBroker = new AskBroker();
+function questionsOf(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((q) => ({
+    id: String(q?.id ?? ""),
+    question: String(q?.question ?? ""),
+    ...q?.detail ? { detail: String(q.detail) } : {},
+    ...q?.header ? { header: String(q.header) } : {},
+    ...Array.isArray(q?.options) ? { options: q.options.map((o) => ({ label: String(o?.label ?? ""), ...o?.description ? { description: String(o.description) } : {} })) } : {},
+    ...q?.multiSelect === true ? { multiSelect: true } : {}
+  }));
+}
+function registerAnswerers(ctx) {
+  const anyCtx = ctx;
+  if (typeof anyCtx?.on !== "function") return () => {
+  };
+  const onApproval = async (req, next) => {
+    const sessionId = String(req?.agent?.sessionId ?? "");
+    if (!sessionId) return next();
+    const decision = await askBroker.ask({
+      id: randomUUID(),
+      sessionId,
+      kind: "approval",
+      toolName: String(req?.toolName ?? ""),
+      ...req?.reason ? { reason: String(req.reason) } : {},
+      createdAt: Date.now()
+    });
+    if (!decision) return next();
+    return decision.approve === true ? "allowed-once" : "rejected";
+  };
+  const onQuestions = async (request, next) => {
+    const sessionId = String(request?.agent?.sessionId ?? "");
+    if (!sessionId) return next();
+    const decision = await askBroker.ask({
+      id: randomUUID(),
+      sessionId,
+      kind: "question",
+      questions: questionsOf(request?.questions),
+      createdAt: Date.now()
+    });
+    if (!decision) return next();
+    return { answers: decision.answers ?? [] };
+  };
+  anyCtx.on("approval/request", onApproval);
+  anyCtx.on("user-questions/request", onQuestions);
+  return () => {
+    anyCtx.off?.("approval/request", onApproval);
+    anyCtx.off?.("user-questions/request", onQuestions);
+  };
+}
+function splitInlineImages(text) {
+  const images = [];
+  let fenced = false;
+  const fence = new RegExp(`<${ATTACHMENT_FENCE}>([\\s\\S]*?)</${ATTACHMENT_FENCE}>`, "g");
+  const cleaned = text.replace(fence, (_all, payload) => {
+    fenced = true;
+    try {
+      const parsed = JSON.parse(payload);
+      if (Array.isArray(parsed)) {
+        for (const item of parsed) {
+          const mime = String(item?.mime ?? "");
+          const data = item?.data;
+          if (mime.startsWith("image/") && typeof data === "string" && data.length > 0) {
+            images.push({ name: String(item?.name ?? "image"), mime, data });
+          }
+        }
+      }
+    } catch {
+    }
+    return "";
+  });
+  if (!fenced) return { text, images: [] };
+  return { text: cleaned.replace(/\n{3,}/g, "\n\n").trim(), images };
+}
+function attachmentDir(cwd) {
+  return join2(cwd || tmpdir(), ".copree", "attachments");
+}
+async function saveInlineImages(images, cwd) {
+  const saved = [];
+  let skipped = Math.max(0, images.length - MAX_IMAGES_PER_PROMPT);
+  const dir = attachmentDir(cwd);
+  await mkdir(dir, { recursive: true });
+  for (const img of images.slice(0, MAX_IMAGES_PER_PROMPT)) {
+    const buf = Buffer.from(img.data, "base64");
+    if (buf.length === 0 || buf.length > MAX_IMAGE_BYTES) {
+      skipped += 1;
+      continue;
+    }
+    const safe = basename2(img.name).replace(/[^\w.\-]+/g, "_").slice(-80) || "image";
+    const file = join2(dir, `${Date.now()}-${saved.length}-${safe}`);
+    await writeFile(file, buf);
+    saved.push(file);
+  }
+  return { saved, skipped };
+}
+async function pullAttachments(refs, cwd, source) {
+  const saved = [];
+  let skipped = Math.max(0, refs.length - MAX_IMAGES_PER_PROMPT);
+  const dir = attachmentDir(cwd);
+  await mkdir(dir, { recursive: true });
+  for (const ref of refs.slice(0, MAX_IMAGES_PER_PROMPT)) {
+    const fileId = Number(ref?.fileId);
+    if (!Number.isInteger(fileId) || fileId <= 0) {
+      skipped += 1;
+      continue;
+    }
+    try {
+      const response = await fetch(`${source.backendUrl}/dsh-bridge/attachment/${fileId}`, {
+        headers: { "x-copree-bridge-token": source.secret },
+        signal: AbortSignal.timeout(3e4)
+      });
+      if (!response.ok) {
+        skipped += 1;
+        continue;
+      }
+      const buf = Buffer.from(await response.arrayBuffer());
+      if (buf.length === 0 || buf.length > MAX_IMAGE_BYTES) {
+        skipped += 1;
+        continue;
+      }
+      const safe = basename2(String(ref.name ?? "image")).replace(/[^\w.\-]+/g, "_").slice(-80) || "image";
+      const file = join2(dir, `${Date.now()}-${saved.length}-${safe}`);
+      await writeFile(file, buf);
+      saved.push(file);
+    } catch {
+      skipped += 1;
+    }
+  }
+  return { saved, skipped };
+}
+function textOf(content) {
+  if (!Array.isArray(content)) return "";
+  return content.filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => block.text).join("").slice(0, TEXT_LIMIT);
+}
+function toolResultOf(data) {
+  const block = Array.isArray(data?.message?.content) ? data.message.content[0] : void 0;
+  const callId = String(data?.message?.source?.callId ?? block?.toolCallId ?? "");
+  const ok = data?.error === void 0 && block?.isError !== true;
+  const text = textOf(block?.content).replace(/\s+/g, " ").trim();
+  return { callId, ok, summary: text.slice(0, SUMMARY_LIMIT) };
+}
+function reasoningOf(content) {
+  if (!Array.isArray(content)) return "";
+  return content.filter((block) => block?.type === "reasoning" && typeof block.text === "string").map((block) => block.text).join("").slice(0, TEXT_LIMIT);
+}
+var argsByCallId = /* @__PURE__ */ new Map();
+var parentsWithSubOps = /* @__PURE__ */ new Set();
+var MAX_RESULT_LINES = 12;
+function definitionFor(tools, name2, scope) {
+  if (!name2) return void 0;
+  try {
+    const scoped = tools?.get?.(name2, scope);
+    if (scoped) return scoped;
+  } catch {
+  }
+  try {
+    return tools?.get?.(name2);
+  } catch {
+    return void 0;
+  }
+}
+function presentCallOf(tools, name2, args, scope) {
+  let view;
+  try {
+    view = definitionFor(tools, name2, scope)?.presentCall?.(args);
+  } catch {
+    view = void 0;
+  }
+  const rawArgs = typeof args === "string" ? args : JSON.stringify(args ?? {});
+  if (!view || typeof view !== "object") {
+    return { card: "generic", title: name2, kind: "other", detail: String(rawArgs ?? "").slice(0, ARGS_LIMIT) };
+  }
+  const detail = view.card === "diff" ? Array.isArray(view.diffs) ? view.diffs.map((d) => String(d?.path ?? "")).filter(Boolean).join("\n") : "" : typeof view.rawInput === "string" ? view.rawInput : JSON.stringify(view.rawInput ?? args ?? {});
+  return {
+    card: String(view.card ?? "generic"),
+    title: String(view.title ?? name2),
+    kind: String(view.kind ?? "other"),
+    detail: String(detail ?? "").slice(0, ARGS_LIMIT)
+  };
+}
+function presentResultLines(tools, name2, args, result, fallback, scope) {
+  let view;
+  try {
+    view = definitionFor(tools, name2, scope)?.presentResult?.(args, result);
+  } catch {
+    view = void 0;
+  }
+  const lines = [];
+  const push = (value) => {
+    if (typeof value !== "string") return;
+    const flat = value.replace(/\s+/g, " ").trim();
+    if (flat) lines.push(flat.slice(0, SUMMARY_LIMIT));
+  };
+  if (view && typeof view === "object") {
+    if (view.title) push(view.title);
+    if (view.card === "terminal") {
+      push(view.output);
+      if (view.exitCode !== void 0) push(`exit ${view.exitCode}`);
+    } else if (view.card === "diff") {
+      for (const diff of view.diffs ?? []) push(diff?.path);
+    } else if (Array.isArray(view.matches)) {
+      for (const group of view.matches) push(group?.path);
+    } else {
+      for (const block of view.content ?? []) if (block?.type === "text") push(block.text);
+    }
+  }
+  if (lines.length === 0) push(fallback);
+  return lines.slice(0, MAX_RESULT_LINES);
+}
+function frameForEvent(event, tools, scope) {
+  const data = event?.data ?? {};
+  switch (event?.type) {
+    case "user/message":
+      return data.source?.kind === "user" ? { k: "user", text: textOf(data.content) } : null;
+    case "step/start":
+      return { k: "step", turn: Number(data.turn ?? 0), step: Number(data.step ?? 0) };
+    case "assistant/message": {
+      const content = data.message?.content ?? data.content;
+      const thinking = reasoningOf(content);
+      const text = textOf(content);
+      const frames = [];
+      if (thinking) frames.push({ k: "think", text: thinking });
+      if (text) frames.push({ k: "say", text, ...data.interrupted === true ? { interrupted: true } : {} });
+      return frames.length > 0 ? frames : null;
+    }
+    case "tool/call": {
+      const callId = String(data.callId ?? "");
+      const name2 = String(data.name ?? "");
+      let parsed = data.arguments;
+      try {
+        parsed = JSON.parse(String(data.arguments ?? "{}"));
+      } catch {
+      }
+      argsByCallId.set(callId, { name: name2, args: parsed });
+      if (argsByCallId.size > 200) argsByCallId.delete(String(argsByCallId.keys().next().value));
+      return {
+        k: "tool",
+        callId,
+        name: name2,
+        args: String(data.arguments ?? "").slice(0, ARGS_LIMIT),
+        ...presentCallOf(tools, name2, parsed, scope)
+      };
+    }
+    case "tool/ptc-dispatch": {
+      const parentCallId = String(data.parentCallId ?? "");
+      if (!parentCallId) return null;
+      parentsWithSubOps.add(parentCallId);
+      if (parentsWithSubOps.size > 200) parentsWithSubOps.delete(String(parentsWithSubOps.values().next().value));
+      const callId = String(data.subCallId ?? "");
+      if (!callId) return null;
+      const name2 = String(data.name ?? "");
+      let parsed = data.arguments;
+      try {
+        parsed = JSON.parse(String(data.arguments ?? "{}"));
+      } catch {
+      }
+      const lines = presentResultLines(
+        tools,
+        name2,
+        parsed,
+        { content: Array.isArray(data.content) ? data.content : [], isError: data.isError === true },
+        name2,
+        scope
+      );
+      return [
+        { k: "tool", callId, name: name2, args: String(data.arguments ?? "").slice(0, ARGS_LIMIT), ...presentCallOf(tools, name2, parsed, scope) },
+        { k: "toolDone", callId, ok: data.isError !== true, summary: lines[0] ?? name2, lines }
+      ];
+    }
+    case "tool/result": {
+      const { callId, ok, summary } = toolResultOf(data);
+      const block = Array.isArray(data?.message?.content) ? data.message.content[0] : void 0;
+      const known = argsByCallId.get(callId);
+      const lines = parentsWithSubOps.has(callId) ? [] : presentResultLines(
+        tools,
+        known?.name ?? "",
+        known?.args,
+        {
+          content: Array.isArray(block?.content) ? block.content : [],
+          isError: block?.isError === true,
+          ...data?.meta === void 0 ? {} : { meta: data.meta }
+        },
+        summary,
+        scope
+      );
+      return { k: "toolDone", callId, ok, summary: lines[0] ?? summary, lines };
+    }
+    case "turn/end":
+      return { k: "turnEnd", reason: String(data.reason?.kind ?? data.reason ?? "completed") };
+    default:
+      return null;
+  }
+}
+function frameForStreamFrame(frame) {
+  const chunk = frame?.chunk;
+  if (frame?.type !== "chunk") return null;
+  if (chunk?.type === "text-delta") {
+    const text = typeof chunk.text === "string" ? chunk.text : "";
+    return text ? { k: "delta", text, live: true } : null;
+  }
+  if (chunk?.type === "reasoning-delta") {
+    const text = typeof chunk.text === "string" ? chunk.text : "";
+    return text ? { k: "think", text, live: true } : null;
+  }
+  return null;
+}
+function framesOf(records, tools, scope) {
+  if (!Array.isArray(records)) return [];
+  const out = [];
+  for (const record of records) {
+    const frame = frameForEvent(record?.event, tools, scope);
+    if (Array.isArray(frame)) out.push(...frame);
+    else if (frame) out.push(frame);
+  }
+  return out;
+}
+var CONSENT_PATH = "/copree-consent";
+function consentFile() {
+  return join2(process.env.DSH_HOME || join2(homedir(), ".dsh"), "dsh-copree-consent.json");
+}
+function readConsent() {
+  try {
+    return JSON.parse(readFileSync2(consentFile(), "utf8"))?.copree === true;
+  } catch {
+    return false;
+  }
+}
+function writeConsent(allowed) {
+  const file = consentFile();
+  mkdirSync2(dirname2(file), { recursive: true });
+  writeFileSync2(file, JSON.stringify({ copree: allowed, at: Date.now() }, null, 2), { mode: 384 });
+}
+function handleConsent(req, res, apply2) {
+  const route = new URL(req.url ?? "/", "http://dsh.local").pathname;
+  if (route !== CONSENT_PATH && route !== `${CONSENT_PATH}/`) {
+    sendJson(res, 404, { error: "not found" });
+    return;
+  }
+  if (req.method === "GET") {
+    sendJson(res, 200, { allowed: readConsent() });
+    return;
+  }
+  if (req.method !== "POST") {
+    sendJson(res, 405, { error: "method not allowed" });
+    return;
+  }
+  readJsonBody(req).then((body) => {
+    const allowed = body?.allowed === true;
+    try {
+      writeConsent(allowed);
+    } catch (error) {
+      sendJson(res, 500, { error: String(error?.message ?? error) });
+      return;
+    }
+    apply2(allowed);
+    sendJson(res, 200, { allowed });
+  }).catch((error) => sendJson(res, 400, { error: String(error?.message ?? error) }));
+}
+async function sessionCwd(controller, sessionId, fallback) {
+  try {
+    const items = (await controller.list({})).items;
+    const hit = items.find((item) => String(item?.sessionId) === sessionId);
+    return String(hit?.cwd ?? "") || fallback;
+  } catch {
+    return fallback;
+  }
+}
+function sessionSummary(item) {
+  const projected = item?.projections?.values?.title;
+  return {
+    sessionId: String(item?.sessionId ?? ""),
+    title: typeof projected === "string" ? projected : String(item?.title ?? ""),
+    cwd: String(item?.cwd ?? ""),
+    updatedAt: Number(item?.updatedAt ?? 0),
+    running: item?.running === true
+  };
+}
+function authorized(req, expected) {
+  const got = req.headers["x-copree-bridge-token"];
+  if (typeof got !== "string" || got.length !== expected.length) return false;
+  return timingSafeEqual(Buffer.from(got), Buffer.from(expected));
+}
+function handle(req, res, controller, options, tools, scopeOf) {
+  const route = new URL(req.url ?? "/", "http://dsh.local").pathname.slice(BRIDGE_PREFIX.length) || "/";
+  if (!authorized(req, options.secret)) {
+    sendJson(res, 401, { error: "unauthorized" });
+    return;
+  }
+  const query = new URL(req.url ?? "/", "http://dsh.local").searchParams;
+  const run = (fn) => {
+    fn().then(
+      ({ status = 200, body }) => sendJson(res, status, body),
+      (error) => sendJson(res, 500, { error: String(error?.message ?? error) })
+    );
+  };
+  if (req.method === "GET" && route === "/status") {
+    sendJson(res, 200, { ok: true, plugin: "dsh-copree", version: options.version, streams: askBroker.watchers() });
+    return;
+  }
+  if (req.method === "GET" && route === "/sessions") {
+    run(async () => ({ body: { items: (await controller.list({})).items.map(sessionSummary) } }));
+    return;
+  }
+  if (req.method === "POST" && route === "/prompt") {
+    run(async () => {
+      const body = await readJsonBody(req, PROMPT_BODY_LIMIT);
+      const { text: cleaned, images } = splitInlineImages(String(body.text ?? ""));
+      if (!cleaned.trim() && images.length === 0) return { status: 400, body: { error: "text is required" } };
+      const sessionId = body.sessionId ? String(body.sessionId) : (await controller.create(body.cwd ? { cwd: String(body.cwd) } : {})).sessionId;
+      const refs = Array.isArray(body.attachments) ? body.attachments : [];
+      let text = cleaned;
+      if (images.length > 0 || refs.length > 0) {
+        const cwd = await sessionCwd(controller, sessionId, body.cwd ? String(body.cwd) : "");
+        const inline = images.length > 0 ? await saveInlineImages(images, cwd) : { saved: [], skipped: 0 };
+        const pulled = refs.length > 0 ? await pullAttachments(refs, cwd, options) : { saved: [], skipped: 0 };
+        const saved = [...inline.saved, ...pulled.saved];
+        const skipped = inline.skipped + pulled.skipped;
+        if (saved.length > 0) {
+          text = [text, `[\u56FE\u7247\u9644\u4EF6]
+${saved.map((p) => `- ${p}`).join("\n")}`].filter(Boolean).join("\n\n");
+        }
+        if (skipped > 0) {
+          text = [text, `[\u56FE\u7247\u9644\u4EF6] \u6709 ${skipped} \u5F20\u672A\u80FD\u4FDD\u5B58\uFF08\u8D85\u51FA\u5927\u5C0F\u6216\u6570\u91CF\u4E0A\u9650\uFF09`].filter(Boolean).join("\n\n");
+        }
+      }
+      const mode = body.mode === "steer" ? "steer" : void 0;
+      await controller.prompt(
+        { sessionId, content: [{ type: "text", text }], requestId: randomUUID(), ...mode === void 0 ? {} : { mode } },
+        new AbortController().signal
+      );
+      return { body: { sessionId } };
+    });
+    return;
+  }
+  if (req.method === "POST" && route === "/cancel") {
+    run(async () => {
+      const body = await readJsonBody(req);
+      await controller.cancel({ sessionId: String(body.sessionId ?? "") });
+      return { body: { ok: true } };
+    });
+    return;
+  }
+  if (req.method === "POST" && route === "/answer") {
+    run(async () => {
+      const body = await readJsonBody(req);
+      const id = String(body.id ?? "");
+      if (!id) return { status: 400, body: { error: "id is required" } };
+      const decision = {};
+      if (body.approve !== void 0) decision.approve = body.approve === true;
+      if (Array.isArray(body.answers)) {
+        decision.answers = body.answers.map((a) => ({
+          id: String(a?.id ?? ""),
+          selected: Array.isArray(a?.selected) ? a.selected.map((x) => String(x)) : [],
+          ...a?.custom ? { custom: String(a.custom) } : {}
+        }));
+      }
+      if (!askBroker.answer(id, decision)) return { status: 404, body: { error: "ask not found" } };
+      return { body: { ok: true } };
+    });
+    return;
+  }
+  if (req.method === "GET" && route === "/stream") {
+    const sessionId = query.get("sessionId") ?? "";
+    if (!sessionId) {
+      sendJson(res, 400, { error: "sessionId is required" });
+      return;
+    }
+    void streamSession(req, res, controller, sessionId, Number(query.get("afterSeq") ?? -1), tools, scopeOf);
+    return;
+  }
+  sendJson(res, 404, { error: "not found" });
+}
+async function streamSession(req, res, controller, sessionId, afterSeq, tools, scopeOf) {
+  const scope = scopeOf(sessionId);
+  res.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-cache, no-transform",
+    connection: "keep-alive",
+    "x-accel-buffering": "no"
+  });
+  const write = (frame) => {
+    res.write(`data: ${JSON.stringify(frame)}
+
+`);
+  };
+  const abort = new AbortController();
+  const unsubscribeAsks = askBroker.subscribe(sessionId, write);
+  req.on("close", () => abort.abort());
+  const ping = setInterval(() => {
+    res.write(": ping\n\n");
+  }, HEARTBEAT_MS);
+  ping.unref?.();
+  try {
+    const request = {
+      address: { kind: "session", sessionId },
+      assistantStream: true,
+      ...Number.isSafeInteger(afterSeq) && afterSeq >= 0 ? { afterSeq } : {}
+    };
+    for await (const item of controller.follow(request, abort.signal)) {
+      if (item?.type === "snapshot") {
+        write({ k: "snapshot", records: framesOf(item.records, tools, scope) });
+        continue;
+      }
+      if (item?.type === "assistant-stream") {
+        const frame2 = frameForStreamFrame(item.frame);
+        if (frame2) write(frame2);
+        continue;
+      }
+      const frame = frameForEvent(item?.event, tools, scope);
+      if (Array.isArray(frame)) frame.forEach(write);
+      else if (frame) write(frame);
+    }
+  } catch (error) {
+    if (!abort.signal.aborted) write({ k: "error", message: String(error?.message ?? error) });
+  } finally {
+    unsubscribeAsks();
+    clearInterval(ping);
+    res.end();
+  }
+}
+function startHeartbeat(options) {
+  if (!options.advertiseUrl) {
+    options.log("dsh-copree: \u53CD\u5411\u6865\u63A5\u5DF2\u542F\u7528\u4F46\u672A\u6CE8\u518C\uFF08\u672A\u914D\u7F6E bridgeAdvertiseUrl\uFF09");
+    return () => {
+    };
+  }
+  let reported = null;
+  const beat = async () => {
+    let ok = false;
+    try {
+      const response = await fetch(`${options.backendUrl}/dsh-bridge/register`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-copree-bridge-token": options.secret },
+        body: JSON.stringify({
+          plugin: "dsh-copree",
+          version: options.version,
+          advertiseUrl: options.advertiseUrl
+        }),
+        signal: AbortSignal.timeout(5e3)
+      });
+      ok = response.ok;
+    } catch {
+      ok = false;
+    }
+    if (ok !== reported) {
+      reported = ok;
+      options.log(ok ? `dsh-copree: \u53CD\u5411\u6865\u63A5\u5DF2\u6CE8\u518C -> ${options.advertiseUrl}` : "dsh-copree: \u53CD\u5411\u6865\u63A5\u6CE8\u518C\u5931\u8D25\uFF08Copree \u540E\u7AEF\u4E0D\u53EF\u8FBE\u6216\u5BC6\u94A5\u4E0D\u5339\u914D\uFF09");
+    }
+  };
+  void beat();
+  const timer = setInterval(() => {
+    void beat();
+  }, options.heartbeatMs ?? HEARTBEAT_MS);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
+var scopeOfFn;
+async function initScopeSupport(log) {
+  try {
+    const mod = await import("@deepseek-ai/dsh-scope");
+    if (typeof mod?.scopeOf === "function") {
+      scopeOfFn = mod.scopeOf;
+      return;
+    }
+    log("dsh-copree: dsh-scope \u6CA1\u6709\u5BFC\u51FA scopeOf\uFF08\u5DE5\u5177\u5361\u7247\u5C06\u9000\u5316\u4E3A\u901A\u7528\u5361\u7247\uFF09");
+  } catch (error) {
+    log(`dsh-copree: \u8F7D\u5165 dsh-scope \u5931\u8D25\uFF08\u5DE5\u5177\u5361\u7247\u5C06\u9000\u5316\u4E3A\u901A\u7528\u5361\u7247\uFF09\uFF1A${String(error?.message ?? error)}`);
+  }
+}
+function registerBridge(ctx, options) {
+  if (!options.enabled) {
+    options.log("dsh-copree: \u53CD\u5411\u6865\u63A5\u672A\u542F\u7528\uFF08bridgeEnabled=false\uFF09");
+    return () => {
+    };
+  }
+  const controller = ctx.sessionController;
+  let scopeState = null;
+  const scopeOf = (sessionId) => {
+    try {
+      const agentCtx = ctx.agents?.get?.(sessionId)?.ctx;
+      const scope = scopeOfFn ? scopeOfFn(agentCtx) : void 0;
+      if (scope === void 0) {
+        if (scopeState !== "missing") {
+          scopeState = "missing";
+          options.log("dsh-copree: \u6865\u63A5\u53D6\u4E0D\u5230\u4F1A\u8BDD\u7684 agent scope\uFF08\u5DE5\u5177\u5361\u7247\u5C06\u9000\u5316\u4E3A\u901A\u7528\u5361\u7247\uFF09");
+        }
+      } else if (scopeState !== "ok") {
+        scopeState = "ok";
+        options.log("dsh-copree: \u6865\u63A5\u5DF2\u62FF\u5230 agent scope\uFF08\u5DE5\u5177\u5361\u7247\u6309\u5DE5\u5177\u81EA\u5DF1\u7684\u58F0\u660E\u6E32\u67D3\uFF09");
+      }
+      return scope;
+    } catch {
+      return void 0;
+    }
+  };
+  let disposeRoute = null;
+  let stopHeartbeat = null;
+  const apply2 = (allowed) => {
+    if (allowed === (disposeRoute !== null)) return;
+    if (allowed) {
+      if (!options.secret) {
+        options.log("dsh-copree: \u5DF2\u540C\u610F\u63A5\u5165\uFF0C\u4F46\u672A\u914D\u7F6E bridgeSecret\uFF0C\u6865\u63A5\u65E0\u6CD5\u542F\u52A8");
+        return;
+      }
+      if (!controller) {
+        options.log("dsh-copree: \u5DF2\u540C\u610F\u63A5\u5165\uFF0C\u4F46\u5F53\u524D profile \u6CA1\u6709 sessionController\uFF0C\u6865\u63A5\u65E0\u6CD5\u542F\u52A8");
+        return;
+      }
+      void initScopeSupport(options.log);
+      disposeRoute = ctx.webServer.register({
+        kind: "prefix",
+        path: BRIDGE_PREFIX,
+        handler: (req, res) => handle(req, res, controller, options, ctx.tools, scopeOf)
+      });
+      stopHeartbeat = startHeartbeat(options);
+      options.log("dsh-copree: \u5DF2\u540C\u610F Copree \u63A5\u5165\uFF0C\u6865\u63A5\u8DEF\u7531\u4E0E\u5FC3\u8DF3\u5DF2\u542F\u52A8");
+    } else {
+      disposeRoute?.();
+      disposeRoute = null;
+      stopHeartbeat?.();
+      stopHeartbeat = null;
+      options.log("dsh-copree: \u5DF2\u64A4\u9500\u540C\u610F\uFF0C\u6865\u63A5\u8DEF\u7531\u4E0E\u5FC3\u8DF3\u5DF2\u505C");
+    }
+  };
+  const disposeAnswerers = registerAnswerers(ctx);
+  const disposeConsent = ctx.webServer.register({
+    kind: "prefix",
+    path: CONSENT_PATH,
+    handler: (req, res) => handleConsent(req, res, apply2)
+  });
+  apply2(readConsent());
+  return () => {
+    disposeConsent();
+    disposeRoute?.();
+    stopHeartbeat?.();
+    disposeAnswerers();
+  };
+}
+
 // src/index.ts
 var name = "dsh-copree";
-var inject = ["webServer", "tools", "systemPrompt"];
+var inject = ["webServer", "tools", "systemPrompt", "sessionController", "agents"];
+var PLUGIN_VERSION = (() => {
+  try {
+    return String(JSON.parse(readFileSync3(join3(PACKAGE_ROOT, "package.json"), "utf8")).version ?? "0.0.0");
+  } catch {
+    return "0.0.0";
+  }
+})();
 var Config = z.object({
   backendUrl: z.string().default("http://127.0.0.1:5228"),
-  pluginSourceDir: z.string().default("")
+  pluginSourceDir: z.string().default(""),
+  bridgeEnabled: z.boolean().default(true),
+  bridgeSecret: z.string().default(""),
+  bridgeAdvertiseUrl: z.string().default(""),
+  bridgeHeartbeatMs: z.natural().default(HEARTBEAT_MS)
 });
 var HTTP_PREFIX = "/copree-api";
 var WS_PATH = "/copree-ws";
 var UI_PREFIX = "/copree-ui";
-var UI_ROOT = join2(PACKAGE_ROOT, "dist");
+var UI_ROOT = join3(PACKAGE_ROOT, "dist");
 var MIME = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -352,7 +1107,7 @@ var MIME = {
 function serveStatic(req, res) {
   const raw = (req.url ?? "/").split("?")[0];
   const rel = raw === UI_PREFIX || raw === `${UI_PREFIX}/` ? "/index.html" : raw.slice(UI_PREFIX.length);
-  const candidate = normalize(join2(UI_ROOT, rel));
+  const candidate = normalize(join3(UI_ROOT, rel));
   if (!candidate.startsWith(UI_ROOT)) {
     res.writeHead(403);
     res.end("forbidden");
@@ -360,7 +1115,7 @@ function serveStatic(req, res) {
   }
   let file = candidate;
   if (!existsSync2(file) || statSync(file).isDirectory()) {
-    file = join2(UI_ROOT, "index.html");
+    file = join3(UI_ROOT, "index.html");
   }
   if (!existsSync2(file)) {
     res.writeHead(404);
@@ -494,16 +1249,16 @@ function proxyWs(backendUrl, req, socket, head) {
   if (head.length > 0) upstream.write(head);
   upstream.end();
 }
-var WORLD_DIR_BASE = join2(process.env.DSH_HOME ?? join2(os.homedir(), ".dsh"), "copree-worlds");
+var WORLD_DIR_BASE = join3(process.env.DSH_HOME ?? join3(os.homedir(), ".dsh"), "copree-worlds");
 var WORLDS_PREFIX = "/copree-worlds";
-var LEGACY_WORLD_DIR_BASE = join2(process.env.DSH_HOME ?? join2(os.homedir(), ".dsh"), "aischat-worlds");
+var LEGACY_WORLD_DIR_BASE = join3(process.env.DSH_HOME ?? join3(os.homedir(), ".dsh"), "aischat-worlds");
 var WORLD_DIR_BASES = [WORLD_DIR_BASE, LEGACY_WORLD_DIR_BASE];
 var META_FILES = [".copree-world.json", ".aischat-world.json"];
 function readWorldMeta(dir) {
   for (const file of META_FILES) {
-    const p = join2(dir, file);
+    const p = join3(dir, file);
     try {
-      if (existsSync2(p)) return JSON.parse(readFileSync2(p, "utf8"));
+      if (existsSync2(p)) return JSON.parse(readFileSync3(p, "utf8"));
     } catch {
     }
   }
@@ -513,29 +1268,6 @@ var worldTokenMap = /* @__PURE__ */ new Map();
 var sessionTokenMap = /* @__PURE__ */ new Map();
 function sanitizeDirName(name2) {
   return String(name2 || "").replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").trim() || "\u672A\u547D\u540D\u4E16\u754C";
-}
-function readJsonBody(req) {
-  return new Promise((resolve2, reject) => {
-    let size = 0;
-    const chunks = [];
-    req.on("data", (c) => {
-      size += c.length;
-      if (size > 262144) {
-        reject(new Error("body too large"));
-        req.destroy();
-        return;
-      }
-      chunks.push(c);
-    });
-    req.on("end", () => {
-      try {
-        resolve2(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"));
-      } catch {
-        reject(new Error("invalid json"));
-      }
-    });
-    req.on("error", reject);
-  });
 }
 function backendRequest(backendUrl, method, path, opts = {}) {
   return new Promise((resolve2, reject) => {
@@ -611,7 +1343,7 @@ function listWorldDirs() {
       for (const entry of readdirSync(root, { withFileTypes: true })) {
         if (!entry.isDirectory() || seen.has(entry.name)) continue;
         seen.add(entry.name);
-        const meta = readWorldMeta(join2(root, entry.name)) ?? {};
+        const meta = readWorldMeta(join3(root, entry.name)) ?? {};
         out.push({
           dir: entry.name,
           worldId: Number(meta.worldId) || null,
@@ -638,8 +1370,8 @@ function worldDirFor(worldId) {
       if (!existsSync2(root)) continue;
       for (const entry of readdirSync(root, { withFileTypes: true })) {
         if (!entry.isDirectory()) continue;
-        const meta = readWorldMeta(join2(root, entry.name));
-        if (meta && Number(meta.worldId) === worldId) return join2(root, entry.name);
+        const meta = readWorldMeta(join3(root, entry.name));
+        if (meta && Number(meta.worldId) === worldId) return join3(root, entry.name);
       }
     } catch {
     }
@@ -651,7 +1383,7 @@ var LEGACY_SNAPSHOT_FILE = ".aischat-sync.json";
 function readSnapshot(dir) {
   for (const file of [SNAPSHOT_FILE, LEGACY_SNAPSHOT_FILE]) {
     try {
-      const parsed = JSON.parse(readFileSync2(join2(dir, file), "utf8"));
+      const parsed = JSON.parse(readFileSync3(join3(dir, file), "utf8"));
       if (parsed && parsed.v === 1 && parsed.files && typeof parsed.files === "object") return parsed;
     } catch {
     }
@@ -660,7 +1392,7 @@ function readSnapshot(dir) {
 }
 function writeSnapshot(dir, snap) {
   try {
-    writeFileSync2(join2(dir, SNAPSHOT_FILE), JSON.stringify(snap, null, 2), "utf8");
+    writeFileSync3(join3(dir, SNAPSHOT_FILE), JSON.stringify(snap, null, 2), "utf8");
   } catch {
   }
 }
@@ -676,7 +1408,7 @@ function compareMirror(remoteTree, dir, snap) {
   for (const f of remoteTree) if (f.path && !isMirrorExcluded(f.path)) remote.set(f.path, f.mtime);
   const localFiles = walkDir(dir).filter((p) => !isMirrorExcluded(p));
   const local = /* @__PURE__ */ new Map();
-  for (const p of localFiles) local.set(p, statMtime(join2(dir, p)));
+  for (const p of localFiles) local.set(p, statMtime(join3(dir, p)));
   const out = { added: [], removed: [], changedRemote: [], changedLocal: [], conflict: [] };
   const seen = /* @__PURE__ */ new Set();
   for (const [p, rm] of remote) {
@@ -765,9 +1497,9 @@ async function pullWithSnapshot(backendUrl, worldId, dir, token, force = false) 
         skipped++;
         continue;
       }
-      const target = join2(dir, rel);
-      mkdirSync2(join2(target, ".."), { recursive: true });
-      writeFileSync2(target, content, "utf8");
+      const target = join3(dir, rel);
+      mkdirSync3(join3(target, ".."), { recursive: true });
+      writeFileSync3(target, content, "utf8");
       pulled++;
       pulledOk.push(rel);
     } catch {
@@ -778,7 +1510,7 @@ async function pullWithSnapshot(backendUrl, worldId, dir, token, force = false) 
   for (const rel of cmp.removed) {
     if (force || !cmp.changedLocal.includes(rel)) {
       try {
-        unlinkSync(join2(dir, rel));
+        unlinkSync(join3(dir, rel));
         pulled++;
         removedOk.push(rel);
       } catch {
@@ -789,7 +1521,7 @@ async function pullWithSnapshot(backendUrl, worldId, dir, token, force = false) 
   const nextSnap = { v: 1, files: { ...snap.files } };
   for (const rel of pulledOk) {
     const rm = tree.find((t) => t.path === rel)?.mtime ?? snap.files[rel]?.rm ?? 0;
-    nextSnap.files[rel] = { lm: statMtime(join2(dir, rel)), rm };
+    nextSnap.files[rel] = { lm: statMtime(join3(dir, rel)), rm };
   }
   for (const rel of removedOk) delete nextSnap.files[rel];
   writeSnapshot(dir, nextSnap);
@@ -826,7 +1558,7 @@ async function pushWithSnapshot(backendUrl, worldId, dir, token, force = false) 
       continue;
     }
     try {
-      const content = readFileSync2(join2(dir, rel), "utf8");
+      const content = readFileSync3(join3(dir, rel), "utf8");
       const res = await backendRequest(backendUrl, "PUT", `/worlds/${worldId}/files`, { token, json: { path: rel, content } });
       if (res.status === 200) {
         pushed++;
@@ -850,7 +1582,7 @@ async function pushWithSnapshot(backendUrl, worldId, dir, token, force = false) 
   const nextSnap = { v: 1, files: { ...snap.files } };
   for (const rel of pushedOk) {
     const rm = freshTree.find((t) => t.path === rel)?.mtime ?? snap.files[rel]?.rm ?? 0;
-    nextSnap.files[rel] = { lm: statMtime(join2(dir, rel)), rm };
+    nextSnap.files[rel] = { lm: statMtime(join3(dir, rel)), rm };
   }
   for (const rel of removedOk) delete nextSnap.files[rel];
   writeSnapshot(dir, nextSnap);
@@ -872,7 +1604,7 @@ function walkDir(root) {
       return;
     }
     for (const e of entries) {
-      const full = join2(dir, e.name);
+      const full = join3(dir, e.name);
       const rel = full.slice(root.length).replace(/^[/\\]/, "");
       if (e.isDirectory()) {
         if (e.name === "__pycache__") continue;
@@ -912,15 +1644,21 @@ function apply(ctx, config) {
     sourceDir: config.pluginSourceDir,
     log: (message) => ctx.logger?.info?.(message)
   });
+  registerBridge(ctx, {
+    enabled: config.bridgeEnabled,
+    secret: config.bridgeSecret,
+    advertiseUrl: config.bridgeAdvertiseUrl.replace(/\/+$/, ""),
+    backendUrl,
+    version: PLUGIN_VERSION,
+    heartbeatMs: config.bridgeHeartbeatMs,
+    log: (message) => ctx.logger?.info?.(message)
+  });
   ctx.webServer.register({
     kind: "prefix",
     path: WORLDS_PREFIX,
     handler: (req, res) => {
       const route = (req.url ?? "/").split("?")[0];
-      const send = (status, json) => {
-        res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
-        res.end(JSON.stringify(json));
-      };
+      const send = (status, json) => sendJson(res, status, json);
       if (req.method === "POST" && route === `${WORLDS_PREFIX}/dir`) {
         readJsonBody(req).then((body) => {
           const worldId = Number(body.worldId);
@@ -935,14 +1673,14 @@ function apply(ctx, config) {
             return;
           }
           const dirName = sanitizeDirName(`Copree\u7FA4\u89C6\u754C-${name2 || `\u4E16\u754C${worldId}`}`);
-          const dir = join2(WORLD_DIR_BASE, dirName);
+          const dir = join3(WORLD_DIR_BASE, dirName);
           try {
-            mkdirSync2(dir, { recursive: true });
-            const metaPath = join2(dir, ".copree-world.json");
+            mkdirSync3(dir, { recursive: true });
+            const metaPath = join3(dir, ".copree-world.json");
             if (!existsSync2(metaPath)) {
-              writeFileSync2(metaPath, JSON.stringify({ worldId, name: name2 }, null, 2), "utf8");
+              writeFileSync3(metaPath, JSON.stringify({ worldId, name: name2 }, null, 2), "utf8");
             } else {
-              const prev = JSON.parse(readFileSync2(metaPath, "utf8"));
+              const prev = JSON.parse(readFileSync3(metaPath, "utf8"));
               if (Number(prev.worldId) !== worldId) {
                 send(409, { error: `\u76EE\u5F55\u5DF2\u5C5E\u4E8E\u4E16\u754C ${prev.worldId}` });
                 return;
