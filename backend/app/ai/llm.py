@@ -926,8 +926,15 @@ async def build_messages(
     if "tools" in enabled_segments:
         segments["tools"] = await _build_tools_segment(db, agent, is_dm)
     
+    # injected_skills（记忆 + 技能注入）**不进 message 0**：它的检索词就是「最近 5 条消息」，
+    # 每条新消息都让它变——它一变，整个前缀从第 0 字节起全 miss（实测：插一条消息前后首差下标 = 0）。
+    # 按 §3 的规矩它就是「当轮事实」，跟状态栈/任务一起沉到尾部读数。
+    dynamic_readings: list[str] = []
     if "injected_skills" in enabled_segments and context_config_parser.should_inject_skills(context_config):
-        segments["injected_skills"] = await _build_injected_skills(db, agent, group_id, query_text, api_base_url, api_key, trigger_user_id)
+        _memory_block = await _build_injected_skills(
+            db, agent, group_id, query_text, api_base_url, api_key, trigger_user_id)
+        if _memory_block:
+            dynamic_readings.append(_memory_block)
 
     order = context_config_parser.parse_segment_order(context_config)
     system_prompt = assemble_system_prompt(segments, order)
@@ -937,7 +944,7 @@ async def build_messages(
 
     # 动态内容一律沉到尾部（message 0 只留静态段）：状态栈每次切会话都在变、任务/通道规矩/
     # 好友申请也会变——写进前缀等于每轮重建整个前缀，缓存全废。它们按「当轮事实」跟在历史后面。
-    tail_blocks: list[str] = []
+    tail_blocks: list[str] = list(dynamic_readings)  # 先记忆注入（当轮事实），再任务/状态/通道
 
     # ✨ 工作区任务（配置驱动）
     if context_config_parser.should_inject_workspace(context_config):
@@ -1321,14 +1328,18 @@ async def build_dm_messages(
         "personality": build_personality_segment(agent, language, eff_personality),
         "protocol": dm_protocol,
         "tools": await _build_tools_segment(db, agent, is_dm=True),
-        "injected_skills": await _build_injected_skills(
-            db, agent, group_id=0,  # group_id=0 表示非群聊上下文
-            query_text=query_text,
-            api_base_url=api_base_url,
-            api_key=api_key,
-            trigger_user_id=trigger_user_id,
-        ),
     }
+    # 同上：记忆注入的检索词是「最近 5 条消息」，每轮都变 → 沉到尾部读数（§3）
+    dynamic_readings: list[str] = []
+    _memory_block = await _build_injected_skills(
+        db, agent, group_id=0,  # group_id=0 表示非群聊上下文
+        query_text=query_text,
+        api_base_url=api_base_url,
+        api_key=api_key,
+        trigger_user_id=trigger_user_id,
+    )
+    if _memory_block:
+        dynamic_readings.append(_memory_block)
 
     order = await _get_segment_order(db)
     system_prompt = assemble_system_prompt(segments, order)
@@ -1338,7 +1349,7 @@ async def build_dm_messages(
 
     # 动态内容一律沉到尾部（message 0 只留静态段）：切会话时状态栈会变，写进前缀
     # 等于每轮重建前缀、缓存全废。它们按「当轮事实」跟在历史后面。
-    tail_blocks: list[str] = []
+    tail_blocks: list[str] = list(dynamic_readings)  # 先记忆注入，再任务/状态/会话列表
 
     # ✨ 工作区任务
     try:
