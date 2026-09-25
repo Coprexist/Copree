@@ -39,6 +39,8 @@ export default function ApiKeyPoolTab() {
   const [keys, setKeys] = useState<PoolKey[]>([])
   const [loading, setLoading] = useState(true)
   const [showAdd, setShowAdd] = useState(false)
+  const [editingKey, setEditingKey] = useState<PoolKey | null>(null)
+  const [testingId, setTestingId] = useState<number | null>(null)
   const [statsKeyId, setStatsKeyId] = useState<number | null>(null)
 
   const loadKeys = async () => {
@@ -58,6 +60,20 @@ export default function ApiKeyPoolTab() {
       loadKeys()
     } catch (err: any) {
       alert(err?.message || t('admin.deleteFailed'))
+    }
+  }
+
+  const handleTest = async (id: number) => {
+    setTestingId(id)
+    try {
+      const r = await api.post(`/admin/api-key-pool/${id}/test`, {}) as any
+      const lines = [r?.message || (r?.ok ? t('admin.testOk') : t('admin.testFailed'))]
+      if (r?.models?.length) lines.push(t('admin.testModels').replace('{n}', String(r.models.length)))
+      alert(lines.join('\n'))
+    } catch (err: any) {
+      alert(err?.message || t('admin.testFailed'))
+    } finally {
+      setTestingId(null)
     }
   }
 
@@ -159,7 +175,22 @@ export default function ApiKeyPoolTab() {
                       <BarChart3 size={14} />
                     </button>
                   </td>
-                  <td className="py-2.5 px-3 text-right">
+                  <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                    <button
+                      onClick={() => handleTest(k.id)}
+                      disabled={testingId === k.id}
+                      className="px-2 py-1 mr-1 rounded-control text-xs text-textMuted hover:text-mint-400 hover:bg-mint-400/10 transition-colors disabled:opacity-50"
+                      title={t('admin.testKey')}
+                    >
+                      {testingId === k.id ? t('admin.testing') : t('admin.testKey')}
+                    </button>
+                    <button
+                      onClick={() => setEditingKey(k)}
+                      className="px-2 py-1 mr-1 rounded-control text-xs text-textMuted hover:text-primary-400 hover:bg-primary-500/10 transition-colors"
+                      title={t('admin.editKey')}
+                    >
+                      {t('admin.editKey')}
+                    </button>
                     <button
                       onClick={() => handleDelete(k.id, k.name)}
                       className="p-1.5 rounded-control hover:bg-rose-400/10 text-textMuted hover:text-rose-400 transition-colors"
@@ -178,34 +209,49 @@ export default function ApiKeyPoolTab() {
       {/* 添加弹窗 */}
       {showAdd && <AddPoolKeyModal onClose={() => setShowAdd(false)} onSaved={() => { setShowAdd(false); loadKeys() }} />}
 
+      {/* 编辑弹窗：同一个组件，重填明文 key（留空 = 不改） */}
+      {editingKey && (
+        <AddPoolKeyModal
+          editing={editingKey}
+          onClose={() => setEditingKey(null)}
+          onSaved={() => { setEditingKey(null); loadKeys() }}
+        />
+      )}
+
       {/* Key 统计弹窗 */}
       {statsKeyId && <KeyStatsModal keyId={statsKeyId} onClose={() => setStatsKeyId(null)} />}
     </div>
   )
 }
 
-function AddPoolKeyModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+function AddPoolKeyModal({ onClose, onSaved, editing }: {
+  onClose: () => void
+  onSaved: () => void
+  editing?: PoolKey | null
+}) {
   const t = useT()
-  const [name, setName] = useState('')
-  const [apiBaseUrl, setApiBaseUrl] = useState('')
-  const [apiKey, setApiKey] = useState('')
-  const [priority, setPriority] = useState(0)
+  const [name, setName] = useState(editing?.name || '')
+  const [apiBaseUrl, setApiBaseUrl] = useState(editing?.api_base_url || '')
+  const [apiKey, setApiKey] = useState('')   // 编辑时留空 = 不替换明文
+  const [priority, setPriority] = useState(editing?.priority ?? 0)
   const [concurrentLimit, setConcurrentLimit] = useState<number | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
   const handleSave = async () => {
-    if (!name.trim() || !apiKey.trim()) return
+    if (!name.trim() || (!editing && !apiKey.trim())) return
     setLoading(true)
     setError('')
     try {
-      await api.post('/admin/api-key-pool', {
+      const payload: Record<string, unknown> = {
         name: name.trim(),
         api_base_url: apiBaseUrl.trim() || null,
-        api_key: apiKey.trim(),
         priority,
         concurrent_limit: concurrentLimit,
-      })
+      }
+      if (apiKey.trim()) payload.api_key = apiKey.trim()   // 留空表示保留原明文
+      if (editing) await api.put(`/admin/api-key-pool/${editing.id}`, payload)
+      else await api.post('/admin/api-key-pool', payload)
       onSaved()
     } catch (err: any) {
       setError(err?.message || err?.detail || t('admin.saveFailed'))
@@ -221,7 +267,7 @@ function AddPoolKeyModal({ onClose, onSaved }: { onClose: () => void; onSaved: (
         onClick={(e) => e.stopPropagation()}
       >
         <h3 className="text-lg font-semibold mb-1 text-textPrimary flex items-center gap-2">
-          <Key size={18} className="text-accent-400" /> {t('admin.addApiKeyModal')}
+          <Key size={18} className="text-accent-400" /> {editing ? t('admin.editApiKeyModal') : t('admin.addApiKeyModal')}
         </h3>
         <p className="text-xs text-textMuted mb-4">
           {t('admin.addKeyEncryptNote')}
@@ -247,7 +293,7 @@ function AddPoolKeyModal({ onClose, onSaved }: { onClose: () => void; onSaved: (
           </div>
           <div>
             <label className="block text-xs font-medium mb-1 text-textSecondary flex items-center gap-2">
-              {t('admin.keyApiKey')}
+              {t('admin.keyApiKey')}{editing ? `（${t('admin.keyApiKeyKeepHint')}）` : ''}
               {apiBaseUrl && getApiKeyUrl(apiBaseUrl) && (
                 <a
                   href={getApiKeyUrl(apiBaseUrl)}

@@ -604,6 +604,8 @@ class CreatePoolKeyRequest(BaseModel):
 
 class UpdatePoolKeyRequest(BaseModel):
     name: str | None = None
+    # 重填明文（None = 不修改）：库里的密文解不开时（加密密钥换过）这是唯一的修法
+    api_key: str | None = Field(default=None, min_length=1)
     api_base_url: str | None = None
     is_active: bool | None = None
     priority: int | None = None
@@ -701,6 +703,9 @@ async def update_pool_key(
         key_entry.priority = req.priority
     if req.concurrent_limit is not None:
         key_entry.concurrent_limit = req.concurrent_limit if req.concurrent_limit > 0 else None
+    if req.api_key:
+        from app.utils.crypto import encrypt_api_key
+        key_entry.api_key_encrypted = encrypt_api_key(req.api_key)
 
     await _log_admin_action(
         db, admin["user_id"], "update_pool_key", "api_key_pool", key_id,
@@ -709,6 +714,31 @@ async def update_pool_key(
     await db.flush()
 
     return {"message": "更新成功", "id": key_id}
+
+
+@router.post("/api-key-pool/{key_id}/test")
+async def test_pool_key(
+    key_id: int,
+    admin: dict = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """测通池 Key：解密 → 探测 provider（策略/文案/脱敏复用 api_probe，这里只做取 key + 转结构）。"""
+    from app.models.api_key_pool import ApiKeyPool
+    from app.services.agent.api_probe import probe_provider
+    from app.utils.crypto import APIKeyDecryptError, decrypt_api_key
+
+    row = (await db.execute(select(ApiKeyPool).where(ApiKeyPool.id == key_id))).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="池 Key 不存在")
+    try:
+        key = decrypt_api_key(row.api_key_encrypted)
+    except APIKeyDecryptError as e:
+        return {"ok": False, "code": "decrypt_failed", "message": f"解密失败：{e}", "models": []}
+    probe = await probe_provider(row.api_base_url or settings.deepseek_base_url, key, allow_private=True)
+    return {
+        "ok": probe.ok, "code": probe.kind, "message": probe.message,
+        "models": list(probe.models or []),
+    }
 
 
 @router.delete("/api-key-pool/{key_id}")

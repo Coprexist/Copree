@@ -81,7 +81,7 @@ export const CONSOLE_WORKSPACES: ConsoleWorkspace[] = [
     items: [
       { key: 'capabilities', labelKey: 'admin.capabilities', descKey: 'admin.capabilitiesDesc', icon: Plug, Component: CapabilitiesTab },
       { key: 'prompt', labelKey: 'admin.prompt', descKey: 'admin.promptDesc', icon: Layers, Component: SystemPromptTab },
-      { key: 'apipool', labelKey: 'admin.apikeyPool', descKey: 'admin.apikeyPoolDesc', icon: Key, Component: ApiKeyPoolTab },
+      { key: 'apipool', labelKey: 'admin.apiKeyPool', descKey: 'admin.apiKeyPoolDesc', icon: Key, Component: ApiKeyPoolTab },
       { key: 'opencli', labelKey: 'admin.opencli', descKey: 'admin.opencliDesc', icon: Terminal, Component: OpenCliTab },
       { key: 'federation', labelKey: 'admin.federation', descKey: 'admin.federationDesc', icon: Globe, Component: FederationTab },
       { key: 'store', labelKey: 'admin.store', descKey: 'admin.storeDesc', icon: Store, Component: StoreConsoleTab },

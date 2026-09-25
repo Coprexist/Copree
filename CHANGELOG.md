@@ -60,6 +60,10 @@
   + 修法提示（不再静默），一致时打一行「向量维度自检通过」
 - **删池 Key 不再 500**：`api_usage_log.pool_key_id` 外键改 `ON DELETE SET NULL`（迁移 `b8c9d0e1f2a3`）——
   用量历史保留、引用置空；之前有用量记录的 Key 一删就 ForeignKeyViolationError（线上实测 `DELETE /admin/api-key-pool/1`）
+- **池 Key 管理补齐（前端 Tab 早就有，缺的是这两件）**：① `PUT /admin/api-key-pool/{id}` 之前**根本不收 `api_key`**，
+  只能改名/启停/优先级——现在支持重填明文（密文解不开时唯一的修法）；② 新增 `POST /admin/api-key-pool/{id}/test`
+  测通（探测策略/文案/脱敏全复用 `api_probe.probe_provider`）；前端列表加「编辑」「测通」按钮 + i18n 三语，
+  并修掉标签键大小写不一致（`admin.apikeyPool` vs 字典里的 `admin.apiKeyPool`）
 - **跨对话回复的「读」**：新工具 `read_conversation` 读别的会话最近几条原文（群传 `group_id`、私信传
   `target_user_id`；只读不切状态）+ `history_service.tail` 读账本尾部的唯一入口 —— 写早就能发，
   补上读之后「跨对话回复」才成立
