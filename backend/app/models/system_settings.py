@@ -44,6 +44,7 @@ class SystemSettings(Base):
     world_preset_suggestions = Column(json_column(), nullable=True, comment="世界 AI 建议问题预设（「你可以问」按钮，无对话历史/兜底时展示）")
     market_config = Column(json_column(), nullable=True, comment="世界商城配置：github_repo/github_token/auto_sync_enabled")
 
+
     # 每日数据库备份（管理员开关 + 保留份数，超出自动清除）
     daily_backup_enabled = Column(Boolean, default=False, comment="每日自动备份开关（管理员控制，默认关）")
     daily_backup_keep = Column(Integer, default=7, comment="备份保留份数，超出自动清除（默认 7）")

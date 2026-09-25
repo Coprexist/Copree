@@ -3358,41 +3358,41 @@ async def list_plugins(
     return {"plugins": plugins}
 
 
-@router.post("/plugins/{plugin_id}/start")
+@router.post("/plugins/{plugin_key}/start")
 async def start_plugin(
-    plugin_id: str,
+    plugin_key: str,
     admin: dict = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
 ):
-    """启动插件服务"""
-    plugin = PluginRegistry.get(plugin_id)
-    if plugin is None:
-        raise HTTPException(404, f"未知插件: {plugin_id}")
+    """启动插件服务（plugin_key 是注册表 key：单实例=插件 id，多实例=插件 id:实例名）
 
-    status = await plugin.get_status()
-    if status.get("running", False):
-        return {"message": f"{plugin.name} 已在运行", "running": True}
-    ok = await plugin.start()
-    if ok:
-        return {"message": f"{plugin.name} 已启动", "running": True}
-    else:
-        raise HTTPException(500, f"{plugin.name} 启动失败")
+    启停逻辑住在 runtime_control：用户给自己的 AI 开通道走的是同一段代码，
+    两边各写一份迟早不一致。
+    """
+    from app.services.plugin import runtime_control
+
+    try:
+        return await runtime_control.start_instance(db, plugin_key)
+    except runtime_control.UnknownInstance:
+        raise HTTPException(404, f"未知插件实例: {plugin_key}")
+    except runtime_control.StartFailed as e:
+        # 起不来时把插件自己记的原因带出去：管理页要看得到"为什么失败"（如未配置凭据）
+        raise HTTPException(500, str(e))
 
 
-@router.post("/plugins/{plugin_id}/stop")
+@router.post("/plugins/{plugin_key}/stop")
 async def stop_plugin(
-    plugin_id: str,
+    plugin_key: str,
     admin: dict = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
 ):
-    """停止插件服务"""
-    plugin = PluginRegistry.get(plugin_id)
-    if plugin is None:
-        raise HTTPException(404, f"未知插件: {plugin_id}")
+    """停止插件服务（plugin_key 同上）"""
+    from app.services.plugin import runtime_control
 
-    status = await plugin.get_status()
-    if not status.get("running", False):
-        return {"message": f"{plugin.name} 未运行", "running": False}
-    await plugin.stop()
-    return {"message": f"{plugin.name} 已停止", "running": False}
+    try:
+        return await runtime_control.stop_instance(db, plugin_key)
+    except runtime_control.UnknownInstance:
+        raise HTTPException(404, f"未知插件实例: {plugin_key}")
 
 
 # ══════════════════════════════════════════════════════════════

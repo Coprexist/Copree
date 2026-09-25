@@ -319,36 +319,50 @@ async def _startup_federation() -> None:
     spawn_task(federation_profile_sync, "federation_profile_sync", restart=True)
 
 
-async def _start_browser_service() -> None:
-    """启动共享 Chromium CDP 服务（非致命，数据库已由 _startup_db 确保就绪）"""
+async def _start_service_plugins() -> None:
+    """按期望状态启动所有服务插件（browser 也是其中之一，不再单独硬编码）
+
+    期望状态存在 plugins.service_desired_running：管理员停掉的服务不会在下次重启时
+    自己跑起来。内置服务插件（browser）没有 DB 行 → 缺省启动，保持原有行为。
+    """
+    from app.services.infrastructure.plugin_registry import PluginRegistry
+
+    desired: dict[tuple[str, str], bool] = {}
     try:
-        from app.services.infrastructure.plugin_registry import PluginRegistry
-        plugin = PluginRegistry.get("browser")
-        if plugin is None:
-            logger.warning("Browser 插件未注册，browser 命令将不可用")
-            return
-        status = await plugin.get_status()
-        if status.get("running"):
-            logger.info(f"[OK] Chromium CDP 已在运行 (port {status.get('port')})")
-            return
-        ok = await plugin.start()
-        if ok:
-            logger.info("[OK] Chromium CDP 已启动，所有 AI 共用")
-        else:
-            logger.warning("Chromium CDP 启动失败，browser 命令将不可用")
+        from app.services.plugin.config import desired_states
+
+        desired = await desired_states()
     except Exception as e:
-        logger.warning(f"[WARN] 浏览器服务启动失败（非致命）: {e}", exc_info=True)
+        # 读不到就按"都该启动"处理：宁可多启一个服务，也不要因为一张表读失败把功能全停了
+        logger.warning(f"[WARN] 读取服务插件期望状态失败，按默认启动处理: {e}")
+
+    for plugin in PluginRegistry.get_all():
+        if not desired.get((plugin.id, plugin.instance), True):
+            logger.info(f"[OK] 服务插件 {plugin.key} 处于停止状态，跳过启动")
+            continue
+        try:
+            status = await plugin.get_status()
+            if status.get("running"):
+                logger.info(f"[OK] 服务插件已在运行: {plugin.key}")
+                continue
+            ok = await plugin.start()
+            if ok:
+                logger.info(f"[OK] 服务插件已启动: {plugin.key}")
+            else:
+                logger.warning(f"[WARN] 服务插件启动失败: {plugin.key}（相关功能不可用）")
+        except Exception as e:
+            logger.warning(f"[WARN] 服务插件启动异常: {plugin.key}: {e}", exc_info=True)
 
 
-async def _stop_browser_service() -> None:
-    """停止共享 Chromium CDP 服务"""
-    try:
-        from app.services.infrastructure.plugin_registry import PluginRegistry
-        plugin = PluginRegistry.get("browser")
-        if plugin is not None:
+async def _stop_service_plugins() -> None:
+    """停止所有服务插件（进程退出前）"""
+    from app.services.infrastructure.plugin_registry import PluginRegistry
+
+    for plugin in PluginRegistry.get_all():
+        try:
             await plugin.stop()
-    except Exception as e:
-        logger.warning(f"[WARN] 停止 Chromium CDP 失败: {e}", exc_info=True)
+        except Exception as e:
+            logger.warning(f"[WARN] 停止服务插件失败: {plugin.id}: {e}", exc_info=True)
 
 
 async def _startup_brain_and_skills() -> None:
@@ -394,8 +408,8 @@ async def lifespan(app: FastAPI):
     await _startup_world()
     await _startup_federation()
 
-    # 启动共享 Chromium 服务（所有 AI 共用的浏览器 CDP）
-    spawn_task(_start_browser_service, "_start_browser_service")
+    # 按期望状态启动服务插件（含共享 Chromium CDP，所有 AI 共用）
+    spawn_task(_start_service_plugins, "_start_service_plugins")
 
     await _startup_brain_and_skills()
 
@@ -442,8 +456,8 @@ async def lifespan(app: FastAPI):
     # 停止所有后台任务（含延迟重启任务）
     await cancel_all_tasks()
 
-    # 停止共享 Chromium
-    await _stop_browser_service()
+    # 停止所有服务插件（含共享 Chromium）
+    await _stop_service_plugins()
 
     # 释放数据库连接池
     await engine.dispose()
