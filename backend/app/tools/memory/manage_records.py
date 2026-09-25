@@ -32,7 +32,9 @@ class ManageRecords(ToolPlugin):
         "- 查看目录: action='categories'\n"
         "- 删除: action='delete', category='...', sub_key='...', field='...'  (field可选，不填删整个sub_key)\n"
         "- 改名: action='rename', category='project', new_name='设定', level='category'（或 level='sub_key'/'field' 加 sub_key/field 定位）\n"
-        "- 移动: action='move', category='project', sub_key='图鉴页面', to_category='design'（整组移动；加 field 则只移单条）"
+        "- 移动: action='move', category='project', sub_key='图鉴页面', to_category='design'（整组移动；加 field 则只移单条）\n\n"
+        "注意：**临时的、有时效的约定**（暗号、触发条件、等会儿到别的会话要做的事）不要写这里——"
+        "这里只把路径注入上下文，值要再 get 一次，很容易误事；这类东西用 cross_state_note。"
     )
     segment = "memory"
     parameters = {

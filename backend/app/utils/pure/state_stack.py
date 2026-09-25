@@ -20,9 +20,13 @@ MAX_STACK_DEPTH = 10
 
 # 帧的合法扩展字段（make_state_frame 白名单）
 _FRAME_FIELDS = (
-    "id", "type", "context_ref", "why", "doing", "todo", "plan", "journal",
+    "id", "type", "context_ref", "label", "why", "doing", "todo", "plan", "journal",
     "created_at", "status", "emotion", "emotion_text", "source_emotion",
     "tools", "skills", "call_count", "handoff", "completed_handoff",
+    # tail：这段会话的最后几轮原文。切走时它是「原文尾巴」，切回来时一次性注入
+    "tail",
+    # notes：投递进这段会话的跨状态便签副本（固化在前缀里，直到 compact/clear）
+    "notes",
 )
 
 
@@ -60,6 +64,69 @@ def make_state_frame(type_: str, context_ref: str = "", **extras) -> dict:
     return frame
 
 
+def frame_tail(messages: list[dict], max_exchanges: int = 4, max_chars: int = 1200) -> list[str]:
+    """取「最后几轮对话原文」（切走时靠它保持连续，无需额外 LLM 调用）。
+
+    只认 user/assistant 且有文本内容的消息：system 段（规矩、时间、摘要）不是
+    对话原文，混进来只会让 AI 把注入内容当成对方说过的话。按「轮」收集——收集满
+    max_exchanges 条用户消息（连同其后的回复）即停；再从最旧端按 max_chars 丢，
+    因为尾巴的意义就是「最新说到哪」。
+    """
+    picked: list[str] = []
+    users = 0
+    for m in reversed(messages):
+        if m.get("role") not in ("user", "assistant"):
+            continue
+        content = m.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        if m.get("role") == "user":
+            users += 1
+        picked.append(content.strip())
+        if users >= max_exchanges:
+            break
+    picked.reverse()
+
+    # 超预算从最旧端丢；最后一条即使自己就超预算也留着——丢掉它等于这次交接白做
+    # （实测：AI 上一轮的长回复单条就上千字，整条丢会让尾巴变成空）。
+    total = sum(len(x) + 1 for x in picked)
+    while len(picked) > 1 and total > max_chars:
+        total -= len(picked[0]) + 1
+        picked.pop(0)
+    if picked and len(picked[0]) > max_chars:
+        picked[0] = picked[0][:max_chars].rstrip() + "……（原文过长，已截断）"
+    return picked
+
+
+def format_handoff_tail(label: str, tail: list[str], reason: str = "") -> str:
+    """渲染「上一段对话的原文尾巴」——临时性交接，只注入一次。
+
+   两道边界都要说清（2026-09-25 实测踩过第一条的坑）：
+    - **别串台**：群里看到私信的尾巴，AI 很容易顺手在群里答一句私信的内容；
+    - **但约定要履约**：如果那段对话里说好了「到了别处做什么」（暗号、触发条件、待办），
+      必须照做——只写禁令会让 AI 明明看见了暗号也不敢答（用户实测：私信约好暗号，
+      群里喊了暗号，AI 只看见"便签：就剩暗号那条待验证"，却没看见答什么，也没敢接）。
+    """
+    if not tail:
+        return ""
+    where = f"（{label}）" if label else ""
+    lines = [
+        f"## 📎 上一段对话的原文尾巴{where}",
+        "这是你刚离开的那段对话的最后原文：",
+        "- 不要在当前会话里回应它、不要把它当成当前会话的消息，也不要向当前的人复述它；",
+        "- 但如果那段对话里和你约定了**到了别处要做的事**（暗号、触发条件、待办），"
+        "现在条件满足就按约定执行——这条提醒不构成不做它的理由。",
+    ]
+    if reason:
+        lines.append(f"（你离开那里的原因：{reason}）")
+    lines += [f"  {t}" for t in tail]
+    lines.append(
+        "（要是那段对话里还有该带到别处、但原文这里没说完的临时约定，用 cross_state_note 记下来："
+        "40 次 API 调用内有效，别的会话拿到后会一直留在它的上下文里。）"
+    )
+    return "\n".join(lines)
+
+
 def format_state_stack_summary(stack: list[dict], max_chars: int = 500) -> str:
     """栈 → AI 可读摘要（交接驱动）。
 
@@ -81,7 +148,7 @@ def format_state_stack_summary(stack: list[dict], max_chars: int = 500) -> str:
         lines = ["\n\n## 📋 当前状态"]
         status = top.get("status", "active")
         type_name = top.get("type", "?")
-        context = top.get("context_ref", "")
+        context = top.get("label") or top.get("context_ref", "")
         doing = top.get("doing", "")
         why = top.get("why", "")
         todo = top.get("todo", "")

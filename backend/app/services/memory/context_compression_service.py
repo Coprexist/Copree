@@ -222,6 +222,20 @@ async def _request_summary(
     raise ValueError(f"LLM 返回空摘要（{last}）")
 
 
+def split_for_compression(
+    messages: list[dict], keep_system: bool = True, keep_last_n: int = DEFAULT_KEEP_LAST_N
+) -> tuple[int, int]:
+    """把消息切成「保留的头 + 待压缩的中间 + 保留的尾」，返回 (start_idx, end_idx)。
+
+    **顺序约定：调用方给的列表必须是正序（旧 → 新）**，所以"保留最后 N 条"就是
+    保留**最新的** N 条。2026-09-25 的事故就是这条约定被破坏：群/私聊历史当时按
+    新→旧注入，压缩于是吃掉了最新的那几条（包括触发消息），AI 看不到当轮的消息，
+    只能回上一条（用户实测"答上一条"漂移）。
+    """
+    start_idx = 1 if (keep_system and messages and messages[0].get("role") == "system") else 0
+    return start_idx, max(start_idx, len(messages) - keep_last_n)
+
+
 async def compress_messages(
     messages: list[dict],
     api_base_url: str,
@@ -250,8 +264,9 @@ async def compress_messages(
     original_tokens = estimate_tokens(messages)
 
     # 确定保留范围
-    start_idx = 1 if (keep_system and messages and messages[0].get("role") == "system") else 0
-    end_idx = max(start_idx, original_count - keep_last_n)
+    start_idx, end_idx = split_for_compression(
+        messages, keep_system=keep_system, keep_last_n=keep_last_n
+    )
 
     if end_idx <= start_idx:
         # 没有可压缩的内容

@@ -506,6 +506,50 @@ async def _get_segment_order(db) -> list[str]:
     return list(SEGMENT_ORDER)
 
 
+async def _inject_cross_state_context(db, agent, context_ref: str, messages: list[dict]) -> None:
+    """原文尾巴：记下本会话最后几轮原文；把刚离开那段对话的尾巴注入一次。
+
+    放在历史之后、当前时间之前——动态内容沉底，前缀（system + 历史）仍可缓存。
+    便签不走这里：它是**投递制**，投进来就固化在会话前缀里（见 _deliver_frame_notes）。
+    """
+    try:
+        from app.services.agent.state_stack_service import frame_turn_context
+        from app.utils.pure.state_stack import frame_tail
+
+        block = await frame_turn_context(db, agent.id, context_ref, frame_tail(messages))
+        if block:
+            messages.append({"role": "system", "content": block})
+    except Exception as e:
+        logger.warning(f"交接尾巴注入失败（非致命）: {e}")
+
+
+async def _deliver_frame_notes(db, agent, context_ref: str, messages: list[dict]) -> str:
+    """跨状态便签：投递进本会话的那份固定在 message 0 之后；返回尾部要发的「撤下通知」（发一次）。
+
+    位置固定 + 内容固定 = 每轮字节一致 → 前缀缓存命中；它就这样"躺在上下文里"。
+    **撤下不许动前缀**（动一个字节也是断缓存）：已经投出去的行永远照原样渲染，撤下改成尾部
+    变更通知，通知发出即盖章（`notified`），所以只出现一次；解锁（compact/clear）时副本被删
+    （release_active_frame_notes）。有效期只决定"还能不能投递"。
+    """
+    try:
+        from app.services.agent.cross_state_note_service import sync_frame_notes
+        from app.services.agent.state_stack_service import mark_frame_notes_notified
+        from app.utils.pure.cross_state_note import format_frame_notes, format_retired_notes_notice
+
+        copies = await sync_frame_notes(db, agent.id, context_ref)
+        block = format_frame_notes(copies)
+        if block:
+            messages.append({"role": "system", "content": block})
+        notice = format_retired_notes_notice(copies)
+        if notice:
+            await mark_frame_notes_notified(
+                db, agent.id, {c["id"] for c in copies if c.get("retired") and not c.get("notified")})
+        return notice
+    except Exception as e:
+        logger.warning(f"跨状态便签投递失败（非致命）: {e}")
+        return ""
+
+
 async def _inject_personality_anchor(db, agent, system_prompt: str, language: str = "zh") -> str:
     """
     人格锚点注入 — 设计文档 6.2：只读、始终在最前面、随一致性系数缩放。
@@ -784,6 +828,34 @@ async def _resolve_speaker_names(db, messages) -> dict[tuple[str, int], str]:
     return names
 
 
+def _chronological(rows: list) -> list:
+    """把消息行统一成**正序（旧 → 新）**。
+
+    两个来源的排序相反（群聊 get_gm_messages 是正序、私信查询是 DESC），以前两条路
+    各自 reversed 一次，看着都能跑；2026-09-25 把展示改成正序时只对了一半——私信被反过来，
+    AI 把 7 月的消息当成"最新"，于是抱怨「你这一串消息时间戳怎么是 7 月 6 号的」。
+    统一在这里归一，后面所有逻辑（字符裁剪、注入、压缩）都只认正序。
+    """
+    if len(rows) >= 2:
+        first, last = rows[0], rows[-1]
+        if getattr(first, "created_at", None) and getattr(last, "created_at", None):
+            if first.created_at > last.created_at:
+                return list(reversed(rows))
+    return list(rows)
+
+
+def _keep_newest_within(rows: list, max_chars: int) -> list:
+    """按字符上限从**最旧端**丢消息，保留最新的（正序进、正序出）"""
+    total = 0
+    kept: list = []
+    for m in reversed(rows):
+        total += len(m.content or "")
+        if total > max_chars:
+            break
+        kept.append(m)
+    return list(reversed(kept))
+
+
 async def build_messages(
     db: AsyncSession,
     agent,
@@ -894,13 +966,17 @@ async def build_messages(
     # ✨ 人格锚点注入（只读，始终在最前面 — 设计文档 6.2）
     system_prompt = await _inject_personality_anchor(db, agent, system_prompt, language)
 
+    # 动态内容一律沉到尾部（message 0 只留静态段）：状态栈每次切会话都在变、任务/通道规矩/
+    # 好友申请也会变——写进前缀等于每轮重建整个前缀，缓存全废。它们按「当轮事实」跟在历史后面。
+    tail_blocks: list[str] = []
+
     # ✨ 工作区任务（配置驱动）
     if context_config_parser.should_inject_workspace(context_config):
         try:
             from app.services.agent.workspace_service import get_current_task_text
             task_text = await get_current_task_text(db, agent.id)
             if task_text:
-                system_prompt += task_text
+                tail_blocks.append(task_text)
         except Exception as e:
             logger.warning(f"工作区上下文注入失败（非致命）: {e}")
 
@@ -910,23 +986,19 @@ async def build_messages(
             from app.services.agent.state_stack_service import get_state_stack_summary
             stack_summary = await get_state_stack_summary(db, agent.id)
             if stack_summary:
-                system_prompt += stack_summary
+                tail_blocks.append(stack_summary)
         except Exception as e:
             logger.warning(f"状态栈摘要注入失败（非致命）: {e}")
 
-    # ✨ 通俗模式（用户级偏好）：摆在最动态的好友申请之前，位置固定、内容随人不变
-    try:
-        from app.models.user import User as UserModel
-        from app.utils.pure.expression_style import build_expression_segment
-        # 跟着「正在读这条回复的人」走：群里是触发者，取不到就退回 AI 主人
-        reader = None
-        if trigger_user_id and trigger_user_id != getattr(agent, "owner_id", None):
-            reader = await db.get(UserModel, trigger_user_id)
-        if reader is None and getattr(agent, "owner_id", None):
-            reader = await db.get(UserModel, agent.owner_id)
-        system_prompt += build_expression_segment(reader)
-    except Exception as e:
-        logger.warning(f"通俗模式注入失败（非致命）: {e}")
+    # 📡 外部通道的规矩（这个群接没接 QQ、接了哪条）：让 AI 知道"我在群里只能被动回复"
+    if group_id:
+        try:
+            from app.services.plugin import channel as channel_service
+            brief = await channel_service.group_brief(db, group_id)
+            if brief:
+                tail_blocks.append(brief)
+        except Exception as e:
+            logger.warning(f"通道能力说明注入失败（非致命）: {e}")
 
     # 📨 待处理好友申请（AI 感知；动态内容沉底，缓存友好）
     if getattr(agent, "ai_type", None) in ("resonance", "general", "semi_general"):
@@ -941,11 +1013,14 @@ async def build_messages(
                 for r in reqs:
                     lines.append(f"- 来自「{r['name']}」：{r['message']}（申请 id: {r['id']}，可调 handle_friend_request 处理）")
                 lines.append("你可以回复对方，或视情况处理（是否通过由你与用户沟通后决定）。")
-                system_prompt += "\n".join(lines)
+                tail_blocks.append("\n".join(lines))
         except Exception as e:
             logger.warning(f"好友申请注入失败（非致命）: {e}")
 
     messages = [{"role": "system", "content": system_prompt}]
+
+    # 📌 跨状态便签（投递制）：紧跟 message 0，进前缀、字节稳定；撤下通知走尾部
+    notes_notice = await _deliver_frame_notes(db, agent, f"group:{group_id}", messages)
 
     # ── 多会话上下文（配置驱动）──
     if context_config_parser.should_inject_cross_conversation(context_config):
@@ -999,16 +1074,8 @@ async def build_messages(
         
         recent_messages = await chat_api.get_gm_messages(db, group_id, limit=max_unread)
         
-        # 字符数上限：最多加载 40000 字，与条数上限取小
-        MAX_CHARS = 40000
-        total_chars = 0
-        trimmed = []
-        for m in reversed(recent_messages):
-            total_chars += len(m.content or '')
-            if total_chars > MAX_CHARS:
-                break
-            trimmed.append(m)
-        recent_messages = list(reversed(trimmed))
+        # 统一成正序 + 按字符上限从最旧端丢（40000 字与条数上限取小）
+        recent_messages = _keep_newest_within(_chronological(recent_messages), 40000)
         
         max_len = getattr(group_obj, 'max_msg_display_len', 256) if group_obj else 256
 
@@ -1016,7 +1083,10 @@ async def build_messages(
         last_user_orm = None
         # 说话人名字先批量查好：本地消息的 sender_name 是空的，直接渲染会让 AI 看到说话人叫 "None"
         speaker_names = await _resolve_speaker_names(db, recent_messages)
-        for m in reversed(recent_messages):
+        history_start = len(messages)   # 历史块起点：截断提示要插在它前面
+        # 正序（旧→新）注入：压缩的"保留最后 N 条"就是保留最新的 N 条，
+        # 触发消息永远排在最后（2026-09-25 漂移事故：以前新→旧，压缩把最新的吞了）
+        for m in recent_messages:
             md = await chat_api.gm_message_to_dict(
                 m, sender_name=speaker_names.get((m.sender_type, m.sender_id))
             )
@@ -1038,10 +1108,70 @@ async def build_messages(
                 last_user_idx = len(messages) - 1
                 last_user_orm = m
         
+        # 窗口只装得下最近 max_unread 条：更早的未读不硬塞，但要交代清楚"还剩多少、去哪查"，
+        # 否则 AI 会以为群里就这些消息（用户 2026-09-25：应该像"剩余 10 条请用查群消息的工具"）
+        try:
+            from sqlalchemy import func as sa_func
+
+            from app.models.message import Message as MessageModel
+
+            if recent_messages and last_read_at is not None:
+                oldest_seen_id = int(getattr(recent_messages[0], "id", 0) or 0)
+                older = (await db.execute(
+                    select(sa_func.count(MessageModel.id)).where(
+                        MessageModel.group_id == group_id,
+                        MessageModel.id < oldest_seen_id,
+                        MessageModel.created_at > last_read_at,
+                    )
+                )).scalar() or 0
+                if older:
+                    messages.insert(history_start, {
+                        "role": "system",
+                        "content": (
+                            f"（更早还有 {older} 条未读消息没有列在上面；需要时用 view_unread "
+                            "查看，别当成群里只有这几条。）"
+                        ),
+                    })
+        except Exception as e:
+            logger.warning(f"未读截断提示注入失败（非致命）: {e}")
+
         if context_config_parser.should_inject_image(context_config):
             _n_img = _attach_image_to_message(messages, last_user_idx, last_user_orm, settings.data_dir)
             if _n_img:
                 messages.append({"role": "system", "content": image_note(_n_img)})
+
+        # 兜底（2026-09-25 漂移事故）：上下文最后一条不该落后于群内最新一条。
+        # 真落后了（窗口/压缩吃掉了新消息）就至少把"还有几条没看"说清楚，
+        # 别让 AI 对着旧消息作答——那正是用户看到的"答上一条"。
+        try:
+            from sqlalchemy import func as sa_func
+
+            from app.models.message import Message as MessageModel
+
+            newest_id = (await db.execute(
+                select(sa_func.max(MessageModel.id)).where(MessageModel.group_id == group_id)
+            )).scalar()
+            last_seen_id = int(getattr(recent_messages[-1], "id", 0) or 0) if recent_messages else 0
+            if newest_id and int(newest_id) > last_seen_id:
+                missing = (await db.execute(
+                    select(sa_func.count(MessageModel.id)).where(
+                        MessageModel.group_id == group_id, MessageModel.id > last_seen_id
+                    )
+                )).scalar() or 0
+                logger.warning(
+                    f"群 {group_id} 的上下文最新消息 id={last_seen_id} 落后于群内最新 id={newest_id}，"
+                    f"有 {missing} 条没进上下文"
+                )
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        f"（注意：这个群还有 {missing} 条更新的消息没有进入你的上下文。"
+                        "不要凭上面的历史猜着回答——可以调用 view_unread 查看未读，"
+                        "或直接说明你只看到较早的消息。）"
+                    ),
+                })
+        except Exception as e:
+            logger.warning(f"未读兜底检查失败（非致命）: {e}")
 
     # 更新 AI 的最后阅读时间
     if last_read_at is not None:
@@ -1079,6 +1209,17 @@ async def build_messages(
                 })
     except Exception as e:
         logger.warning(f"注入工具错误记录失败（非致命）: {e}")
+
+    # 尾部动态块（顺序即语义：先「我该干什么」，再「这里的规矩」，与上一段对话的尾巴分开放）
+    for block in tail_blocks:
+        messages.append({"role": "system", "content": block})
+
+    # 📌 撤下的便签：前缀里那行不动，靠这条尾部通知压住它（每轮都发）
+    if notes_notice:
+        messages.append({"role": "system", "content": notes_notice})
+
+    # 📎 上一段对话的原文尾巴（切会话时的临时交接，只出现一轮）
+    await _inject_cross_state_context(db, agent, f"group:{group_id}", messages)
 
     # 当前时间放在最后（每次变化，放末尾不影响前缀cache）
     current_ctx = await _build_current_context(db, agent, group_id, group_name, is_dm)
@@ -1267,12 +1408,16 @@ async def build_dm_messages(
     # ✨ 人格锚点注入（只读，始终在最前面 — 设计文档 6.2）
     system_prompt = await _inject_personality_anchor(db, agent, system_prompt, language)
 
+    # 动态内容一律沉到尾部（message 0 只留静态段）：切会话时状态栈会变，写进前缀
+    # 等于每轮重建前缀、缓存全废。它们按「当轮事实」跟在历史后面。
+    tail_blocks: list[str] = []
+
     # ✨ 工作区任务
     try:
         from app.services.agent.workspace_service import get_current_task_text
         task_text = await get_current_task_text(db, agent.id)
         if task_text:
-            system_prompt += task_text
+            tail_blocks.append(task_text)
     except Exception as e:
         logger.warning(f"DM 工作区上下文注入失败（非致命）: {e}")
 
@@ -1281,7 +1426,7 @@ async def build_dm_messages(
         from app.services.agent.state_stack_service import get_state_stack_summary
         stack_summary = await get_state_stack_summary(db, agent.id)
         if stack_summary:
-            system_prompt += stack_summary
+            tail_blocks.append(stack_summary)
     except Exception as e:
         logger.warning(f"DM 状态栈摘要注入失败（非致命）: {e}")
 
@@ -1315,7 +1460,7 @@ async def build_dm_messages(
                     last_t = ds.last_message_at.strftime("%m-%d %H:%M") if ds.last_message_at else "—"
                     unread_str = f"，{unread} 条未读" if unread else ""
                     lines.append(f"- 私信「{oname}」(会话 {ds.session_id})：最后消息 {last_t}{unread_str}")
-                system_prompt += "\n".join(lines)
+                tail_blocks.append("\n".join(lines))
     except Exception as e:
         logger.warning(f"DM 会话列表注入失败（非致命）: {e}")
 
@@ -1331,11 +1476,14 @@ async def build_dm_messages(
             for r in reqs:
                 lines.append(f"- 来自「{r['name']}」：{r['message']}（申请 id: {r['id']}，可调 handle_friend_request 处理）")
             lines.append("你可以回复对方，或视情况处理（是否通过由你与用户沟通后决定）。")
-            system_prompt += "\n".join(lines)
+            tail_blocks.append("\n".join(lines))
     except Exception as e:
         logger.warning(f"DM 好友申请注入失败（非致命）: {e}")
 
     messages = [{"role": "system", "content": system_prompt}]
+
+    # 📌 跨状态便签（投递制）：紧跟 message 0，进前缀、字节稳定
+    notes_notice = await _deliver_frame_notes(db, agent, session_id, messages)
 
     # ── 统一上下文：数字生命档/沉浸档/共振 → 加载多会话上下文 ──
     cross_msgs = await _build_cross_conversation_context(
@@ -1358,22 +1506,13 @@ async def build_dm_messages(
         .order_by(DMMessage.created_at.desc())
         .limit(limit)
     )
-    dm_messages = result.scalars().all()
-
-    # 字符数上限：最多加载 40000 字，与条数上限取小
-    MAX_CHARS = 40000
-    total_chars = 0
-    trimmed = []
-    for m in reversed(dm_messages):
-        total_chars += len(m.content or '')
-        if total_chars > MAX_CHARS:
-            break
-        trimmed.append(m)
-    dm_messages = list(reversed(trimmed))
+    # 私信查询是 DESC（新→旧）：归一成正序，再按字符上限保留最新的
+    dm_messages = _keep_newest_within(_chronological(result.scalars().all()), 40000)
 
     last_user_idx = None
     last_user_orm = None
-    for m in reversed(dm_messages):
+    # 同上：正序注入（旧→新），最新那条在最后
+    for m in dm_messages:
         role = "assistant" if m.sender_id == agent.user_id else "user"
         name_result = await db.execute(
             sa_select(User.username).where(User.id == m.sender_id)
@@ -1459,6 +1598,17 @@ async def build_dm_messages(
             await db.commit()
     except Exception:
         pass
+
+    # 尾部动态块（顺序即语义：先「我该干什么」，再「我有哪些会话」）
+    for block in tail_blocks:
+        messages.append({"role": "system", "content": block})
+
+    # 📌 撤下的便签：前缀里那行不动，靠这条尾部通知压住它（每轮都发）
+    if notes_notice:
+        messages.append({"role": "system", "content": notes_notice})
+
+    # 📎 上一段对话的原文尾巴（切会话时的临时交接，只出现一轮）
+    await _inject_cross_state_context(db, agent, session_id, messages)
 
     # 当前时间放在最后（每次变化，放末尾不影响前缀cache）
     dm_ctx = await _build_current_context(db, agent, 0, partner_name or "私信", is_dm=True)

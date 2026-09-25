@@ -14,6 +14,7 @@ import logging
 import re
 import time
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from app.config import settings
 from app.database import async_session
@@ -537,6 +538,8 @@ async def _tool_call_loop(
             # 流式逐工具分发：回调在 SSE 解析到完整 tool_call 时即刻执行
             _pending_results: list[dict] = []  # {tc_id, result}
             _end_turn = False
+            # 轮末结算（docs/dev/conversation_history.md §5）：思考留不留 + 留给后面自己的关键信息
+            _settlement: dict = {}
 
             def _repair_json(raw: str) -> dict | None:
                 """尝试修复 LLM 生成的内容字段引号嵌套问题"""
@@ -561,7 +564,7 @@ async def _tool_call_loop(
                 return None
 
             async def _dispatch_one_tool(tc: dict):
-                nonlocal last_task, _end_turn
+                nonlocal last_task, _end_turn, _settlement
                 if _end_turn:
                     # 同一批里前一个工具已 end_turn → 后面的不执行，但**必须**留一条 tool 响应：
                     # assistant(tool_calls) 里每个 id 都要有回应，少一条整次请求 400
@@ -619,6 +622,9 @@ async def _tool_call_loop(
                 _pending_results.append({"tc_id": tc_id, "result": result})
                 if isinstance(result, dict) and result.get("end_turn"):
                     _end_turn = True
+                    # 收下结算决定（还没接账本：账本封存落地后在这里写条目）
+                    _settlement["keep_thinking"] = bool(result.get("keep_thinking"))
+                    _settlement["key_note"] = (result.get("key_note") or "").strip()
                 # 追踪 AI 是否已发消息
                 if tool_name in ("send_gm", "send_dm"):
                     _has_sent_message = True
@@ -673,6 +679,9 @@ async def _tool_call_loop(
                             from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
                             from app.services.capability_versioning import apply_pending_changes, SOURCE_PLATFORM
                             await apply_pending_changes(SQLAlchemyCapabilityRepository(db), agent, [SOURCE_PLATFORM, f"agent-prompt-{agent.id}"])
+                            # 解锁：便签副本（连同撤下通知）随上下文重建一起离场——锁定态绝不动前缀
+                            from app.services.agent.state_stack_service import release_active_frame_notes
+                            await release_active_frame_notes(db, agent.id)
                             await db.commit()
                         except Exception:
                             pass
@@ -856,7 +865,11 @@ async def _tool_call_loop(
             for pr in _pending_results:
                 messages.append({"role": "tool", "tool_call_id": pr["tc_id"],
                                  "content": json.dumps(pr["result"], ensure_ascii=False)})
-            logger.info(f"AI {agent.name}({agent.id}) end_turn 流式触发，本轮结束")
+            logger.info(
+                f"AI {agent.name}({agent.id}) end_turn 流式触发，本轮结束"
+                f"（结算：keep_thinking={bool(_settlement.get('keep_thinking'))}，"
+                f"key_note={'有' if _settlement.get('key_note') else '无'}）"
+            )
             await _save_conversation_log_safe(
                 db, agent, messages, conversation_type,
                 group_id, session_id, has_output=True, model=model,
@@ -1161,7 +1174,11 @@ def _is_conversation_idle(messages: list[dict], hours: int = 12) -> bool:
     2. 对话跨度超过 N 小时（首条 user 消息到最后一条，跨天堆积也触发）——
        修复场景：12 天没对话但今天刚发消息，历史堆积 138 条不压缩，直接带全量硬跑
     """
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    # 消息内容里的时间戳是**北京时间**（format_time_shanghai）：以前当 UTC 裸时间比，
+    # 只要"上海时刻 > 当前 UTC 时刻"（东八区，一天里大半时间成立）就被判成"未来"、
+    # 走年-1 兜底 → 变成去年 → 空闲判定恒真、每轮都压缩（2026-09-25 用户实测）
+    tz_cn = ZoneInfo("Asia/Shanghai")
+    now = datetime.now(tz_cn)
 
     def _parse_ts(content: str):
         m2 = re.search(r'\[([A-Za-z_]+) (\d{2}-\d{2} \d{2}:\d{2})\]', content)
@@ -1171,9 +1188,9 @@ def _is_conversation_idle(messages: list[dict], hours: int = 12) -> bool:
         for offset in (0, -1):
             try:
                 year = now.year + offset
-                msg_time = datetime.strptime(f"{year}-{time_str}", "%Y-%m-%d %H:%M")
+                msg_time = datetime.strptime(f"{year}-{time_str}", "%Y-%m-%d %H:%M").replace(tzinfo=tz_cn)
                 if msg_time > now:
-                    continue
+                    continue          # 真·未来：只可能是跨年，退一年再看
                 return msg_time
             except ValueError:
                 pass

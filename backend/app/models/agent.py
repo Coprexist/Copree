@@ -1,9 +1,9 @@
-﻿"""
+"""
 AI 代理模型
 """
 from sqlalchemy import (
     Column, Integer, String, Boolean, Float, Text, DateTime,
-    ForeignKey, UniqueConstraint, func,
+    ForeignKey, Index, UniqueConstraint, func,
 )
 from app.db_providers import json_column
 from app.database import Base
@@ -157,6 +157,10 @@ class Agent(Base):
     # AI 调用总次数（v0.3.2）：情感/记忆衰减的时间尺度（分状态帧计数在 state_stack 帧内）
     llm_call_count = Column(Integer, default=0)
 
+    # 跨状态便签（v0.3.6）：临时、有时效的跨会话留言。时效刻度就是 llm_call_count ——
+    # 写下后 40 次 API 调用内有效（只决定能不能投递）；投进某会话后固化在它的上下文里
+    cross_state_notes = Column(json_column(), default=list)
+
     # 状态栈摘要长度上限（默认 500，AI 配置页可改；最新帧必保完整）
     state_stack_max_chars = Column(Integer, default=500)
 
@@ -244,4 +248,33 @@ class CapabilityVersion(Base):
 
     __table_args__ = (
         UniqueConstraint("source", "version", name="uq_capability_ver_source_version"),
+    )
+
+class AgentHistoryEntry(Base):
+    """会话历史账本条目（2026-09-25 设计，见 docs/dev/conversation_history.md）
+
+    为什么单独一张表、而不是每轮现拼：
+    - 会话上下文 = 模型看过的**账本**；段内只追加、只在 compact / 超时压缩（解锁点）重写
+      → 每轮重拼字节一致 → 前缀缓存命中；
+    - content 存**渲染好的最终字节**（渲染即落库）：不存半成品，否则每轮重渲染会让字节漂，
+      历史自己就成了缓存杀手。
+
+    owner 只有 agent：世界 AI 侧复用 world_chat_messages 加列，不共用这张表（服务同一套）。
+    """
+    __tablename__ = "agent_history_entries"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    agent_id = Column(Integer, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
+    context_ref = Column(String(64), nullable=False, comment="会话标识：group:{id} / dm:{session}")
+    seq = Column(Integer, nullable=False, comment="同一会话内的单调序号，唯一的排序依据")
+    kind = Column(String(16), nullable=False, comment="message/gap/backfill/tool/note/notice/suggestion/summary/thinking")
+    actor = Column(String(16), nullable=False, default="system", comment="self=我 / user=用户 / world=外界 / system=平台")
+    content = Column(Text, nullable=False, comment="渲染好的最终字节（渲染即落库）")
+    ref = Column(String(128), nullable=True, comment="来源锚点：message_id / tool_call_id（补看定位与排查用）")
+    flags = Column(json_column(), default=dict, comment="可压/已撤下等标记（只由解锁点改写）")
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("agent_id", "context_ref", "seq", name="uq_agent_history_seq"),
+        Index("ix_agent_history_ctx_seq", "agent_id", "context_ref", "seq"),
     )

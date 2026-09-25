@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.agent import Agent
 from app.repositories.agent_repo import AgentRepository, SQLAlchemyAgentRepository
 from app.utils.pure.state_stack import (
-    make_state_frame, format_state_stack_summary, MAX_STACK_DEPTH,
+    make_state_frame, format_state_stack_summary, format_handoff_tail, MAX_STACK_DEPTH,
 )
 from app.utils.pure.emotion import decay_emotion, apply_emotion_update
 
@@ -50,6 +50,24 @@ async def _set_stack(db: AsyncSession, agent_id: int, stack: list[dict]) -> None
     )
 
 
+def _left_conversation(prev: dict | None) -> dict:
+    """离开一个会话/状态时打的交接包：从哪来、在干嘛、那段对话的原文尾巴。
+
+    「原文尾巴」是临时性的：切回去时只注入一次，注入后即清（见 frame_turn_context）。
+    统一入口——push_state（AI 主动切）与 ensure_active_frame（消息触发切）都从这里取，
+    免得两处各写一份字段名。
+    """
+    if not prev:
+        return {}
+    return {
+        "from_type": prev.get("type"),
+        "from_context_ref": prev.get("context_ref") or "",
+        "from_label": prev.get("label") or prev.get("context_ref") or "",
+        "from_doing": (prev.get("doing") or prev.get("why") or "")[:200],
+        "tail": prev.get("tail") or [],
+    }
+
+
 # ═══════════════════════════════════════════════════════════════
 # 编排函数
 # ═══════════════════════════════════════════════════════════════
@@ -85,12 +103,8 @@ async def push_state(
             "emotion": prev.get("emotion") or {},
             "emotion_text": prev.get("emotion_text") or "",
         }
-        # 交接打包：从哪来 / 在干嘛（旧交接不重复注入——切换时一次性携带）
-        handoff = {
-            "from_type": prev.get("type"),
-            "from_context_ref": prev.get("context_ref") or "",
-            "from_doing": (prev.get("doing") or prev.get("why") or "")[:200],
-        }
+        # 交接打包：从哪来 / 在干嘛 / 原文尾巴（旧交接不重复注入——切换时一次性携带）
+        handoff = _left_conversation(prev)
 
     frame["status"] = "active"
     if not frame.get("source_emotion"):
@@ -155,6 +169,8 @@ async def pop_state(
             "type": popped.get("type"),
             "doing": (popped.get("doing") or popped.get("why") or "")[:200],
             "skipped": " → ".join(skipped) if skipped else "",
+            "label": popped.get("label") or popped.get("context_ref") or "",
+            "tail": popped.get("tail") or [],
         }
 
     await _set_stack(db, agent_id, stack)
@@ -228,6 +244,123 @@ async def get_state_stack_summary(db: AsyncSession, agent_id: int, max_chars: in
     return format_state_stack_summary(stack, max_chars=max_chars)
 
 
+async def set_frame_notes(db: AsyncSession, agent_id: int, context_ref: str, copies: list[dict]) -> list[dict]:
+    """把「已投递到本会话的便签」写进栈顶帧，返回落地后的那份。
+
+    只认栈顶帧 = 本会话：切换没走完时栈顶还是别的会话，硬写会把 A 的便签记到 B 头上。
+    """
+    db = _ensure_repo(db)
+    stack = await _get_stack(db, agent_id)
+    if not stack or str(stack[-1].get("context_ref")) != str(context_ref):
+        return []
+    stack[-1]["notes"] = copies
+    await _set_stack(db, agent_id, stack)
+    return copies
+
+
+async def retire_frame_notes(db: AsyncSession, agent_id: int, note_ids: set[str]) -> int:
+    """把各会话帧里这些便签副本标成「已撤下」（AI 删记录 / 清空时调用）。
+
+    只加标记、不删副本：删了会让那段前缀少一块（缓存断），而且 AI 也看不出自己撤过什么。
+    帧里的副本是"已经过户给这段会话"的那份，改它属于会话自己的事，所以放在本模块。
+    """
+    db = _ensure_repo(db)
+    if not note_ids:
+        return 0
+    stack = await _get_stack(db, agent_id)
+    hit = 0
+    for frame in stack:
+        for copy in (frame.get("notes") or []):
+            if copy.get("id") in note_ids and not copy.get("retired"):
+                copy["retired"] = True
+                hit += 1
+    if hit:
+        await _set_stack(db, agent_id, stack)
+    return hit
+
+
+async def mark_frame_notes_notified(db: AsyncSession, agent_id: int, note_ids: set[str]) -> int:
+    """给撤销下的便签副本盖章「通知已发」——那条尾部通知只发一次（见 format_retired_notes_notice）。
+
+    印章和通知在同一次构建里落库，所以断电/异常最多多发一次，不会漏发。
+    """
+    db = _ensure_repo(db)
+    if not note_ids:
+        return 0
+    stack = await _get_stack(db, agent_id)
+    hit = 0
+    for frame in stack:
+        for copy in (frame.get("notes") or []):
+            if copy.get("id") in note_ids and not copy.get("notified"):
+                copy["notified"] = True
+                hit += 1
+    if hit:
+        await _set_stack(db, agent_id, stack)
+    return hit
+
+
+async def release_active_frame_notes(db: AsyncSession, agent_id: int) -> int:
+    """解锁（compact / clear）时丢掉本会话帧里的便签副本——便签（连同撤下通知）就此离开这段上下文。
+
+    前缀本来就要在解锁时重建，所以此刻删不额外付缓存代价；锁定态绝不能碰它。
+    只认对话帧（dm / group_chat）：AI 手动压的状态帧不代表会话，别误清。
+    """
+    db = _ensure_repo(db)
+    stack = await _get_stack(db, agent_id)
+    if not stack or stack[-1].get("type") not in ("dm", "group_chat"):
+        return 0
+    copies = stack[-1].get("notes") or []
+    if not copies:
+        return 0
+    stack[-1]["notes"] = []
+    await _set_stack(db, agent_id, stack)
+    logger.info(f"Agent({agent_id}) 解锁：丢掉会话帧上的 {len(copies)} 条便签副本")
+    return len(copies)
+
+
+async def frame_turn_context(
+    db: AsyncSession, agent_id: int, context_ref: str, tail: list[str],
+) -> str:
+    """一轮开始时的状态帧记账（一次读 + 最多一次写），返回要注入提示词的一次性尾巴。
+
+    1. 把本会话的最后几轮原文存进栈顶帧——它是「原文尾巴」的来源，切走时随交接带走；
+    2. 取出并清空上一段对话留下的尾巴——临时性交接，只注入一轮，避免每轮重复喂。
+
+    尾巴只在栈顶帧就是当前会话时才存：栈顶是别的会话（切换还没走完）时硬写会写错帧。
+    """
+    db = _ensure_repo(db)
+    stack = await _get_stack(db, agent_id)
+    if not stack:
+        return ""
+
+    top = stack[-1]
+    dirty = False
+
+    if tail and context_ref and str(top.get("context_ref")) == str(context_ref):
+        if top.get("tail") != tail:
+            top["tail"] = tail
+            dirty = True
+
+    # 一次性消费：handoff（切过来）优先，其次 completed_handoff（pop 回来）
+    block = ""
+    for key in ("handoff", "completed_handoff"):
+        pending = top.get(key) or {}
+        pending_tail = pending.get("tail") or []
+        if not pending_tail:
+            continue
+        if not block:
+            label = pending.get("from_label") or pending.get("label") or pending.get("from_context_ref") or ""
+            reason = top.get("why") or ""
+            block = format_handoff_tail(label, pending_tail, reason=reason)
+        pending.pop("tail", None)
+        top[key] = pending
+        dirty = True
+
+    if dirty:
+        await _set_stack(db, agent_id, stack)
+    return block
+
+
 # ═══════════════════════════════════════════════════════════
 # 会话帧自动维护（2026-08-09）：聊天即情景
 # ═══════════════════════════════════════════════════════════
@@ -268,8 +401,10 @@ async def ensure_active_frame(
 
     idx = next((i for i, f in enumerate(stack) if f.get("context_ref") == context_ref), None)
 
+    label = f"{conv_label}「{title}」"
+
     if idx is not None:
-        # 切回挂起的会话
+        # 切回挂起的会话：把「刚离开那段对话」的尾巴挂上，切回瞬间才知道刚才在别处说到哪
         frame = stack.pop(idx)
         prev = stack[-1] if stack else None
         if prev is not None:
@@ -277,8 +412,11 @@ async def ensure_active_frame(
             frame["completed_handoff"] = {
                 "type": prev.get("type"),
                 "doing": prev.get("doing"),
+                "label": prev.get("label") or prev.get("context_ref") or "",
+                "tail": prev.get("tail") or [],
             }
         frame["status"] = "active"
+        frame["label"] = label
         frame["why"] = f"收到{actor_name}的消息"
         frame["doing"] = f"在{conv_label}「{title}」中回复{actor_name}"
         stack.append(frame)
@@ -288,15 +426,13 @@ async def ensure_active_frame(
         frame = make_state_frame(
             type_=conv_type,
             context_ref=context_ref,
+            label=label,
             why=f"收到{actor_name}的消息",
             doing=f"在{conv_label}「{title}」中回复{actor_name}",
         )
         if prev is not None:
             prev["status"] = "suspended"
-            frame["handoff"] = {
-                "from_type": prev.get("type"),
-                "from_doing": prev.get("doing"),
-            }
+            frame["handoff"] = _left_conversation(prev)
         stack.append(frame)
 
     if len(stack) > MAX_STACK_DEPTH:
