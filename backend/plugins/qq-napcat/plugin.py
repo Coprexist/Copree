@@ -363,7 +363,9 @@ class QqNapcatPlugin(ServicePlugin):
 
         from app.chat.outbound import register_sink
 
-        register_sink(self.id, group=self._outbound_sink, dm=self._dm_outbound_sink)
+        # 出口注册名用 **key（带实例）**：id 是插件类型，两个实例同名会互相顶掉——
+        # 2026-09-25 线上实测：新绑的第二个 QQ 通道把第一个的出口覆盖，群 64 的 AI 回复被静默丢弃
+        self._sink_handle = register_sink(self.key, group=self._outbound_sink, dm=self._dm_outbound_sink)
         self._task = asyncio.create_task(self._supervise())
         logger.info(
             f"QQ 通道(NapCat)[{self.instance}] 已启动：AI={self._target_agent}"
@@ -374,7 +376,7 @@ class QqNapcatPlugin(ServicePlugin):
     async def stop(self) -> bool:
         from app.chat.outbound import unregister_sink
 
-        unregister_sink(self.id)
+        unregister_sink(getattr(self, "_sink_handle", None) or self.key)
         self._route.clear()
         self._dm_route.clear()
         if self._task is not None:

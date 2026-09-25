@@ -92,7 +92,7 @@ async def _make_plugin(instance: str = "bot-a"):
     plugin._target_user_id = AGENT_USER
     plugin._client = FakeClient()
     plugin.self_id = SELF_ID
-    register_sink(plugin.id, group=plugin._outbound_sink, dm=plugin._dm_outbound_sink)
+    register_sink(plugin.key, group=plugin._outbound_sink, dm=plugin._dm_outbound_sink)
 
     async def _alive():
         await asyncio.sleep(3600)
