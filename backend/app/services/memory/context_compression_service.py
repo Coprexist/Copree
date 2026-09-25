@@ -18,6 +18,7 @@ import re
 from typing import NamedTuple, Optional
 
 from app.repositories.memory_repo import MemoryRepository, SQLAlchemyMemoryRepository
+from app.utils.pure.model_window import DEFAULT_CONTEXT_WINDOW
 from sqlalchemy.ext.asyncio import AsyncSession
 logger = logging.getLogger(__name__)
 
@@ -28,8 +29,8 @@ def _ensure_repo(db_or_repo):
     return db_or_repo
 
 
-# 默认上下文窗口（DeepSeek V4 为 128K）
-DEFAULT_CONTEXT_WINDOW = 128_000
+# 上下文窗口的唯一来源：按模型取（认不出退回保守默认）——见 utils/pure/model_window.py
+# （以前是个全局常量，1M 的模型也按 128K 触发，等于把大窗口白扔）
 # 压缩阈值：达到窗口的 N% 时触发压缩（管理员可覆盖，DB 配置优先）
 COMPRESSION_THRESHOLD = 0.60
 # 压缩目标范围（管理员可覆盖）
@@ -62,13 +63,27 @@ class CompressionThresholds(NamedTuple):
 IDLE_THRESHOLD_FRACTION = 1 / math.e
 
 
-def compression_thresholds(hot: float) -> CompressionThresholds:
-    """由热阈值推出三档：压后地板 / 冷触发线 / 热触发线。
+def _fraction(percent, *, default: float, lo: int, hi: int) -> float:
+    """百分比配置 → 0-1 系数：空值/越界一律回默认（配置写错不能变成「永不压缩」）。"""
+    try:
+        value = int(percent)
+    except (TypeError, ValueError):
+        return default
+    if value < lo or value > hi:
+        logger.warning(f"压缩配置 {value} 越界（应在 {lo}-{hi}），回退默认 {round(default * 100)}")
+        return default
+    return value / 100.0
 
-    只用热阈值一个自变量——三档数值别在调用点各自乘系数，口径只留这一份。
+
+def compression_thresholds(hot: float, *, idle_fraction: float = IDLE_THRESHOLD_FRACTION,
+                           post_fraction: float = COMPRESSION_TARGET_MAX) -> CompressionThresholds:
+    """由热阈值 + 两个系数推出三档：压后地板 / 冷触发线 / 热触发线。
+
+    系数是**参数**不是全局状态：默认值由常量给（1/e、20%），配置值由
+    get_compression_thresholds 读库后传进来——纯函数保持可测，也没有「谁先跑谁生效」的污染。
     """
-    post = hot * COMPRESSION_TARGET_MAX
-    return CompressionThresholds(post=post, idle=post + IDLE_THRESHOLD_FRACTION * (hot - post), hot=hot)
+    post = hot * post_fraction
+    return CompressionThresholds(post=post, idle=post + idle_fraction * (hot - post), hot=hot)
 
 
 # 中文（CJK/假名/全角）与其它字符的 token 密度差 2~3 倍：一律按 4 字符/token 会把
@@ -113,19 +128,29 @@ def estimate_tokens(messages: list[dict]) -> int:
     return int(cjk_chars / _CJK_CHARS_PER_TOKEN + other_chars / _OTHER_CHARS_PER_TOKEN)
 
 
-async def get_compression_threshold(db) -> float:
-    """从 DB 配置读取压缩阈值（0.0-1.0），回退到硬编码默认值"""
+async def get_compression_thresholds(db) -> CompressionThresholds:
+    """读配置 → 三档阈值（**唯一入口**：调用点不再自己乘系数、也不再各读一次配置）。
+
+    三列都可空：空 = 用常量默认；越界也回默认。idle 系数必须落在 (0, 1) 内，否则退回 1/e
+    ——贴 0/1 两端就退化成没有冷阈值（docs/dev/conversation_history.md §6）。
+    """
     db = _ensure_repo(db)
+    hot, post_fraction, idle_fraction = COMPRESSION_THRESHOLD, COMPRESSION_TARGET_MAX, IDLE_THRESHOLD_FRACTION
     try:
         from sqlalchemy import select
         from app.models.conversation_log import ConversationLogConfig
-        result = await db.execute(select(ConversationLogConfig.compression_threshold).where(ConversationLogConfig.id == 1))
-        val = result.scalar_one_or_none()
-        if val is not None and val > 0:
-            return val / 100.0
-    except Exception:
-        pass
-    return COMPRESSION_THRESHOLD
+        row = (await db.execute(select(
+            ConversationLogConfig.compression_threshold,
+            ConversationLogConfig.compress_target_percent,
+            ConversationLogConfig.idle_threshold_percent,
+        ).where(ConversationLogConfig.id == 1))).one_or_none()
+        if row:
+            hot = _fraction(row[0], default=hot, lo=1, hi=100)
+            post_fraction = _fraction(row[1], default=post_fraction, lo=1, hi=99)
+            idle_fraction = _fraction(row[2], default=idle_fraction, lo=1, hi=99)
+    except Exception as e:
+        logger.warning(f"读取压缩配置失败，用默认值: {e}")
+    return compression_thresholds(hot, idle_fraction=idle_fraction, post_fraction=post_fraction)
 
 
 def should_compress(

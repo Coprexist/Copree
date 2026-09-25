@@ -32,7 +32,12 @@
 - **DM 走账本**（第二批 b-2）：`context_sync.sync_dm_history` 与群聊同一套语义；`chat/dm.py` 新增
   `dm_message_entry`（渲染即落库）+ `resolve_dm_sender_names`（同一人只查一次）；
   `build_dm_messages` 历史段读账本，通知/便签撤下也随之落条目 —— 群聊与私信共用同一套账本语义
-- 验证：全量 **267/0**；真机会话 `1_40` 账本 176 条、连续两次构建字节完全一致（182 条 / 65321 bytes）；
+- **压缩系数可配 + 窗口按模型**（第四批 c）：迁移 `a7b8c9d0e1f2` 给 `conversation_log_config` 加
+  `idle_threshold_percent` / `compress_target_percent`（NULL = 用代码默认 1/e、20%）；读取唯一入口
+  `get_compression_thresholds(db)`；`utils/pure/model_window.py:context_window_for(model)` 取代全局窗口常量，
+  executor 两处 `should_compress` 按模型窗口判定；管理端三个滑块（i18n 三语）
+- 验证：全量 **270/0**；前端 `tsc --noEmit` 与 i18n 检查无输出；真库 head=`a7b8c9d0e1f2`；
+  真机 `gpt-4.1` 窗口 1M → 三档 **120K / 296.6K / 600K**（以前一律按 128K 的 76.8K 触发）；
   真机草稿会话 40 条 / 10423 bytes → **22 条 / 5426 bytes**；
   真机连续两次构建字节完全一致（28 条 / 8935 bytes，修前 27/28）；
   真机 25 个会话体积**全部 < `T_idle`**（最大 34.7K）→ 旧逻辑逢 12h 闲置必压，现在不压；`health=healthy restarts=0`

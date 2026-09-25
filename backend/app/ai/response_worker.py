@@ -24,7 +24,6 @@ from app.models.group import Group, GroupMember
 from app.models.user import User
 from app.config import settings
 from app.chat import chat_api
-from app.services.memory.context_compression_service import should_compress, inline_compress, get_compression_threshold
 from app.utils.text import extract_mentions as _extract_mentions, check_mention as _check_mention
 from app.utils.crypto import APIKeyDecryptError
 from app.ai.executor import _tool_call_loop, _get_api_config, _check_rate_limit, _send_system_error, _send_system_error_notification, add_pending_interrupt, is_agent_running, mark_agent_running, unmark_agent_running

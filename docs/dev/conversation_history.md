@@ -87,10 +87,17 @@
   - `T_post` = **压缩后的上限**：摘要 ≤ 触发量的 20%（`COMPRESSION_TARGET_MAX = 0.20`）再留最近 N 条，
     折算到窗口 ≈ 12%。它是「压完能有多小」的地板，**不是触发线**。
   - `T_hot` = **热触发线**：体积到这条线就**必须压**（不压迟早爆窗口）。主站 = DB `compression_threshold`
-    （现值 60%，乘 `DEFAULT_CONTEXT_WINDOW` = 128K）；世界 AI = 128K 的 60%。
+    （现值 60%）× **该模型自己的窗口**；世界 AI 同口径。
+  - **窗口按模型取**（第四批 c）：`utils/pure/model_window.py: context_window_for(model)`——
+    认得出就用准的（如 1M 的模型按 600K 触发），认不出退回保守默认 128K。以前是个全局常量，
+    1M 的模型也按 128K 触发，等于把大窗口白扔。
+  - **两个系数可配**（同表同模式）：`idle_threshold_percent`（k，1-99）与 `compress_target_percent`
+    （`T_post = T_hot × 它`，1-99）；**NULL = 用代码默认**（1/e、20%）——默认值只留常量一处，
+    管理员改过的才落库；越界一律回默认（配置写错不能变成「永不压缩」）。
+    读取只有一个入口：`get_compression_thresholds(db)`（顺带把老的单值 `get_compression_threshold` 删了）。
   - `T_idle` = **久未活跃（缓存经济）触发线**：空闲到点、且体积 ≥ 它才压——缓存已经凉，顺手把冷前缀压小，
     下一次请求的未命中就只剩「摘要 + 最近 N 条」。**由两个已有端点插值，不新造数**（2026-09-25 用户定）：
-    `T_idle = T_post + (1/e) × (T_hot − T_post)`，常数 `IDLE_THRESHOLD_FRACTION = 1/e ≈ 0.3679`
+    `T_idle = T_post + k × (T_hot − T_post)`，插值系数 `k` 默认 `1/e ≈ 0.3679`（`IDLE_THRESHOLD_FRACTION`）
     （代码写 `1 / math.e`，别写 0.3679）。当前 = **29.7% 窗口 ≈ 38.0K tokens**。
     - **区间约束自动满足**：插值系数落在 `(0, 1)` 就是 `T_post < T_idle < T_hot`，等价
       `ΔT_idle(= T_hot − T_idle) < T_hot − T_post`。不贴两端：贴 `T_post` 等于每次闲置都白跑一遍压缩
@@ -189,8 +196,9 @@
 1. ~~现在工作区那批未提交改动：先提交，还是直接在其上改？~~ → **已提交（2026-09-25，7 个提交，见 git log）**
 2. 超时阈值要不要统一（主站 12h / 世界 18h）？
 3. 是否先跑一次实测钉死"不保留思考"会不会 400（两条 API 调用）。
-4. 主站 `T_hot`：代码/DB 现值 60%（`DEFAULT_CONTEXT_WINDOW` 128K），本文档早先写的"40%（1M）"是设想值。
-   1M 模型要不要把 `T_hot` 降到 40%、`context_window` 要不要按模型窗口走？（现值下 1M 窗口等于没用上）
+4. ~~主站 `T_hot` 与 `context_window`~~ → **已定（第四批 c）**：窗口按模型取（`context_window_for`），
+   1M 模型现在按 600K 触发；`T_hot` 仍是 60%（DB 可配）。剩下的是**表内容维护**：新模型加一行；
+   要不要把「模型 → 窗口」也做成后台可配（现在在代码表里）。
 
 **已知风险**
 
@@ -299,9 +307,6 @@
 - **验证**：全量 267/0；重启 `health=healthy restarts=0`；真机库（agent 24，草稿会话，跑完即清）
   40 条 / 10423 bytes → **22 条 / 5426 bytes**（结构 `summary + 1 缺口 + 最近 20 条`，seq 重排，二次重写稳定）。
 
-### 待落地
-
-
 ### 第二批 b-2：DM 走账本（已完成 2026-09-25）
 
 - `context_sync.sync_dm_history(db, agent, session_id, *, cap)`：与群聊同一套语义（水位从账本推、
@@ -313,6 +318,19 @@
 - **验证**：全量 267/0；重启 `health=healthy restarts=0`；真机 agent 24 / 会话 `1_40`：
   账本 176 条，连续两次构建**字节完全一致（182 条 / 65321 bytes）**。
 
+### 第四批 c：系数可配 + 窗口按模型（已完成 2026-09-25）
+
+- **两个系数从代码常量变成可配**：迁移 `a7b8c9d0e1f2` 给 `conversation_log_config` 加
+  `idle_threshold_percent` / `compress_target_percent`（都可空，**NULL = 用代码默认**）；
+  读取唯一入口 `get_compression_thresholds(db)`（越界回默认并告警），老的单值 `get_compression_threshold` 删除；
+  `compression_thresholds(hot, *, idle_fraction=…, post_fraction=…)` 的系数是**参数**不是全局状态。
+  管理链路照抄既有模式：`conversation_log_service.update_config`（1-99 校验）+ `routers/admin.py` 字段 +
+  前端 `ConversationLogTab` 三个滑块（顺手把原先硬编码的中文标签也走了 i18n 三语）。
+- **窗口按模型**：`utils/pure/model_window.py`（纯函数 + 一张表，认不出退回 128K）；
+  `executor` 两处 `should_compress` 都带上 `context_window=context_window_for(model)`。
+- **验证**：全量 270/0；`tsc --noEmit` 与 `node scripts/check-i18n.mjs` 均无输出；真库迁移 head=`a7b8c9d0e1f2`，
+  两列为 NULL（用默认）；真机 `deepseek-v4-flash` → 15.4K/38.0K/76.8K，`gpt-4.1` → **120K/296.6K/600K**（1M 窗口用上了）。
+
 ### 待落地
 
 
@@ -321,5 +339,5 @@
 - **第二批 b-4**：轮末封存（工具轮历史 + `end_turn` 结算写条目）。
 - **第三批**：世界 AI（新增同名 `end_turn` + 现有强制收尾轮并入 + 历史走同一套服务）。
 - **第四批**：两级压缩（确定性修剪器 + 摘要模板：关键想法 / 必留项 / 裁剪优先级）+ **三档阈值落地**
-  （三档阈值与「解锁点重写账本」已落地，见上；剩下**两级压缩器**与用 `cached_tokens` 标定数值）+ 图片不降级。
+  （三档阈值、解锁重写、系数可配、窗口按模型都已落地，见上；剩下**两级压缩器**与用 `cached_tokens` 标定数值）+ 图片不降级。
 - **第五批**：老会话迁移（状态栈 + 群视界历史一次性拆进历史 + 投递变更通知）+ 全量验证与文档收尾。

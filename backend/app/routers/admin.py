@@ -2576,6 +2576,8 @@ class ConvLogConfigBody(PydanticBaseModel):
     default_user_log_access: bool | None = None
     default_delay_reply_enabled: bool | None = None
     compression_threshold: int | None = Field(None, ge=1, le=100)
+    idle_threshold_percent: int | None = Field(None, ge=1, le=99)
+    compress_target_percent: int | None = Field(None, ge=1, le=99)
 
 
 class ConvLogAgentSettingsBody(PydanticBaseModel):
@@ -2610,6 +2612,8 @@ async def update_conv_log_config(
             default_user_log_access=req.default_user_log_access,
             default_delay_reply_enabled=req.default_delay_reply_enabled,
             compression_threshold=req.compression_threshold,
+            idle_threshold_percent=req.idle_threshold_percent,
+            compress_target_percent=req.compress_target_percent,
         )
         await _log_admin_action(
             db, admin["user_id"], "update_conv_log_config", "system", 1,

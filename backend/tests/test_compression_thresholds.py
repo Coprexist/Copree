@@ -45,3 +45,52 @@ def test_should_compress_boundary_is_the_threshold_it_is_given():
 
     assert should_compress(messages, threshold=(estimated + 1) / window) is False
     assert should_compress(messages, threshold=(estimated - 1) / window) is True
+
+def test_coefficients_are_parameters_not_globals():
+    """两个系数是可传参的（默认 1/e + 20%），不是全局状态——纯函数、互不影响"""
+    from app.services.memory.context_compression_service import compression_thresholds
+
+    d = compression_thresholds(0.60)
+    c = compression_thresholds(0.60, idle_fraction=0.5, post_fraction=0.10)
+
+    assert abs(c.post - 0.06) < TOL, "压缩目标 10% → T_post = 0.06"
+    assert abs(c.idle - (0.06 + 0.5 * (0.60 - 0.06))) < TOL
+    assert d.idle < c.idle, "系数调大 → 冷阈值贴近热阈值"
+    assert abs(compression_thresholds(0.60).idle - d.idle) < TOL, "别人传过参数不影响默认调用"
+
+
+def test_context_window_follows_the_model():
+    """窗口按模型取（认不出退回保守默认）——不能再拿一个常量套所有模型"""
+    from app.utils.pure.model_window import DEFAULT_CONTEXT_WINDOW, context_window_for
+
+    assert context_window_for("deepseek-v4-flash") == 128_000
+    assert context_window_for("GPT-4.1-preview") == 1_000_000, "大小写与后缀无关"
+    assert context_window_for("some-unknown-model") == DEFAULT_CONTEXT_WINDOW
+    assert context_window_for(None) == DEFAULT_CONTEXT_WINDOW
+
+
+async def test_db_knobs_override_and_clamp(migrated_db):
+    """库里的系数生效；写坏了（越界）回默认，不能变成「永不压缩」"""
+    from sqlalchemy import text
+
+    from app.database import async_session
+    from app.services.memory.context_compression_service import compression_thresholds, get_compression_thresholds
+
+    async with async_session() as db:
+        await db.execute(text(
+            "INSERT INTO conversation_log_config (id, compression_threshold, idle_threshold_percent, compress_target_percent) "
+            "VALUES (1, 60, 50, 10) ON CONFLICT (id) DO UPDATE SET "
+            "compression_threshold=60, idle_threshold_percent=50, compress_target_percent=10"
+        ))
+        await db.commit()
+        t = await get_compression_thresholds(db)
+        assert abs(t.post - 0.06) < TOL and abs(t.idle - 0.33) < TOL
+
+        await db.execute(text(
+            "UPDATE conversation_log_config SET idle_threshold_percent=120, compress_target_percent=0 WHERE id=1"
+        ))
+        await db.commit()
+        bad = await get_compression_thresholds(db)
+        good = compression_thresholds(0.60)
+        assert abs(bad.post - good.post) < TOL and abs(bad.idle - good.idle) < TOL, "越界 → 回默认"
+

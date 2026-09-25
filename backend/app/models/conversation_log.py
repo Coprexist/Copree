@@ -1,4 +1,4 @@
-﻿"""
+"""
 AI 对话日志模型
 存储 AI 每次 LLM 完整对话，供管理员和授权用户查看
 """
@@ -24,6 +24,10 @@ class ConversationLogConfig(Base):
     default_delay_reply_enabled = Column(Boolean, default=False)
     # 上下文压缩阈值（占上下文窗口百分比，0.0-1.0，默认 0.60）
     compression_threshold = Column(Integer, default=60)  # 存整数 0-100，前端友好
+    # 下面两列是「系数旋钮」，可空：**NULL = 用代码默认**（冷阈值系数 1/e、压后目标 20%）
+    # 默认值只留在常量里一处，管理员改过的才落库 —— 免得同一个默认值抄两遍
+    idle_threshold_percent = Column(Integer, nullable=True)   # T_idle 插值系数（1-99）
+    compress_target_percent = Column(Integer, nullable=True)  # T_post = T_hot × 这个比例（1-99）
 
     updated_by = Column(Integer, ForeignKey("users.id"))
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

@@ -11,6 +11,8 @@ interface GlobalConfig {
   default_user_log_access: boolean
   default_delay_reply_enabled: boolean
   compression_threshold: number
+  idle_threshold_percent: number | null
+  compress_target_percent: number | null
 }
 
 interface AgentSettings {
@@ -108,6 +110,8 @@ export default function ConversationLogTab() {
         default_user_log_access: config.default_user_log_access,
         default_delay_reply_enabled: config.default_delay_reply_enabled,
         compression_threshold: config.compression_threshold,
+        idle_threshold_percent: config.idle_threshold_percent,
+        compress_target_percent: config.compress_target_percent,
       })
       setConfig(updated)
     } catch (err: any) { alert(err.message) }
@@ -220,7 +224,7 @@ export default function ConversationLogTab() {
               </div>
               <div>
                 <label className="block text-xs font-medium text-textSecondary mb-1">
-                  上下文压缩阈值 ({config.compression_threshold || 60}%)
+                  {t('admin.convlogCompressThreshold')} ({config.compression_threshold || 60}%)
                 </label>
                 <input
                   type="range" min={5} max={100} step={5}
@@ -228,7 +232,31 @@ export default function ConversationLogTab() {
                   onChange={e => setConfig({ ...config, compression_threshold: parseInt(e.target.value) })}
                   className="w-full accent-primary-500"
                 />
-                <p className="text-3xs text-textMuted mt-0.5">达到上下文窗口的此百分比时自动压缩。调低=更早压缩，调高=收集更多消息再压缩</p>
+                <p className="text-3xs text-textMuted mt-0.5">{t('admin.convlogCompressThresholdDesc')}</p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-textSecondary mb-1">
+                  {t('admin.convlogIdleThreshold')} ({config.idle_threshold_percent ?? 37}%)
+                </label>
+                <input
+                  type="range" min={1} max={99} step={1}
+                  value={config.idle_threshold_percent ?? 37}
+                  onChange={e => setConfig({ ...config, idle_threshold_percent: parseInt(e.target.value) })}
+                  className="w-full accent-primary-500"
+                />
+                <p className="text-3xs text-textMuted mt-0.5">{t('admin.convlogIdleThresholdDesc')}</p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-textSecondary mb-1">
+                  {t('admin.convlogTargetPercent')} ({config.compress_target_percent ?? 20}%)
+                </label>
+                <input
+                  type="range" min={1} max={99} step={1}
+                  value={config.compress_target_percent ?? 20}
+                  onChange={e => setConfig({ ...config, compress_target_percent: parseInt(e.target.value) })}
+                  className="w-full accent-primary-500"
+                />
+                <p className="text-3xs text-textMuted mt-0.5">{t('admin.convlogTargetPercentDesc')}</p>
               </div>
               <button
                 onClick={saveConfig}

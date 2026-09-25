@@ -450,15 +450,16 @@ async def _tool_call_loop(
     # 优先级（2026-08-13 产品定）：API 通 → LLM 总结压缩（保留要点）；API 不通 → 内联截断兜底
     try:
         from app.services.memory.context_compression_service import (
-            inline_compress, compress_messages, should_compress,
-            get_compression_threshold, compression_thresholds,
+            inline_compress, compress_messages, should_compress, get_compression_thresholds,
         )
+        from app.utils.pure.model_window import context_window_for
         # 体积是「该不该压」的必要条件，空闲只决定「什么时候压最划算」（§6）：
         # 冷路径用 T_idle——没超就不压，小上下文白跑一次摘要不值
-        idle_threshold = compression_thresholds(await get_compression_threshold(db)).idle
+        thresholds = await get_compression_thresholds(db)
+        window = context_window_for(model)  # 窗口按模型取，别拿全局常量套所有模型
         stale = (
             _is_conversation_idle(messages, hours=12)
-            and should_compress(messages, threshold=idle_threshold)
+            and should_compress(messages, context_window=window, threshold=thresholds.idle)
         )
         if stale and not getattr(context, "_precompressed", False):
             compressed_ok = False
@@ -648,12 +649,16 @@ async def _tool_call_loop(
             # 策略：AI 没发消息时不压缩（保全中间操作链），发过消息后用 LLM 总结重要事件再压缩。
             # 另外 12 小时空闲时内联压缩（缓存已过期）——但要先过 T_idle 的体积门槛（§6）。
             if not _auto_compressed:
-                from app.services.memory.context_compression_service import should_compress, inline_compress, compress_messages, get_compression_threshold, compression_thresholds
-                thresholds = compression_thresholds(await get_compression_threshold(db))
+                from app.services.memory.context_compression_service import should_compress, inline_compress, compress_messages, get_compression_thresholds
+                from app.utils.pure.model_window import context_window_for
+                thresholds = await get_compression_thresholds(db)
+                window = context_window_for(model)
                 # 两条路各自的体积门槛（§6）：冷（久未活跃）用更低的 T_idle，
                 # 热（本轮已发过消息）用 T_hot；都不满足就不压——体积是必要条件，空闲只决定时机
-                stale = _is_conversation_idle(messages, hours=12) and should_compress(messages, threshold=thresholds.idle)
-                if stale or (_has_sent_message and should_compress(messages, threshold=thresholds.hot)):
+                stale = _is_conversation_idle(messages, hours=12) and should_compress(
+                    messages, context_window=window, threshold=thresholds.idle)
+                if stale or (_has_sent_message and should_compress(
+                        messages, context_window=window, threshold=thresholds.hot)):
                     if stale:
                         # 空闲压缩：直接内联截断（缓存已过期，不浪费 API）
                         messages, compress_stats = inline_compress(messages)
