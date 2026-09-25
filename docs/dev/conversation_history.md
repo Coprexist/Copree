@@ -345,12 +345,32 @@
   ② 真跑 `_unlock_context`（真库草稿会话）断言执行步骤 == 清单且账本真被重写成摘要在前。
 - **验证**：全量 272/0；重启 `health=healthy restarts=0`。
 
+### 第二批 b-4：轮末封存（已完成 2026-09-25）
+
+- `utils/pure/history.py` 新增三个条目构造器（文案唯一来源）：`tools_entry`（**一条**本轮工具总账：
+  `send_gm(ok)；view_unread(失败：超时)`——逐个调用落账本会被工具淹没，细节本来在 ConversationLog）、
+  `handoff_entry`（`end_turn.key_note` → kind `handoff`，**加入 NEVER_COMPRESSIBLE**：留给后面自己的不能揉进摘要）、
+  `thinking_entry`（`keep_thinking=true` 时的整段推理 → kind `thinking`）。新增 kind `handoff`。
+- `executor._seal_turn(...)`：轮末把工具总账 + 交接 + 保留的思考按序写进账本；三个出口
+  （`end_turn` 工具 / `intent=end_turn` / 循环走完）共用一次 `_seal(...)` 闭包，失败只告警不致命。
+- **顺手修掉一个真 bug（探针抓到）**：`sync_group_history` 里 `context_ref(group_id)` 是位置调用，
+  而第四批 b 把它改成了关键字参数 → 群聊 `build_messages` 直接 `TypeError`（线上下一轮必炸）。
+  已修 + 补回归测试（真起一个群、两条消息，跑 `sync_group_history`）。
+- **再修一个**：`get_gm_messages` 在 `after_id` 有值时返回**倒序**，而 `chronological` 靠时间戳判先后
+  （同一秒插入的两条判不出来）→ 增量同步会把新消息倒着追加。改成**按 id 归正**（水位本来就是按 id 记的）；
+  回归测试覆盖增量路径（新消息只往后追加、顺序为 第一→第二→第三）。
+- **验证**：全量 276/0；重启 `health=healthy restarts=0`；真机草稿会话：封存条目在请求里如实渲染
+  （`[本轮工具] send_gm(ok)；store_memory(失败：超时)` / `[上一轮交接] …` / `[本轮思考] …`，两次构建字节一致）；
+  增量后账本顺序 `第一条→第四条` 正确。
+- **探针顺带发现（未修，下一件）**：**新消息一到，message 0 就变了**——记忆注入那一段拿的是
+  「最近 5 条消息」当检索词（`build_messages` 的 `query_text`），而它被拼进了锁定 system 段。
+  后果：群里有新消息时前缀从**第 0 条**就 miss，前面所有缓存纪律白做。修法按 §3：动态内容一律沉到尾部读数。
+
 ### 待落地
 
 
 - **第二批 b-3b**：便签**投递**也改成条目（现在仍是 frame 副本 + message 0 之后的前缀插入），
   连同 `retired`/`notified` 记账一起删；以及建议回复。
-- **第二批 b-4**：轮末封存（工具轮历史 + `end_turn` 结算写条目）。
 - **第三批**：世界 AI（新增同名 `end_turn` + 现有强制收尾轮并入 + 历史走同一套服务）。
 - **第四批**：两级压缩（确定性修剪器 + 摘要模板：关键想法 / 必留项 / 裁剪优先级）+ **三档阈值落地**
   （三档阈值、解锁重写、系数可配、窗口按模型都已落地，见上；剩下**两级压缩器**与用 `cached_tokens` 标定数值）+ 图片不降级。

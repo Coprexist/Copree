@@ -442,6 +442,19 @@ async def _tool_call_loop(
     _auto_compressed = False
     # AI 尚未在本次循环中发过消息 → 压缩只应在空闲强制时触发，保中间结果
     _has_sent_message = False
+    # 轮末封存用的工具总账（工具轮历史 → 账本）
+    _tool_log: list[dict] = []
+
+    async def _seal(reasoning: str = "") -> None:
+        """三个出口（end_turn 工具 / intent=end_turn / 循环走完）共用这一次封存。"""
+        try:
+            await _seal_turn(
+                db, agent, group_id=group_id, session_id=session_id,
+                conversation_type=conversation_type, tool_log=_tool_log,
+                settlement=_settlement, reasoning=reasoning,
+            )
+        except Exception as e:
+            logger.warning(f"轮末封存失败（非致命，下一轮只少了这一笔）: {e}")
 
     # ── 空闲强制压缩（2026-08-13 前移）：在第一次 LLM 调用之前检查 12h 空闲。
     # 之前放在工具循环内（调用成功后），key 失效等早期失败时根本执行不到——
@@ -634,6 +647,12 @@ async def _tool_call_loop(
                     if isinstance(result, dict):
                         result["__task"] = task_summary
                 _pending_results.append({"tc_id": tc_id, "result": result})
+                # 工具总账：名字 + 失败原因（成功就一个字）——轮末封存成一条 tool 条目
+                _note = "ok"
+                if isinstance(result, dict) and (result.get("error") or result.get("success") is False):
+                    _reason = str(result.get("message") or result.get("error") or "失败")[:60]
+                    _note = f"失败：{_reason}"
+                _tool_log.append({"name": tool_name, "note": _note})
                 if isinstance(result, dict) and result.get("end_turn"):
                     _end_turn = True
                     # 收下结算决定（还没接账本：账本封存落地后在这里写条目）
@@ -881,6 +900,7 @@ async def _tool_call_loop(
             for pr in _pending_results:
                 messages.append({"role": "tool", "tool_call_id": pr["tc_id"],
                                  "content": json.dumps(pr["result"], ensure_ascii=False)})
+            await _seal(response.get("reasoning_content") or "")
             logger.info(
                 f"AI {agent.name}({agent.id}) end_turn 流式触发，本轮结束"
                 f"（结算：keep_thinking={bool(_settlement.get('keep_thinking'))}，"
@@ -919,6 +939,7 @@ async def _tool_call_loop(
             logger.info(
                 f"AI {agent.name}({agent.id}) intent={parsed_intent}，本轮结束"
             )
+            await _seal(response.get("reasoning_content") or "")
             if last_task:
                 try:
                     from app.services.agent.workspace_service import save_current_task
@@ -1094,6 +1115,7 @@ async def _tool_call_loop(
         except Exception as e:
             logger.warning(f"  扣除额度失败（不阻塞主流程）: {e}")
 
+    await _seal(response.get("reasoning_content") or "")
     await _save_conversation_log_safe(
         db, agent, messages, conversation_type,
         group_id, session_id,
@@ -1195,6 +1217,36 @@ UNLOCK_STEPS = (
 )
 
 
+def _context_ref(group_id, session_id, conversation_type) -> str:
+    """本会话在账本里的键（群 vs 私信）——只有这里能把三个参数翻成一个键。"""
+    from app.services.history.context_sync import context_ref
+    return (context_ref(group_id=group_id) if conversation_type == "group"
+            else context_ref(session_id=session_id))
+
+
+async def _seal_turn(db, agent, *, group_id, session_id, conversation_type,
+                     tool_log: list[dict], settlement: dict, reasoning: str = "") -> None:
+    """**轮末封存**：把轮内的东西（工具轮历史 + 轮末结算）写进账本。
+
+    不封存的话，AI 下一轮只看得见消息、看不见自己上一轮干了什么——工具轮历史原本只活在当轮
+    messages 里，轮一结束就没了。这里是它进账本的唯一入口。
+    """
+    from app.services.history.context_sync import append_events
+    from app.utils.pure.history import handoff_entry, thinking_entry, tools_entry
+
+    entries = []
+    if tool_log:
+        entries.append(tools_entry(tool_log))
+    note = (settlement.get("key_note") or "").strip()
+    if note:
+        entries.append(handoff_entry(note))
+    if settlement.get("keep_thinking") and (reasoning or "").strip():
+        entries.append(thinking_entry(reasoning))
+    if not entries:
+        return
+    await append_events(db, agent, _context_ref(group_id, session_id, conversation_type), entries)
+
+
 async def _unlock_context(db, agent, *, group_id, session_id, conversation_type,
                           summary: str) -> tuple[str, ...]:
     """解锁点（压缩成功）的一整套收尾：按 `UNLOCK_STEPS` 顺序执行，返回实际执行的步骤名。
@@ -1204,8 +1256,7 @@ async def _unlock_context(db, agent, *, group_id, session_id, conversation_type,
     """
     from app.services.history.context_sync import context_ref, rewrite_context
     from app.services.memory.context_compression_service import DEFAULT_KEEP_LAST_N
-    ref = (context_ref(group_id=group_id) if conversation_type == "group"
-           else context_ref(session_id=session_id))
+    ref = _context_ref(group_id, session_id, conversation_type)
 
     async def _rewrite_history():
         if ref:

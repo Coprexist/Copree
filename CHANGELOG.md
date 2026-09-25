@@ -39,7 +39,11 @@
 - **解锁清单即契约**（第四批 d）：`executor.UNLOCK_STEPS` 是唯一清单，`_unlock_context` 按序执行并返回实际
   执行的步骤；任一步失败记 `logger.exception` 再抛（半解锁要响，不能静默）；`tests/test_unlock_steps.py`
   把清单与执行对账（改清单必须改测试）
-- 验证：全量 **272/0**；前端 `tsc --noEmit` 与 i18n 检查无输出；真库 head=`a7b8c9d0e1f2`；
+- **轮末封存**（第二批 b-4）：`executor._seal_turn` 把轮内的东西写进账本——工具总账一条（`tools_entry`）、
+  `end_turn.key_note`（kind `handoff`，**永不压缩**）、`keep_thinking` 的整段推理（kind `thinking`）；
+  三个出口共用一次 `_seal(...)`。顺手修两个真 bug：`sync_group_history` 的 `context_ref` 位置调用（线上必炸）、
+  增量同步把新消息**倒序**追加（`get_gm_messages` 带 `after_id` 时是倒序，`chronological` 同秒判不出来）→ 改按 id 归正
+- 验证：全量 **276/0**；真机封存条目如实渲染、增量顺序正确；
   真机 `gpt-4.1` 窗口 1M → 三档 **120K / 296.6K / 600K**（以前一律按 128K 的 76.8K 触发）；
   真机草稿会话 40 条 / 10423 bytes → **22 条 / 5426 bytes**；
   真机连续两次构建字节完全一致（28 条 / 8935 bytes，修前 27/28）；

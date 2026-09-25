@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.chat import gm
 from app.services.history import history_service
 from app.utils.pure.history import gap_entry, latest_message_ref
-from app.utils.pure.prompting import chronological, keep_newest_within
+from app.utils.pure.prompting import keep_newest_within
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +92,7 @@ async def sync_dm_history(db: AsyncSession, agent, session_id: str, *, cap: int)
         sa_select(DMMessage).where(DMMessage.session_id == session_id, DMMessage.id > watermark)
         .order_by(DMMessage.id.desc()).limit(cap)
     )).scalars().all()
-    rows = list(reversed(rows))  # 按 id 倒序取"最新 cap 条"，再归一回正序
+    rows = sorted(rows, key=lambda m: m.id)  # 按 id 归正（与群聊同一口径）
 
     skipped = 0
     if rows:
@@ -125,12 +125,14 @@ async def sync_group_history(db: AsyncSession, agent, group_id: int, *, cap: int
 
     cap = 一批最多几条（旧窗口的 max_unread），max_len = 单条展示上限（群设置的 max_msg_display_len）。
     """
-    ref = context_ref(group_id)
+    ref = context_ref(group_id=group_id)
     entries = await history_service.read(db, agent.id, ref)
     watermark = latest_message_ref(entries)
 
     rows = await gm.get_gm_messages(db, group_id, limit=cap, after_id=watermark or None)
-    rows = keep_newest_within(chronological(rows), BATCH_MAX_CHARS)
+    # 顺序按 **id** 归正：水位就是按 id 记的，而 get_gm_messages 在 after_id 有值时返回倒序
+    # （chronological 靠时间戳判先后，同一秒插入的两条判不出来——实测踩过）
+    rows = keep_newest_within(sorted(rows, key=lambda m: m.id), BATCH_MAX_CHARS)
 
     # 水位与本批第一条之间被窗口/字符上限吃掉的：折成缺口，排在这批最前面
     skipped = await gm.count_messages_between(

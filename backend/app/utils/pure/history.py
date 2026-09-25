@@ -21,6 +21,7 @@ KINDS = (
     "tool",        # 工具调用与结果（"我干过什么"）
     "note",        # 便签投递 / 撤下
     "notice",      # 平台通知（能力变更等）
+    "handoff",     # 轮末交接：留给后面自己的关键信息（end_turn.key_note）
     "suggestion",  # 给用户的建议回复
     "summary",     # compact 产物
     "thinking",    # 保留的思考（仅 keep_thinking=true 时）
@@ -30,7 +31,7 @@ KINDS = (
 ROLE_BY_ACTOR = {"self": "assistant", "user": "user", "world": "user", "system": "system"}
 
 # 事件类：压缩时**原样搬运**，不揉进摘要（揉了就等于丢契约/丢"有个洞"）
-NEVER_COMPRESSIBLE = ("gap", "backfill", "note", "notice")
+NEVER_COMPRESSIBLE = ("gap", "backfill", "note", "notice", "handoff")
 
 
 def make_entry(kind: str, content: str, *, actor: str = "system",
@@ -79,6 +80,29 @@ def latest_message_ref(entries: list[dict]) -> int:
         except (TypeError, ValueError):
             continue
     return latest
+
+
+def tools_entry(items: list[dict]) -> dict:
+    """本轮工具调用一笔总账（**我干了什么**）——一条条目，不是每个调用一条：
+
+    逐个调用落账本会被工具淹没（一轮十几个调用），细节本来就在 ConversationLog 里。
+    """
+    parts = []
+    for it in items or []:
+        name = (it.get("name") or "?").strip()
+        note = (it.get("note") or "ok").strip()
+        parts.append(f"{name}({note})")
+    return make_entry("tool", "[本轮工具] " + "；".join(parts), actor="self")
+
+
+def handoff_entry(note: str) -> dict:
+    """轮末交接（end_turn.key_note）：留给后面自己的关键信息——压缩时原样搬运，不揉进摘要。"""
+    return make_entry("handoff", f"[上一轮交接] {note.strip()}", actor="system")
+
+
+def thinking_entry(text: str) -> dict:
+    """保留的思考（end_turn keep_thinking=true）：整段推理进历史，供后面的自己复用。"""
+    return make_entry("thinking", f"[本轮思考] {text.strip()}", actor="self")
 
 
 def is_compressible(entry: dict) -> bool:
