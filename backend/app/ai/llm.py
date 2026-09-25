@@ -524,31 +524,34 @@ async def _inject_cross_state_context(db, agent, context_ref: str, messages: lis
         logger.warning(f"交接尾巴注入失败（非致命）: {e}")
 
 
-async def _deliver_frame_notes(db, agent, context_ref: str, messages: list[dict]) -> str:
-    """跨状态便签：投递进本会话的那份固定在 message 0 之后；返回尾部要发的「撤下通知」（发一次）。
+async def _deliver_frame_notes(db, agent, context_ref: str, entries: list[dict]) -> list[dict]:
+    """跨状态便签：**投递 = 落一条 note 条目**（账本里有了就不再投，幂等）；返回本轮要追加的条目。
 
-    位置固定 + 内容固定 = 每轮字节一致 → 前缀缓存命中；它就这样"躺在上下文里"。
-    **撤下不许动前缀**（动一个字节也是断缓存）：已经投出去的行永远照原样渲染，撤下改成尾部
-    变更通知，通知发出即盖章（`notified`），所以只出现一次；解锁（compact/clear）时副本被删
-    （release_active_frame_notes）。有效期只决定"还能不能投递"。
+    以前是插进 message 0 之后的前缀块——前缀动不得，撤下只能靠尾部通知"压着"它；
+    现在它是账本里的**一次性事件**：投递即入历史（只追加），撤下补一条变更通知，
+    解锁（compact/清空）时随账本重写离场（flags.drop_on_unlock）。
+    有效期只决定"还能不能投递"；撤下不改已投出去的那条。
     """
     try:
         from app.services.agent.cross_state_note_service import sync_frame_notes
         from app.services.agent.state_stack_service import mark_frame_notes_notified
-        from app.utils.pure.cross_state_note import format_frame_notes, format_retired_notes_notice
+        from app.utils.pure.cross_state_note import format_note_delivery, format_retired_notes_notice
+        from app.utils.pure.history import delivered_note_ids, make_entry, note_entry
 
         copies = await sync_frame_notes(db, agent.id, context_ref)
-        block = format_frame_notes(copies)
-        if block:
-            messages.append({"role": "system", "content": block})
+        delivered = delivered_note_ids(entries)
+        out = [note_entry(c["id"], format_note_delivery(c))
+               for c in copies if c.get("id") and c["id"] not in delivered]
         notice = format_retired_notes_notice(copies)
         if notice:
             await mark_frame_notes_notified(
                 db, agent.id, {c["id"] for c in copies if c.get("retired") and not c.get("notified")})
-        return notice
+            # 撤下通知也是"只活到解锁"（它讲的那条便签解锁时就没了）
+            out.append(make_entry("notice", notice, flags={"drop_on_unlock": True}))
+        return out
     except Exception as e:
         logger.warning(f"跨状态便签投递失败（非致命）: {e}")
-        return ""
+        return []
 
 
 async def _build_capability_notice(db, agent) -> str:
@@ -1016,9 +1019,6 @@ async def build_messages(
 
     messages = [{"role": "system", "content": system_prompt}]
 
-    # 📌 跨状态便签（投递制）：紧跟 message 0，进前缀、字节稳定；撤下通知走尾部
-    notes_notice = await _deliver_frame_notes(db, agent, f"group:{group_id}", messages)
-
     # ── 多会话上下文（配置驱动）──
     if context_config_parser.should_inject_cross_conversation(context_config):
         cross_msgs = await _build_cross_conversation_context(
@@ -1084,9 +1084,8 @@ async def build_messages(
         # 一次性事件（能力变更通知 / 便签撤下）**落成条目**：它们属于「外界带来了什么」，
         # 必须紧跟历史——落在尾部读数之前，否则下一轮它们会从末尾跑到中间（顺序变 = 断缓存）。
         from app.utils.pure.history import make_entry
-        events: list[dict] = []
-        if notes_notice:
-            events.append(make_entry("note", notes_notice))
+        # 便签投递（逐条条目、幂等）+ 撤下通知：投过没有以账本为准
+        events: list[dict] = await _deliver_frame_notes(db, agent, group_ref, ledger)
         cap_notice = await _build_capability_notice(db, agent)
         if cap_notice:
             events.append(make_entry("notice", cap_notice))
@@ -1443,9 +1442,6 @@ async def build_dm_messages(
 
     messages = [{"role": "system", "content": system_prompt}]
 
-    # 📌 跨状态便签（投递制）：紧跟 message 0，进前缀、字节稳定
-    notes_notice = await _deliver_frame_notes(db, agent, session_id, messages)
-
     # ── 统一上下文：数字生命档/沉浸档/共振 → 加载多会话上下文 ──
     cross_msgs = await _build_cross_conversation_context(
         db, agent, current_session_id=session_id, trigger_user_id=trigger_user_id,
@@ -1469,9 +1465,7 @@ async def build_dm_messages(
     dm_ref = context_ref(session_id=session_id)  # 会话键只在这里拼一次
 
     # 一次性事件（能力变更通知 / 便签撤下）落成条目：紧跟历史、排在尾部读数之前
-    events: list[dict] = []
-    if notes_notice:
-        events.append(make_entry("note", notes_notice))
+    events: list[dict] = await _deliver_frame_notes(db, agent, dm_ref, ledger)
     cap_notice = await _build_capability_notice(db, agent)
     if cap_notice:
         events.append(make_entry("notice", cap_notice))

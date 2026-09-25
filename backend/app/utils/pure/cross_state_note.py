@@ -77,8 +77,19 @@ def note_copy(note: dict) -> dict:
     }
 
 
+def format_note_delivery(note: dict) -> str:
+    """投递条目文案（唯一来源）：与 `format_frame_notes` 里那一行同款，但不带块头——
+
+    投递改成逐条落账本条目了，条目自带位置（时间序列里的一次性事件），不需要块。
+    """
+    where = f"（来自 {note['from_label']}）" if note.get('from_label') else ""
+    return f"[便签 · {note.get('kind') or 'todo'}] {note.get('text', '')}{where}"
+
+
 def format_frame_notes(copies: list[dict]) -> str:
     """会话里那份便签 → 前缀块（每轮字节一致才缓存得住）。
+
+    历史：主站已改成逐条投递条目（见 `format_note_delivery`），这个块渲染保留给世界侧/工具回显。
 
     这里**不看 `retired`**：前缀一旦投出去就归锁管，撤下也不许改它一个字节。
     "撤下"走尾部动态告知（`format_retired_notes_notice`），解锁（compact/clear）时才真删副本。

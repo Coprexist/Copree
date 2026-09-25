@@ -105,6 +105,25 @@ def thinking_entry(text: str) -> dict:
     return make_entry("thinking", f"[本轮思考] {text.strip()}", actor="self")
 
 
+def note_entry(note_id: str, text: str) -> dict:
+    """一条跨状态便签的**投递条目**——ref 记 note id，账本里有了就不再投（幂等）。
+
+    便签是"只活到解锁"的东西：`drop_on_unlock` 让解锁重写时把它连同副本一起清掉。
+    """
+    return make_entry("note", text, actor="system", ref=f"note:{note_id}",
+                      flags={"drop_on_unlock": True})
+
+
+def delivered_note_ids(entries: list[dict]) -> set[str]:
+    """账本里已经投过的便签 id（投递幂等的唯一依据：AI 看过就算投过）。"""
+    ids: set[str] = set()
+    for e in entries or []:
+        ref = e.get("ref") or ""
+        if ref.startswith("note:"):
+            ids.add(ref[len("note:"):])
+    return ids
+
+
 def is_compressible(entry: dict) -> bool:
     """这条能不能被摘要吃掉：事件类永不（缺口/补看/便签/通知），其余默认可以。"""
     flags = entry.get("flags") or {}

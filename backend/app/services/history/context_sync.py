@@ -61,15 +61,22 @@ async def rewrite_context(db: AsyncSession, agent, context_ref: str, *,
     entries = await history_service.read(db, agent.id, context_ref)
     if not entries:
         return []
-    keep = entries[-keep_last:] if keep_last > 0 else []
-    kept_seqs = {e["seq"] for e in keep}
-    events = [e for e in entries if e["seq"] not in kept_seqs and not is_compressible(e)]
+    kept_seqs = {e["seq"] for e in (entries[-keep_last:] if keep_last > 0 else [])}
+
+    def _survives(e: dict) -> bool:
+        # 带 `drop_on_unlock` 的（便签投递/撤下通知）**只活到解锁**：哪怕落在保留窗口里也走
+        # ——解锁是便签唯一的退出点（§6「解锁必须整套」），它不该靠「最近 N 条」侥幸活着
+        if (e.get("flags") or {}).get("drop_on_unlock"):
+            return False
+        return e["seq"] in kept_seqs or not is_compressible(e)
+
+    events = [e for e in entries if _survives(e)]   # 顺序天然还是 seq 顺序（保留的是后缀）
     head = [make_entry("summary", summary)] if (summary or "").strip() else []
     await history_service.clear(db, agent.id, context_ref)
-    rewritten = await history_service.append(db, agent.id, context_ref, head + events + keep)
+    rewritten = await history_service.append(db, agent.id, context_ref, head + events)
     logger.info(
         f"Agent({agent.id}) 会话 {context_ref} 解锁重写：{len(entries)} → {len(rewritten)} 条"
-        f"（摘要 {len(head)} + 事件 {len(events)} + 保留 {len(keep)}）"
+        f"（摘要 {len(head)} + 保留/事件 {len(events)}）"
     )
     return rewritten
 
