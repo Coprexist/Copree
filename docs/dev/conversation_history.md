@@ -250,10 +250,28 @@
   `hot=0.60 → T_post=15.4K / T_idle=38.0K / T_hot=76.8K`；25 个真机会话体积全部 < `T_idle`（最大 34.7K）——
   旧逻辑逢 12h 闲置必压一次，现在一个都不压（这就是这条门槛要拦的浪费）。
 
+### 第二批 b-1：主站群聊历史读账本（已完成 2026-09-25）
+
+- **新入口** `services/history/context_sync.py`：`sync_group_history(db, agent, group_id, cap, max_len)` 是
+  「群聊历史 → 账本」的**唯一入口**——读账本 → 从账本自己推水位（最后一条 message 条目的 `ref` = 消息 id，
+  **不另立游标表**）→ 取水位之后的新消息 → 窗口装不下的折成**缺口条目**排在最前面、**同一次 append** → 返回整段条目。
+  幂等：没有新消息就一条不写，渲染出的仍是同一份字节。
+- `utils/pure/history.py`：`latest_message_ref(entries)`（水位推导，纯函数）。
+- **渲染归位**：`resolve_speaker_names` / `gm_message_entry`（渲染即落库）落进 `chat/gm.py`；
+  `chronological` / `keep_newest_within` 落进 `utils/pure/prompting.py`；`ai/llm.py` 里那三份私有副本删掉
+  （同一个东西抄两遍，改一处忘一处）。
+- `ai/llm.py:build_messages`：群聊历史段从「每轮按最新 N 条重建窗口」改成「读账本」——
+  这是**前缀每轮前移 → 整段 miss** 的正主；未读兜底改读账本水位（原来读的 `recent_messages` 已不存在）。
+- **验证**：全量 265/0；重启后 `health=healthy restarts=0`；真机 agent 24 / 群 64 **连续两次构建字节完全一致**
+  （8382 bytes，公共前缀 27 条全同）；账本 21 条（1 缺口 + 20 消息）。
+- **侧记（下一片要修）**：能力变更通知仍是「当轮 append 即丢」——实测两次构建刚好差这一条（27 → 28 条），
+  正是 §4 说的「一次性事件要落成条目」；探针会把它标记成已告知，已把 `cap_known_versions` 回滚，留给下一轮真机。
+
 ### 待落地
 
-- **第二批 b**：主站读账本渲染（`build_messages` / `build_dm_messages` 改成固定三段）+ 轮末封存
-  （缺口事件写在批次前、补看 append）+ 便签/通知/建议回复改走条目。
+- **第二批 b-2**：DM 路径（`build_dm_messages`）走同一套账本入口。
+- **第二批 b-3**：能力变更通知 / 便签撤下 / 建议回复**落成条目**（去掉「说完就没了」与 `retired`/`notified` 记账）。
+- **第二批 b-4**：轮末封存（工具轮历史 + `end_turn` 结算写条目）。
 - **第三批**：世界 AI（新增同名 `end_turn` + 现有强制收尾轮并入 + 历史走同一套服务）。
 - **第四批**：两级压缩（确定性修剪器 + 摘要模板：关键想法 / 必留项 / 裁剪优先级）+ **三档阈值落地**
   （三档阈值已落地，见上；剩下**两级压缩器**与用 `cached_tokens` 标定数值）+ 图片不降级。

@@ -24,6 +24,8 @@ from app.chat.gm import (
     send_gm_message,
     get_gm_messages,
     gm_message_to_dict,
+    gm_message_entry,
+    resolve_speaker_names,
     is_member_of_group,
     remove_member,
     leave_group,
@@ -84,6 +86,13 @@ class ChatApi(BaseChatApi):
         return gm_message_to_dict(message, sender_name=sender_name,
                                   sender_avatar_url=sender_avatar_url,
                                   sender_state=sender_state)
+
+    async def resolve_speaker_names(self, db, messages):
+        return await resolve_speaker_names(db, messages)
+
+    def gm_message_entry(self, message, *, agent_name, agent_user_id, speaker_name=None, max_len=256):
+        return gm_message_entry(message, agent_name=agent_name, agent_user_id=agent_user_id,
+                                speaker_name=speaker_name, max_len=max_len)
 
     async def is_member_of_group(self, db, member_id, member_type, group_id):
         return await is_member_of_group(db, member_id, member_type, group_id)

@@ -11,6 +11,8 @@ from sqlalchemy import select, desc, and_, update, delete, func as sqlfunc
 from app.models.group import Group, GroupMember
 from app.models.message import Message
 from app.models.agent import Agent as AgentModel
+from app.utils.pure.history import make_entry
+from app.utils.pure.prompting import format_message, format_time_shanghai
 
 logger = logging.getLogger(__name__)
 
@@ -387,6 +389,60 @@ def gm_message_to_dict(message: Message, sender_name: str | None = None,
         conversation_key='group_id',
         include_read_at=False,
     )
+
+
+async def resolve_speaker_names(db, messages) -> dict[tuple[str, int], str]:
+    """一次把「谁在说话」查成名字。
+
+    本地消息的 sender_name 列是空的（网页端靠 sender_id 自己查名字），可 AI 的上下文
+    必须有人名：空名字会被 format_message 原样渲染成字面 "None"，模型真的会把 None
+    当成一个可 @ 的人（用户 2026-09-25 在 QQ 群里看到 AI 回 "@None"）。
+    联邦消息自带 sender_name，优先用它；AI 的 sender_id 也是它的用户行 id，所以一张表查得到。
+    """
+    from app.models.user import User  # 函数内导入：与其它模型引用保持一致，避免循环导入
+
+    names: dict[tuple[str, int], str] = {}
+    for m in messages:
+        key = (m.sender_type, m.sender_id)
+        if key in names:
+            continue
+        name = (getattr(m, "sender_name", None) or "").strip()
+        if not name:
+            u = await db.get(User, m.sender_id)
+            name = (getattr(u, "username", "") or "").strip()
+        names[key] = name or f"用户{m.sender_id}"
+    return names
+
+
+def gm_message_entry(message, *, agent_name: str, agent_user_id: int | None,
+                     speaker_name: str | None = None, max_len: int = 256) -> dict:
+    """一条群消息 → 账本条目（**渲染即落库**：content 就是发给模型的最终字节）。
+
+    同一列消息每次渲染必须字节一致——差一个字符，从它开始的前缀全部 miss（§0）。
+    """
+    content = message.content or ""
+    if max_len > 0 and len(content) > max_len:
+        content = content[:max_len] + '...[展开 id=' + str(message.id) + ']'
+    is_self = message.sender_type == "ai" and message.sender_id == agent_user_id
+    rendered = format_message({
+        "time": format_time_shanghai(message.created_at),
+        "speaker_name": speaker_name or "未知",
+        "speaker_id": None if is_self else message.sender_id,
+        "is_self": is_self,
+        "content": content,
+        "message_id": message.id,
+    }, agent_name, max_content_len=5000)
+    return make_entry("message", rendered, actor="self" if is_self else "user", ref=str(message.id))
+
+
+async def count_messages_between(db, group_id: int, *, after_id: int, before_id: int) -> int:
+    """数一下 (after_id, before_id) 之间有多少条——缺口条目要报的数（after_id=0 表示从头数）。"""
+    query = select(sqlfunc.count(Message.id)).where(Message.group_id == group_id)
+    if after_id:
+        query = query.where(Message.id > after_id)
+    if before_id:
+        query = query.where(Message.id < before_id)
+    return (await db.execute(query)).scalar() or 0
 
 
 # ============================================================

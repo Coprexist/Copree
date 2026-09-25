@@ -18,6 +18,7 @@ from app.services.memory.memory_service import recall_relevant_memories, format_
 from app.utils.pure.prompting import (
     resolve_model, build_personality_segment, format_time_shanghai,
     format_message, format_context_for_ai, assemble_system_prompt,
+    chronological, keep_newest_within,
 )
 from app.utils.multimodal import (
     build_content, image_attachments, image_note, injected_image_count,
@@ -805,55 +806,11 @@ async def _versioned_agent_prompt(db: AsyncSession, agent, system_prompt_overrid
     return await get_effective_text(SQLAlchemyCapabilityRepository(db), agent, source, cur)
 
 
-async def _resolve_speaker_names(db, messages) -> dict[tuple[str, int], str]:
-    """一次把「谁在说话」查成名字。
-
-    本地消息的 sender_name 列是空的（网页端靠 sender_id 自己查名字），可 AI 的上下文
-    必须有人名：空名字会被 format_message 原样渲染成字面 "None"，模型真的会把 None
-    当成一个可 @ 的人（用户 2026-09-25 在 QQ 群里看到 AI 回 "@None"）。
-    联邦消息自带 sender_name，优先用它；AI 的 sender_id 也是它的用户行 id，所以一张表查得到。
-    """
-    from app.models.user import User  # 函数内导入：与其它模型引用保持一致，避免循环导入
-
-    names: dict[tuple[str, int], str] = {}
-    for m in messages:
-        key = (m.sender_type, m.sender_id)
-        if key in names:
-            continue
-        name = (getattr(m, "sender_name", None) or "").strip()
-        if not name:
-            u = await db.get(User, m.sender_id)
-            name = (getattr(u, "username", "") or "").strip()
-        names[key] = name or f"用户{m.sender_id}"
-    return names
 
 
-def _chronological(rows: list) -> list:
-    """把消息行统一成**正序（旧 → 新）**。
-
-    两个来源的排序相反（群聊 get_gm_messages 是正序、私信查询是 DESC），以前两条路
-    各自 reversed 一次，看着都能跑；2026-09-25 把展示改成正序时只对了一半——私信被反过来，
-    AI 把 7 月的消息当成"最新"，于是抱怨「你这一串消息时间戳怎么是 7 月 6 号的」。
-    统一在这里归一，后面所有逻辑（字符裁剪、注入、压缩）都只认正序。
-    """
-    if len(rows) >= 2:
-        first, last = rows[0], rows[-1]
-        if getattr(first, "created_at", None) and getattr(last, "created_at", None):
-            if first.created_at > last.created_at:
-                return list(reversed(rows))
-    return list(rows)
 
 
-def _keep_newest_within(rows: list, max_chars: int) -> list:
-    """按字符上限从**最旧端**丢消息，保留最新的（正序进、正序出）"""
-    total = 0
-    kept: list = []
-    for m in reversed(rows):
-        total += len(m.content or "")
-        if total > max_chars:
-            break
-        kept.append(m)
-    return list(reversed(kept))
+
 
 
 async def build_messages(
@@ -908,7 +865,7 @@ async def build_messages(
     for m in recent_for_query:
         if m.content:
             query_parts.append(m.content[:200])
-    speaker_names = await _resolve_speaker_names(db, recent_for_query)
+    speaker_names = await chat_api.resolve_speaker_names(db, recent_for_query)
     if speaker_names:
         query_parts.append("涉及用户: " + " ".join(sorted(set(speaker_names.values()))))
     query_text = " ".join(query_parts)
@@ -1072,68 +1029,26 @@ async def build_messages(
         max_unread = msg_window["max_unread_messages"]
         min_unread = msg_window["min_unread_messages"]
         
-        recent_messages = await chat_api.get_gm_messages(db, group_id, limit=max_unread)
-        
-        # 统一成正序 + 按字符上限从最旧端丢（40000 字与条数上限取小）
-        recent_messages = _keep_newest_within(_chronological(recent_messages), 40000)
-        
         max_len = getattr(group_obj, 'max_msg_display_len', 256) if group_obj else 256
 
+        # ── 历史消息：账本（只追加 + 缺口）──
+        # 旧实现每轮按「最新 N 条」重建窗口，前缀每轮前移 → 整段 miss；
+        # 现在渲染即落库（条目 content 就是发给模型的最终字节），新消息只往后追加。
+        from app.models.message import Message as MessageModel
+        from app.services.history.context_sync import sync_group_history
+        from app.utils.pure.history import ROLE_BY_ACTOR, latest_message_ref
+
+        ledger = await sync_group_history(db, agent, group_id, cap=max_unread, max_len=max_len)
         last_user_idx = None
         last_user_orm = None
-        # 说话人名字先批量查好：本地消息的 sender_name 是空的，直接渲染会让 AI 看到说话人叫 "None"
-        speaker_names = await _resolve_speaker_names(db, recent_messages)
-        history_start = len(messages)   # 历史块起点：截断提示要插在它前面
-        # 正序（旧→新）注入：压缩的"保留最后 N 条"就是保留最新的 N 条，
-        # 触发消息永远排在最后（2026-09-25 漂移事故：以前新→旧，压缩把最新的吞了）
-        for m in recent_messages:
-            md = await chat_api.gm_message_to_dict(
-                m, sender_name=speaker_names.get((m.sender_type, m.sender_id))
-            )
-            content = m.content or ""
-            if max_len > 0 and len(content) > max_len:
-                content = content[:max_len] + '...[展开 id=' + str(m.id) + ']'
-            msg_struct = {
-                "time": format_time_shanghai(m.created_at),
-                "speaker_name": md.get("sender_name") or speaker_names.get((m.sender_type, m.sender_id)) or "未知",
-                "speaker_id": None if m.sender_type == "ai" and m.sender_id == agent.user_id else m.sender_id,
-                "is_self": m.sender_type == "ai" and m.sender_id == agent.user_id,
-                "content": content,
-                "message_id": m.id,
-            }
-
-            role = "assistant" if m.sender_type == "ai" else "user"
-            messages.append({"role": role, "content": format_message(msg_struct, getattr(agent, 'name', ''), max_content_len=5000),})
-            if role == "user":
+        for entry in ledger:
+            messages.append({
+                "role": ROLE_BY_ACTOR.get(entry["actor"], "system"),
+                "content": entry["content"],
+            })
+            if entry["actor"] == "user":
                 last_user_idx = len(messages) - 1
-                last_user_orm = m
-        
-        # 窗口只装得下最近 max_unread 条：更早的未读不硬塞，但要交代清楚"还剩多少、去哪查"，
-        # 否则 AI 会以为群里就这些消息（用户 2026-09-25：应该像"剩余 10 条请用查群消息的工具"）
-        try:
-            from sqlalchemy import func as sa_func
-
-            from app.models.message import Message as MessageModel
-
-            if recent_messages and last_read_at is not None:
-                oldest_seen_id = int(getattr(recent_messages[0], "id", 0) or 0)
-                older = (await db.execute(
-                    select(sa_func.count(MessageModel.id)).where(
-                        MessageModel.group_id == group_id,
-                        MessageModel.id < oldest_seen_id,
-                        MessageModel.created_at > last_read_at,
-                    )
-                )).scalar() or 0
-                if older:
-                    messages.insert(history_start, {
-                        "role": "system",
-                        "content": (
-                            f"（更早还有 {older} 条未读消息没有列在上面；需要时用 view_unread "
-                            "查看，别当成群里只有这几条。）"
-                        ),
-                    })
-        except Exception as e:
-            logger.warning(f"未读截断提示注入失败（非致命）: {e}")
+                last_user_orm = (await db.get(MessageModel, int(entry["ref"]))) if entry.get("ref") else None
 
         if context_config_parser.should_inject_image(context_config):
             _n_img = _attach_image_to_message(messages, last_user_idx, last_user_orm, settings.data_dir)
@@ -1151,7 +1066,8 @@ async def build_messages(
             newest_id = (await db.execute(
                 select(sa_func.max(MessageModel.id)).where(MessageModel.group_id == group_id)
             )).scalar()
-            last_seen_id = int(getattr(recent_messages[-1], "id", 0) or 0) if recent_messages else 0
+            # 账本水位就是「上下文里最后一条真实消息」（别再读 recent_messages：它已不存在）
+            last_seen_id = latest_message_ref(ledger)
             if newest_id and int(newest_id) > last_seen_id:
                 missing = (await db.execute(
                     select(sa_func.count(MessageModel.id)).where(
@@ -1507,7 +1423,7 @@ async def build_dm_messages(
         .limit(limit)
     )
     # 私信查询是 DESC（新→旧）：归一成正序，再按字符上限保留最新的
-    dm_messages = _keep_newest_within(_chronological(result.scalars().all()), 40000)
+    dm_messages = keep_newest_within(chronological(result.scalars().all()), 40000)
 
     last_user_idx = None
     last_user_orm = None

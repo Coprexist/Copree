@@ -18,6 +18,10 @@
 - **三档阈值落地**：`compression_thresholds(hot)` 做**单一入口**（`CompressionThresholds` +
   `IDLE_THRESHOLD_FRACTION = 1/e`），`executor.py:458`（调用前）与 `:649`（工具循环）**两路分用** `T_idle` / `T_hot`——
   原先两路共用 60%、且空闲那路没有体积门槛；测试 3 条
+- **主站群聊历史读账本**（第二批 b-1）：新入口 `services/history/context_sync.py:sync_group_history`
+  （水位从账本自推、缺口同批在前、幂等）；`build_messages` 群聊历史段改读账本；
+  `resolve_speaker_names` / `gm_message_entry` 收进 `chat/gm.py`、`chronological` / `keep_newest_within` 收进
+  `utils/pure/prompting.py`（llm 里那三份私有副本删掉）；真机连续两次构建**字节完全一致**（8382 bytes）
 - 验证：全量 **265/0**（18.3s）；真库 `hot=0.60 → T_post=15.4K / T_idle=38.0K / T_hot=76.8K`；
   真机 25 个会话体积**全部 < `T_idle`**（最大 34.7K）→ 旧逻辑逢 12h 闲置必压，现在不压；`health=healthy restarts=0`
 

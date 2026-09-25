@@ -64,6 +64,23 @@ def backfill_header(count: int, *, first_ref: str = "", last_ref: str = "", at: 
             "它们排在后面是因为只能追加，不代表刚发生。）")
 
 
+def latest_message_ref(entries: list[dict]) -> int:
+    """账本里最后渲染过的**真实消息 id**（水位）——只追加的幂等锚点。
+
+    水位从账本自己推（message 条目的 ref = 消息 id），不另立游标表：
+    多一份状态就多一处漂移，而且回滚时游标和账本会不一致。
+    """
+    latest = 0
+    for e in entries or []:
+        if (e.get("kind") or "") != "message":
+            continue
+        try:
+            latest = max(latest, int(e.get("ref") or 0))
+        except (TypeError, ValueError):
+            continue
+    return latest
+
+
 def is_compressible(entry: dict) -> bool:
     """这条能不能被摘要吃掉：事件类永不（缺口/补看/便签/通知），其余默认可以。"""
     flags = entry.get("flags") or {}

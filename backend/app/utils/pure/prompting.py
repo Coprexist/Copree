@@ -146,6 +146,34 @@ def format_time_shanghai(dt: datetime) -> str:
 # 消息格式化
 # ═══════════════════════════════════════════════════════════════
 
+def chronological(rows: list) -> list:
+    """把消息行统一成**正序（旧 → 新）**。
+
+    两个来源的排序相反（群聊 get_gm_messages 是正序、私信查询是 DESC），以前两条路
+    各自 reversed 一次，看着都能跑；2026-09-25 把展示改成正序时只对了一半——私信被反过来，
+    AI 把 7 月的消息当成"最新"，于是抱怨「你这一串消息时间戳怎么是 7 月 6 号的」。
+    统一在这里归一，后面所有逻辑（字符裁剪、注入、压缩）都只认正序。
+    """
+    if len(rows) >= 2:
+        first, last = rows[0], rows[-1]
+        if getattr(first, "created_at", None) and getattr(last, "created_at", None):
+            if first.created_at > last.created_at:
+                return list(reversed(rows))
+    return list(rows)
+
+
+def keep_newest_within(rows: list, max_chars: int) -> list:
+    """按字符上限从**最旧端**丢消息，保留最新的（正序进、正序出）"""
+    total = 0
+    kept: list = []
+    for m in reversed(rows):
+        total += len(m.content or "")
+        if total > max_chars:
+            break
+        kept.append(m)
+    return list(reversed(kept))
+
+
 def format_message(msg: dict, agent_name: str = "", max_content_len: int = 200) -> str:
     """
     纯函数：统一格式化单条消息。多会话上下文、当前对话、向量检索全部走这里。

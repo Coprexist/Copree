@@ -23,7 +23,7 @@ async def test_format_message_never_renders_none():
 
 
 async def test_resolve_speaker_names_fills_local_messages(migrated_db):
-    from app.ai.llm import _resolve_speaker_names
+    from app.chat.gm import resolve_speaker_names  # 唯一实现在 chat 层（llm 只是调用方）
     from app.database import async_session
 
     async with async_session() as db:
@@ -47,7 +47,7 @@ async def test_resolve_speaker_names_fills_local_messages(migrated_db):
         rows = list((await db.execute(text(
             "SELECT sender_type, sender_id, sender_name, content FROM messages ORDER BY id"
         ))).all())
-        names = await _resolve_speaker_names(db, rows)
+        names = await resolve_speaker_names(db, rows)
 
         assert names[("human", 90)] == "QQ用户6682BD"
         assert names[("ai", 40)] == "化学老师"
