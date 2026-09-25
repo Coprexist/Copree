@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
-import { api } from '../api/client'
-import { useIsDark } from '../hooks/useIsDark'
-import { useT } from '../i18n/I18nContext'
+import { api } from '../../../api/client'
+import { useIsDark } from '../../../hooks/useIsDark'
+import { useT } from '../../../i18n/I18nContext'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, PieChart, Pie, Cell,

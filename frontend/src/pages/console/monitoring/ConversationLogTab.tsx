@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react'
-import { api } from '../api/client'
-import { useT } from '../i18n/I18nContext'
+import { api } from '../../../api/client'
+import { useT } from '../../../i18n/I18nContext'
 import { FileText, Settings, Bot, Eye, ChevronDown, ChevronUp, Loader2, Save, Sliders, X } from 'lucide-react'
-import Toggle from './Toggle'
-import { Dialog } from './ui'
+import Toggle from '../../../components/Toggle'
+import { Dialog } from '../../../components/ui'
 
 interface GlobalConfig {
   max_conversation_logs: number

@@ -1,6 +1,6 @@
 import { memo, useState, useMemo } from 'react'
 import { useAuth } from '../context/AuthContext'
-import { FileIcon, Download, Globe, ShieldAlert, Reply } from 'lucide-react'
+import { FileIcon, Download, Globe, ShieldAlert, Reply, MessageSquare } from 'lucide-react'
 import { formatMessageTime } from '../utils/time'
 import { formatFileSize } from '../utils/format'
 import { avatarGradient } from '../utils/avatar'
@@ -58,6 +58,8 @@ interface MessageBubbleProps {
   thinking?: boolean
   isTyping?: boolean
   sourcePublicId?: string | null
+  /** 消息入口通道：'qq' = 从 QQ 进来的（界面画来源标识用） */
+  via?: string | null
   attachments?: Array<{file_id?: number, name?: string, size?: number, mime_type?: string, type?: string, invitation_id?: number, group_name?: string, inviter_name?: string, status?: string}> | null
   messageType?: string
   messageId?: number
@@ -79,7 +81,7 @@ import MarkdownContent from './shared/MarkdownContent'
 
 const MessageBubble = memo(function MessageBubble({
   senderName, senderAvatarUrl, content, isMine, createdAt, state,
-  senderType, senderId, thinking, isTyping, sourcePublicId, attachments, messageType, onAvatarClick, messageId, replyTo, onReply,
+  senderType, senderId, thinking, isTyping, sourcePublicId, via, attachments, messageType, onAvatarClick, messageId, replyTo, onReply,
 }: MessageBubbleProps) {
   const { user } = useAuth()
   const lang = useLang()
@@ -194,6 +196,11 @@ const MessageBubble = memo(function MessageBubble({
       <div className={`max-w-[72%] ${isMine ? 'items-end' : 'items-start'}`}>
         <div className={`flex items-center gap-2 mb-1 flex-wrap ${isMine ? 'flex-row-reverse' : ''}`}>
           <span className={`text-xs font-medium ${senderType === 'system' ? 'text-rose-500' : 'text-textSecondary'}`}>{senderName}</span>
+          {via === 'qq' && (
+            <span className="chip chip-primary shrink-0" title={t('chat.fromQq')}>
+              <MessageSquare size={10} className="inline" /> {t('chat.fromQq')}
+            </span>
+          )}
           {sourcePublicId && (
             <span className="chip chip-primary shrink-0" title={t('chat.fromInstance').replace('{publicId}', sourcePublicId)}>
               <Globe size={10} className="inline" /> {sourcePublicId.length > 15 ? sourcePublicId.slice(0, 15) + '...' : sourcePublicId}

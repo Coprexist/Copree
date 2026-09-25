@@ -1,9 +1,13 @@
-import { useState, useEffect, useMemo } from 'react'
-import { useNavigate, useOutletContext } from 'react-router-dom'
+import { useState, useEffect, useMemo, type ReactNode } from 'react'
+import { useNavigate, useOutletContext, useSearchParams } from 'react-router-dom'
 import { api } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import { useT } from '../i18n/I18nContext'
 import { Users, MessageSquare, UserPlus, Check, X, Search, ArrowUpDown, ArrowLeft, Bot, User, Menu, Star } from 'lucide-react'
+import {
+  notifyRequestsChanged, fetchPendingRequests, REQUESTS_CHANGED, REQUESTS_POLL_MS,
+  type PendingRequest,
+} from '../hooks/usePendingRequests'
 import { getStateDotColor } from '../constants'
 import { getStatusTextStyle, BG_CANVAS_LIGHT, BG_CANVAS_DARK } from '../utils/statusColor.tsx'
 import { useTheme } from '../context/ThemeContext'
@@ -56,14 +60,82 @@ function AvatarPic({ url, name, size = 'md' }: { url: string | null | undefined;
   )
 }
 
-type Tab = 'friends' | 'requests'
+/** 申请分区标题：三种申请共用同一排版 */
+function SectionHeader({ label, count }: { label: string; count: number }) {
+  return (
+    <div className="px-4 py-2 bg-surface sticky top-0 z-10 border-b border-border/50">
+      <span className="text-xs font-semibold text-textSecondary uppercase tracking-wider">
+        {label}{count}
+      </span>
+    </div>
+  )
+}
+
+/**
+ * 申请行：头像 + 名字/说明 + 通过/拒绝。
+ * 好友申请、入群申请、成员邀请审批共用它——三处各写一份 markup 迟早长歪。
+ * onAccept 省略时只渲染拒绝/撤回按钮（发出的申请只能撤回）。
+ */
+function RequestRow({
+  name, avatarUrl, note, badge, onAccept, acceptTitle, onReject, rejectTitle,
+}: {
+  name: string
+  avatarUrl?: string | null
+  note: string
+  badge?: ReactNode
+  onAccept?: () => void
+  acceptTitle?: string
+  onReject: () => void
+  rejectTitle: string
+}) {
+  return (
+    <div className="px-4 py-3.5">
+      <div className="flex items-center gap-3">
+        <AvatarPic url={avatarUrl} name={name || '?'} />
+        <div className="flex-1 min-w-0">
+          <span className="text-sm font-medium text-textPrimary truncate block">{name}</span>
+          <span className="text-xs text-textMuted">{note}</span>
+          {badge}
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {onAccept && (
+            <button
+              onClick={onAccept}
+              className="p-1.5 rounded-control bg-mint-400/15 text-mint-400 hover:bg-mint-400/25 transition-colors"
+              title={acceptTitle}
+            >
+              <Check size={16} />
+            </button>
+          )}
+          <button
+            onClick={onReject}
+            className="p-1.5 rounded-control bg-rose-400/15 text-rose-400 hover:bg-rose-400/25 transition-colors"
+            title={rejectTitle}
+          >
+            <X size={16} />
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+type Tab = 'list' | 'requests'
 type SortMode = 'smart' | 'alpha' | 'recent_chat' | 'added_time'
 
+/** 群申请审批路径：入群申请与成员邀请只是路径不同，动作语义一致（通过=approve） */
+const GROUP_APPROVAL_PATHS = {
+  group_join: (id: number, approve: boolean) =>
+    `/groups/join-requests/${id}/${approve ? 'approve' : 'reject'}`,
+  group_invite: (id: number, approve: boolean) =>
+    `/group-invitations/${id}/${approve ? 'approve' : 'deny'}`,
+} as const
+
 const SORT_OPTIONS: { value: SortMode; key: string }[] = [
-  { value: 'smart', key: 'friends.smartSort' },
-  { value: 'alpha', key: 'friends.sortAlpha' },
-  { value: 'recent_chat', key: 'friends.sortRecent' },
-  { value: 'added_time', key: 'friends.sortAdded' },
+  { value: 'smart', key: 'list.smartSort' },
+  { value: 'alpha', key: 'list.sortAlpha' },
+  { value: 'recent_chat', key: 'list.sortRecent' },
+  { value: 'added_time', key: 'list.sortAdded' },
 ]
 
 // 状态权重：在线 > 勿扰 > 离线
@@ -117,12 +189,15 @@ function sortFriends(friends: Friend[], mode: SortMode): Friend[] {
   return list
 }
 
-export default function FriendsPage() {
+export default function ListPage() {
   const t = useT()
+  const [searchParams] = useSearchParams()
   const [friends, setFriends] = useState<Friend[]>([])
   const [requests, setRequests] = useState<FriendRequest[]>([])
+  const [groupRequests, setGroupRequests] = useState<PendingRequest[]>([])
   const [loading, setLoading] = useState(true)
-  const [tab, setTab] = useState<Tab>('friends')
+  // ?tab=requests 深链：群设置面板的「待审批申请」跳到这里
+  const [tab, setTab] = useState<Tab>(searchParams.get('tab') === 'requests' ? 'requests' : 'list')
   const [sortMode, setSortMode] = useState<SortMode>('smart')
   const [searchQuery, setSearchQuery] = useState('')
   const [showSearch, setShowSearch] = useState(false)
@@ -135,6 +210,28 @@ export default function FriendsPage() {
     loadAll()
   }, [])
 
+  // 申请列表的实时性：别人发来的靠轮询，自己处理完靠广播（红点同一个事件）
+  useEffect(() => {
+    if (tab !== 'requests') return
+    const reload = () => loadGroupRequests()
+    const iv = setInterval(reload, REQUESTS_POLL_MS)
+    window.addEventListener(REQUESTS_CHANGED, reload)
+    return () => {
+      clearInterval(iv)
+      window.removeEventListener(REQUESTS_CHANGED, reload)
+    }
+  }, [tab])
+
+  /** 只拉群相关的申请：好友申请走 /friends/requests（那边才有 auto_respond 等字段） */
+  const loadGroupRequests = async () => {
+    try {
+      const items = await fetchPendingRequests()
+      setGroupRequests(items.filter(r => r.kind !== 'friend'))
+    } catch (err) {
+      console.error('加载申请列表失败:', err)
+    }
+  }
+
   const loadAll = async () => {
     setLoading(true)
     try {
@@ -144,8 +241,9 @@ export default function FriendsPage() {
       ])
       setFriends(friendsRes)
       setRequests(reqRes.filter(r => r.status === 'pending'))
+      await loadGroupRequests()
     } catch (err) {
-      console.error('加载好友数据失败:', err)
+      console.error('加载列表数据失败:', err)
     } finally {
       setLoading(false)
     }
@@ -166,13 +264,14 @@ export default function FriendsPage() {
   const handleAccept = async (requestId: number) => {
     const req = requests.find(r => r.id === requestId)
     if (req && req.direction === 'received' && req.auto_respond_friend_request) {
-      if (!confirm(t('friends.autoRespondConfirm'))) {
+      if (!confirm(t('list.autoRespondConfirm'))) {
         return
       }
     }
     try {
       await api.post(`/friends/requests/${requestId}/accept`)
       loadAll()
+      notifyRequestsChanged()   // 红点即时消失，不等 30s 轮询
     } catch (err: any) {
       console.error('接受好友申请失败:', err)
     }
@@ -182,6 +281,7 @@ export default function FriendsPage() {
     try {
       await api.post(`/friends/requests/${requestId}/reject`)
       loadAll()
+      notifyRequestsChanged()
     } catch (err: any) {
       console.error('拒绝好友申请失败:', err)
     }
@@ -191,15 +291,34 @@ export default function FriendsPage() {
     try {
       await api.post(`/friends/requests/${requestId}/reject`)
       loadAll()
+      notifyRequestsChanged()
     } catch (err: any) {
       console.error('撤回好友申请失败:', err)
+    }
+  }
+
+  /** 群申请审批（入群申请 / 成员邀请）。仅群主/管理员能看到条目，后端已按审批权过滤 */
+  const handleGroupApproval = async (
+    kind: 'group_join' | 'group_invite', requestId: number, approve: boolean,
+  ) => {
+    try {
+      await api.post(GROUP_APPROVAL_PATHS[kind](requestId, approve))
+      await loadGroupRequests()
+      notifyRequestsChanged()
+    } catch (err: any) {
+      console.error('处理群申请失败:', err)
+      alert(err.message || t('list.actionFailed'))
     }
   }
 
   // 拆分收到和发出的申请
   const receivedRequests = requests.filter(r => r.direction === 'received')
   const sentRequests = requests.filter(r => r.direction === 'sent')
-  const pendingCount = receivedRequests.length
+  const joinRequests = groupRequests.filter(r => r.kind === 'group_join')
+  const inviteRequests = groupRequests.filter(r => r.kind === 'group_invite')
+  // 红点口径与后端 /requests/pending 一致：三类待处理申请都算
+  const pendingCount = receivedRequests.length + joinRequests.length + inviteRequests.length
+  const hasAnyRequest = pendingCount > 0 || sentRequests.length > 0
 
   const stateIcon = (s: string | null) => (
     <span className={`w-2 h-2 rounded-full shrink-0 ${getStateDotColor(s)}`} />
@@ -221,7 +340,7 @@ export default function FriendsPage() {
         type="text"
         value={searchQuery}
         onChange={(e) => setSearchQuery(e.target.value)}
-        placeholder={t('friends.searchPlaceholder')}
+        placeholder={t('list.searchPlaceholder')}
         className="w-full pl-9 pr-8 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
         autoFocus={showSearch}
       />
@@ -249,11 +368,11 @@ export default function FriendsPage() {
         </button>
         <h1 className="font-semibold text-textPrimary text-sm flex items-center gap-2">
           <Users size={16} className="text-primary-400 hidden md:inline" />
-          {tab === 'friends' ? t('friends.tabFriends') : t('friends.tabRequests')}
+          {tab === 'list' ? t('list.tabFriends') : t('list.tabRequests')}
         </h1>
 
-        {/* 排序 + 搜索按钮（仅好友列表 Tab） */}
-        {tab === 'friends' && friends.length > 0 && (
+        {/* 排序 + 搜索按钮（仅「列表」Tab） */}
+        {tab === 'list' && friends.length > 0 && (
           <div className="ml-auto flex items-center gap-1">
             {/* 排序下拉 */}
             <div className="relative">
@@ -272,7 +391,7 @@ export default function FriendsPage() {
             <button
               onClick={() => setShowSearch(true)}
               className="p-1.5 rounded-control hover:bg-elevated text-textMuted hover:text-textSecondary transition-colors"
-              title={t('friends.searchButton')}
+              title={t('list.searchButton')}
             >
               <Search size={16} />
             </button>
@@ -283,14 +402,14 @@ export default function FriendsPage() {
       {/* Tab 切换 */}
       <div className="flex border-b border-border bg-surface shrink-0">
         <button
-          onClick={() => setTab('friends')}
+          onClick={() => setTab('list')}
           className={`flex-1 py-2.5 text-xs font-medium transition-colors ${
-            tab === 'friends'
+            tab === 'list'
               ? 'text-primary-400 border-b-2 border-primary-400'
               : 'text-textMuted hover:text-textSecondary'
           }`}
         >
-          {t('friends.tabFriends')}
+          {t('list.tabFriends')}
         </button>
         <button
           onClick={() => setTab('requests')}
@@ -300,7 +419,7 @@ export default function FriendsPage() {
               : 'text-textMuted hover:text-textSecondary'
           }`}
         >
-          {t('friends.tabRequests')}
+          {t('list.tabRequests')}
           {pendingCount > 0 && (
             <span className="absolute top-1 right-4 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-3xs font-bold text-white bg-rose-500 rounded-full">
               {pendingCount}
@@ -315,19 +434,19 @@ export default function FriendsPage() {
           <div className="flex items-center justify-center py-20">
             <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-500" />
           </div>
-        ) : tab === 'friends' ? (
-          /* 好友列表 */
+        ) : tab === 'list' ? (
+          /* 列表（好友） */
           friends.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-20 text-textMuted">
               <Users size={40} className="mb-3 opacity-30" />
-              <p className="text-sm">{t('friends.noFriends')}</p>
-              <p className="text-xs mt-1">{t('friends.noFriendsHint')}</p>
+              <p className="text-sm">{t('list.noFriends')}</p>
+              <p className="text-xs mt-1">{t('list.noFriendsHint')}</p>
             </div>
           ) : sortedFriends.length === 0 && searchQuery ? (
             <div className="flex flex-col items-center justify-center py-20 text-textMuted">
               <Search size={40} className="mb-3 opacity-30" />
-              <p className="text-sm">{t('friends.noSearchResults')}</p>
-              <p className="text-xs mt-1">{t('friends.tryOtherKeywords')}</p>
+              <p className="text-sm">{t('list.noSearchResults')}</p>
+              <p className="text-xs mt-1">{t('list.tryOtherKeywords')}</p>
             </div>
           ) : (
             <div className="divide-y divide-border/50">
@@ -354,7 +473,7 @@ export default function FriendsPage() {
                       {stateIcon(f.state)}
                     </div>
                     <span className="text-xs text-textMuted">
-                      {f.friend_type === 'ai' ? <><Bot size={12} className="inline" /> {t('friends.friendAi')}</> : <><User size={12} className="inline" /> {t('friends.friendHuman')}</>}
+                      {f.friend_type === 'ai' ? <><Bot size={12} className="inline" /> {t('list.friendAi')}</> : <><User size={12} className="inline" /> {t('list.friendHuman')}</>}
                     </span>
                   </div>
                   <MessageSquare size={16} className="text-textMuted shrink-0" />
@@ -363,92 +482,86 @@ export default function FriendsPage() {
             </div>
           )
         ) : (
-          /* 好友申请 */
-          receivedRequests.length === 0 && sentRequests.length === 0 ? (
+          /* 申请列表：好友申请 / 入群申请 / 成员邀请审批 / 我发出的申请 */
+          !hasAnyRequest ? (
             <div className="flex flex-col items-center justify-center py-20 text-textMuted">
               <UserPlus size={40} className="mb-3 opacity-30" />
-              <p className="text-sm">{t('friends.noPendingRequests')}</p>
-              <p className="text-xs mt-1">{t('friends.pendingHint')}</p>
+              <p className="text-sm">{t('list.noPendingRequests')}</p>
+              <p className="text-xs mt-1">{t('list.pendingHint')}</p>
             </div>
           ) : (
             <div className="divide-y divide-border/50">
-              {/* 收到的申请 */}
               {receivedRequests.length > 0 && (
                 <>
-                  <div className="px-4 py-2 bg-surface sticky top-0 z-10 border-b border-border/50">
-                    <span className="text-xs font-semibold text-textSecondary uppercase tracking-wider">{t('friends.receivedRequests')}{receivedRequests.length}</span>
-                  </div>
+                  <SectionHeader label={t('list.receivedRequests')} count={receivedRequests.length} />
                   {receivedRequests.map((req) => (
-                    <div key={`recv-${req.id}`} className="px-4 py-3.5">
-                      <div className="flex items-center gap-3">
-                        <AvatarPic url={req.requester_avatar_url} name={req.requester_name || '?'} />
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium text-textPrimary truncate">
-                              {req.requester_name || `${t('friends.userPrefix')}${req.requester_id}`}
-                            </span>
-                          </div>
-                          <span className="text-xs text-textMuted">
-                            {req.message || t('friends.defaultRequestMessage')}
-                          </span>
-                          {req.auto_respond_friend_request && (
-                            <span className="inline-block mt-0.5 text-3xs text-accent-400 bg-accent-400/10 px-1.5 py-0.5 rounded">
-                              {t('friends.autoRespondWarning')}
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <button
-                            onClick={() => handleAccept(req.id)}
-                            className="p-1.5 rounded-control bg-mint-400/15 text-mint-400 hover:bg-mint-400/25 transition-colors"
-                            title={t('friends.accept')}
-                          >
-                            <Check size={16} />
-                          </button>
-                          <button
-                            onClick={() => handleReject(req.id)}
-                            className="p-1.5 rounded-control bg-rose-400/15 text-rose-400 hover:bg-rose-400/25 transition-colors"
-                            title={t('friends.reject')}
-                          >
-                            <X size={16} />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
+                    <RequestRow
+                      key={`recv-${req.id}`}
+                      name={req.requester_name || `${t('list.userPrefix')}${req.requester_id}`}
+                      avatarUrl={req.requester_avatar_url}
+                      note={req.message || t('list.defaultRequestMessage')}
+                      badge={req.auto_respond_friend_request ? (
+                        <span className="inline-block mt-0.5 text-3xs text-accent-400 bg-accent-400/10 px-1.5 py-0.5 rounded">
+                          {t('list.autoRespondWarning')}
+                        </span>
+                      ) : undefined}
+                      onAccept={() => handleAccept(req.id)}
+                      acceptTitle={t('list.accept')}
+                      onReject={() => handleReject(req.id)}
+                      rejectTitle={t('list.reject')}
+                    />
                   ))}
                 </>
               )}
-              {/* 发出的申请 */}
+
+              {joinRequests.length > 0 && (
+                <>
+                  <SectionHeader label={t('list.joinRequests')} count={joinRequests.length} />
+                  {joinRequests.map((req) => (
+                    <RequestRow
+                      key={`join-${req.id}`}
+                      name={req.user_name || `${t('list.userPrefix')}${req.user_id}`}
+                      avatarUrl={req.avatar_url}
+                      note={`${req.message ? `${req.message} · ` : ''}${t('list.applyToJoin')}「${req.group_name || ''}」`}
+                      onAccept={() => handleGroupApproval('group_join', req.id, true)}
+                      acceptTitle={t('list.accept')}
+                      onReject={() => handleGroupApproval('group_join', req.id, false)}
+                      rejectTitle={t('list.reject')}
+                    />
+                  ))}
+                </>
+              )}
+
+              {inviteRequests.length > 0 && (
+                <>
+                  <SectionHeader label={t('list.inviteApprovals')} count={inviteRequests.length} />
+                  {inviteRequests.map((req) => (
+                    <RequestRow
+                      key={`invite-${req.id}`}
+                      name={req.target_name || `${t('list.userPrefix')}${req.target_id}`}
+                      avatarUrl={req.avatar_url}
+                      note={`${req.user_name || ''} ${t('list.invitedToJoin')}「${req.group_name || ''}」`}
+                      onAccept={() => handleGroupApproval('group_invite', req.id, true)}
+                      acceptTitle={t('list.approve')}
+                      onReject={() => handleGroupApproval('group_invite', req.id, false)}
+                      rejectTitle={t('list.deny')}
+                    />
+                  ))}
+                </>
+              )}
+
               {sentRequests.length > 0 && (
                 <>
-                  <div className="px-4 py-2 bg-surface sticky top-0 z-10 border-b border-border/50">
-                    <span className="text-xs font-semibold text-textSecondary uppercase tracking-wider">{t('friends.sentRequests')}{sentRequests.length}</span>
-                  </div>
+                  <SectionHeader label={t('list.sentRequests')} count={sentRequests.length} />
                   {sentRequests.map((req) => (
-                    <div key={`sent-${req.id}`} className="px-4 py-3.5">
-                      <div className="flex items-center gap-3">
-                        <AvatarPic url={req.target_avatar_url} name={req.target_name || '?'} />
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium text-textPrimary truncate">
-                              {req.target_name || `${t('friends.userPrefix')}${req.target_id}`}
-                            </span>
-                          </div>
-                          <span className="text-xs text-textMuted">
-                            {req.message || t('friends.sentRequestMessage')}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <button
-                            onClick={() => handleCancelSent(req.id)}
-                            className="p-1.5 rounded-control bg-rose-400/15 text-rose-400 hover:bg-rose-400/25 transition-colors"
-                            title={t('friends.cancelRequest')}
-                          >
-                            <X size={16} />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
+                    <RequestRow
+                      key={`sent-${req.id}`}
+                      name={req.target_name || `${t('list.userPrefix')}${req.target_id}`}
+                      avatarUrl={req.target_avatar_url}
+                      note={req.message || t('list.sentRequestMessage')}
+                      onReject={() => handleCancelSent(req.id)}
+                      rejectTitle={t('list.cancelRequest')}
+                    />
                   ))}
                 </>
               )}
@@ -477,7 +590,7 @@ export default function FriendsPage() {
               {sortedFriends.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-20 text-textMuted">
                   <Search size={40} className="mb-3 opacity-30" />
-                  <p className="text-sm">{t('friends.noSearchResults')}</p>
+                  <p className="text-sm">{t('list.noSearchResults')}</p>
                 </div>
               ) : (
                 sortedFriends.map((f) => (
@@ -497,7 +610,7 @@ export default function FriendsPage() {
                         {stateIcon(f.state)}
                       </div>
                       <span className="text-xs text-textMuted">
-                        {f.friend_type === 'ai' ? <><Bot size={12} className="inline" /> {t('friends.friendAi')}</> : <><User size={12} className="inline" /> {t('friends.friendHuman')}</>}
+                        {f.friend_type === 'ai' ? <><Bot size={12} className="inline" /> {t('list.friendAi')}</> : <><User size={12} className="inline" /> {t('list.friendHuman')}</>}
                       </span>
                     </div>
                   </button>
@@ -519,7 +632,7 @@ export default function FriendsPage() {
                 {searchQuery.trim() && (
                   <div className="max-h-64 overflow-y-auto border-t border-border divide-y divide-border/50">
                     {sortedFriends.length === 0 ? (
-                      <div className="py-6 text-center text-xs text-textMuted">{t('friends.searchEmptyDesktop')}</div>
+                      <div className="py-6 text-center text-xs text-textMuted">{t('list.searchEmptyDesktop')}</div>
                     ) : (
                       sortedFriends.slice(0, 8).map((f) => (
                         <button
@@ -538,7 +651,7 @@ export default function FriendsPage() {
                               {stateIcon(f.state)}
                             </div>
                             <span className="text-3xs text-textMuted">
-                              {f.friend_type === 'ai' ? <><Bot size={12} className="inline" /> {t('friends.friendAi')}</> : <><User size={12} className="inline" /> {t('friends.friendHuman')}</>}
+                              {f.friend_type === 'ai' ? <><Bot size={12} className="inline" /> {t('list.friendAi')}</> : <><User size={12} className="inline" /> {t('list.friendHuman')}</>}
                             </span>
                           </div>
                         </button>

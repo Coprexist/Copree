@@ -15,6 +15,39 @@ export interface SkinVars {
   dark: Record<string, string>
 }
 
+/** service 插件的配置字段（后端 config_schema 的 JSON Schema 子集） */
+export interface PluginConfigField {
+  type?: string
+  title?: string
+  description?: string
+  required?: boolean
+  /** true = 机密项：后端加密落库、接口只回"有没有填"，前端用 password 输入 */
+  secret?: boolean
+  items?: { type?: string }
+}
+
+/** service 插件的一个实例：一份配置 + 它的运行态（多实例插件每份配置一条） */
+export interface PluginServiceInstance {
+  /** 实例名（单实例为空串） */
+  instance: string
+  /** 非机密配置值（机密永不下发，只在 secrets 里标"有没有填"） */
+  values: Record<string, string>
+  secrets: Record<string, boolean>
+  running: boolean
+  /** schema 里必填但还没填的键——让用户知道"为什么启动不了" */
+  missing_required: string[]
+  /** 插件自己报的运行细节（已连接 / 机器人名 / 回复数…） */
+  detail: Record<string, any>
+  desired_running: boolean
+}
+
+/** service 插件的配置与运行态（仅 category=service 时后端才返回） */
+export interface PluginServiceState {
+  multi_instance: boolean
+  config_schema: Record<string, PluginConfigField>
+  instances: PluginServiceInstance[]
+}
+
 export interface PluginView {
   id: string
   name: string
@@ -30,6 +63,7 @@ export interface PluginView {
   is_admin: boolean
   users_count: number | null
   skin_vars: SkinVars
+  service?: PluginServiceState
 }
 
 /** key（primary_500 / bubble）→ CSS 变量名（--tw-primary-500 / --tw-bubble） */

@@ -2,7 +2,7 @@ import { memo, useState, useEffect, useRef, useMemo, useCallback, type ReactNode
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api/client'
 import { Plus, BellOff, Menu, UserPlus, Users, Bot, Globe, ShieldAlert, MessageCircle, Inbox, Pin, ChevronDown, ChevronRight } from 'lucide-react'
-import { EmptyState } from './ui'
+import { EmptyState, MenuPanel, MenuItem } from './ui'
 import { getStateDotColor, CHAT_REFRESH_EVENT } from '../constants'
 import { formatRelativeTime } from '../utils/time'
 import { GroupAvatarGroup, thumbUrl } from './GroupAvatar'
@@ -436,22 +436,22 @@ const ChatSidebar = memo(function ChatSidebar({
           {showPlusMenu && (
             <>
               <div className="fixed inset-0 z-drawer" onClick={() => setShowPlusMenu(false)} />
-              <div className="absolute right-0 top-full mt-1 w-36 bg-elevated border border-border rounded-card shadow-xl z-modal py-1 overflow-hidden">
-                <button
+              <MenuPanel className="absolute right-0 top-full mt-1 w-36 py-1 z-modal">
+                <MenuItem
                   onClick={() => { setShowPlusMenu(false); onCreateGroup() }}
-                  className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-sm text-textSecondary hover:bg-canvas hover:text-textPrimary transition-colors"
+                  className="flex items-center gap-2.5 px-3.5 py-2.5 text-sm"
                 >
                   <Users size={15} />
                   {t('chatlist.createGroup')}
-                </button>
-                <button
+                </MenuItem>
+                <MenuItem
                   onClick={() => { setShowPlusMenu(false); onAddFriend() }}
-                  className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-sm text-textSecondary hover:bg-canvas hover:text-textPrimary transition-colors"
+                  className="flex items-center gap-2.5 px-3.5 py-2.5 text-sm"
                 >
                   <UserPlus size={15} />
-                  {t('friends.add')}
-                </button>
-              </div>
+                  {t('list.add')}
+                </MenuItem>
+              </MenuPanel>
             </>
           )}
         </div>

@@ -6,7 +6,7 @@ import { MANUAL_URL } from '../constants'
 import SearchOverlay from './SearchOverlay'
 import { useT } from '../i18n/I18nContext'
 import { mainNavItems, navLinkClass, navIconClass } from '../utils/navRegistry.tsx'
-import { usePendingFriendRequests } from '../hooks/usePendingFriendRequests'
+import { usePendingRequests } from '../hooks/usePendingRequests'
 
 export default function Sidebar({ mobile, onClose, translucent }: { mobile?: boolean; onClose?: () => void; translucent?: boolean }) {
   const { user, logout } = useAuth()
@@ -14,7 +14,7 @@ export default function Sidebar({ mobile, onClose, translucent }: { mobile?: boo
   const [collapsed, setCollapsed] = useState(false)
   const [toolsOpen, setToolsOpen] = useState(false)
   const t = useT()
-  const pendingRequests = usePendingFriendRequests()
+  const pendingRequests = usePendingRequests()
 
   const handleLogout = () => {
     logout()
@@ -91,7 +91,7 @@ export default function Sidebar({ mobile, onClose, translucent }: { mobile?: boo
             >
               <item.icon size={18} />
               <span>{t(item.i18nKey)}</span>
-              {item.path === '/friends' && pendingRequests > 0 && (
+              {item.path === '/list' && pendingRequests > 0 && (
                 <span className="ml-auto w-2 h-2 rounded-full bg-rose-500" />
               )}
             </NavLink>
@@ -134,7 +134,7 @@ export default function Sidebar({ mobile, onClose, translucent }: { mobile?: boo
             >
               <span className="relative">
                 <item.icon size={18} />
-                {item.path === '/friends' && pendingRequests > 0 && (
+                {item.path === '/list' && pendingRequests > 0 && (
                   <span className="absolute -top-1 -right-1.5 w-2 h-2 rounded-full bg-rose-500" />
                 )}
               </span>

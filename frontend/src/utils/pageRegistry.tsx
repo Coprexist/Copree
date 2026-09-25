@@ -25,8 +25,8 @@ const SettingsPage = lazy(() => import('../pages/SettingsPage'))
 const MePage = lazy(() => import('../pages/MePage'))
 const StoragePage = lazy(() => import('../pages/StoragePage'))
 const UsagePage = lazy(() => import('../pages/UsagePage'))
-const AdminPage = lazy(() => import('../pages/AdminPage'))
-const FriendsPage = lazy(() => import('../pages/FriendsPage'))
+const ConsolePage = lazy(() => import('../pages/console/ConsolePage'))
+const ListPage = lazy(() => import('../pages/ListPage'))
 const SetupPage = lazy(() => import('../pages/SetupPage'))
 const ManualPage = lazy(() => import('../pages/ManualPage'))
 const InstanceSetupPage = lazy(() => import('../pages/InstanceSetupPage'))
@@ -38,6 +38,7 @@ const WorldDesignPage = lazy(() => import('../pages/WorldDesignPage'))
 const WorldViewPage = lazy(() => import('../pages/WorldViewPage'))
 const StudyRoomPage = lazy(() => import('../pages/StudyRoomPage'))
 const NotFoundPage = lazy(() => import('../pages/NotFoundPage'))
+const DshChatPage = lazy(() => import('../pages/DshChatPage'))
 
 // ── 路由定义类型 ──
 
@@ -87,7 +88,9 @@ export function getProtectedRoutes(AdminGuardComponent: ComponentType<{ children
     { path: 'dm', element: <Navigate to="/chat" replace /> },
     { path: 'dm/:sessionId', element: <DMPage /> },
     { path: 'chat/dm/:sessionId', element: <ChatPage /> },
-    { path: 'friends', element: <FriendsPage /> },
+    { path: 'list', element: <ListPage /> },
+    // 旧地址兜底：改名前的 /friends 还留在书签、历史记录与外部链接里
+    { path: 'friends', element: <Navigate to="/list" replace /> },
     { path: 'agents', element: <AgentsPage /> },
     { path: 'agents/:id', element: <AgentDetailPage /> },
     { path: 'me', element: <MePage /> },
@@ -106,6 +109,8 @@ export function getProtectedRoutes(AdminGuardComponent: ComponentType<{ children
     { path: 'study', element: <StudyRoomPage /> },
     { path: 'manual', element: <ManualPage /> },
     { path: 'manual/admin', element: <ManualPage /> },
-    { path: 'admin', element: <A><AdminPage /></A> },
+    { path: 'admin', element: <A><ConsolePage /></A> },
+    // DSH 对话：放大后的群视界对话版式，桥接 DSH 本体会话（管理员）
+    { path: 'dsh', element: <A><DshChatPage /></A> },
   ]
 }

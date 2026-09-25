@@ -1,9 +1,9 @@
 import { useState, useEffect, Fragment } from 'react'
-import { api } from '../api/client'
-import { useT } from '../i18n/I18nContext'
+import { api } from '../../../api/client'
+import { useT } from '../../../i18n/I18nContext'
 import { Globe, Link, Plus, Trash2, RefreshCw, Power, Shield, X } from 'lucide-react'
-import ExternalLinkSafe from './ExternalLinkSafe'
-import { Dialog } from './ui'
+import ExternalLinkSafe from '../../../components/ExternalLinkSafe'
+import { Dialog } from '../../../components/ui'
 
 interface InstanceInfo {
   instance_id: string

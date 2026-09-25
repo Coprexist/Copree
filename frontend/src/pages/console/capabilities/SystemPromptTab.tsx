@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import { api } from '../api/client'
-import { useT } from '../i18n/I18nContext'
+import { api } from '../../../api/client'
+import { useT } from '../../../i18n/I18nContext'
 import { Save, RotateCcw, Eye, Edit3, ChevronDown, ChevronUp, Loader2, Layers, ArrowRight, ArrowUp, ArrowDown } from 'lucide-react'
 
 interface Segment {

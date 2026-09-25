@@ -1,9 +1,10 @@
 import { useState, useEffect, useMemo } from 'react'
-import { api } from '../api/client'
-import { useT } from '../i18n/I18nContext'
-import { STATE_LABELS, STATE_TAG_COLORS } from '../constants'
-import { Wrench, Brain, Backpack } from 'lucide-react'
-import SkillBackpack from './SkillBackpack'
+import { api } from '../../../api/client'
+import { useT } from '../../../i18n/I18nContext'
+import { STATE_LABELS, STATE_TAG_COLORS } from '../../../constants'
+import { Wrench, Brain, Backpack, Plug } from 'lucide-react'
+import SkillBackpack from '../../../components/SkillBackpack'
+import PluginManager from './PluginManager'
 
 // ─── 类型 ────────────────────────────────────────────
 
@@ -50,7 +51,7 @@ const SKILL_TYPE_LABELS: Record<string, string> = {
   inject_prompt: '注入提示词',
 }
 
-type SubTab = 'registry' | 'skills' | 'backpack'
+type SubTab = 'plugins' | 'registry' | 'skills' | 'backpack'
 
 function ToolRegistryTab() {
   const t = useT()
@@ -315,11 +316,14 @@ function SkillManagementTab() {
   )
 }
 
-export default function ToolsSkillsTab() {
+
+/** 能力面板：插件（可装卸的扩展） / 工具（内置工具注册表） / 技能（AI 技能） / 技能背包，四处都是"给 AI 装能力"，合并成一个入口 */
+export default function CapabilitiesTab() {
   const t = useT()
-  const [subTab, setSubTab] = useState<SubTab>('registry')
+  const [subTab, setSubTab] = useState<SubTab>('plugins')
 
   const subTabs: { key: SubTab; label: string; icon: React.ElementType }[] = [
+    { key: 'plugins', label: t('admin.capabilitiesPlugins'), icon: Plug },
     { key: 'registry', label: t('admin.toolRegistry'), icon: Wrench },
     { key: 'skills', label: t('admin.skillManagement'), icon: Brain },
     { key: 'backpack', label: t('admin.skillBackpack'), icon: Backpack },
@@ -345,7 +349,10 @@ export default function ToolsSkillsTab() {
       </div>
 
       {/* 内容 */}
-      {subTab === 'registry' ? <ToolRegistryTab /> : subTab === 'skills' ? <SkillManagementTab /> : <SkillBackpack />}
+      {subTab === 'plugins' ? <PluginManager />
+        : subTab === 'registry' ? <ToolRegistryTab />
+        : subTab === 'skills' ? <SkillManagementTab />
+        : <SkillBackpack />}
     </div>
   )
 }

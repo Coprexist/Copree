@@ -5,7 +5,7 @@
  */
 import { useCallback, useEffect, useState } from 'react'
 import { FileText, CheckCircle2, XCircle, Loader2, PackagePlus } from 'lucide-react'
-import { api } from '../api/client'
+import { api } from '../../../api/client'
 
 interface ExportStatus {
   docx_available: boolean

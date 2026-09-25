@@ -35,7 +35,7 @@ export interface NavItem {
 export const mainNavItems: NavItem[] = [
   { path: '/chat', i18nKey: 'nav.chat', icon: MessageCircle, matchSubPaths: true },
   { path: '/worlds', i18nKey: 'nav.worlds', icon: Globe },
-  { path: '/friends', i18nKey: 'nav.friends', icon: Users },
+  { path: '/list', i18nKey: 'nav.list', icon: Users },
   { path: '/agents', i18nKey: 'nav.ai', icon: Bot },
   { path: '/me', i18nKey: 'nav.me', icon: User },
 ]

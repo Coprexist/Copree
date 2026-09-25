@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { api } from '../api/client'
 import { useT } from '../i18n/I18nContext'
+import { ExpandPanel } from './ui'
 import { STATE_LABELS, STATE_TAG_COLORS } from '../constants'
 import {
   MessagesSquare, Folder, Brain, Users, Settings, Clock,
@@ -146,13 +147,13 @@ export default function SkillBackpack({ agentId, className = '' }: Props) {
         })}
       </div>
 
-      {/* 展开区域 — 通栏显示被选中段落的工具 */}
+      {/* 展开区域 — 通栏显示被选中段落的工具（与插件页共用同一块 ExpandPanel） */}
       {expandedSeg && (
-        <div className="bg-surface rounded-card border border-primary-500/20 p-4 space-y-2.5 shadow-lg">
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-semibold text-textPrimary">{expandedSeg.name} — {t('backpack.toolsInSkill')} ({expandedSeg.tool_count})</p>
-            <button onClick={() => setExpandedSegment(null)} className="text-2xs text-textMuted hover:text-textSecondary transition-colors">收起 <X size={12} /></button>
-          </div>
+        <ExpandPanel
+          title={`${expandedSeg.name} — ${t('backpack.toolsInSkill')} (${expandedSeg.tool_count})`}
+          collapseLabel={t('tool:ui.collapse')}
+          onCollapse={() => setExpandedSegment(null)}
+        >
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
             {expandedSeg.tools.map(tool => (
               <div key={tool.name} className="rounded-control border border-border/60 p-3 hover:border-primary-500/30 hover:bg-primary-500/[0.02] transition-colors">
@@ -184,7 +185,7 @@ export default function SkillBackpack({ agentId, className = '' }: Props) {
               </div>
             ))}
           </div>
-        </div>
+        </ExpandPanel>
       )}
     </div>
   )

@@ -41,6 +41,10 @@ interface Group {
   avatar_url?: string | null
   include_ai_in_avatar?: boolean
   is_federated?: boolean
+  // 发现与入群三开关（GET /groups 已返回；可选是为了兼容旧缓存数据）
+  searchable?: boolean
+  auto_approve_join?: boolean
+  approve_invites?: boolean
 }
 
 interface ChatAreaProps {
@@ -247,7 +251,7 @@ export default function ChatArea({ groupId, dmSessionId }: ChatAreaProps) {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold text-textPrimary">{t('friends.add')}</h2>
+              <h2 className="text-lg font-semibold text-textPrimary">{t('list.add')}</h2>
               <button onClick={() => setShowAddFriend(false)} className="p-1 hover:bg-canvas rounded-control text-textMuted hover:text-textSecondary">
                 <X size={18} />
               </button>
@@ -306,6 +310,10 @@ export default function ChatArea({ groupId, dmSessionId }: ChatAreaProps) {
             avatar_mode: currentGroup.avatar_mode || 'default',
             avatar_url: currentGroup.avatar_url,
             include_ai_in_avatar: currentGroup.include_ai_in_avatar ?? true,
+            // 发现与入群三开关：设置面板回显要用，别在这里漏字段（漏了开关永远是默认值）
+            searchable: currentGroup.searchable ?? false,
+            auto_approve_join: currentGroup.auto_approve_join ?? true,
+            approve_invites: currentGroup.approve_invites ?? false,
           }}
           onClose={() => setShowSettings(false)}
           onUpdate={(updated) => {
@@ -433,7 +441,7 @@ function CreateGroupModal({
                 const sel = selectedMembers.has(key)
                 return (
                   <button key={key} onClick={() => toggleMember(r)}
-                    className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-hover transition-colors ${sel ? 'bg-primary-500/10' : ''}`}>
+                    className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-elevated transition-colors ${sel ? 'bg-primary-500/10' : ''}`}>
                     <span className={`w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 ${sel ? 'bg-primary-500 border-primary-500' : 'border-border'}`}>
                       {sel && <Check size={10} className="text-white" />}
                     </span>
@@ -778,7 +786,7 @@ function InviteMemberModal({
                       : 'border-border text-textSecondary hover:bg-elevated'
                   }`}
                 >
-                  {type === 'ai' ? <><Bot size={12} className="inline" /> AI</> : <><User size={12} className="inline" /> {t('friends.human')}</>}
+                  {type === 'ai' ? <><Bot size={12} className="inline" /> AI</> : <><User size={12} className="inline" /> {t('list.human')}</>}
                 </button>
               ))}
             </div>

@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { api } from '../api/client'
 import { useT } from '../i18n/I18nContext'
-import { ArrowLeft, X, Loader2, RotateCw, Ticket, ChevronRight } from 'lucide-react'
+import { ArrowLeft, X, Loader2, RotateCw, Ticket, ChevronRight, MessageSquare } from 'lucide-react'
 import { STATUS_COLORS } from '../utils/statusColor.tsx'
 import SkillBackpack from './SkillBackpack'
+import QQChannelModal from './channels/QQChannelModal'
 import Toggle from './Toggle'
 
 interface AgentData {
@@ -135,6 +136,8 @@ export default function AgentSettingsModal({
 
   // ── 视图状态 ──
   const [view, setView] = useState<'main' | 'detailed'>('main')
+  // QQ 通道配置项多，单独开弹窗（这里是入口）
+  const [qqOpen, setQqOpen] = useState(false)
 
   // ── 主设置状态 ──
   const [name, setName] = useState(agent.name)
@@ -334,9 +337,10 @@ export default function AgentSettingsModal({
   if (!isOpen) return null
 
   return (
+    <>
     <div className="fixed inset-0 md:bg-black/70 flex items-start justify-center z-toast md:pt-8 overflow-y-auto bg-surface" onClick={onClose}>
       <div
-        className="bg-elevated border border-border rounded-none md:rounded-dialog p-6 w-full max-w-full md:max-w-2xl mx-0 md:mx-4 shadow-2xl shadow-black/30 my-0 md:my-4 h-full md:h-auto flex flex-col pb-0 md:pb-6"
+        className="bg-elevated border border-border rounded-none md:rounded-dialog p-6 w-full max-w-full md:max-w-4xl lg:max-w-5xl mx-0 md:mx-4 shadow-2xl shadow-black/30 my-0 md:my-4 h-full md:h-auto flex flex-col pb-0 md:pb-6"
         onClick={(e) => e.stopPropagation()}
       >
         {/* 移动端头部 */}
@@ -373,7 +377,7 @@ export default function AgentSettingsModal({
           </button>
         </div>
 
-        <div className="space-y-5 flex-1 overflow-y-auto md:max-h-[65vh] pr-1 pb-[var(--safe-bottom)] md:pb-0">
+        <div className="space-y-5 flex-1 overflow-y-auto md:max-h-[78vh] pr-1 pb-[var(--safe-bottom)] md:pb-0">
 
           {/* ═══════════════════════════════════════════ 主设置 ═══════════════════════════════════════════ */}
           {view === 'main' && (
@@ -746,6 +750,16 @@ export default function AgentSettingsModal({
                 <SkillBackpack agentId={agent.id} />
               </Section>
 
+              {/* QQ 通道：配置项多，单独开一个弹窗（这里是入口，不是表单本体） */}
+              <Section title={t('tool:channel.title')} desc={t('tool:channel.desc')}>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs text-textSecondary flex-1 min-w-[12rem]">{t('tool:channel.entryHint')}</span>
+                  <button onClick={() => setQqOpen(true)} className="btn btn-sm btn-outline gap-1.5 shrink-0">
+                    <MessageSquare size={13} /> {t('tool:channel.configure')}
+                  </button>
+                </div>
+              </Section>
+
               {/* 兑换码 */}
               <Section title={t('modal.detailSettingsRedeemCode')} desc={t('modal.detailSettingsRedeemCodeDesc')} defaultCollapsed>
                 <div className="flex items-center gap-2">
@@ -802,7 +816,11 @@ export default function AgentSettingsModal({
       </div>
     </div>
   </div>
-)
+
+    {/* QQ 通道：配置项多，单独一间屋子，别和这张长表单挤在一起 */}
+    {qqOpen && <QQChannelModal agentId={agent.id} onClose={() => setQqOpen(false)} />}
+    </>
+  )
 }
 
 // ── 分区容器 ──

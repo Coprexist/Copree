@@ -410,7 +410,7 @@ export default function MePage() {
             value={stats?.friend_count ?? '...'}
             label={t('me.friendCountCard')}
             bg="bg-mint-500/5"
-            onClick={() => navigate('/friends')}
+            onClick={() => navigate('/list')}
           />
           <StatCard
             icon={<MessageSquare size={18} className="text-accent-400" />}

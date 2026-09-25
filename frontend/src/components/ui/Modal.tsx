@@ -14,11 +14,12 @@ import Dialog from './Dialog'
  */
 type ModalSize = 'sm' | 'md' | 'lg' | 'xl'
 
+// 宽屏下不要只占中间一小条：每档在 sm / lg 断点各抬一级（卡片本身是 w-full，窄屏仍回落整宽）
 const SIZE_CLASS: Record<ModalSize, string> = {
-  sm: 'max-w-sm',
-  md: 'max-w-lg',
-  lg: 'max-w-2xl',
-  xl: 'max-w-4xl',
+  sm: 'max-w-sm sm:max-w-md',
+  md: 'max-w-lg sm:max-w-xl lg:max-w-2xl',
+  lg: 'max-w-2xl sm:max-w-3xl lg:max-w-4xl',
+  xl: 'max-w-4xl sm:max-w-5xl lg:max-w-6xl',
 }
 
 interface ModalProps {

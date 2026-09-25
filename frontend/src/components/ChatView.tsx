@@ -4,9 +4,11 @@ import { api } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import MessageBubble from './MessageBubble'
 import ChatInput from './ChatInput'
+// 阈值（距底多少算「在底部」）与群视界/DSH 对话同一份来源；本组件有自己的虚拟列表机器，不套整个 hook
+import { BOTTOM_THRESHOLD } from '../hooks/useStickToBottom'
 import ActivityBar, { type ActivityUser } from './ActivityBar'
 import ProfileCard from './ProfileCard'
-import { EmptyState } from './ui'
+import { EmptyState, MenuPanel, MenuItem } from './ui'
 import { Send, Loader2, AlertTriangle, X, ArrowDown, ArrowUp, Paperclip, FileIcon, Bot, User, MessageSquare, Inbox, Settings , Gamepad2 , Globe } from 'lucide-react'
 import { getStateDotColor, CHAT_REFRESH_EVENT } from '../constants'
 import { useT } from '../i18n/I18nContext'
@@ -44,6 +46,7 @@ interface Message {
   read_at?: string | null
   attachments?: Array<{file_id?: number, name?: string, size?: number, mime_type?: string, type?: string, invitation_id?: number, group_name?: string, inviter_name?: string, status?: string}> | null
   source_public_id?: string | null
+  via?: string | null
   message_type?: string
   sender_state?: string | null
   created_at: string
@@ -138,6 +141,8 @@ export default function ChatView({ conversationType, conversationId }: ChatViewP
 
   // @提及 自动补全（仅群聊）
   const [groupMembers, setGroupMembers] = useState<Array<{ type: string; id: number; name: string; state?: string }>>([])
+  // 私信对方的类型（判断这场对话有没有 AI；群聊直接看成员表）
+  const [peerType, setPeerType] = useState<string | null>(null)
   const [mentionActive, setMentionActive] = useState(false)
   const [replyTo, setReplyTo] = useState<{ id: number; sender_name: string; content: string } | null>(null)
   const [mentionQuery, setMentionQuery] = useState('')
@@ -418,6 +423,7 @@ export default function ChatView({ conversationType, conversationId }: ChatViewP
             senderId={msg.sender_id}
             state={msg.sender_state ?? undefined}
             sourcePublicId={msg.source_public_id}
+            via={msg.via}
             attachments={msg.attachments}
             messageType={msg.message_type}
             messageId={msg.id}
@@ -591,6 +597,11 @@ export default function ChatView({ conversationType, conversationId }: ChatViewP
         .catch(() => {})
       const membersData = await api.get(`/groups/${conversationId}/members`)
       setGroupMembers(membersData)
+    } else {
+      // 只取会话元信息（summary=true，不拉消息）：只为知道对方是不是 AI
+      api.get<{ partner?: { type?: string } }>(`/dm/${conversationId}?summary=true`)
+        .then((d) => setPeerType(d?.partner?.type ?? null))
+        .catch(() => setPeerType(null))
     }
     await loadMessages({ mode: 'initial' })
     // DM 消息加载同时标记已读，触发 sidebar 刷新未读计数
@@ -759,7 +770,7 @@ export default function ChatView({ conversationType, conversationId }: ChatViewP
         // 虚拟列表：跟踪滚动位置与视口高度（值变化才触发渲染）
         setViewportH(clientHeight)
         setScrollTop(prev => (Math.abs(prev - st) > 1 ? st : prev))
-        const atBottom = scrollHeight - st - clientHeight < 80
+        const atBottom = scrollHeight - st - clientHeight < BOTTOM_THRESHOLD
         setIsAtBottom(atBottom)
         isAtBottomRef.current = atBottom
 
@@ -1067,25 +1078,22 @@ export default function ChatView({ conversationType, conversationId }: ChatViewP
 
         {/* @提及 自动补全下拉 */}
         {mentionActive && mentionFiltered.length > 0 && (
-          <div className="absolute bottom-full left-3 right-3 mb-1 bg-elevated border border-border rounded-card shadow-2xl shadow-black/20 z-modal max-h-48 overflow-y-auto">
+          <MenuPanel className="absolute bottom-full left-3 right-3 mb-1 max-h-48 overflow-y-auto z-modal">
             {mentionFiltered.map((m, i) => (
-              <button
+              <MenuItem
                 key={`${m.type}:${m.id}`}
+                active={i === mentionIdx}
                 onClick={() => insertMention(m.name)}
-                className={`w-full flex items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${
-                  i === mentionIdx
-                    ? 'bg-primary-500/15 text-primary-600 dark:text-primary-300'
-                    : 'text-textPrimary hover:bg-elevated'
-                }`}
+                className="flex items-center gap-2 py-2 text-sm"
               >
                 <span className={`w-2 h-2 rounded-full shrink-0 ${getStateDotColor(m.state)}`} />
                 <span className="font-medium">{m.name}</span>
                 <span className="text-textMuted text-xs ml-auto">
                   {m.type === 'ai' ? <><Bot size={12} className="inline" /> AI</> : <User size={12} className="inline" />}
                 </span>
-              </button>
+              </MenuItem>
             ))}
-          </div>
+          </MenuPanel>
         )}
 
         {replyTo && (
@@ -1110,6 +1118,7 @@ export default function ChatView({ conversationType, conversationId }: ChatViewP
           onSendFile={() => fileInputRef.current?.click()}
           hasAttachments={attachments.items.length > 0}
           groupMembers={groupMembers}
+          aiCapable={conversationType === 'dm' ? peerType === 'ai' : groupMembers.some((m) => m.type === 'ai')}
           inputHeight={inputHeight}
           onAutoHeight={(ah) => {
             setInputHeight(prev => {

@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { api } from '../api/client'
-import { useT } from '../i18n/I18nContext'
+import { api } from '../../../api/client'
+import { useT } from '../../../i18n/I18nContext'
 import { Mail, Shield, CheckCircle, XCircle, Loader2, Plus, Trash2, ChevronUp, ChevronDown, X } from 'lucide-react'
-import ProviderPresetSelector from './ProviderPresetSelector'
-import { Dialog } from './ui'
+import ProviderPresetSelector from '../../../components/ProviderPresetSelector'
+import { Dialog } from '../../../components/ui'
 
 interface SmtpConfigItem {
   host: string
@@ -558,7 +558,7 @@ export default function AuthSettingsTab() {
 
                 {/* 变量提示 */}
                 <p className="text-3xs text-textMuted mb-4 bg-canvas rounded-control px-3 py-2 border border-border/50">
-                  💡 {t('admin.emailTemplateVarHint')}
+                  {t('admin.emailTemplateVarHint')}
                 </p>
 
                 {/* 按钮 */}

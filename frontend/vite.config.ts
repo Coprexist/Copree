@@ -32,6 +32,21 @@ export default defineConfig({
         target: 'http://backend:8000',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ''),
+        configure: (proxy: any) => {
+          // FastAPI 对尾斜杠不匹配的路径会 307，而 changeOrigin 把 Host 改成了 backend:8000 ——
+          // 重定向于是指向 http://backend:8000/... ，浏览器解析不了这个内网名，请求直接 "Failed to fetch"。
+          // 不动请求路径（有的路由确实只注册了带尾斜杠的形式），只把 Location 换回浏览器可用的地址。
+          proxy.on('proxyRes', (proxyRes: any) => {
+            const loc = proxyRes.headers?.location
+            if (typeof loc !== 'string' || !/^https?:\/\//.test(loc)) return
+            try {
+              const u = new URL(loc)
+              proxyRes.headers.location = `/api${u.pathname}${u.search}`
+            } catch {
+              /* 解析不了就原样透传 */
+            }
+          })
+        },
       },
       '/world/': {
         target: 'http://backend:8000',

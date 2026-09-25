@@ -4,6 +4,8 @@ import Sidebar from './Sidebar'
 import MobileNav from './MobileNav'
 import BalancePromptModal from './BalancePromptModal'
 import { useDesktopNotification } from '../hooks/useDesktopNotification'
+import { useNotificationSocket } from '../hooks/useNotificationSocket'
+import NotificationToasts from './NotificationToasts'
 import { Wrench, X } from 'lucide-react'
 import { loadFromStorage, apply } from '../utils/cssFilters'
 import { isEmbedded } from '../embed/bridge'
@@ -136,6 +138,9 @@ export default function Layout() {
   // 桌面通知：标签页标题未读计数 + 任务栏闪烁（所有页面生效）
   useDesktopNotification()
 
+  // 站内弹窗：常驻通知连接收群/私聊消息、审批结果与系统通知（与系统通知分工：后台归系统通知）
+  const notifications = useNotificationSocket()
+
   // 聊天详情页（群聊/私信）/ 沉浸界面（世界视界）隐藏底部导航栏
   const hideNav = /^\/chat\/(dm\/[^/]+|\d+)/.test(location.pathname)
                    || /^\/dm\/[^/]+/.test(location.pathname)
@@ -146,7 +151,9 @@ export default function Layout() {
   // 页面级专注模式（?focus=1，如群视界设计页的「对话布满网页」）：页面请求收起应用侧边栏，
   // 把整页宽度让给内容。用查询参数而不是全局状态：刷新/后退都能还原
   const pageFocus = new URLSearchParams(location.search).get('focus') === '1'
-  const hideSidebar = isWorldView || pageFocus
+  // 控制台（/admin）：收起应用侧边栏，整页宽度让给管理界面——控制台自己带导航栏
+  const isConsole = /^\/admin(\/|$)/.test(location.pathname)
+  const hideSidebar = isWorldView || pageFocus || isConsole
 
   // 沉浸界面：悬浮图标切换侧边栏（覆盖式，不挤压世界画面）
   const [sidebarOverlay, setSidebarOverlay] = useState(false)
@@ -247,6 +254,9 @@ export default function Layout() {
 
       {/* ── 全局弹窗 ── */}
       <BalancePromptModal />
+
+      {/* 站内新消息弹窗（右下角浮层） */}
+      <NotificationToasts items={notifications.items} onDismiss={notifications.dismiss} />
 
       {/* 软维护——顶栏 */}
       {softMaintenance && !(softOnce && sessionStorage.getItem('maint_soft_done')) && softStyle === 'banner' && (

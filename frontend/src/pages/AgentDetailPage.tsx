@@ -15,6 +15,7 @@ import AvatarPickerModal from '../components/AvatarPickerModal'
 import AgentSettingsModal from '../components/AgentSettingsModal'
 import { Dialog, EmptyState } from '../components/ui'
 import FilePreviewModal from '../components/FilePreviewModal'
+import QQChannelCard from '../components/channels/QQChannelCard'
 
 /** 扩展名→MIME 类型映射（后端未返回 mime_type 时 fallback） */
 const EXT_MIME_MAP: Record<string, string> = {
@@ -271,7 +272,18 @@ export default function AgentDetailPage() {
 
   const [agent, setAgent] = useState<Agent | null>(null)
   const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<'info' | 'memories' | 'storage' | 'workspace' | 'logs' | 'collaborators'>('info')
+  const [activeTab, setActiveTab] = useState<'info' | 'channels' | 'memories' | 'storage' | 'workspace' | 'logs' | 'collaborators'>('info')
+  // 页签文案：一张表代替七层三元表达式；每项都写成字面量 t('...')，
+  // i18n 静态检查（扫 t('字面量')）才看得见，加页签只动一行
+  const tabLabels: Record<string, string> = {
+    info: t('agentDetail.tabInfo'),
+    channels: t('agentDetail.tabChannels'),
+    memories: t('agentDetail.tabMemories'),
+    storage: t('agentDetail.tabStorage'),
+    workspace: t('agentDetail.tabWorkspace'),
+    logs: t('agentDetail.tabLogs'),
+    collaborators: t('agentDetail.tabCollaborators'),
+  }
   const [showFullSettings, setShowFullSettings] = useState(false)
   const [modelOptions, setModelOptions] = useState<{ value: string; label: string; provider_name?: string; provider_key?: string }[]>([])
   const [providersList, setProvidersList] = useState<{ name: string; provider: string; base_url: string; thinking_supported: boolean; is_default: boolean; models: { value: string; label: string }[] }[]>([])
@@ -707,17 +719,17 @@ export default function AgentDetailPage() {
 
         {/* Tabs */}
         <div className="flex gap-1 mb-4 border-b border-border overflow-x-auto">
-          {(['info', 'memories', 'storage', 'workspace', 'logs', 'collaborators'] as const).map((tab) => (
+          {(['info', 'channels', 'memories', 'storage', 'workspace', 'logs', 'collaborators'] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
-              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
                 activeTab === tab
                   ? 'border-primary-500 text-primary-400'
                   : 'border-transparent text-textMuted hover:text-textSecondary'
               }`}
             >
-              {tab === 'info' ? t('agentDetail.tabInfo') : tab === 'memories' ? t('agentDetail.tabMemories') : tab === 'storage' ? t('agentDetail.tabStorage') : tab === 'workspace' ? t('agentDetail.tabWorkspace') : tab === 'logs' ? t('agentDetail.tabLogs') : t('agentDetail.tabCollaborators')}
+              {tabLabels[tab]}
             </button>
           ))}
         </div>
@@ -1085,6 +1097,13 @@ export default function AgentDetailPage() {
                 </button>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* 通道：这个 AI 对外的接线（QQ 等）。这里直接铺开，不用再开弹窗 */}
+        {activeTab === 'channels' && (
+          <div className="max-w-3xl">
+            <QQChannelCard agentId={agent.id} />
           </div>
         )}
 

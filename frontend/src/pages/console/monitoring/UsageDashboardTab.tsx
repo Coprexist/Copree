@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
-import { api } from '../api/client'
-import { useIsDark } from '../hooks/useIsDark'
-import { useT, useLang } from '../i18n/I18nContext'
-import { fmtTokenNum } from '../utils/format'
+import { api } from '../../../api/client'
+import { useIsDark } from '../../../hooks/useIsDark'
+import { useT, useLang } from '../../../i18n/I18nContext'
+import { fmtTokenNum } from '../../../utils/format'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, AreaChart, Area

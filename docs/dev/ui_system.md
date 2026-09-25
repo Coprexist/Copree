@@ -97,7 +97,7 @@ src/components/ui/     React 壳：PageShell PageHeader Button IconButton
 ## 4. 组件（写页面时优先用）
 
 ```tsx
-import { PageShell, Button, IconButton, Input, Select, Card, Badge, Modal, Dialog, EmptyState, confirmAsync } from '../components/ui'
+import { PageShell, Button, IconButton, Input, Select, Card, Badge, Modal, Dialog, EmptyState, ListPanel, ExpandPanel, confirmAsync } from '../components/ui'
 
 // 页面骨架：根容器 + 标题栏 + 滚动 + 居中等宽，一次搞定
 <PageShell
@@ -123,6 +123,24 @@ import { PageShell, Button, IconButton, Input, Select, Card, Badge, Modal, Dialo
 <EmptyState icon={Inbox} title="暂无内容" description="…" />
 <Badge tone="mint">在线</Badge>
 if (await confirmAsync({ title: '删除？', message: '不可恢复', danger: true })) …
+
+// 「紧凑列表 + 详情按需出现」= 管理页的统一模式（插件页 / 命令白名单 / 技能背包）
+<ListPanel
+  title="命令白名单"
+  columns={[{ key: 'pattern', label: '命令' }, { key: 'status', label: '状态' }]}
+  toolbar={<><Input fieldSize="sm" value={q} onChange={…} /><Button size="sm">重扫</Button></>}
+  empty={rows.length === 0 ? <EmptyState icon={Inbox} title="暂无内容" /> : undefined}
+>
+  <tr className="border-b border-border/50">
+    <td className="py-2 px-3">…</td>
+    <td className="py-2 px-3">…</td>
+  </tr>
+</ListPanel>
+
+// 展开的那块详情：标题栏与「收起」由它统一给，内容自己写
+<ExpandPanel title="QQ 通道" collapseLabel={t('tool:ui.collapse')} onCollapse={close}>
+  …表单 / 实例列表…
+</ExpandPanel>
 ```
 
 ### 宽度档位（页面留白唯一来源）
@@ -146,11 +164,19 @@ if (await confirmAsync({ title: '删除？', message: '不可恢复', danger: tr
 | 页面顶端 | 用 PageHeader（PageShell 已含），不要手写 `h-14 border-b` 的 div |
 | 弹窗 | Modal / Dialog，不要手写 `fixed inset-0` 遮罩（ESC、锁滚动、点遮罩关闭由 Dialog 统一给） |
 | 按钮 | `<Button>` 或 `.btn .btn-md .btn-* ` |
+| 控制台（/admin） | 进 /admin 收起应用侧边栏（Layout 按路径判断），宽度全给管理界面；控制台自带可折叠导航栏（收起=只剩图标，`localStorage` 记状态）与底部「返回应用」出口——侧边栏收起了就必须在这里留出口 |
+| 管理面板导航 | 分组/顺序/图标/文案/组件**只写在 `pages/admin/tabs.tsx`**；分组按"管理对象"分桶（通用 / 用户与内容 / 能力与扩展 / 监控与日志 / 数据与维护），每桶 2~6 项、桶名要能盖住桶内所有条目。页面里不许再写第二份标签表（桌面端与移动端会漂移） |
 | 图标按钮 | `<IconButton>` 或 `.icon-btn` |
 | 输入框 | `<Input>` / `<Select>` 或 `.field` |
 | 卡片 | `.card .card-pad` 或 `<Card>` |
 | 徽标 | `<Badge tone=…>` 或 `.chip .chip-* ` |
 | 空状态 | `<EmptyState>`，不要自己拼居中提示 |
+| 管理页列表 | `<ListPanel>`（表格壳 + 标题 + 工具条 + 空态）；行用 `border-b border-border/50`，单元格 `py-2 px-3` |
+| 实体列表（插件/AI/应用） | **两行式**：上排「名称 + 类型 + 版本」，下排**一行截断的说明**（`truncate` + `title` 悬停看全文）。**完整说明与元信息（作者/来源）住详情，不住列表** —— 列表负责"认出它"，详情负责"讲清楚它" |
+| 列表里的状态 | **圆点 + 文案**（颜色即语义），别只给彩色文字 |
+| 列表里的启停 | **开关**（`<Toggle size="sm">`），不要用会变字的文字链接：位置固定、状态靠形态表达 |
+| 列表里的详情 | **只读内容**用 `<ExpandPanel>` 就地展开（技能背包）；**带表单/凭据的配置**用右侧抽屉（`<Dialog layer="drawer" className="flex justify-end">` + `h-full w-full max-w-xl bg-surface border-l shadow-2xl overflow-y-auto`，见 `PluginDetailPanel`）——**先列表给状态与动作，详情按需展开** |
+| 为什么不用弹窗/悬窗放配置 | 悬窗（popover）鼠标一移开就没了，装不下表单；弹窗遮全屏，看不清"我在改列表里的哪一个"。抽屉两头都避开：列表留在原地当上下文 |
 | 确认框 | `confirmAsync()`，不要用 `window.confirm` |
 | 危险色 | `rose`；成功/在线 `mint`；强调/通知 `accent`；品牌主色 `primary`（紫） |
 | 主题色 | 一律走 `rgb(var(--tw-*))` 对应的 Tailwind 名（`bg-surface` / `text-textSecondary`…），

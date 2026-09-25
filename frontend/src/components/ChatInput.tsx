@@ -1,15 +1,39 @@
 import { useState, useCallback, useEffect, useRef, useMemo, forwardRef, useImperativeHandle } from 'react'
 import { Send, Paperclip } from 'lucide-react'
+import { MenuPanel, MenuItem } from './ui'
+import ExpressionModeSwitch from './ExpressionModeSwitch'
+
+/** @提及 的终止字符：与后端 app/utils/text.py 的 _MENTION_STOP 同一套口径
+ *  （两处必须一致，否则前端提醒的名字和后端认的名字会对不上） */
+const MENTION_STOP_CHARS = new Set<string>([
+  ' ', '\t', '\n', '@', '\\',
+  ...'，。！？、；：\u201c\u201d\u2018\u2019「」『』【】（）()[]{}<>#+*&^%$!~`|/'.split(''),
+])
+
+/** 找出文本里所有 @提及 的短名（到终止字符为止） */
+function findMentionTokens(text: string): string[] {
+  const tokens: string[] = []
+  let at = text.indexOf('@')
+  while (at !== -1) {
+    let end = at + 1
+    while (end < text.length && !MENTION_STOP_CHARS.has(text[end])) end++
+    if (end > at + 1) tokens.push(text.slice(at + 1, end))
+    at = text.indexOf('@', at + 1)
+  }
+  return tokens
+}
 
 interface ChatInputProps {
   conversationType: string
   conversationId: number | string
-  t: (key: string) => string
+  t: (key: string, vars?: Record<string, string | number>) => string
   onSend: (text: string) => void
   onSendFile?: () => void
   connected: boolean
   hasAttachments?: boolean
   groupMembers?: Array<{ type: string; id: number; name: string; state?: string }>
+  /** 这场对话可能有 AI 吗（它改的是 AI 的说话方式，跟人说话时开关没有意义） */
+  aiCapable?: boolean
   inputHeight?: number | null
   /** 自动高度变化时通知父组件（用于补偿拖拽高度） */
   onAutoHeight?: (ah: number) => void
@@ -18,7 +42,7 @@ interface ChatInputProps {
 /**
  * 独立输入框。管理自身 value 和 @mention 状态，打字不触发父组件重渲染。
  */
-const ChatInputFunc = ({ conversationType, conversationId, t, onSend, onSendFile, connected, hasAttachments, groupMembers, inputHeight, onAutoHeight }: ChatInputProps, ref: React.ForwardedRef<HTMLTextAreaElement>) => {
+const ChatInputFunc = ({ conversationType, conversationId, t, onSend, onSendFile, connected, hasAttachments, groupMembers, aiCapable, inputHeight, onAutoHeight }: ChatInputProps, ref: React.ForwardedRef<HTMLTextAreaElement>) => {
   const [value, setValue] = useState('')
   const [autoHeight, setAutoHeight] = useState(0)
   const valueRef = useRef('')
@@ -91,6 +115,34 @@ const ChatInputFunc = ({ conversationType, conversationId, t, onSend, onSendFile
     })
   }, [value])
 
+  // 手打 @短名（漏了括号后缀）时提醒一句：@ 是全字匹配，少一个字都喊不醒对方
+  const mentionFix = useMemo(() => {
+    if (mentionActive || !groupMembers?.length) return null
+    const names = groupMembers.map((m) => m.name)
+    for (const token of findMentionTokens(value)) {
+      if (names.includes(token)) continue
+      const candidates = names.filter((n) => n.startsWith(token))
+      // 已经打全了就别提醒（提取在括号处截断，"@浮生（人物志1）" 的 token 仍是"浮生"）
+      if (candidates.length === 1 && !value.includes(`@${candidates[0]}`)) {
+        return { token, name: candidates[0] }
+      }
+    }
+    return null
+  }, [value, groupMembers, mentionActive])
+
+  // 一键补全：把 @短名 换成 @完整名字，光标落到名字后面
+  const applyMentionFix = useCallback(() => {
+    if (!mentionFix) return
+    const next = value.split(`@${mentionFix.token}`).join(`@${mentionFix.name} `)
+    setValue(next)
+    requestAnimationFrame(() => {
+      const ta = textareaRef.current
+      if (!ta) return
+      ta.focus()
+      ta.setSelectionRange(next.length, next.length)
+    })
+  }, [mentionFix, value])
+
   // 发送
   const doSend = useCallback(() => {
     onSend(value.trim())
@@ -130,21 +182,34 @@ const ChatInputFunc = ({ conversationType, conversationId, t, onSend, onSendFile
 
   return (
     <div className="flex items-end gap-2 px-4 py-3 shrink-0">
+      {/* 没 @ 到人的提醒：@ 是全字匹配，漏了括号后缀对方根本收不到；给一键补全 */}
+      {mentionFix && (
+        <div className="absolute bottom-full left-4 mb-1 flex items-center gap-2 rounded-control border border-border bg-elevated px-3 py-1.5 text-2xs text-textSecondary shadow-lg z-modal">
+          <span>{t('chat.mentionHint', { token: mentionFix.token, name: mentionFix.name })}</span>
+          <button
+            type="button"
+            className="btn btn-xs btn-outline"
+            onMouseDown={(e) => { e.preventDefault(); applyMentionFix() }}
+          >
+            {t('chat.mentionHintFix')}
+          </button>
+        </div>
+      )}
+
       {/* @mention 弹出列表 */}
       {mentionActive && mentionFiltered.length > 0 && (
-        <div className="absolute bottom-full left-4 mb-1 w-56 max-h-40 overflow-y-auto rounded-card bg-elevated border border-border shadow-xl z-modal">
+        <MenuPanel className="absolute bottom-full left-4 mb-1 w-56 max-h-40 overflow-y-auto py-1 z-modal">
           {mentionFiltered.map((m, i) => (
-            <button
+            <MenuItem
               key={`${m.type}:${m.id}`}
-              className={`w-full text-left px-3 py-2 text-sm transition-colors ${
-                i === mentionIdx ? 'bg-primary-500/20 text-primary-400' : 'text-textPrimary hover:bg-hover'
-              }`}
+              active={i === mentionIdx}
+              className="py-2 text-xs"
               onMouseDown={(e) => { e.preventDefault(); insertMention(m.name) }}
             >
               {m.name}
-            </button>
+            </MenuItem>
           ))}
-        </div>
+        </MenuPanel>
       )}
 
       <button
@@ -154,6 +219,10 @@ const ChatInputFunc = ({ conversationType, conversationId, t, onSend, onSendFile
       >
         <Paperclip size={18} />
       </button>
+
+      {/* 表达方式（专业模式 / 通俗模式）：立即生效，与设置页同一个 ui_prefs 键。
+          只在可能有 AI 的会话里给（纯人聊的私信/群点了它什么都不会变，只会误导） */}
+      {aiCapable && <ExpressionModeSwitch />}
 
       <textarea
         ref={textareaRef}
