@@ -76,6 +76,21 @@ async def read(db: AsyncSession, agent_id: int, context_ref: str, *,
     return [_row_to_dict(r) for r in rows]
 
 
+async def tail(db: AsyncSession, agent_id: int, context_ref: str, n: int) -> list[dict]:
+    """读账本**最新 n 条**（返回仍是 seq 升序）——"读某个会话最近几条"的唯一入口。
+
+    为什么不用 read(limit=)：`read` 的 limit 是从**最早**往后取的（compact 边界用），
+    要看尾部必须从后往前取再翻正序。
+    """
+    rows = (await db.execute(
+        select(AgentHistoryEntry).where(
+            AgentHistoryEntry.agent_id == agent_id,
+            AgentHistoryEntry.context_ref == context_ref,
+        ).order_by(AgentHistoryEntry.seq.desc()).limit(max(1, int(n)))
+    )).scalars().all()
+    return [_row_to_dict(r) for r in reversed(rows)]
+
+
 async def count(db: AsyncSession, agent_id: int, context_ref: str) -> int:
     return (await db.execute(
         select(func.count(AgentHistoryEntry.id)).where(

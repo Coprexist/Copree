@@ -389,6 +389,18 @@
 - **验证**：全量 277/0；重启 `health=healthy restarts=0`；新测试 `test_note_delivery.py` 走完四段——
   投递一条 note 条目｜再投一次一条不写（幂等）｜撤下补一条通知（不改已投的那条）｜解锁后两条一起清干净。
 
+### 跨对话回复的「读」：read_conversation（已完成 2026-09-25）
+
+- **写早就通了**（`send_gm(group_id=…)` / `send_dm(target_user_id=…)` 都能发到任意目标），缺的是「知道那边发生了什么」——
+  以前只有 `view_unread` 的未读数与预览，等于盲发。
+- 新工具 `chat_social/read_conversation`：读**别的会话**最近几条**原文**（只读、不切状态）；
+  群传 `group_id`、私信传 `target_user_id`（会话 id 取库里 `dm_sessions` 的真相，不在工具里重算规则）。
+- `history_service.tail(db, agent_id, context_ref, n)`：读账本**最新 n 条**的唯一入口
+  （`read(limit=)` 是从最早往后取、给 compact 边界用的，两者别混）。
+- 权限边界天然成立：账本按会话分卷，**只有它参与过的会话才有条目**——读不到别人的会话。
+- **验证**：全量 278/0；`test_read_conversation.py`：读尾部（不是最早几条）、别的会话不串进来、
+  提示语说清「这不是当前会话」、不指定会话就报错而不是猜。
+
 ### 待落地
 
 
