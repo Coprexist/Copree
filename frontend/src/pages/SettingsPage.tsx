@@ -5,7 +5,6 @@ import { useTheme } from '../context/ThemeContext'
 import { useT } from '../i18n/I18nContext'
 import Toggle from '../components/Toggle'
 import { IN_APP_NOTIFICATION_KEY } from '../hooks/useNotificationSocket'
-import { EXPRESSION_MODES } from '../components/ExpressionModeSwitch'
 import MagicVisionFilter from '../components/MagicVisionFilter.tsx'
 import ThemeCustomizer from '../components/ThemeCustomizer'
 import SkinPicker from '../components/SkinPicker'
@@ -17,7 +16,7 @@ import { LANGUAGES } from '../i18n/languages'
 import { isDesktop } from '../utils/platform'
 import { invoke } from '../utils/tauri'
 import { getApiKeyUrl } from '../utils/providers.tsx'
-import { Key, Zap, Save, Clock, Palette, Bell, Eye, EyeOff, CheckCircle, XCircle, Loader2, Globe, Layout, BookOpenText, Bot, Pencil, X, Ticket, Plus, ChevronDown, ChevronRight, Shield, AlertTriangle, ArrowLeft, Mail, Monitor, HardDrive, Trash2, Cpu, Wrench, Box, ExternalLink, BarChart3, Star } from 'lucide-react'
+import { Key, Zap, Save, Clock, Palette, Bell, Eye, EyeOff, CheckCircle, XCircle, Loader2, Globe, Layout, Bot, Pencil, X, Ticket, Plus, ChevronDown, ChevronRight, Shield, AlertTriangle, ArrowLeft, Mail, Monitor, HardDrive, Trash2, Cpu, Wrench, Box, ExternalLink, BarChart3, Star } from 'lucide-react'
 import { useNavigate, useBlocker, useLocation, useSearchParams } from 'react-router-dom'
 
 // 常用时区列表
@@ -61,7 +60,6 @@ const NAV_SECTIONS: NavSection[] = [
   { id: 'timezone',    icon: Clock,   labelKey: 'settings.timezone',         category: 'settings.catPrefs' },
   { id: 'language',    icon: Globe,   labelKey: 'settings.language',         category: 'settings.catPrefs' },
   { id: 'chatstyle',   icon: Layout,   labelKey: 'settings.chatStyle',       category: 'settings.catPrefs' },
-  { id: 'expressionmode', icon: BookOpenText, labelKey: 'settings.expressionMode', category: 'settings.catPrefs' },
   { id: 'uiscale',    icon: Monitor,  labelKey: 'UI 缩放',                  category: 'settings.catPrefs' },
   { id: 'mermaid',    icon: BarChart3, labelKey: 'Mermaid 图表',             category: 'settings.catPrefs' },
   { id: 'appearance',  icon: Palette, labelKey: 'settings.appearance',       category: 'settings.catPrefs' },
@@ -100,7 +98,6 @@ export default function SettingsPage() {
   const [uiScale, setUiScale] = useState(() => {
     try { return parseFloat(localStorage.getItem('ui_scale') || '1') } catch { return 1 }
   })
-  const [plainLanguage, setPlainLanguage] = useState(false)
 
   // 新增：全局默认模型（用户覆盖）
   const [globalChatModel, setGlobalChatModel] = useState('')
@@ -277,7 +274,7 @@ export default function SettingsPage() {
   // ── 未保存修改检测 ──
   const [savedValues, setSavedValues] = useState<{
     apiBaseUrl: string; autoTimeout: number; autoDefault: boolean
-    timezone: string; language: string; chatStyle: string; uiScale: number; plainLanguage: boolean
+    timezone: string; language: string; chatStyle: string; uiScale: number
     globalChatModel?: string; globalWorkModel?: string; preferOwnKey?: boolean
   } | null>(null)
 
@@ -289,7 +286,6 @@ export default function SettingsPage() {
     language !== savedValues.language ||
     chatStyle !== savedValues.chatStyle ||
     uiScale !== savedValues.uiScale ||
-    plainLanguage !== savedValues.plainLanguage ||
     globalChatModel !== (savedValues.globalChatModel || '') ||
     globalWorkModel !== (savedValues.globalWorkModel || '') ||
     apiKey.trim() !== ''
@@ -327,7 +323,6 @@ export default function SettingsPage() {
         const tz = data.timezone || 'Asia/Shanghai'
         const lang = data.language || 'zh'
         const style = data.ui_prefs?.chat_style || 'cozy'
-        const plain = data.ui_prefs?.plain_language === true
         const to = data.auto_approve_vector_timeout ?? 60
         const ad = data.auto_approve_vector_default ?? false
         setApiBaseUrl(apiUrl)
@@ -337,7 +332,6 @@ export default function SettingsPage() {
         if (data.timezone) setTimezone(tz)
         if (data.language) setLanguage(lang)
         if (data.ui_prefs?.chat_style) { setChatStyle(style); try { localStorage.setItem('chat_style', style) } catch {} }
-        setPlainLanguage(plain)
         if (data.ui_prefs?.ui_scale) {
           const s = parseFloat(data.ui_prefs.ui_scale)
           if (s >= 0.7 && s <= 1.5) { setUiScale(s); try { localStorage.setItem('ui_scale', String(s)) } catch {} }
@@ -354,7 +348,6 @@ export default function SettingsPage() {
           language: lang,
           chatStyle: style,
           uiScale: data.ui_prefs?.ui_scale || 1,
-          plainLanguage: plain,
           globalChatModel: data.global_chat_model || '',
           globalWorkModel: data.global_work_model || '',
         })
@@ -409,7 +402,7 @@ export default function SettingsPage() {
         auto_approve_vector_default: autoDefault,
         timezone,
         language,
-        ui_prefs: { chat_style: chatStyle, ui_scale: uiScale, plain_language: plainLanguage },
+        ui_prefs: { chat_style: chatStyle, ui_scale: uiScale },
         global_chat_model: globalChatModel || null,
         global_work_model: globalWorkModel || null,
       })
@@ -424,7 +417,6 @@ export default function SettingsPage() {
         language,
         chatStyle,
         uiScale,
-        plainLanguage,
         globalChatModel,
         globalWorkModel,
       })
@@ -901,31 +893,6 @@ export default function SettingsPage() {
             >
               <div className="font-medium">{t(s.key)}</div>
               <div className="text-3xs mt-0.5 opacity-70">{t(s.descKey)}</div>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* 表达方式（专业模式 / 通俗模式）：两段直选，与聊天输入工具条的那对按钮同一套名字 */}
-      <div id="settings-expressionmode" className={(activeTab === 'expressionmode' ? '' : 'hidden') + ' bg-surface rounded-card border border-border p-3 md:p-6 scroll-mt-16'}>
-        <div className="flex items-center gap-2 mb-4">
-          <BookOpenText size={18} className="text-primary-400" />
-          <h2 className="font-semibold text-textPrimary">{t('settings.expressionMode')}</h2>
-        </div>
-        <p className="text-xs text-textMuted mb-3">{t('settings.expressionModeDesc')}</p>
-        <div className="flex gap-3">
-          {EXPRESSION_MODES.map((m) => (
-            <button
-              key={String(m.plain)}
-              onClick={() => setPlainLanguage(m.plain)}
-              className={`flex-1 px-4 py-3 rounded-card border text-sm font-medium transition-all text-left ${
-                plainLanguage === m.plain
-                  ? 'border-primary-500 bg-primary-500/10 text-primary-400'
-                  : 'border-border bg-canvas text-textSecondary hover:border-primary-500/30'
-              }`}
-            >
-              <div className="font-medium">{t(m.labelKey)}</div>
-              <div className="text-3xs mt-0.5 opacity-70">{t(m.descKey)}</div>
             </button>
           ))}
         </div>

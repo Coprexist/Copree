@@ -1118,7 +1118,6 @@ export default function ChatView({ conversationType, conversationId }: ChatViewP
           onSendFile={() => fileInputRef.current?.click()}
           hasAttachments={attachments.items.length > 0}
           groupMembers={groupMembers}
-          aiCapable={conversationType === 'dm' ? peerType === 'ai' : groupMembers.some((m) => m.type === 'ai')}
           inputHeight={inputHeight}
           onAutoHeight={(ah) => {
             setInputHeight(prev => {

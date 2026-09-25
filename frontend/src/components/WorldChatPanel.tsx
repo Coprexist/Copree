@@ -693,7 +693,7 @@ const WorldChatPanel = memo(forwardRef<WorldChatHandle, WorldChatPanelProps>(({ 
           <input ref={fileInputRef} type="file" multiple accept="image/*" className="hidden" onChange={handlePickFiles} />
           <IconButton size="sm" icon={<Plus size={14} />} label={t('tool:world.input.attach')} onClick={() => fileInputRef.current?.click()} />
           <ModePicker mode={mode} busy={modeBusy} onChange={switchMode} />
-          <ExpressionModeSwitch size="sm" />
+          <ExpressionModeSwitch />
           {/* 常驻说明收进 ? 的 title：绝大多数轮次用不到，不该天天占一行 */}
           <IconButton size="sm" icon={<HelpCircle size={12} />} label={t('tool:world.hint.billing')} />
           {(chat.chatSending || chat.chatProcessing) && (

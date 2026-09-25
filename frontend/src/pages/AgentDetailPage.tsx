@@ -15,7 +15,7 @@ import AvatarPickerModal from '../components/AvatarPickerModal'
 import AgentSettingsModal from '../components/AgentSettingsModal'
 import { Dialog, EmptyState } from '../components/ui'
 import FilePreviewModal from '../components/FilePreviewModal'
-import QQChannelCard from '../components/channels/QQChannelCard'
+import ChannelCard from '../components/channels/ChannelCard'
 
 /** 扩展名→MIME 类型映射（后端未返回 mime_type 时 fallback） */
 const EXT_MIME_MAP: Record<string, string> = {
@@ -273,8 +273,8 @@ export default function AgentDetailPage() {
   const [agent, setAgent] = useState<Agent | null>(null)
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<'info' | 'channels' | 'memories' | 'storage' | 'workspace' | 'logs' | 'collaborators'>('info')
-  // 页签文案：一张表代替七层三元表达式；每项都写成字面量 t('...')，
-  // i18n 静态检查（扫 t('字面量')）才看得见，加页签只动一行
+  // 页签文案：一张表代替七层三元表达式；每项都写成字面量 key（不要用变量拼），
+  // i18n 静态检查只认源码里的字面量调用，加页签只动一行
   const tabLabels: Record<string, string> = {
     info: t('agentDetail.tabInfo'),
     channels: t('agentDetail.tabChannels'),
@@ -1103,7 +1103,7 @@ export default function AgentDetailPage() {
         {/* 通道：这个 AI 对外的接线（QQ 等）。这里直接铺开，不用再开弹窗 */}
         {activeTab === 'channels' && (
           <div className="max-w-3xl">
-            <QQChannelCard agentId={agent.id} />
+            <ChannelCard agentId={agent.id} />
           </div>
         )}
 

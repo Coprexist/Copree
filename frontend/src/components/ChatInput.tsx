@@ -1,7 +1,6 @@
 import { useState, useCallback, useEffect, useRef, useMemo, forwardRef, useImperativeHandle } from 'react'
 import { Send, Paperclip } from 'lucide-react'
 import { MenuPanel, MenuItem } from './ui'
-import ExpressionModeSwitch from './ExpressionModeSwitch'
 
 /** @提及 的终止字符：与后端 app/utils/text.py 的 _MENTION_STOP 同一套口径
  *  （两处必须一致，否则前端提醒的名字和后端认的名字会对不上） */
@@ -32,8 +31,6 @@ interface ChatInputProps {
   connected: boolean
   hasAttachments?: boolean
   groupMembers?: Array<{ type: string; id: number; name: string; state?: string }>
-  /** 这场对话可能有 AI 吗（它改的是 AI 的说话方式，跟人说话时开关没有意义） */
-  aiCapable?: boolean
   inputHeight?: number | null
   /** 自动高度变化时通知父组件（用于补偿拖拽高度） */
   onAutoHeight?: (ah: number) => void
@@ -42,7 +39,7 @@ interface ChatInputProps {
 /**
  * 独立输入框。管理自身 value 和 @mention 状态，打字不触发父组件重渲染。
  */
-const ChatInputFunc = ({ conversationType, conversationId, t, onSend, onSendFile, connected, hasAttachments, groupMembers, aiCapable, inputHeight, onAutoHeight }: ChatInputProps, ref: React.ForwardedRef<HTMLTextAreaElement>) => {
+const ChatInputFunc = ({ conversationType, conversationId, t, onSend, onSendFile, connected, hasAttachments, groupMembers, inputHeight, onAutoHeight }: ChatInputProps, ref: React.ForwardedRef<HTMLTextAreaElement>) => {
   const [value, setValue] = useState('')
   const [autoHeight, setAutoHeight] = useState(0)
   const valueRef = useRef('')
@@ -219,10 +216,6 @@ const ChatInputFunc = ({ conversationType, conversationId, t, onSend, onSendFile
       >
         <Paperclip size={18} />
       </button>
-
-      {/* 表达方式（专业模式 / 通俗模式）：立即生效，与设置页同一个 ui_prefs 键。
-          只在可能有 AI 的会话里给（纯人聊的私信/群点了它什么都不会变，只会误导） */}
-      {aiCapable && <ExpressionModeSwitch />}
 
       <textarea
         ref={textareaRef}
