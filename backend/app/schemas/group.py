@@ -27,6 +27,15 @@ class GroupUpdateRequest(BaseModel):
     avatar_mode: str | None = Field(default=None, pattern=r'^(default|members|custom)$')
     avatar_url: str | None = None
     include_ai_in_avatar: bool | None = None
+    # 发现与入群三开关（群主/管理员可改）
+    searchable: bool | None = None
+    auto_approve_join: bool | None = None
+    approve_invites: bool | None = None
+
+
+class GroupJoinRequestCreate(BaseModel):
+    """入群申请请求"""
+    message: str | None = Field(default=None, max_length=200, description="申请附言")
 
 
 class GroupResponse(BaseModel):
@@ -54,6 +63,10 @@ class GroupResponse(BaseModel):
     avatar_mode: str = "default"
     avatar_url: str | None = None
     include_ai_in_avatar: bool = True
+    # 发现与入群三开关（默认值＝保持旧行为：搜不到、直接进、邀请免审）
+    searchable: bool = False
+    auto_approve_join: bool = True
+    approve_invites: bool = False
 
 
 class GroupMemberResponse(BaseModel):

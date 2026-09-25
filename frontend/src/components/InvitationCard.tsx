@@ -86,7 +86,7 @@ export default function InvitationCard({
           <button
             onClick={(e) => { e.stopPropagation(); onReject(invitationId) }}
             className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5
-              ${isMine ? 'bg-white/10 hover:bg-white/20 text-white/80' : 'bg-canvas hover:bg-hover text-textSecondary hover:text-textPrimary'}
+              ${isMine ? 'bg-white/10 hover:bg-white/20 text-white/80' : 'bg-canvas hover:bg-elevated text-textSecondary hover:text-textPrimary'}
               text-sm rounded-control border ${isMine ? 'border-white/20' : 'border-border'} transition-colors`}
           >
             <X size={14} />

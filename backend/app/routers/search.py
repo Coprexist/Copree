@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query
 
 from app.repositories.search_repo import SearchRepository
 from app.routers.deps import get_search_repo
-from app.services.social.search_service import search_entities
+from app.services.social.search_service import search_entities, search_groups
 from app.utils.auth import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -19,6 +19,11 @@ async def search(
     current_user: dict = Depends(get_current_user),
     search_repo: SearchRepository = Depends(get_search_repo),
 ):
-    """搜索用户和 AI（支持按用户名/AI名搜索，可直接发起 DM）"""
+    """搜索用户、AI 与群聊。
+
+    群聊单独一组返回（只含群主开了「可被搜索」的群）：前端按用户/AI/群聊分区渲染，
+    塞进同一个列表会逼前端靠 type 猜字段。
+    """
     results = await search_entities(search_repo, q, current_user["user_id"])
-    return {"results": results, "query": q}
+    groups = await search_groups(search_repo, q, current_user["user_id"])
+    return {"results": results, "groups": groups, "query": q}

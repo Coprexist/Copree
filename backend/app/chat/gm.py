@@ -14,6 +14,10 @@ from app.models.agent import Agent as AgentModel
 
 logger = logging.getLogger(__name__)
 
+# 拥有群审批权的角色（审批入群申请 / 成员邀请）。审批权就是可见性：
+# 只有这些角色能在「申请列表」里看到本群的待审项。
+APPROVER_ROLES = ("owner", "admin")
+
 
 # ============================================================
 # 群聊 CRUD
@@ -202,6 +206,10 @@ async def list_user_groups(db: AsyncSession, user_id: int) -> list[dict]:
             "avatar_mode": group.avatar_mode or "default",
             "avatar_url": group.avatar_url,
             "include_ai_in_avatar": group.include_ai_in_avatar,
+            # 发现与入群三开关：群设置面板据此回显，不能只在 PATCH 响应里给
+            "searchable": bool(group.searchable),
+            "auto_approve_join": bool(group.auto_approve_join),
+            "approve_invites": bool(group.approve_invites),
             "is_pinned": False,
             "created_at": str(group.created_at) if group.created_at else None,
         })
@@ -470,6 +478,29 @@ async def update_last_read(db: AsyncSession, group_id: int, member_type: str, me
     return False
 
 
+async def get_approver_group_ids(db: AsyncSession, user_id: int) -> list[int]:
+    """我拥有审批权的群（群主/管理员）。红点统计与申请列表共用一个口径。"""
+    rows = await db.execute(
+        select(GroupMember.group_id).where(
+            GroupMember.member_type == "human",
+            GroupMember.member_id == user_id,
+            GroupMember.role.in_(APPROVER_ROLES),
+        )
+    )
+    return [row[0] for row in rows.all()]
+
+
+async def require_group_approver(db: AsyncSession, group_id: int, user_id: int) -> GroupMember:
+    """校验用户对该群有审批权（群主/管理员），返回其成员记录。
+
+    申请审批、邀请审批都从这里取权，避免各端点各写一遍角色判断。
+    """
+    member = await _get_member(db, group_id, "human", user_id)
+    if member is None or member.role not in APPROVER_ROLES:
+        raise ValueError("仅群主或管理员可审批")
+    return member
+
+
 async def update_group_settings(db: AsyncSession, group_id: int, operator_id: int, updates: dict) -> Group:
     """更新群聊设置"""
     group = await db.get(Group, group_id)
@@ -484,6 +515,8 @@ async def update_group_settings(db: AsyncSession, group_id: int, operator_id: in
         "speak_limit_per_minute", "speak_limit_window_seconds",
         "is_vector_accelerated",
         "avatar_mode", "avatar_url", "include_ai_in_avatar",
+        # 发现与入群三开关
+        "searchable", "auto_approve_join", "approve_invites",
     }
     for key, value in updates.items():
         if key not in allowed_fields:

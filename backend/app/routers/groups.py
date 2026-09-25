@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.schemas.group import (
-    GroupCreateRequest, GroupInviteRequest, GroupResponse,
+    GroupCreateRequest, GroupInviteRequest, GroupJoinRequestCreate, GroupResponse,
     GroupUpdateRequest, AnnouncementRequest, RoleChangeRequest,
     SetDndRequest, UnreadSummaryItem, UnreadSummaryResponse, UnreadResponse,
     FederationShareRequest, GroupFederationStatus,
@@ -195,6 +195,9 @@ async def get_group_detail(
         "avatar_mode": group.avatar_mode or "default",
         "avatar_url": group.avatar_url,
         "include_ai_in_avatar": group.include_ai_in_avatar,
+        "searchable": bool(group.searchable),
+        "auto_approve_join": bool(group.auto_approve_join),
+        "approve_invites": bool(group.approve_invites),
         "created_at": str(group.created_at) if group.created_at else None,
         "member_count": member_count,
         "online_count": online_count,
@@ -224,12 +227,66 @@ async def invite_member(
             result = await send_group_invitation(
                 invitation_repo, group_id, current_user["user_id"], req.member_id, req.message,
             )
+            pending = result.get("pending_approval", False)
             return {
-                "message": "邀请已发送",
+                # 等审批时不能说「已发送」——对方此刻还没收到任何东西
+                "message": "邀请已提交，等待群主或管理员审批" if pending else "邀请已发送",
                 "group_id": group_id,
                 "method": "invitation",
                 **result,
             }
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+# ============================================================
+# 发现与入群：搜索 → 申请 → 审批
+# ============================================================
+
+
+@router.post("/groups/{group_id}/join")
+async def join_group(
+    group_id: int,
+    req: GroupJoinRequestCreate | None = None,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """申请加入群聊。群开着「加群需审批」时落申请等群主/管理员处理，否则直接入群。"""
+    from app.services.social.group_join_service import request_join
+    try:
+        return await request_join(
+            db, group_id, current_user["user_id"], req.message if req else None,
+            actor_name=current_user.get("username"),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+# 审批端点用 join-requests 前缀：{group_id} 是 int，路径段匹配不上会继续往下找，不会误命中
+@router.post("/groups/join-requests/{request_id}/approve")
+async def approve_join_request(
+    request_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """通过入群申请（仅该群群主/管理员）"""
+    from app.services.social.group_join_service import resolve_join_request
+    try:
+        return await resolve_join_request(db, request_id, current_user["user_id"], approve=True)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post("/groups/join-requests/{request_id}/reject")
+async def reject_join_request(
+    request_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """拒绝入群申请（仅该群群主/管理员）"""
+    from app.services.social.group_join_service import resolve_join_request
+    try:
+        return await resolve_join_request(db, request_id, current_user["user_id"], approve=False)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
@@ -370,6 +427,9 @@ async def update_group(
             "avatar_mode": group.avatar_mode or "default",
             "avatar_url": group.avatar_url,
             "include_ai_in_avatar": group.include_ai_in_avatar,
+            "searchable": bool(group.searchable),
+            "auto_approve_join": bool(group.auto_approve_join),
+            "approve_invites": bool(group.approve_invites),
             "created_at": str(group.created_at) if group.created_at else None,
         }
     except ValueError as e:

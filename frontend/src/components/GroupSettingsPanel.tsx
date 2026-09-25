@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { api } from '../api/client'
+import { fetchPendingRequests } from '../hooks/usePendingRequests'
 import { useT } from '../i18n/I18nContext'
 import { getStateDotColor } from '../constants'
 import { X, Bell, Pause, BellOff, LogOut, UserX, Shield, ShieldOff, UserPlus, Volume2, VolumeX, Download, Clock, Globe, Loader2, ArrowLeft, Crown, Pin, PinOff, Image, Camera, Users, CheckCircle2 } from 'lucide-react'
@@ -165,6 +167,10 @@ interface GroupSettings {
   avatar_mode?: string
   avatar_url?: string | null
   include_ai_in_avatar?: boolean
+  // 发现与入群三开关（默认值＝旧行为：搜不到、直接进、邀请免审）
+  searchable?: boolean
+  auto_approve_join?: boolean
+  approve_invites?: boolean
 }
 
 interface Props {
@@ -178,6 +184,7 @@ type Tab = 'general' | 'members' | 'speak' | 'export'
 
 export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }: Props) {
   const t = useT()
+  const navigate = useNavigate()
   const [tab, setTab] = useState<Tab>('general')
   const [members, setMembers] = useState<GroupMember[]>([])
   const [loading, setLoading] = useState(false)
@@ -203,6 +210,12 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
   const [uploadingAvatar, setUploadingAvatar] = useState(false)
   const [avatarPreview, setAvatarPreview] = useState<string | null>(group?.avatar_url || null)
   const [avatarPickerOpen, setAvatarPickerOpen] = useState(false)
+
+  // 发现与入群
+  const [searchable, setSearchable] = useState(group?.searchable ?? false)
+  const [autoApproveJoin, setAutoApproveJoin] = useState(group?.auto_approve_join ?? true)
+  const [approveInvites, setApproveInvites] = useState(group?.approve_invites ?? false)
+  const [pendingApprovals, setPendingApprovals] = useState(0)
 
   // 转让群主状态
   const [transferModalOpen, setTransferModalOpen] = useState(false)
@@ -233,9 +246,24 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
     setAvatarMode((group.avatar_mode as any) || 'default')
     setIncludeAiAvatar(group.include_ai_in_avatar ?? true)
     setAvatarPreview(group.avatar_url || null)
+    setSearchable(group.searchable ?? false)
+    setAutoApproveJoin(group.auto_approve_join ?? true)
+    setApproveInvites(group.approve_invites ?? false)
     loadMembers()
     loadDndStatus()
+    loadPendingApprovals()
   }, [group?.id])
+
+  /** 本群待审批数：复用统一申请端点（审批权在后端已过滤），不为面板单开接口 */
+  const loadPendingApprovals = async () => {
+    if (!group) return
+    try {
+      const items = await fetchPendingRequests()
+      setPendingApprovals(items.filter(r => r.kind !== 'friend' && r.group_id === group.id).length)
+    } catch {
+      // 拿不到数量不影响设置本身，静默
+    }
+  }
 
   const loadMembers = async () => {
     if (!group) return
@@ -742,6 +770,57 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                     </div>
                   </div>
                   <Toggle checked={vectorAccel} onChange={(next) => { setVectorAccel(next); saveSettings({ is_vector_accelerated: next }) }} />
+                </div>
+              )}
+
+              {/* 发现与入群（仅管理员可见） */}
+              {isAdmin && (
+                <div className="space-y-3">
+                  <div className="text-sm text-textPrimary font-medium">{t('groupSettings.discovery')}</div>
+
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-xs text-textSecondary">{t('groupSettings.searchable')}</div>
+                      <div className="text-3xs text-textMuted">{t('groupSettings.searchableHint')}</div>
+                    </div>
+                    <Toggle
+                      checked={searchable}
+                      onChange={(next) => { setSearchable(next); saveSettings({ searchable: next }) }}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-xs text-textSecondary">{t('groupSettings.autoApproveJoin')}</div>
+                      <div className="text-3xs text-textMuted">{t('groupSettings.autoApproveJoinHint')}</div>
+                    </div>
+                    <Toggle
+                      checked={autoApproveJoin}
+                      onChange={(next) => { setAutoApproveJoin(next); saveSettings({ auto_approve_join: next }) }}
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-xs text-textSecondary">{t('groupSettings.approveInvites')}</div>
+                      <div className="text-3xs text-textMuted">{t('groupSettings.approveInvitesHint')}</div>
+                    </div>
+                    <Toggle
+                      checked={approveInvites}
+                      onChange={(next) => { setApproveInvites(next); saveSettings({ approve_invites: next }) }}
+                    />
+                  </div>
+
+                  {/* 审批入口：审批权在后端，这里只把人送到申请列表 */}
+                  <button
+                    onClick={() => navigate('/list?tab=requests')}
+                    className="w-full flex items-center justify-between px-3 py-2 rounded-control bg-elevated hover:bg-canvas text-xs text-textSecondary transition-colors"
+                  >
+                    <span>{t('groupSettings.pendingApprovals')}</span>
+                    <span className={pendingApprovals > 0 ? 'text-primary-400 font-medium' : 'text-textMuted'}>
+                      {pendingApprovals}
+                    </span>
+                  </button>
                 </div>
               )}
 

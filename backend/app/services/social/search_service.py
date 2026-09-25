@@ -2,7 +2,7 @@
 搜索服务（v0.1.3: 从 friend_service 中提取，不再依赖好友系统）
 """
 import logging
-from sqlalchemy import select
+from sqlalchemy import select, func as sqlfunc
 
 from app.repositories.search_repo import SearchRepository
 
@@ -90,3 +90,55 @@ async def search_entities(
         })
 
     return results[:limit]
+
+
+async def search_groups(
+    search_repo: SearchRepository,
+    query: str,
+    current_user_id: int,
+    limit: int = 20,
+) -> list[dict]:
+    """按群名搜索群聊，附带人数和我是否已在群里。
+
+    只有群主主动开了「可被搜索」的群才会出现——这是暴露入口的开关，
+    没开的群连名字都搜不到。
+    """
+    from app.models.group import Group, GroupMember
+
+    like_pattern = f"%{query}%"
+    groups = (await search_repo.execute(
+        select(Group).where(
+            Group.name.ilike(like_pattern),
+            Group.searchable == True,
+        ).limit(limit)
+    )).scalars().all()
+    if not groups:
+        return []
+
+    group_ids = [g.id for g in groups]
+    member_counts = dict((await search_repo.execute(
+        select(GroupMember.group_id, sqlfunc.count()).where(
+            GroupMember.group_id.in_(group_ids)
+        ).group_by(GroupMember.group_id)
+    )).all())
+    my_group_ids = set((await search_repo.execute(
+        select(GroupMember.group_id).where(
+            GroupMember.group_id.in_(group_ids),
+            GroupMember.member_type == "human",
+            GroupMember.member_id == current_user_id,
+        )
+    )).scalars().all())
+
+    return [
+        {
+            "id": group.id,
+            "type": "group",
+            "name": group.name,
+            "avatar_url": group.avatar_url,
+            "member_count": member_counts.get(group.id, 0),
+            "is_member": group.id in my_group_ids,
+            # 前端据此决定按钮是「加入」还是「申请加入」
+            "auto_approve_join": bool(group.auto_approve_join),
+        }
+        for group in groups
+    ]
