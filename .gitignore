@@ -76,6 +76,9 @@ Copree-Client
 /dsh-copree/node_modules
 /study-room/
 
+# Copree 世界本地镜像与附件（运行时产物，不进仓库）
+/.copree/
+
 # Python/venv
 .venv*
 
