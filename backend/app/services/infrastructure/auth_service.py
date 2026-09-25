@@ -370,9 +370,10 @@ async def update_user_settings(
     if language is not None:
         user.language = language
     if ui_prefs is not None:
-        existing = user.ui_prefs or {}
-        existing.update(ui_prefs)
-        user.ui_prefs = existing
+        # 必须赋**新 dict**：JSON 列的原地 update 不会被 SQLAlchemy 标脏，
+        # 紧接着的 refresh() 会把改动整段丢掉（用户 2026-09-23：通俗模式滑钮打不开；
+        # 同一处也是主题色/ui_scale 存不下来的原因）。本文件是全仓唯一写 ui_prefs 的地方。
+        user.ui_prefs = {**(user.ui_prefs or {}), **ui_prefs}
     if avatar_url is not None:
         user.avatar_url = avatar_url
     if bio is not None:
