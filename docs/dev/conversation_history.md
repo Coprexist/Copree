@@ -115,7 +115,12 @@
   判定改用**会话最后活跃时间**（别依赖消息正文里的时间戳）；**对齐缓存寿命、用数据定阈值**——DeepSeek 没公开 TTL，
   用我们已经在记的 `cached_tokens`（主站 `llm.py:283/373`；世界侧 `WorldLLMUsage.cached_tokens` +
   `routers/worlds.py` 的 `cache_hit_rate_pct`）看命中率随空闲时长怎么衰减，再定 12h/18h 还是别的值。
-- **解锁必须"整套"**：重写历史（摘要 + 最近 N 条）+ 复位思考保留标记 + 卸载最旧的图 + 清便签副本/条目。少做一样就是半解锁（上次便签就是只清了一类）。
+- **解锁必须"整套"**：重写历史（摘要 + 最近 N 条）+ 复位思考保留标记 + 卸载最旧的图 + 清便签副本/条目。
+  少做一样就是半解锁（上次便签就是只清了一类）。
+  **纪律做成了契约**（第四批 d）：`executor.UNLOCK_STEPS` 是唯一清单（新增动作只加一行、顺序也在这），
+  `_unlock_context` 按清单执行并把**实际执行的步骤**返回；`tests/test_unlock_steps.py` 拿它跟清单对账
+  ——改清单必须同时改测试（那道摩擦是故意的）。任何一步失败都**响**：日志写明哪步挂的、前面做完了什么。
+  尚未实现的两条（复位思考保留标记 / 卸载最旧的图）随第四批的思考与图片落地时加进清单。
 
 ### 6.1 排程：把未来的动作写进一条链，而不是每次现算（2026-09-25 定）
 
@@ -330,6 +335,15 @@
   `executor` 两处 `should_compress` 都带上 `context_window=context_window_for(model)`。
 - **验证**：全量 270/0；`tsc --noEmit` 与 `node scripts/check-i18n.mjs` 均无输出；真库迁移 head=`a7b8c9d0e1f2`，
   两列为 NULL（用默认）；真机 `deepseek-v4-flash` → 15.4K/38.0K/76.8K，`gpt-4.1` → **120K/296.6K/600K**（1M 窗口用上了）。
+
+### 第四批 d：解锁清单即契约（已完成 2026-09-25）
+
+- `executor.UNLOCK_STEPS`（数据，不是散在函数体里的调用）：`rewrite_history` / `clear_note_copies` /
+  `apply_pending_config` / `apply_pending_changes`；`_unlock_context` 按清单顺序执行并返回实际执行的步骤名。
+- 任何一步抛异常都记 `logger.exception`（哪步挂的 + 前面做完了什么）再往上抛——静默半解锁正是便签那次的病根。
+- 测试 `tests/test_unlock_steps.py`：① 清单 == 约定集合（改清单必须改测试）；
+  ② 真跑 `_unlock_context`（真库草稿会话）断言执行步骤 == 清单且账本真被重写成摘要在前。
+- **验证**：全量 272/0；重启 `health=healthy restarts=0`。
 
 ### 待落地
 

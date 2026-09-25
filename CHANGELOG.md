@@ -36,7 +36,10 @@
   `idle_threshold_percent` / `compress_target_percent`（NULL = 用代码默认 1/e、20%）；读取唯一入口
   `get_compression_thresholds(db)`；`utils/pure/model_window.py:context_window_for(model)` 取代全局窗口常量，
   executor 两处 `should_compress` 按模型窗口判定；管理端三个滑块（i18n 三语）
-- 验证：全量 **270/0**；前端 `tsc --noEmit` 与 i18n 检查无输出；真库 head=`a7b8c9d0e1f2`；
+- **解锁清单即契约**（第四批 d）：`executor.UNLOCK_STEPS` 是唯一清单，`_unlock_context` 按序执行并返回实际
+  执行的步骤；任一步失败记 `logger.exception` 再抛（半解锁要响，不能静默）；`tests/test_unlock_steps.py`
+  把清单与执行对账（改清单必须改测试）
+- 验证：全量 **272/0**；前端 `tsc --noEmit` 与 i18n 检查无输出；真库 head=`a7b8c9d0e1f2`；
   真机 `gpt-4.1` 窗口 1M → 三档 **120K / 296.6K / 600K**（以前一律按 128K 的 76.8K 触发）；
   真机草稿会话 40 条 / 10423 bytes → **22 条 / 5426 bytes**；
   真机连续两次构建字节完全一致（28 条 / 8935 bytes，修前 27/28）；

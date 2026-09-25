@@ -1182,8 +1182,22 @@ async def _save_conversation_log_safe(
 # 检查对话是否闲置
 # ============================================================
 
-async def _unlock_context(db, agent, *, group_id, session_id, conversation_type, summary: str) -> None:
-    """解锁点（压缩成功）的一整套收尾：**重写账本** + 复位便签副本 + 应用挂起的配置/能力变更。
+# 解锁 = 一整套动作，**清单即契约**（docs/dev/conversation_history.md §6：少做一样就是半解锁）。
+# 做成数据而不是散在函数体里：新增动作只加一行，执行顺序也在这里；
+# `_unlock_context` 按清单执行并把**实际执行的步骤**返回，测试拿它跟清单对账——
+# Python 没有「你必须调过这个方法」的编译期保证，能钉住的只有断言。
+# 尚未实现的两条（复位思考保留标记 / 卸载最旧的图）随第四批的图片与思考落地时加进来。
+UNLOCK_STEPS = (
+    "rewrite_history",        # 重写账本（摘要 + 事件 + 最近 N 条）
+    "clear_note_copies",      # 便签副本（连同撤下通知）随上下文重建离场
+    "apply_pending_config",   # 应用挂起的配置
+    "apply_pending_changes",  # 能力版本对齐最新（工具定义 + 提示词）
+)
+
+
+async def _unlock_context(db, agent, *, group_id, session_id, conversation_type,
+                          summary: str) -> tuple[str, ...]:
+    """解锁点（压缩成功）的一整套收尾：按 `UNLOCK_STEPS` 顺序执行，返回实际执行的步骤名。
 
     为什么必须重写账本：不重写的话，下一轮 build_messages 又从账本把原文端回来——
     压了等于没压，还每轮白付一次摘要调用（§0：compact / 超时压缩是唯一重写点）。
@@ -1192,18 +1206,42 @@ async def _unlock_context(db, agent, *, group_id, session_id, conversation_type,
     from app.services.memory.context_compression_service import DEFAULT_KEEP_LAST_N
     ref = (context_ref(group_id=group_id) if conversation_type == "group"
            else context_ref(session_id=session_id))
-    if ref:
-        await rewrite_context(db, agent, ref, summary=summary, keep_last=DEFAULT_KEEP_LAST_N)
-    # 便签副本（连同撤下通知）随上下文重建一起离场——锁定态绝不动前缀
-    from app.services.agent.state_stack_service import release_active_frame_notes
-    await release_active_frame_notes(db, agent.id)
-    from app.services.agent.agent_service import apply_pending_config
-    await apply_pending_config(db, agent)
-    # 前缀版本化：compact 解锁，effective 对齐最新（工具定义 + agent 提示词）
-    from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
-    from app.services.capability_versioning import apply_pending_changes, SOURCE_PLATFORM
-    await apply_pending_changes(SQLAlchemyCapabilityRepository(db), agent,
-                                [SOURCE_PLATFORM, f"agent-prompt-{agent.id}"])
+
+    async def _rewrite_history():
+        if ref:
+            await rewrite_context(db, agent, ref, summary=summary, keep_last=DEFAULT_KEEP_LAST_N)
+
+    async def _clear_note_copies():
+        from app.services.agent.state_stack_service import release_active_frame_notes
+        await release_active_frame_notes(db, agent.id)
+
+    async def _apply_pending_config():
+        from app.services.agent.agent_service import apply_pending_config
+        await apply_pending_config(db, agent)
+
+    async def _apply_pending_changes():
+        # 前缀版本化：compact 解锁，effective 对齐最新（工具定义 + agent 提示词）
+        from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
+        from app.services.capability_versioning import apply_pending_changes, SOURCE_PLATFORM
+        await apply_pending_changes(SQLAlchemyCapabilityRepository(db), agent,
+                                    [SOURCE_PLATFORM, f"agent-prompt-{agent.id}"])
+
+    runners = {
+        "rewrite_history": _rewrite_history,
+        "clear_note_copies": _clear_note_copies,
+        "apply_pending_config": _apply_pending_config,
+        "apply_pending_changes": _apply_pending_changes,
+    }
+    done: list[str] = []
+    for name in UNLOCK_STEPS:
+        try:
+            await runners[name]()   # 清单里写了却没人实现 → KeyError，当场炸而不是悄悄半解锁
+        except Exception:
+            # 半解锁要**响**：哪一步挂的、前面做完了什么——静默半解锁正是当初便签那次的病根
+            logger.exception(f"解锁步骤 {name} 失败：已完成 {done}，整段解锁未完成（下次会重来）")
+            raise
+        done.append(name)
+    return tuple(done)
 
 
 def _is_conversation_idle(messages: list[dict], hours: int = 12) -> bool:
