@@ -1051,7 +1051,7 @@ async def build_messages(
         from app.utils.pure.history import ROLE_BY_ACTOR, latest_message_ref
 
         ledger = await sync_group_history(db, agent, group_id, cap=max_unread, max_len=max_len)
-        group_ref = context_ref(group_id)  # 会话键只在这里拼一次
+        group_ref = context_ref(group_id=group_id)  # 会话键只在这里拼一次
 
         # 一次性事件（能力变更通知 / 便签撤下）**落成条目**：它们属于「外界带来了什么」，
         # 必须紧跟历史——落在尾部读数之前，否则下一轮它们会从末尾跑到中间（顺序变 = 断缓存）。

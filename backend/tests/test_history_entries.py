@@ -154,3 +154,33 @@ async def test_events_land_in_the_ledger_not_just_this_turn(migrated_db):
         assert written[0]["seq"] == 1
         assert (await hs.read(db, 1, "group:64"))[0]["content"].startswith("【能力变更通知】")
 
+
+
+async def test_rewrite_keeps_summary_events_and_tail(migrated_db):
+    """解锁重写：摘要 + 事件原样搬运 + 最近 N 条（保留最新、不是最旧）；账本空则不动"""
+    from app.database import async_session
+    from app.services.history import history_service as hs
+    from app.services.history.context_sync import rewrite_context
+    from app.utils.pure.history import gap_entry, make_entry
+
+    async with async_session() as db:
+        await _seed(db)
+        agent = type("A", (), {"id": 1})()
+        await hs.append(db, 1, "group:64", [
+            make_entry("message", "老的1", actor="user"),
+            gap_entry(5, ref="m5"),
+            make_entry("message", "老的2", actor="self"),
+            make_entry("notice", "平台通知"),
+            make_entry("message", "新的1", actor="user"),
+            make_entry("message", "新的2", actor="self"),
+        ])
+        await db.commit()
+
+        out = await rewrite_context(db, agent, "group:64", summary="[摘要] 前面聊了化学", keep_last=2)
+
+        assert [e["kind"] for e in out] == ["summary", "gap", "notice", "message", "message"]
+        assert [e["content"] for e in out[-2:]] == ["新的1", "新的2"], "保留最新的 N 条"
+        assert [e["seq"] for e in out] == [1, 2, 3, 4, 5], "重写后 seq 从 1 重排"
+        assert await hs.count(db, 1, "group:64") == 5
+        assert await rewrite_context(db, agent, "group:none", summary="x", keep_last=2) == [], "账本空就不动"
+

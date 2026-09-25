@@ -10,6 +10,8 @@
 """
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.chat import gm
@@ -17,12 +19,20 @@ from app.services.history import history_service
 from app.utils.pure.history import gap_entry, latest_message_ref
 from app.utils.pure.prompting import chronological, keep_newest_within
 
+logger = logging.getLogger(__name__)
+
 # 一批最多带多少字符（与旧窗口同口径：40000 字）
 BATCH_MAX_CHARS = 40_000
 
 
-def context_ref(group_id: int) -> str:
-    """这个会话在账本里的键——只在这里拼一次，别处别再拼。"""
+def context_ref(*, group_id: int | None = None, session_id: str | None = None) -> str:
+    """这个会话在账本里的键——只在这里拼一次，别处别再拼。
+
+    群 = `group:{id}`；私信 = `session_id`（就是 `40_90` 那种，与状态帧的 context_ref 同口径）。
+    关键字参数是故意的：调用点必须说清自己在哪个会话，别靠位置参数猜。
+    """
+    if session_id:
+        return session_id
     return f"group:{group_id}"
 
 
@@ -36,6 +46,32 @@ async def append_events(db: AsyncSession, agent, context_ref: str, events: list[
     if not events:
         return []
     return await history_service.append(db, agent.id, context_ref, events)
+
+
+async def rewrite_context(db: AsyncSession, agent, context_ref: str, *,
+                          summary: str, keep_last: int) -> list[dict]:
+    """**解锁点**重写整段账本：摘要 + 原样搬运的事件 + 最近 keep_last 条。
+
+    全仓唯一允许动中段的地方（§0：compact / 超时压缩是唯一重写点）；其它路径只能 append。
+    事件类（缺口/补看/便签/通知）不揉进摘要，原样搬到摘要之后——它们是契约，不是内容。
+    账本空就什么都不做（不动 = 不误清）。
+    """
+    from app.utils.pure.history import is_compressible, make_entry
+
+    entries = await history_service.read(db, agent.id, context_ref)
+    if not entries:
+        return []
+    keep = entries[-keep_last:] if keep_last > 0 else []
+    kept_seqs = {e["seq"] for e in keep}
+    events = [e for e in entries if e["seq"] not in kept_seqs and not is_compressible(e)]
+    head = [make_entry("summary", summary)] if (summary or "").strip() else []
+    await history_service.clear(db, agent.id, context_ref)
+    rewritten = await history_service.append(db, agent.id, context_ref, head + events + keep)
+    logger.info(
+        f"Agent({agent.id}) 会话 {context_ref} 解锁重写：{len(entries)} → {len(rewritten)} 条"
+        f"（摘要 {len(head)} + 事件 {len(events)} + 保留 {len(keep)}）"
+    )
+    return rewritten
 
 
 async def sync_group_history(db: AsyncSession, agent, group_id: int, *, cap: int, max_len: int) -> list[dict]:

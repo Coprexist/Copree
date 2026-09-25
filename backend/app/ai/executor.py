@@ -492,6 +492,12 @@ async def _tool_call_loop(
             if compressed_ok:
                 _auto_compressed = True
                 context["_precompressed"] = True
+                # 解锁点整套（以前这条路径只压内存、不重写账本 → 下一轮原文又回来了）
+                await _unlock_context(
+                    db, agent, group_id=group_id, session_id=session_id,
+                    conversation_type=conversation_type,
+                    summary=(compress_stats.get("summary") or ""),
+                )
     except Exception as e:
         logger.warning(f"调用前空闲压缩跳过（非致命）: {e}")
 
@@ -682,15 +688,11 @@ async def _tool_call_loop(
                             f"{compress_stats['before_tokens']} → {compress_stats['after_tokens']} tokens"
                         )
                         try:
-                            from app.services.agent.agent_service import apply_pending_config
-                            await apply_pending_config(db, agent)
-                            # 前缀版本化：compact 解锁，effective 对齐最新（工具定义 + agent 提示词）
-                            from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
-                            from app.services.capability_versioning import apply_pending_changes, SOURCE_PLATFORM
-                            await apply_pending_changes(SQLAlchemyCapabilityRepository(db), agent, [SOURCE_PLATFORM, f"agent-prompt-{agent.id}"])
-                            # 解锁：便签副本（连同撤下通知）随上下文重建一起离场——锁定态绝不动前缀
-                            from app.services.agent.state_stack_service import release_active_frame_notes
-                            await release_active_frame_notes(db, agent.id)
+                            await _unlock_context(
+                                db, agent, group_id=group_id, session_id=session_id,
+                                conversation_type=conversation_type,
+                                summary=(compress_stats.get("summary") or ""),
+                            )
                             await db.commit()
                         except Exception:
                             pass
@@ -1174,6 +1176,30 @@ async def _save_conversation_log_safe(
 # ============================================================
 # 检查对话是否闲置
 # ============================================================
+
+async def _unlock_context(db, agent, *, group_id, session_id, conversation_type, summary: str) -> None:
+    """解锁点（压缩成功）的一整套收尾：**重写账本** + 复位便签副本 + 应用挂起的配置/能力变更。
+
+    为什么必须重写账本：不重写的话，下一轮 build_messages 又从账本把原文端回来——
+    压了等于没压，还每轮白付一次摘要调用（§0：compact / 超时压缩是唯一重写点）。
+    """
+    from app.services.history.context_sync import context_ref, rewrite_context
+    from app.services.memory.context_compression_service import DEFAULT_KEEP_LAST_N
+    ref = (context_ref(group_id=group_id) if conversation_type == "group"
+           else context_ref(session_id=session_id))
+    if ref:
+        await rewrite_context(db, agent, ref, summary=summary, keep_last=DEFAULT_KEEP_LAST_N)
+    # 便签副本（连同撤下通知）随上下文重建一起离场——锁定态绝不动前缀
+    from app.services.agent.state_stack_service import release_active_frame_notes
+    await release_active_frame_notes(db, agent.id)
+    from app.services.agent.agent_service import apply_pending_config
+    await apply_pending_config(db, agent)
+    # 前缀版本化：compact 解锁，effective 对齐最新（工具定义 + agent 提示词）
+    from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
+    from app.services.capability_versioning import apply_pending_changes, SOURCE_PLATFORM
+    await apply_pending_changes(SQLAlchemyCapabilityRepository(db), agent,
+                                [SOURCE_PLATFORM, f"agent-prompt-{agent.id}"])
+
 
 def _is_conversation_idle(messages: list[dict], hours: int = 12) -> bool:
     """检查对话是否闲置——缓存大概率已过期，应强制压缩。

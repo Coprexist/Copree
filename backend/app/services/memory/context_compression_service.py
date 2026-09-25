@@ -349,6 +349,8 @@ async def compress_messages(
         "after_tokens": new_tokens,
         "compression_ratio_pct": compression_ratio,
         "summary_length": len(summary),
+        # 摘要文本本身：解锁点要拿它写账本条目（不留的话账本重写只能写空摘要）
+        "summary": summary,
     }
 
     logger.info(
@@ -415,4 +417,6 @@ def inline_compress(
         "after_count": len(new_messages),
         "before_tokens": original_tokens,
         "after_tokens": new_tokens,
+        # 没调模型也要给账本一个交代（同一句文案，别再写一遍）
+        "summary": head[-1]["content"] if compressed_count > 0 else "",
     }
