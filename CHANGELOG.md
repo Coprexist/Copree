@@ -9,6 +9,387 @@
 
 ### ✨ 新增功能
 
+### 🐛 修复的 Bug
+
+#### QQ 用户的昵称没落到 Copree（2026-09-25）
+- 发现：官方群 @ 事件的 author **确实带 username**（真机日志实测：字段=['bot','id','member_openid',
+  'member_role','union_openid','username']）；我们只在**第一次见这个人**时读它，之后就不再更新，
+  所以老账号一直停在占位名「QQ用户XXXXXX」——Coprope 界面、AI 眼里的说话人名、AI 回 @ 用的名字全读这一列
+- 修法：拿到昵称就补写 users.username（撞名走和建号同一个去重函数 _unique_username，加 #2、#3…）；
+  外部身份的 display_name 同步更新。群消息事件把 author 字段打进日志（openid 只留尾号），
+  以后判断"腾讯没给"还是"我们没读"不用再猜
+- 用例 test_group_nickname_backfills_username；全量 212 passed
+
+#### QQ 侧回复里出现两个 @（2026-09-25）
+- 现象：QQ 群里 AI 的回复显示成「@书爱… @QQ用户6682BD 正文」——前一个 @ 是 QQ 自己的
+  被动回复标记（我们带了 msg_id），后一个是我们把它写在正文里的：纯文本，QQ 不会渲染成真 @，
+  而且名字只是给外部身份起的占位名，QQ 侧看着莫名其妙
+- 修法：**出站只摘开头对"这次回的那个人"的 @**（仅 QQ 群回复）。点名规则收在
+  app/utils/text.py 的 strip_leading_mention，与 check_mention 共用同一份边界字符集
+  （全字匹配、左括号不算边界、昵称带空格也能整串命中，短名不会把长名切一半）。
+  站内消息一字不动——Copree 界面要靠它显示 AI 在回复谁
+- 顺带把群消息事件里的 author 字段打进日志（openid 只留尾号）：官方事件表里 author 有 username，
+  真机上我们只拿到过占位名，这行日志用来判断"腾讯没给"还是"我们没读"
+- 用例 test_group_outbound_strips_reply_mention + test_mention_check 新增断言；全量 211 passed
+
+#### QQ 群里说的话，Copree 侧要刷新才看得到（2026-09-25）
+- 症状：QQ 群里发消息，AI 会回，但 Copree 群界面上不出现这条人话，刷新之后才有
+- 根因：插件那条投递链路少调了 manager.broadcast_to_group（网页端发消息那条是有的）；
+  fanout_group_message 只管 AI 成员与离线暂存，不推给群里的人 —— 两条链路各写一遍就会漂
+- 修法：新增单一入口 broadcast_group_message()，网页端发消息与 QQ 插件都走它；
+  插件里消息只序列化一次（message_view），fanout 与 broadcast 共用同一份 msg_data
+- 用例 test_group_message_broadcasts_to_humans（spy 住广播，断言 via=qq/前缀/发送者名）；全量 209 passed
+
+#### AI 在群里 @ 出一个叫「None」的人（2026-09-25）
+- 症状：QQ 群里 AI 回「@None 在的在的，看到你了…」
+- 根因：本地消息的 sender_name 列是空的（网页端靠 sender_id 自己查名字），
+  而 AI 的历史消息渲染（build_messages）直接把这个空值当说话人名 →
+  上下文里说话人叫字面「None」，模型就照群里的 @ 习惯把人 @ 了出来。
+  影响所有群，不只 QQ 通道
+- 修法：说话人名字在一个入口批量解析（_resolve_speaker_names，联邦消息优先自带名、
+  否则查用户行），format_message 对空名字兜底成「未知」——纯函数层不再可能吐出 "None"
+- 用例 test_speaker_name.py 2 条；全量 208 passed
+
+#### 外部身份独立成表：QQ / 联邦统一到 external_identities（2026-09-25）
+- 新增 external_identities（迁移 f7c1a2b3d4e5）：一行 = 某个通道上的某个人，键是
+  (kind 来源类别, owner_scope 归属实例, origin 通道侧标识)。kind 由插件在 plugin.json 的
+  channel 块里自己声明（QQ 是 qq），保留字 federation/local/system，唯一性由社区市场索引 CI 守
+  ——第三方开发者加通道不用等平台加常量
+- channel_pairings 并入这张表：配对状态与「这个外部身份是谁」本来就是同一行，少一张表、
+  少一处双写；接口 JSON 键不变，前端零改动
+- QQ 影子账号标成 users.type='external'（users_type_check 放宽到四值）：不再被搜人、加好友、
+  用户统计与注册引导（has-users / 首个注册用户即管理员）当成真人
+- 市场 CI 增 channel_kind 校验（格式 / 保留字 / 全局唯一），schema.json 同步；
+  新增 docs/dev/channel-plugins.md：manifest 声明、运行时接口、信任边界、下一阶段一次讲全
+- 用例 14 passed；真库实测：channel_pairings 搬迁到 external_identities、QQ 通道重启后照常鉴权收事件
+- 遗留（下一阶段）：messages / dm_sessions / group_members 仍以 users.id 为锚点，
+  改成引用外部身份之后再删掉过渡锚点账号
+
+#### 用户给自己的 AI 接 QQ：通道卡片 + 配对制（2026-09-25）
+- 入口在「我的 AI → 设置 → QQ 通道」：填 AppID / AppSecret（去 QQ 开放平台用手机 QQ 扫码自建机器人），
+  保存即启动；实例 id = agent-<agentId>，归属直接读 agents.owner_id，**非主人（含管理员）一律 403**
+  ——通道里存的是用户自己的机器人凭据，管理员排障走控制台那条路
+- **配对制**（对齐 OpenClaw 的 DM pairing）：默认私聊策略 pairing —— 陌生人私聊只收到一个 6 位配对码，
+  消息**不进 AI**；主人在卡片上「批准」或把码抄回来批准后才放行，还能拉黑 / 解除；
+  策略四档 pairing / owner / open / off
+- 为什么认 openid 不认 QQ 号：腾讯官方只给按机器人加密的 openid（事件文档已核），QQ 号拿不到，
+  界面只把它当显示名；影子账号用官方给的昵称显示
+- 新增 channel_pairings 表（迁移 d8e9f0a1b2c3）、app/services/plugin/{pairing,channel,runtime_control}.py、
+  app/routers/channels.py；启停逻辑抽到 runtime_control，管理台两个接口改为调用它（一处改、两处对）
+- 管理台那份「列表即真相」加护栏：agent- 前缀的实例归 AI 主人管，重扫 / 保存插件配置不会误删用户的通道
+- 插件：dm_policy 改成 pairing/owner/open/off（去掉 allowlist），陌生人私聊回配对码并做 60 秒节流
+- 用例 test_channel_pairing.py 4 条 + QQ 插件用例改为覆盖配对门槛；全量 203 passed；
+  真接口实测：主人 200 / 别人 403 / 待配对可见 / 小写码批准 200 / 错码 400 / 解除 200
+- 文档 docs/agent-channels.md（三种身份、配对流程、归属与限制）
+
+#### 管理界面改成"控制台" + 商城搬进控制台（2026-09-25）
+- 进 /admin 自动收起应用侧边栏（Layout 里按路径判断，和沉浸界面同一机制），整页宽度归管理界面，
+  能塞下更多管理项；控制台顶部一条 48px 工具条（标题 + 当前页签 + 手册入口），导航栏**可折叠**
+  （收起后只剩图标，状态记在本机），底部固定一个**返回应用**出口——侧边栏收起来了，出口必须在这里
+- 商城从独立页面搬进控制台，成为「能力与扩展 → 商城」页签：插件商城 / 已安装 / 商城源 三个子页签。
+  起因是分级：**世界商城是给普通用户找世界的，继续留在 /market 对外开放**；
+  插件的安装、卸载、同步源配置是管理动作，不该出现在普通用户页面上。已安装直接复用能力面板的表格
+- 上一版把世界商城整页拆成"总商城分区"，本轮按上面的分级把公开页恢复成原样（git checkout 回 HEAD，
+  与拆之前逐行比对过），只把插件相关部分留在控制台里
+
+#### 插件商城一期：装上插件不用再进目录（2026-09-25）
+- 插件商城：上传 zip → **先审阅 manifest**（id/版本/作者/类型/载荷/解压体积/sha256/文件清单）
+  → 安装 / 更新 / 卸载；装卸只对管理员开放（后端 require_admin，普通用户调接口是 403）
+- 后端 app/services/plugin/store.py：安装是纯文件操作，安全审查只有这一处——
+  拒绝绝对路径与 ..、符号链接、隐藏目录、可执行后缀；限单包 5MB / 解压 20MB / 500 条目 / 单文件 2MB；
+  覆盖安装走临时目录 + 原子替换；**内置插件 id 一律拒绝被覆盖**；卸载连带清掉服务期望状态
+- 接口 GET /plugins/store、POST /plugins/store/packages、POST …/{file}/install、
+  DELETE …/{file}、DELETE /plugins/store/installed/{id}
+- 社区插件索引仓 community-market/（可整目录拆成独立仓）：index.json 是唯一事实来源，
+  README 目录由 CI 生成（手写一定漂移）；tools/verify.py 两层校验——索引格式（离线）+
+  下载 pin 住的发布物核对 sha256 与 manifest；三层信任：内置 / 已验证（源码在我们仓）/ 社区（CI 仅）
+- 类别文案与图标收敛到 utils/pluginCategories.ts（管理页与商城共用，此前是硬编码中文）
+- 用例 backend/tests/test_plugin_store.py 11 条：越界与符号链接、可执行后缀、体积条目上限、
+  撞内置、重复安装必须显式 upgrade、覆盖不留旧文件、卸载规则、坏包不落盘、与 DB 对齐
+- 文档 docs/plugin-market.md（三层信任 / 安全边界 / 索引仓与 CI 通过规则）
+
+#### 管理面板重新分级 + 拆分成单文件页签（2026-09-25）
+- 起因：20 个页签塞进 3 个分组，其中「系统配置」一个桶装了 13 个（备份、审计、联邦、提示词、工具、插件、
+  认证、清理、商城…），桶名和桶里的内容对不上；桌面端和移动端的分组顺序还不一致（核心/运维/系统 vs 核心/系统/运维）
+- 分组改成按**管理对象**分桶，对齐 GitHub（General / Access / Code and automation / Integrations）、
+  Vercel、Google 管理控制台的习惯，每桶 2~6 项、桶名必须能盖住桶内全部条目：
+  **通用**（概览 / 平台设置 / 认证）、**用户与内容**（用户 / AI 管理 / 群聊审查 / 兑换码）、
+  **能力与扩展**（插件与技能 / 系统提示词 / API 密钥池 / OpenCLI / 联邦 / 商城源）、
+  **监控与日志**（系统监控 / 用量分析 / 对话日志 / 审计）、**数据与维护**（备份 / 文件清理）
+- 拆文件：`pages/AdminPage.tsx` 2172 → 169 行（只剩导航与渲染），9 个页签各自成文件放进 `pages/admin/`；
+  分组、顺序、图标、文案、组件**只登记在 `pages/admin/tabs.tsx`**（单一事实来源，桌面端与移动端共用同一份顺序）
+- 并入口：插件、工具、技能、技能背包这四处"给 AI 装能力"的地方合成一个「插件与技能」页签，内部 4 个子页签
+- 顺带修掉三处硬编码中文标签（系统提示词 / 插件管理 / 世界商城）并补齐三语说明文案；
+  `?tab=` 传了不认识的值时回落概览，旧书签不再落在空页面上
+- 「世界商城」这个页签改名为「商城源」，它实际管的是商城内容的 GitHub 同步源——真正的世界商城会作为
+  总商城的其中一个分区出现
+- 拆分过程中逐行比对过正文（抽取用的是一次性脚本，不进仓库），`tsc -b` 与 `i18n:check` 全绿
+
+#### 管理页统一排版：列表 + 就地展开（2026-09-25）
+- 插件页重做：一张表（插件 / 类型 / 说明 / 状态 / 操作）+ 搜索 + 分类筛选 + 重扫；
+  配置不再摊在列表里，点「详情」**就地展开**（含 QQ 通道的实例增删/配置/启停）
+- **抽出两个共用件**（`components/ui`）：`ListPanel`（卡片壳 + 表头 + 工具条 + 空态）
+  与 `ExpandPanel`（就地展开的详情块）——这两块以前在插件页、命令白名单、技能背包各写一遍，
+  类名都是互相抄的
+- 三处一起收敛：插件页（表 + 展开）、OpenCLI 命令白名单（改用 `ListPanel`）、
+  技能背包（展开区改用 `ExpandPanel`）；`docs/dev/ui_system.md` 的「照抄模式」补了两行
+- 插件页的 DSH 桥接 / 文档导出 / 接口文档分区从"同级板块"变成表里的**内置条目**，
+  点详情才展开——一处装所有插件，配置各回各家
+- 文案走 i18n 三语（新增 `tool:plugin.*` 一批 + 通用 `tool:ui.collapse`）；`tsc -b` 与 `i18n:check` 全绿
+
+#### 插件协议 v3.5：一个插件多份配置（多实例）+ 私聊通道（2026-09-25）
+- 起因：QQ 通道要接多个机器人（**每个 AI 一个自己的 AppID**），而原协议是"一个插件一份配置"，
+  只能退化成"装 N 遍同一个插件"——同一插件在页面上出现 N 次、代码加载 N 次。这不是插件多，是**配置多**
+- **声明与实例分离**：`@service(multi_instance=True)` 只声明（类 + schema + 展示信息），
+  实例化交给加载器按 DB 里的实例列表逐个建；单实例插件就是"实例固定为空串"的特例——
+  **单实例与多实例共用同一条加载代码**。注册表 key 变成 `plugin_id` / `plugin_id:instance`，
+  于是现有启停接口 `/admin/plugins/{key}/start|stop` 一行没改就支持了实例
+- **数据**：`plugin_configs` 加 `instance` 列（唯一键 `(plugin_id, instance, key)`）；
+  期望运行状态改为按实例存（新表 `plugin_service_states`，取代原先加在 `plugins` 上的单列）；
+  schema 改为从**声明**读，所以没启用的插件也能先看配置项
+- **配置接口改列表即真相**：`PUT /plugins/{id}/config {instances:[...]}`——没提交的实例被删除
+  （先 stop 再回收），单个实例里未传的键仍不动、空串仍表示清除
+- **私聊**：`C2C_MESSAGE_CREATE` → `get_or_create_dm_session(QQ用户, 该AI)` → `send_dm_message`；
+  出站对称地加了**私信出口分发**，`app/chat/dm_delivery.py` 与 `group_delivery.py` 对称，
+  ws 路由与外部通道共用（`ws.py` 私信分支因此也少了一截）。私聊策略 `dm_policy`（everyone/allowlist/off）默认 everyone
+- **一个意外的好消息**：Coprope 的私信规则本来就是「涉及 AI 免好友校验」，所以 QQ 用户私聊 AI
+  不需要先加好友，不用为桥接破例
+- **前端**：service 卡片从"一个配置表单"改成**实例列表**（增删/各自配置/各自启停/各自状态），
+  schema 驱动、机密只回"已保存"，新增 i18n 三语 11 键
+- **验证**：多实例用例（一份配置一个实例、凭据不串、删配置即回收）、私聊往返、策略过滤；
+  `tsc -b` 与 `i18n:check` 全绿
+
+#### QQ 通道：Copree 的 AI 进 QQ 群（插件协议 v3 的第一个 service 插件，2026-09-25）
+- 目标：群里 @机器人 → Copree 群里的 AI 被唤醒 → 回复发回 QQ 群。**走官方 QQ 机器人 API v2**，
+  不用第三方协议端（违反用户协议、有风控封号风险）
+- **收**：WebSocket 长连网关（hello → identify → 心跳 → dispatch），只订 `GROUP_AND_C2C_EVENT(1<<25)`；
+  消息进 Copree 时按 openid 建一个真用户（随机口令、不可路由的锚点邮箱），所以 **AI 看得出是谁在说话**
+- **发**：优先被动回复（带 `msg_id`，5 分钟内最多 5 次），超时/超次转主动消息，并按 20/群/分钟、60/Bot/分钟限频；
+  `msg_id + msg_seq` 唯一，重复推送按 id 去重
+- **两个共用层（阶段一没预料到，是"单一来源"的必然结果）**：
+  ① `app/chat/group_delivery.py` —— 把"落库后谁来收、怎么收"从 WebSocket 路由里抽出来，
+  **ws 路由与外部通道共用同一条投递链路**（在线直推/离线暂存/唤醒 AI/联邦/向量化），`ws.py` 因此少了约 125 行；
+  ② `app/chat/outbound.py` —— 群消息出口分发，世界感知是第一个出口、QQ 通道是第二个，加通道不再改核心，
+  单个出口抛异常只记日志（外部通道坏了不能拖垮"发消息"本身）
+- **配置**：`app_id` / `client_secret`(加密) / 绑定的 Copree 群 / 唤醒的 AI 名字 / QQ 群白名单，
+  全部走插件配置表（接口不回显机密）
+- **已知限制**：只做群、单聊不回；多 QQ 群共用一个 Copree 群时回复回到最近来消息的那个群；
+  富媒体不回传（收到的图片/语音/文件转文字占位，语音用官方 `asr_refer_text`）
+- **验证**：`tests/test_qq_channel_plugin.py`（入站往返/去重/白名单/不外流/坏出口隔离/媒体占位）；
+  实测启用前不加载、启用后注册、无凭据启动给出明确原因、关闭后回收；后端全量测试 **185 passed / 0 failed**
+
+#### 插件协议 v3：服务类插件（category: service）+ 插件级加密配置（2026-09-25）
+- 目标：让「QQ 通道」这类**常驻服务**能做成插件（`plugins/<id>/` 一个目录装好即可用），而不是硬塞进核心代码
+- **不新造第三套**：仓库里本来就有 `ServicePlugin`（`get_status/start/stop`）+ `PluginRegistry`，只是只有 `browser`
+  一个实例、且 `bootstrap.py` 里硬编码恢复它。v3 = 给「目录即插件」补上 `category: "service"`，
+  用 `@service` 装饰器把目录插件注册进同一个注册表；`bootstrap` 改为按 `plugins.service_desired_running`
+  逐个启动（`browser` 成为普通一员，硬编码取消）
+- **装好即可用**：目录出现 → 登记；管理员关闭/目录消失 → **先 stop 再回收**，不留后台残余；
+  重扫会重载代码并把原本在跑的服务拉回运行态；`GET /plugins` 只登记不启动（不能因为刷一次列表就拉起后台服务）
+- **凭据有地方放**：新表 `plugin_configs` + `services/plugin/config.py` 唯一读写入口；机密项（schema 里
+  `secret: true`）Fernet 加密落库、接口只回"有没有填"、审计只记改了哪些键不记值；
+  `encrypt_secret/decrypt_secret` 成为唯一实现，`*_api_key` 降为同义别名（调用点零改动）
+- **前端**：统一插件区里 service 卡片带运行状态、待配置提示、启动/停止与「配置」展开表单（schema 驱动，
+  机密用 password 且"留空则不变"）；下半屏只列内置服务（`owner == null`），同一个插件不再出现两次
+- **顺带修旧漏**：以前"目录消失"只回收声明式技能，行为式插件的处理器会留在注册表里——现在统一由
+  `_loaded` 追踪，连行为处理器一起回收
+- **验证**：四层（加载/配置/开关/集成）实测通过；`alembic upgrade head` 已 apply；重启日志
+  `[OK] 服务插件已启动: browser`；`/plugins/{id}/config` 无凭据 401（路由在）；`tsc -b`、`i18n:check`、
+  `tests/run_without_pytest.py test_plugin_protocol_v3` 全绿
+- 设计文档：`docs/plugin-protocol-v3.md`
+
+#### DSH 桥接：Copree 管理端给 DSH 本体会话发消息（用户 2026-09-23）
+- 目标：在 Copree「管理 → 插件」看到一个 DSH 区块，检测到 dsh-copree 在跑就能打开**单独的 DSH 对话页**
+  （放大后的群视界对话版式），用 Copree 给 DSH 的会话发消息触发它改代码；会话/上下文/工具全走 DSH 本体
+- **DSH 侧**（dsh-copree 插件新增 host 半侧桥接）：`/copree-bridge/{status,sessions,prompt,stream,cancel}`，
+  帧翻译只取可见文本与工具名（`user/delta/say/tool/toolDone/turnEnd/error`），模型思考与工具 meta 不出境；
+  直接调用 DSH 的 `ctx.sessionController`（list/create/prompt/follow/cancel），**不复刻它的 typert RPC**
+- **安全闸门 = DSH 先同意**：插件只有在 DSH 配置里同时给了 `bridgeSecret` 与 `bridgeAdvertiseUrl` 时
+  才向 Copree 注册心跳；不配则整条路由不注册、一个包都不发，Copree 永远只会显示「未检测到」。
+  两端同一份密钥，切换门恒定时间比较；注册端点错密钥 401（实测）
+- **Copree 侧**：`/dsh-bridge/register`（插件心跳，密钥认证）+ `/admin/dsh/*`（管理员：状态/会话/prompt/SSE 中继/取消）；
+  注册表只在内存（DSH 每 20 秒心跳，Copree 重启自动补齐），不落地任何会话数据
+- **前端**：管理-插件 里 DSH 状态卡（已连接/未检测到 + 版本）→「打开对话」进 `/dsh` 独立页；
+  页面复用群视界对话的顶栏/气泡/输入区版式，会话下拉列出**所有工作区**的 DSH 会话
+- **第二轮修正**（用户实测反馈）：工具行改为读 DSH 自己的 `tool/ptc-dispatch` 记录——PTC 复合调用
+  （run_code）里的编辑/读取/命令各自成行（父行不再重复铺聚合输出）；对话列补 `bg-surface`，
+  不再露出页根 canvas 的 #f8fafc；页面 SSE 改走共享读帧器 `utils/sse.ts`，断线自愈重连——
+  此前流一断页面就静默收不到帧，DSH 的提问/审批帧随之丢失，人卡在页面上答不了
+- **第三轮附：消息显示两遍的根因**（用户 2026-09-24「只有工具流里面说话发文字才会这样」）：
+  直播增量（`delta`/`think`）与落库原文（`assistant/message` 的 `say`/`think`）是同一段话的两种来源，
+  而 reducer 只在「最后一行是直播行」时才覆盖——一轮里工具帧会插在正文中间（先说要做什么，再调工具），
+  那时最后一行是工具行，落库文本就另起一行，同一段话出现两遍（活体帧序列实测：…增量… → think → say → 工具帧）。
+  修法：直播帧带 `live: true`，覆盖时按「本分组内最近一条还开着的直播行」找（跨过中间的工具/思考行），
+  不再是只看最后一行；`think` 同样处理（增量往后接、落库原文覆盖）
+- **功能边界提示**：DSH 页与管理卡都加一行说明「这里只保留核心功能（对话/插队/审批/提问/图片），其余请在
+  DSH 网页里操作」，免得把「没做」当成「坏了」
+- **第三轮修正（0.7.0）：闸门方向做反了，改回只由 DSH 说了算**（用户 2026-09-24
+  「在 dsh 里面点击同意通过之后 copree 才能连过来啊」）：同意按钮在 **DSH 网页 → 设置 → Copree**
+  的「Copree 反向接入」里点；**同意前**插件不发心跳、不注册任何桥接路由（/copree-bridge 整条前缀
+  都不存在），所以 Copree 连「检测到有台 DSH」都做不到；撤销后 ≤1 次心跳内路由与心跳都停。
+  同意状态落本机 DSH_HOME/dsh-copree-consent.json（默认关）。上一版做的「Coproee 管理端再点一次
+  同意」已整体撤掉（含迁移 c3d4e5f6a7b3 删列）——那道闸门保护的是 Copree，而 Copree 侧本来
+  就只有管理员能发指令，同一个管理员点两次不是两道锁，只是假安全感
+- ~~第三轮（已废弃）：接入同意 = 安全设置~~（用户 2026-09-24「dsh 侧必须在 Copree 里面同意才能连接，
+  否则物理隔绝，无法绕过」）：两道闸门——DSH 侧先同意（bridgeSecret + 可达地址）才会来心跳；
+  心跳带这台 DSH 的**稳定实例身份**（`DSH_HOME/dsh-copree-instance.json`），但**必须管理员在
+  「管理 → 插件 → DSH」点同意**才算接入。同意前：Copree 不把它放进可用注册表（`/admin/dsh/*` 一律
+  503「有一台 DSH 请求接入，但尚未在 Copree 同意」），插件侧收到 `approved=false` **不注册桥接路由**
+  ——两端同时隔绝，拿到密钥也没有可调用入口；同意 / 撤销在 ≤1 次心跳（默认 20 秒）内生效且可撤回。
+  决定落 `system_settings.dsh_bridge_config`（迁移 `c3d4e5f6a7b2`，默认拒绝）；
+  `/admin/dsh/consent` 提供待接入 / 已同意 / 已拒绝；插件 `/status` 增 `streams` 订阅诊断
+  （提问与审批只发给「正在看这条会话」的页面，没人在看回落 DSH 默认链）
+- 回归（0.6.0）：`dsh-copree/scripts/bridge-smoke.mjs` 48 条新增 6 条（同意前无路由 / 同意后出现 /
+  撤销后摘掉 / 重新同意恢复 / 心跳带实例身份 / status 报订阅诊断）；
+  `dsh-copree/scripts/bridge-smoke.mjs` 42 条新增 3 条 PTC 断言（子操作独立成帧、
+  子操作结果行来自它自己的声明、父行去重）
+- 回归：`dsh-copree/scripts/bridge-smoke.mjs` 17 条（鉴权/会话字段裁剪/建会话投递/SSE 帧序/心跳注册/未配密钥不注册）；
+  其中 `prompt(request, signal)` 缺 signal 会真实崩溃 —— 测试已按真 controller 的行为收紧（本次就是它抓到的）
+
+#### DSH 对话页接住「等你回答」：审批 / 提问弹窗 + 排队（用户 2026-09-23）
+- 起因：DSH 的审批与 `ask_user_question` 都是**阻塞式**的——没人回答，会话就停在那里；
+  而 Copree 页面不接这两条链，人只看到"AI 不动了"（用户实测：助手弹的问题他根本答不了）
+- **插件 host 半新增回答者**（`dsh-copree/src/bridge.ts`）：注册进 DSH 的 `approval/request` 与
+  `user-questions/request` 两条瀑布，把请求变成一帧 `{k:'ask'}` 发给**正在看这条会话**的 Copree 页面，
+  页面答完回 `{k:'askDone'}` 并把决定交回 DSH（同意 → `allowed-once`，不同意 → `rejected`；提问 → 结构化 answers）
+- **没人在看就立刻交回默认链**（该会话没有打开的流）：宁可让 DSH 按自己的 fail-closed 规则办，
+  也不能把会话挂死在一个没人看的弹窗上。等人窗口 10 分钟，与群视界审批同口径；重连时补发未答完的请求
+- **Copree 侧**：中继新增 `POST /admin/dsh/answer`（审批/提问共用一条，DSH 侧按内容分辨），已实测转发到位
+- **前端**：审批弹窗直接复用**世界对话那一份** `ApprovalDialog`（抽到 `components/shared/ChatDialogs.tsx`，
+  两个页面同一份实现；DSH 没有"附言"通道，`allowNote={false}` 就不摆白写的输入框）；提问新增同款底座的
+  `QuestionDialog`（选项 + 自由填写，多选标注）
+- **排队**（用户反馈"我发的消息和你收到的不一样"）：DSH 还在跑上一轮时，原本的发送是**直接丢弃**的——
+  页面看不出区别，用户以为发了、其实没发。现在改成排队：与群视界对话共用 `PendingQueuePanel`，
+  忙时按钮变「排队」，轮次结束后按顺序一条条发出，中途可移除
+- 共享零件统一到 `components/shared/`：`ChatPanelAtoms.tsx`（内容列宽 + 工具条）、`ChatDialogs.tsx`
+  （审批弹窗 + 提问弹窗 + 排队面板）；`WorldChatPanel` 只换 import，行为与状态不变
+- 用户澄清「那条其实是先前打进排队的消息」后补的两点：排队面板标题写明**什么时候发出**（当前轮结束后按顺序）；
+  发出前先看会话里是否已有同一条文本（例如同时在 DSH 界面与这一页各发过一次），有就跳过并给一句可见提示（不静默吞，8 秒后自行消失）
+- **重复消息**（用户："我发的消息和你收到的消息都不一样 / 我没发这个"）：会话日志实测——同一条文本在上一轮结束后又被提交了一次
+  （各自独立的 prompt rpcId，相隔 5 分钟，正好是"上一轮跑完 → 队列里那条被发出"）。根因是发送后**没有任何即时反馈**：
+  气泡要等 DSH 回显才出现，用户以为没发出去就又按了一下，第二次进了队列、轮次结束后真的发了出去。
+  现在：发出即给一条「已发出，等 DSH 回显」的气泡（回显后自动收掉），队列面板只表示"还没发出"，两个状态不再重叠；
+  另外同一段文本 5 秒内重复提交直接忽略（只在没带图片时判重，避免误伤"再发一次同样的图"）
+- 回归：`bridge-smoke.mjs` **31 条**（新增 8 条：回答者注册、审批过桥成 ask 帧、页面决定被接受、
+  同意→`allowed-once`、答完通知所有观看者、提问带选项过桥、回答按选项交回、没人在看时交回默认链）；
+  `tsc --noEmit` 与 `i18n:check` 通过
+
+#### DSH 对话页复用「群视界对话 · 放大」版式，并让图片能进会话（用户 2026-09-23）
+- 起因：DSH 对话页原来只有一个会话下拉 + 一个 textarea，既没有完整界面，也**发不出图片**
+- **共用零件收敛到一处**：`frontend/src/components/shared/ChatPanelAtoms.tsx`（内容列宽 hook + 拖条 + `ToolBubble`/`toolIcon`）
+  从 `WorldChatPanel` 抽出，世界对话与 DSH 对话共用同一份；世界侧只换 import，行为与状态都不动（`useWorldChat` 未触碰）
+- **DSH 页重做**（`frontend/src/pages/DshChatPage.tsx`）：左栏 = DSH 会话列表（**过滤掉子会话** —— 裸 UUID 不是可跟随地址，
+  列表里点进去只会看到一片空）+ 全宽对话列（列宽可拖、工具条、Markdown 正文、回到底部）+ 输入区（复用主站/群视界共用的
+  `useAttachmentUpload`：点选 / 拖拽 / Ctrl+V 粘贴图片）
+- **空状态分因**：未选会话 / 正在载入 / 该会话确实无内容 三种文案分开，不再共用一句「此会话暂无内容」
+- **图片怎么过桥**：桥接仍是纯文本，所以约定两层——正文里一行人读标记 `[图片 #<file_id>: <name>]`
+  （气泡据此渲染缩略图，刷新后仍在，不靠本地内存），外加一段机器块 `<copree-attachments>…</copree-attachments>`。
+  前端在发送前按长边 1568 压缩、编码成 base64；**插件 >=0.2.0 才发这段块**（老插件会把 base64 当正文留在会话里，宁可退化）
+- **插件 dsh-copree 0.2.0**：`/prompt` 解析该块 → 落盘到会话工作区 `<cwd>/.copree/attachments/` → 把**绝对路径**写回正文，
+  会话里的 AI 用自己的看图工具读；base64 永不进模型上下文。单张上限 8MB、单条 8 张，超限按张跳过并在正文里如实告知；
+  没带附件块时正文一个字不改（不借「清理」之名改写用户原话）。`readJsonBody` 加 `limit` 参数（默认仍 256KB，`/prompt` 用 48MB）
+- 回归：`dsh-copree/scripts/bridge-smoke.mjs` 23 条（新增 6 条：围栏落盘且字节一致 / base64 与围栏不进正文 /
+  人读标记保留 / 只带图片也算非空 / 超量如实告知 / 落盘路径带文件名）；`tsc --noEmit` 与 `i18n:check` 通过
+- **生效条件**：前端改动随 dev 立即生效；插件 host 半改动需 `dsh plugin update` + 重启 `dsh web`（进程内已加载，覆盖文件不会热替换）
+
+#### 世界对话双预算：读的账单独算，不够可以向用户申请提额（用户 2026-09-23）
+- 起因：计划模式下**搜文件也吃** `max_tool_rounds` —— 50 轮里搜掉一半，写文件的活就只能半途收尾
+- **两本账**：改动预算（`max_tool_rounds`，默认 50，硬顶 200）与读取预算（改动 × 2 = 默认 **100**，硬顶 **400**）。
+  一批工具里只要有一个改动类，这一轮记**改动账**；整批都是只读才记**读取账** ——
+  判定复用 `world_ai_mode.action_of` / `SAFE_TOOLS`，只读名单全仓仍然只有一份
+- 开局就把两本账写进 system prompt（`build_budget_prompt`）：改动/读取各多少、怎么记账、
+  不够时怎么申请；每轮播报两本账的已用/剩余；改动见底照旧软提醒（剩 5）与硬约束（剩 2），
+  读取见底则提示「可以用 request_read_budget 申请，或按现有信息收尾」
+- **新工具 `request_read_budget(rounds, reason)`**：走既有审批弹窗（kind=`budget`，无人应答一律不批），
+  批准 → 读取预算当轮立刻生效；不批准 → 维持原预算（AI 拿到明确回执，不会以为自己能继续读）
+- 预算见底的那个类型在这一轮被**挡住不再执行**，但**照样返回 tool 结果** ——
+  悬空的 `tool_calls` 会让下一次请求直接 400（2026-09-14 事故的教训）
+- 顺手修掉一处死代码：`present_plan(tool_rounds=…)` 的提额**从来没生效过** ——
+  预算在工具循环外算一次，而提额是循环里获批才写进 `turn_state`、`turn_state` 又是每轮新建。
+  现在**每轮重算**，用户批准提额当轮即刻生效
+- `tests/test_world_round_budget.py` 7 条：双预算口径、提额封顶、轮次归类、按账拒绝、
+  开局文案含两本账、以及「每轮重算」的源码守卫；全量后端 **176 passed**
+
+#### 审批弹窗计时：等确认更久，正在输入时不计时（用户 2026-09-23）
+- 计划/审阅弹窗等用户的时限，从「5 分钟到点就判不通过」改成**空闲计时**：10 分钟没人动才算超时；
+  用户在输入框里打字（理由/补充要求）会通过心跳把窗口续上——人还在写，就不该被判超时
+- 打字只**续期**，不代替点按钮：门禁「超时一律不放行」的语义没变
+  （审阅/计划绝不会因为"等超时了"被默认批准）
+- 总时长 **30 分钟封顶**：能续期但不能无限续，免得一条审批把整个轮次挂住
+- 弹窗右下角显示**真实剩余时间**（服务端下发 `expires_in`，刷新/重连后照它接着走，不从头重数）
+- 一个口径：`remaining_seconds()` 是等待循环、状态轮询、倒计时共用的算法；
+  `POST /worlds/{id}/chat/approval/touch` 是唯一的心跳入口（仅创建者，不存在/已处理返回 0 而非报错）
+- `tests/test_world_approval_idle.py` 6 条契约测试；变异验证：心跳改成空操作 → 立刻红；
+  取消总上限 → 测试挂住（正是要防的无限续期）。全量后端套件 152 passed
+
+#### 站内新消息弹窗（用户 2026-09-21：主站网页内也要有，不只是电脑通知）
+- 右下角浮层弹窗：私聊（人/AI）、群消息、群公告、好友申请与通过/拒绝、入群申请与
+  通过/拒绝、成员邀请的批准/驳回/接受/拒绝、系统通知（维护模式）——一条连接全收；
+  可堆叠（最多 4 条）、6 秒自动收、**鼠标悬停暂停**、点一下跳到对应会话
+- 与已有的电脑通知（标签页未读标记 + 任务栏闪烁 + 系统通知）分工明确：**标签页在后台时
+  交给系统通知**，人正看着主站时才弹站内浮层——两套不互相刷屏
+- 一条 WS 只能订阅一个会话，所以另开一条**常驻通知连接**（不占订阅位）：连上后按
+  `notifications_subscribe` 一次性登记"我所在的全部群 + 私信"（一次查询验权，
+  不是每个群往返一次），会话消息按这份范围多推一份 `push`；typing/在线状态这类噪音不推
+- 连接池改成"一人一集合"：同一个人可以同时持有会话连接与常驻连接、开两个标签页也各自收得到，
+  不再互相顶掉（旧实现是 `{user_id: 单条 ws}`，两条连接必然丢一条的通知与报错）
+- 顺手补上一个真实空缺：**人类发的私信以前没有任何 WebSocket 推送**（只有 AI 回复有），
+  对方只能等轮询——弹窗也就永远弹不出来。现在 `POST /dm/{session_id}/messages` 推给对方，
+  对方正在看这条会话时前端按 id 去重、不在看时弹窗
+- 「新消息弹窗」在设置页有自己的开关（和"桌面通知"分开）；免打扰的群/私信不弹、
+  正在看的会话不弹；文案三语（`notify.*`），后端只发事实（kind + 群名/名字）
+- `tests/test_ws_notifications.py` 10 条契约测试（多连接投递、范围化 push、噪音过滤、
+  坏连接摘除、人类私信必须推送的源码级守卫）
+
+#### 群发现与入群 / 邀请审批（用户 2026-09-21：名字改成「申请列表」）
+- 搜索框也能搜**群名**了：`GET /search` 多返回一组 `groups`（只含群主开了「可被搜索」的群），
+  前端按「用户与 AI / 群聊」分区渲染——群和人的字段不一样，塞进同一个列表只会逼前端靠
+  `type` 猜字段
+- 群设置新增三开关（仅群主/管理员可见，默认值＝改造前的行为）：
+  **可被搜索**（默认关，开了才能被搜到）、**加群自动通过**（默认开，关掉＝入群要审批）、
+  **成员邀请需审批**（默认关，开了＝成员邀请要审批；**群主/管理员的邀请免审**——
+  他们本来就有审批权，让自己的邀请再等自己批一遍没有意义）
+- `POST /groups/{id}/join` 调用方只调一次：开关关着直接进群，开着就落 `group_join_requests`
+  等审批。两条路径收在 `services/social/group_join_service.py::request_join` 一处，
+  免得每个入群入口都要自己记得读开关
+- 审批动作按领域归位：入群申请走 `/groups/join-requests/{id}/approve|reject`，
+  成员邀请走 `/group-invitations/{id}/approve|deny`；被邀请人自己的 `accept` / `reject` 不动——
+  「驳回邀请（审批人）」和「拒绝邀请（被邀请人）」是两个人的动作，共用一个端点迟早打架
+- 邀请拆成「建记录」与「通知被邀请人」两步：需审批时只落记录，**批准后才发卡片**，
+  被邀请人不会先收到一张群还没认可的邀请；驳回直接终态——否则这条记录一直占着防重位，
+  同一个人再也邀请不进来
+- 「好友申请」改名「申请列表」：`/requests/pending` 把好友申请 / 入群申请 / 待审邀请聚合成
+  一个口径（侧边栏红点与页面共用），**审批权就是可见性**——只有该群群主/管理员看得到本群
+  待审项；导航与底部「好友」→「列表」，页面、路由（`/friends` 留重定向）、组件与 i18n key
+  一起从 `friends.*` 迁到 `list.*`
+- 迁移 `b2c3d4e5f6a1`（`groups` 三列 + `group_join_requests` 表 + 两个索引，含 downgrade）；
+  `tests/test_group_join_approval.py` 九条契约测试覆盖两条入群路径、两条邀请路径与审批权边界
+
+#### 表达方式：专业模式 / 通俗模式（用户级开关）
+- 默认**专业模式**＝原样说话（术语直接用、结论与代码优先，不加任何表达约束，等于改造前的行为）；
+  切到**通俗模式**后 AI 回复**先替换、再解释**——能用日常说法讲清楚就不搬术语
+  （说「把它放到网上那台电脑上」，不写「部署到服务器」）；换不掉的专有名词第一次出现时
+  带一句 ≤ 12 字的大白话解释；一段话里需要解释的名词不超过两个；代码块、报错原文、命令、
+  文件名原样保留（它们是事实不是表达），前后各配一句大白话说明
+- 唯一来源 `backend/app/utils/pure/expression_style.py`（键名常量 + 判定 + 段文本），
+  一处改动两条互不相干的装配路径同时生效：普通 AI 对话（`ai/llm.py`，追加在六段之后、
+  最动态的好友申请之前）与群视界世界 AI（`services/world/world_chat_service.py`）
+- 偏好存 `users.ui_prefs.plain_language`：复用既有 ui_prefs 合并写入，**无迁移、无新接口**；
+  跟着「正在读这条回复的人」走——群里看触发者、取不到退回 AI 主人，所以同一个世界里
+  新手看到带解释的话、老手照旧
+- 三个入口同一份状态：设置页「表达方式」两张选项卡（带说明、随该页保存批量提交）、
+  普通聊天输入工具条、群视界世界对话工具条——后两处是「通俗模式 + 滑块」，拨一下立即生效；
+  都读 `AuthContext.user.ui_prefs`、写走同一个 `hooks/usePlainLanguage.ts`。UI 唯一实现
+  `components/ExpressionModeSwitch.tsx`（两处工具条只差 size），两个模式的名字与说明
+  `EXPRESSION_MODES` + `settings.expressionMode*` 也只一份（三语）
+- 滑块形态是试出来的：先做成两段文字直选，放进世界对话那条全是小图标的工具条里横向占 110px、
+  抢视线（用户原话「一点都不搭」）→ 改成统一 `Toggle`，并给它加 `size="sm"`（32×16，常规档
+  48×24 不变）以贴合紧凑工具条的高度；`Toggle` 加尺寸档而不是让调用方各写一个开关
+- 关掉＝把滑块拨回左边（专业模式），title 里写明当前模式与说明；专业模式不加任何提示词约束，
+  等于改造前的行为
+- 实测（真实构建系统提示词）：普通对话 3316 → 3717 字符、世界 AI 7272 → 7673 字符（各 +401），
+  关掉即回落、系统提示词前缀不受影响（段追加在尾部，缓存策略不变）
+
 #### 计划通过后解除沙箱只读：AI 改完源码能自己跑打包脚本
 - 世界 AI 反馈（2026-09-19）：世界页面加载的是 `dist/*.js`，而计划模式下沙箱被平台强制只读，
   跑不了 `tools/build.py` → 每次改玩法都得「沙箱算期望文本 → 手工把差异打进 dist」，
@@ -470,6 +851,101 @@
   结构与滚动锁定（`role=dialog` + `body.overflow=hidden`）
 
 ### 🐛 修复的 Bug
+
+#### 「余额不足被迫终止后说继续」其实是失忆的（用户 2026-09-23）
+- 现象：世界 AI 因余额不足（402）或其他错误**被迫终止**，界面提示写着「已记录未完成的工作流，
+  充值后说「继续」即可接着做」，但 `world.config.workflow_memory` 已被**清空** ——
+  说「继续」时 AI 不知道上次做到哪，容易把已完成的步骤重做一遍
+- 根因：清不清记忆的判定写成 `if full_content and not full_content.startswith("（")`，
+  而被迫终止时 `full_content` 被换成**友好错误提示**（「💰 世界 AI 余额不足（402）…」、
+  「⏳ 请求太频繁（429）…」）—— 它**不以「（」开头**，于是被当成"正常结束"，
+  刚写好的工作流记忆当场被 pop 掉
+- 修法：判定收进纯函数 `turn_completed(full_content, had_error)`：**出错一律不算正常结束** ——
+  宁可多留一次工作流记忆，也别让「继续」失忆
+- `tests/test_world_turn_resume.py` 4 条（真总结/友好错误/兜底文案/带 error 标记）；
+  全量后端 **180 passed**
+
+#### AI 看不到"我有哪些私信没处理"：私信未读没有出口（用户 2026-09-23）
+- 现象：AI 用 `view_unread` 只能看到群聊，私信一条都看不到（"全部 0 条未读"）
+- 取舍（为什么**不加表**）：文档 §4.3 的 PendingMessage 模型里有 `dm_session_id`，但私信早已有
+  `dm_messages.read_at` 在管"对方看没看"——对方打开会话、AI 回复（`send_dm_message` 的
+  「回复即阅读」）都会标它。再往 pending 记一份就是**同一件事两处真相**，迟早对不上；
+  何况 pending 的 `message_id` 是指向 `messages.id` 的外键，私信消息在另一张表 `dm_messages`，
+  硬塞进去得拆成两套外键 + CHECK 二选一，schema 只会更丑
+- 所以走"读出来"：新增 `chat/delivery.py::check_unread_dms(agent_id)`（按会话聚合
+  `read_at IS NULL` 的对方消息，带对方名字/预览/时间），`view_unread` 的返回多一个 `dms` 字段。
+  **不加表、不加迁移**；pending_messages 继续只记群聊那条投递链的账
+- 真数据实测（dev 库）：AI「书爱的衍生物」未读私信 1 个会话 / 113 条、「梦希」2 个会话、
+  「234」2 个会话——以前这些都是 0
+- `tests/test_dm_unread.py` 4 条：未读可见（只算对方发的）/ AI 回一句即清零 / 私信不写 pending /
+  无 agent 的用户查不出东西；全量后端 **169 passed**
+
+#### 不在线也积压：群消息对离线 AI 从不暂存（用户 2026-09-23，文档早有定论）
+- 文档早就写死了（`docs/chat_service/design/chat_service_design.md` §4.2 可达性矩阵、
+  `docs/dev/cpec.md` 的「若为 dnd/offline 则暂存」）：在线且不 DND → 直推；@提及 连 DND 也穿透；
+  DND/暂停 → 暂存；**不在线 → 一律暂存**
+- 但实现把整个投递循环关在 `if online_ids:` 里、只遍历在线连接 —— 「离线也暂存」这一格从来没人做。
+  实测 `pending_messages` 整表为空（`max(created_at)` 是 NULL），AI 回来 `view_unread`
+  只能报「0 条未读、最后消息时间空、没有任何消息记录」（就是用户转述的那句话）
+- 改法：投递改成**以 AI 成员为准**（读群成员表，逐个 AI 成员算），判定收进
+  `chat/delivery.py::delivery_decision(online, in_dnd, mentioned)` 一处 —— 一个口径，
+  在线/离线/免打扰/@穿透 全走它
+- 顺手修掉同一段里的三处口径错配：
+  · `AgentModel.id.in_(在线 uid)` 把 **agent.id 当 user_id** 用 → DND/暂停判定整体失效
+  · 暂存写入把 **user_id 当 agent_id** 存（暂存表 FK 指向 agents.id）→ 存进去也不是这个 AI 的
+  · `dnd_until` 为空被当成「永远免打扰」（应当是「没设免打扰」）
+- `tests/test_group_message_delivery.py` 5 条：矩阵四格 + 源码守卫（不许再关在 `if online_ids:` 里）
+  + 真库闭环（暂存一条 → `check_unread` 读得到）
+- 真 WS 端到端：临时群里以群主身份发一条 @离线AI 的消息 → 暂存行 `agent_id=25`（正是那个离线 AI）、
+  `check_unread` 返回 1 条未读 + 预览 + 时间；跑完临时群/消息/暂存残留全 0；全量后端 **165 passed**
+
+#### 世界群里 @ 了 AI 也不醒：名字带括号的 AI 永远匹配不上 @（用户 2026-09-23）
+- 现象：群 59「CoExisten」/@浮生（人物志1） 毫无反应；群 58「群世界测试」同样毛病
+- 链路：世界群绑定了世界 → 世界的 `group_trigger_mode` 是 `mention_only` → 只有识别出
+  "被 @" 才会唤醒 LLM；而 `_MENTION_RE`（`app/utils/text.py`）把 `（）()【】` 当分隔符，
+  `@浮生（人物志1）` 只提取出「浮生」，`check_mention` 拿全名去比 → 永远 False
+- 实测（真代码）：`@浮生（人物志1）` / `@浮生(人物志1)` / `@浮生` 三种写法改前**全是 False**
+- 修法：`check_mention` 不再走"提取短名再比"，改成按 `@完整名字` 整串找 + **全字匹配**
+  （名字后面必须是真的边界，且**左括号不算边界**）。于是
+  · `@浮生（人物志1）` → 唤醒「浮生（人物志1）」✔
+  · `@浮生` → **不**唤醒「浮生（人物志1）」✘（括号不是可选后缀，用户 2026-09-23 明确要求）
+  · `@浮生（人物志1）` → **不**唤醒只叫「浮生」的 AI ✘（一个称呼不会叫醒两个人）
+  终止字符集收成一处 `_MENTION_STOP`，提取与边界判定共用，免得两处漂移
+- 前端配套（同一诉求的另一半）：手打 `@短名`（漏了括号后缀）时，输入框上方浮一条提醒
+  「「@浮生」没 @ 到人，是想 @浮生（人物志1）吗？」+ **一键补全**；只在唯一候选时提示，
+  三语文案（`chat.mentionHint` / `chat.mentionHintFix`），不做自动改写
+- `tests/test_mention_check.py` 7 条契约：带括号全名/短名不认/长名不误伤短名/普通名字不变/
+  没 @ 不算/@all 与 @ai 仍通配/提取规则保持原样
+- 顺带：群「暂停 AI」以前是**静默 return**（这次排查的最大障碍），现在会打一行
+  `⏸️ 群 N「名字」已暂停 AI 触发`；群 34/37/57 当前就是暂停状态（那是数据/开关，没动）
+
+#### 通俗模式滑钮打不开：ui_prefs 的写入一直没落库（用户 2026-09-23）
+- 现象：聊天工具条的「通俗模式」滑块点了就回弹，永远开不起来
+- 根因：`PUT /user/settings` 存 ui_prefs 时写的是
+  `existing = user.ui_prefs or {}; existing.update(ui_prefs)` —— 原地改的是**同一个 dict 对象**，
+  SQLAlchemy 不会把 JSON 列标脏，flush 时这一列根本没进 UPDATE；
+  紧接着的 `refresh()` 又从库里读回来，改动当场被丢掉
+- 影响面不止通俗模式：**所有走这个接口的 ui_prefs（主题色、界面缩放、聊天风格）都存不下来**，
+  只是通俗模式一开就在界面上回弹，才被看出来
+- 修法：改赋**新 dict**（`{**(user.ui_prefs or {}), **ui_prefs}`），与全仓其它 JSON 列
+  （world.config 等）本来的写法一致；全仓扫描"对 JSON 列原地 update"已无其它处
+- `tests/test_plain_language_pref.py`：用**另一个会话**从库里读回 plain_language，
+  并核对别的键没被清掉——判据必须是"库里读得到"，接口返回值在这类 bug 里会说谎
+
+#### 世界 file_edit 工具每次调用都失败：import 写在函数里，名字成了局部变量（世界 #45 反馈，2026-09-21～23）
+- 现象：世界 AI 的每一次 file_edit 都返回「工具执行失败: cannot access local variable
+  'infer_operation' where it is not associated with a value」，文件一个字都改不动，
+  只能改用一次性补丁脚本绕路（后端日志里同一句刷了几十条）
+- 根因：`tools/world/file_edit.py` 把 `from app.utils.pure.file_edit import infer_operation`
+  写在 `execute()` **内部**，而函数第一行就先用它——Python 里函数内出现 import 会让这个名字
+  在整个函数作用域内成为**局部变量**，于是"先用后绑定"必抛 UnboundLocalError，
+  与参数、模式、文件内容全都无关（所以怎么试都失败）
+- 修法：共享编辑核心是纯函数、无 IO，改为**模块级导入**（`apply_file_edit, infer_operation`），
+  删掉函数里那行重复导入——同一份实现只剩一个导入点
+- 守卫：新增 `tests/test_world_edit_contract.py::test_world_tool_can_reach_the_shared_core`，
+  用假的世界文件服务**真跑一遍** `execute()`，把"调得到共享核心"钉死；全量后端套件 146 passed
+- 顺带自查同类隐患：全仓 AST 扫描"同一作用域内先用后导入"，另有 1 处
+  （`agent_service.py:361` 先用 `Result`、364 行才导入）——同一行的紧邻代码，实际不会触发，未改
 
 #### 改名后 AI 不知道自己的新名字：通知标题是能力源 id，diff 只给「6→3 字，首处差异」
 - 现象（用户 2026-09-19）：把世界 AI 改名为「小傻福」后它仍自称「群视界机器人」；

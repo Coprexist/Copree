@@ -70,6 +70,9 @@
 |------|---------|------|
 | [plugin_system_design.md](./plugin_system/design/plugin_system_design.md) | 开发者 / 管理员 | 目录即插件协议、两级开关（管理员全局 + 用户个人）、皮肤插件、技能插件桥接 |
 | [plugin-protocol-v2.md](./plugin-protocol-v2.md) | 开发者 / 管理员 | 阶段二设计：语言中立的行为插件协议 |
+| [plugin-protocol-v3.md](./plugin-protocol-v3.md) | 开发者 / 管理员 | 阶段三（已实现）：服务类插件（category: service）、插件级加密配置、生命周期收敛 |
+| [plugin-market.md](./plugin-market.md) | 开发者 / 管理员 | 总商城与插件商城：三层信任、安装包安全边界、社区索引仓与 CI 通过规则 |
+| [agent-channels.md](./agent-channels.md) | 用户 / 管理员 | 给自己的 AI 接 QQ：三种身份、配对制、归属与实例约定、接口与已知限制 |
 
 ### 四、子系统专题
 
@@ -127,6 +130,7 @@
 | [技术规格书](./dev/cpec.md) | 开发者 | AI 群聊社交网络系统技术规格 |
 | [自习室插件开发文档](./dev/STUDY_ROOM_DEVLOG.md) | 开发者 | study-room 插件开发记录 |
 | [开发待办](./dev/TODO.md) | 开发者 | 待办清单 |
+| [写一个通道插件](./dev/channel-plugins.md) | 插件开发者 | 外部身份（QQ/联邦）怎么接：manifest 的 channel 块、类别名规则、运行时接口、信任边界 |
 | [前端界面统一规范](./dev/ui_system.md) | 前端开发者 | **单一来源**：尺度令牌 / 语义类 / 组件库 / 照抄模式 / 提交前自检——写界面前先读它 |
 | [演示截图流水线](../scripts/screenshot/README.md) | 文档/推广维护者 | 一键生成 README 演示图：演示数据脱敏规则、CDP 截图与新增一张图的做法（中英双语） |
 
