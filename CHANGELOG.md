@@ -54,7 +54,10 @@
   的出口覆盖，群 64 的 AI 回复被静默丢弃）；分发改 `asyncio.gather` 并发跑全部出口，一个坏/慢不拖累别的
 - **向量维度对齐**：`docker-compose.yml` 补 `EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-768}`
   （模型向量列在 import 时读它，DB 覆盖管不到；不一致时 INSERT 生成 `::VECTOR(1536)` 写 768 向量必然失败，
-  记忆一直静默写失败重排队）。待办：启动自检三者不一致时大声报错
+  记忆一直静默写失败重排队）
+- **启动自检（②的收尾）**：`embedding_config_service.check_dimension_consistency` 比对
+  「ORM 列维度 / 生效配置 / 库里实际列维度」三者；`prestart.py` 在迁移后调用——不一致时 stderr 打 `[ERROR]`
+  + 修法提示（不再静默），一致时打一行「向量维度自检通过」
 - **删池 Key 不再 500**：`api_usage_log.pool_key_id` 外键改 `ON DELETE SET NULL`（迁移 `b8c9d0e1f2a3`）——
   用量历史保留、引用置空；之前有用量记录的 Key 一删就 ForeignKeyViolationError（线上实测 `DELETE /admin/api-key-pool/1`）
 - **跨对话回复的「读」**：新工具 `read_conversation` 读别的会话最近几条原文（群传 `group_id`、私信传

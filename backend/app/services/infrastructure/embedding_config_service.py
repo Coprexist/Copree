@@ -132,6 +132,35 @@ async def clear_db_config(db: AsyncSession) -> dict:
     return {}
 
 
+async def check_dimension_consistency(db) -> list[str]:
+    """启动自检：**ORM 列维度 / 生效配置 / 库里实际列维度**三者必须一致。
+
+    为什么要有它：2026-09-25 线上事故——容器没有 EMBEDDING_DIMENSION（落到默认 1536），
+    而四个向量列与 DB 配置都是 768，写入每次都以 `expected 1536 dimensions, not 768` 失败；
+    向量只是"可选增强"，失败只进日志、记忆一直存不下来——静默故障必须变成响的。
+    返回问题描述列表（空 = 一致）。
+    """
+    from sqlalchemy import text as sa_text
+
+    from app.config import settings
+    from app.db_config_source import get_db_override
+    from app.models.memory import RoughMemory
+
+    orm_dim = getattr(RoughMemory.__table__.c.embedding.type, "dim", None)
+    configured = get_db_override("embedding_dimension") or settings.embedding_dimension
+    actual = (await db.execute(sa_text(
+        "select distinct atttypmod from pg_attribute "
+        "where attrelid = 'rough_memories'::regclass and attname = 'embedding'"
+    ))).scalar()
+
+    problems: list[str] = []
+    if orm_dim and configured and int(orm_dim) != int(configured):
+        problems.append(f"ORM 列维度 {orm_dim} ≠ 生效配置 {configured}（列维度在 import 时定死，DB 覆盖改不了）")
+    if orm_dim and actual and int(orm_dim) != int(actual):
+        problems.append(f"ORM 列维度 {orm_dim} ≠ 库里实际列维度 {actual}")
+    return problems
+
+
 async def get_effective_config(db: AsyncSession) -> dict:
     """返回当前生效的 embedding 配置（DB 覆盖 + env 兜底，api_key 脱敏）"""
     db = _ensure_repo(db)

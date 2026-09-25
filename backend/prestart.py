@@ -55,6 +55,34 @@ def run():
         print("Prestart: Alembic 迁移失败", file=sys.stderr)
         sys.exit(result.returncode)
     print("Prestart: Alembic 迁移完成")
+    _check_embedding_dimension(url)
+
+
+def _check_embedding_dimension(url: str) -> None:
+    """向量维度自检：三者不一致时写入会静默失败（2026-09-25 事故），这里必须响。"""
+    async def _run():
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+        from app.services.infrastructure.embedding_config_service import (
+            check_dimension_consistency,
+        )
+
+        engine = create_async_engine(url)
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with session_factory() as db:
+            return await check_dimension_consistency(db)
+
+    try:
+        problems = asyncio.run(_run())
+    except Exception as e:  # 自检失败不阻塞启动
+        print(f"Prestart: 向量维度自检跳过（{e}）")
+        return
+    if not problems:
+        print("Prestart: 向量维度自检通过")
+        return
+    print("Prestart: [ERROR] 向量维度不一致，记忆写入会失败：" + "；".join(problems), file=sys.stderr)
+    print("Prestart: 修法：EMBEDDING_DIMENSION 必须等于表列维度与 embedding 模型输出维度"
+          "（本地 nomic-embed-text = 768）", file=sys.stderr)
 
 
 if __name__ == "__main__":
