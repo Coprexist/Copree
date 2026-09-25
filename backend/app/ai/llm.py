@@ -914,6 +914,20 @@ async def build_messages(
         except Exception as e:
             logger.warning(f"状态栈摘要注入失败（非致命）: {e}")
 
+    # ✨ 通俗模式（用户级偏好）：摆在最动态的好友申请之前，位置固定、内容随人不变
+    try:
+        from app.models.user import User as UserModel
+        from app.utils.pure.expression_style import build_expression_segment
+        # 跟着「正在读这条回复的人」走：群里是触发者，取不到就退回 AI 主人
+        reader = None
+        if trigger_user_id and trigger_user_id != getattr(agent, "owner_id", None):
+            reader = await db.get(UserModel, trigger_user_id)
+        if reader is None and getattr(agent, "owner_id", None):
+            reader = await db.get(UserModel, agent.owner_id)
+        system_prompt += build_expression_segment(reader)
+    except Exception as e:
+        logger.warning(f"通俗模式注入失败（非致命）: {e}")
+
     # 📨 待处理好友申请（AI 感知；动态内容沉底，缓存友好）
     if getattr(agent, "ai_type", None) in ("resonance", "general", "semi_general"):
         try:
