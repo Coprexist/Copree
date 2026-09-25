@@ -30,6 +30,12 @@ services:
       DATABASE_URL: postgresql+asyncpg://ai_chat:${DB_PASSWORD}@postgres:5432/ai_group_chat
       DATABASE_URL_SYNC: postgresql://ai_chat:${DB_PASSWORD}@postgres:5432/ai_group_chat
       JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      # 平台自带协议端（profile: napcat）时填这两项：插件据此把"地址 + token"标成托管字段，
+      # 卡片上就不让用户填了。留空 = 用户自带协议端，字段照常显示。
+      NAPCAT_WS_URL: ${NAPCAT_WS_URL:-}
+      NAPCAT_TOKEN: ${NAPCAT_TOKEN:-}
+      # 托管协议端时读它的登录二维码用（NapCat 把码写在 cache 目录里）
+      NAPCAT_CACHE: ${NAPCAT_CACHE:-/app/data/napcat/cache}
     volumes:
       - ${DATA_DIR:-./data}:/app/data
       - ${DATA_DIR:-./data}/uploads:/app/uploads
@@ -61,3 +67,27 @@ services:
       backend:
         condition: service_healthy
     command: yarn dev -- --host 0.0.0.0
+
+  # 平台自带的协议端（可选，默认不启动）：
+  #   docker compose --profile napcat up -d
+  # 一个协议端 = 一个 QQ 机器人：多 AI 各接一个 QQ 号时要各起一份实例。
+  # 协议端违反 QQ 用户协议，有封号风险，建议只挂备用号。
+  napcat:
+    image: mlikiowa/napcat-docker:latest
+    container_name: napcat
+    profiles: ["napcat"]
+    restart: always
+    # 日志同时落一份到挂载目录：NapCat 只把「二维码解码URL」打进 stdout，
+    # 后端读不到别的容器的 docker logs，于是让它的输出经 tee 落到共享卷里
+    entrypoint: ["bash", "-c", "bash /app/entrypoint.sh 2>&1 | tee -a /app/napcat/cache/napcat.log"]
+    environment:
+      NAPCAT_UID: "0"
+      NAPCAT_GID: "0"
+    volumes:
+      - ${DATA_DIR:-./data}/napcat/config:/app/napcat/config
+      - ${DATA_DIR:-./data}/napcat/qq:/app/.config/QQ
+      # 登录二维码给后端读（卡片直接把码画出来，用户不必去找 WebUI）
+      - ${DATA_DIR:-./data}/napcat/cache:/app/napcat/cache
+    ports:
+      # WebUI：扫码登录与网络配置用；登录完之后可以不再暴露
+      - "6099:6099"

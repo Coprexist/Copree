@@ -22,10 +22,14 @@ QQ 通道（NapCat / OneBot v11） — 用第三方协议端把 Copree 的 AI �
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
+import os
+import re
 import time
 from collections import deque
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -151,29 +155,99 @@ class NapCatClient:
         return await self._post("send_private_msg", {"user_id": int(user_id), "message": message})
 
 
+# 协议端由谁提供，字段就由谁填：平台自带协议端（compose 的 napcat profile）时后端会注入
+# 这两个环境变量，声明里就把地址与 token 标成 managed（卡片不显示、也不算"还缺什么"）。
+_HOSTED_WS_URL = os.environ.get("NAPCAT_WS_URL", "").strip()
+_HOSTED_TOKEN = os.environ.get("NAPCAT_TOKEN", "").strip()
+# 托管时 NapCat 的 cache 目录也挂给后端：它把登录二维码写在那儿，
+# 于是"扫码"这一步能直接画在我们自己的卡片上，用户不用再去别处找入口
+_HOSTED_CACHE = os.environ.get("NAPCAT_CACHE", "").strip()
+
+
+def _qr_url_from_log() -> str:
+    """从协议端日志里抓最新的「二维码解码URL」（= 二维码里装的那条授权链接）
+
+    电脑上没有扫码条件时，用户要的是这条链接（发到手机打开即可授权）。
+    NapCat 只把它打到 stdout，所以 compose 用 tee 把输出也落一份到挂载目录供这里读。
+    """
+    if not _HOSTED_CACHE:
+        return ""
+    log = Path(_HOSTED_CACHE) / "napcat.log"
+    try:
+        with log.open("r", encoding="utf-8", errors="ignore") as fh:
+            # 日志不大（几百 KB），但也没必要全读：只扫尾部，够找到最后一条码
+            fh.seek(0, 2)
+            fh.seek(max(0, fh.tell() - 64 * 1024))
+            text = fh.read()
+    except OSError:
+        return ""
+    found = re.findall(r"https://txz\.qq\.com/p\?[^\s\u001b]+", text)
+    return found[-1] if found else ""
+
+
+def _hosted_login(self_id: str, bot_name: str) -> dict[str, Any] | None:
+    """托管协议端的登录进度：没登录就把二维码（png，几百字节）一并报给卡片"""
+    if not _HOSTED_WS_URL:
+        return None
+    info: dict[str, Any] = {
+        "held_by_platform": True,
+        "logged_in": bool(self_id),
+        "bot_name": bot_name or self_id or "",
+    }
+    if info["logged_in"]:
+        return info
+    qr = Path(_HOSTED_CACHE) / "qrcode.png" if _HOSTED_CACHE else None
+    if qr is not None and qr.is_file():
+        info["qr_png"] = base64.b64encode(qr.read_bytes()).decode()
+        info["qr_at"] = int(qr.stat().st_mtime)
+    info["qr_url"] = _qr_url_from_log()
+    return info
+
+
+def _hosted(spec: dict, value: str) -> dict:
+    """平台托管这份值时，字段就地变成 managed（值由平台写进实例配置）"""
+    return {**spec, "managed": True, "default": value} if value else spec
+
+
+def _endpoint_schema() -> dict:
+    return {
+        "ws_url": _hosted({
+            "type": "string", "title": "NapCat WebSocket 地址", "required": True,
+            "title_en": "NapCat WebSocket URL", "title_ja": "NapCat WebSocket アドレス",
+            "description": "NapCat 的正向 WebSocket 地址，如 ws://127.0.0.1:3000",
+            "description_en": "The forward WebSocket URL of NapCat, e.g. ws://127.0.0.1:3000",
+            "description_ja": "NapCat の順方向 WebSocket アドレス（例 ws://127.0.0.1:3000）",
+        }, _HOSTED_WS_URL),
+        "access_token": _hosted({
+            "type": "string", "title": "AccessToken", "secret": True,
+            "description": "NapCat 配置里的 access_token，没设就留空；只在这里填，加密落库、接口不回显",
+            "description_en": "The access_token configured in NapCat; leave empty if unset; stored encrypted and never echoed back",
+            "description_ja": "NapCat 側の access_token。未設定なら空欄。ここにのみ入力し、暗号化して保存します",
+        }, _HOSTED_TOKEN),
+    }
+
+
 @service(
     name="QQ 通道（NapCat）",
     description="用 NapCat / OneBot v11 协议端把 AI 接进 QQ：群里被 @ 才唤醒，私聊默认要配对；AI 的回复发回 QQ",
+    multi_instance=True,
     config_schema={
-        "ws_url": {
-            "type": "string", "title": "NapCat WebSocket 地址", "required": True,
-            "description": "NapCat 的正向 WebSocket 地址，如 ws://127.0.0.1:3000",
-        },
-        "access_token": {
-            "type": "string", "title": "AccessToken", "secret": True,
-            "description": "NapCat 配置里的 access_token，没设就留空；只在这里填，加密落库、接口不回显",
-        },
+        **_endpoint_schema(),
         "target_agent": {
             "type": "string", "title": "这个通道接哪个 AI", "required": True, "managed": True,
             "description": "由平台按「这个 AI 的页面」自动填，不需要手工填；群里 @机器人 就等于在群里 @它",
         },
         "copree_group_id": {
             "type": "string", "title": "接入的 Copree 群 ID", "required": True,
+            "title_en": "Landing Copree group ID", "title_ja": "接続先 Copree グループID",
             "description": "QQ 群消息落到哪个 Copree 群",
         },
         "qq_group_allowlist": {
             "type": "string", "title": "允许接入的 QQ 群号",
+            "title_en": "Allowed QQ group numbers", "title_ja": "許可する QQ グループ番号",
             "description": "QQ 群号，多个用逗号分隔；留空 = 不限制",
+            "description_en": "QQ group numbers, comma separated; empty = no limit",
+            "description_ja": "QQグループ番号をカンマ区切り。空欄＝制限なし",
         },
         "dm_policy": {
             "type": "string", "title": "私聊策略（pairing / owner / open / off）",
@@ -183,6 +257,11 @@ class NapCatClient:
     },
 )
 class QqNapcatPlugin(ServicePlugin):
+    @classmethod
+    async def hosted_status(cls) -> dict[str, Any] | None:
+        """托管协议端时，实例还没建也要能告诉卡片"登录到哪一步了"（含登录二维码）"""
+        return _hosted_login("", "")
+
     def __init__(self) -> None:
         self._task: asyncio.Task | None = None
         self._client: NapCatClient | None = None
@@ -237,6 +316,7 @@ class QqNapcatPlugin(ServicePlugin):
             "dm_replies_sent": self.dm_replies,
             "uptime_seconds": int(time.time() - self.started_at) if self.started_at else 0,
             "last_error": self.last_error,
+            "hosted_endpoint": _hosted_login(self.self_id, ""),
         }
 
     async def start(self) -> bool:

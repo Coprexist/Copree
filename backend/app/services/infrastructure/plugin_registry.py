@@ -61,6 +61,15 @@ class ServicePlugin:
         """返回当前运行状态"""
         return {"installed": False, "running": False}
 
+    @classmethod
+    async def hosted_status(cls) -> dict[str, Any] | None:
+        """平台托管这份服务时的状态；没有可托管的运行时状态就返回 None
+
+        get_status() 得先有实例才能问，而"平台自带协议端的登录"发生在实例配置之前——
+        卡片那时还没有实例，所以给平台留一个类方法问这一件事。
+        """
+        return None
+
     async def start(self) -> bool:
         """启动服务"""
         raise NotImplementedError(f"{self.id} 未实现 start()")

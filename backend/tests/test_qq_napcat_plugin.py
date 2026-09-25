@@ -6,6 +6,7 @@
 import asyncio
 import importlib.util
 import json
+import os
 from pathlib import Path
 
 from sqlalchemy import text
@@ -53,10 +54,10 @@ async def _seed():
     from app.database import async_session
 
     async with async_session() as db:
-        await db.execute(text(
-            "TRUNCATE external_identities, plugin_service_states, plugin_configs, plugins, "
-            "pending_messages, messages, dm_messages, dm_sessions, group_members, groups, users, agents CASCADE"
-        ))
+        from db_reset import clear
+        await clear(db, "external_identities", "plugin_service_states", "plugin_configs", "plugins",
+                    "pending_messages", "messages", "dm_messages", "dm_sessions", "group_members",
+                    "groups", "users", "agents")
         # 下面用写死的 id 播种，序列要往前挪，否则插件新建用户会撞上 id=1/2
         for table in ("users", "agents", "groups", "messages", "dm_messages"):
             await db.execute(text(f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), 100)"))
@@ -365,3 +366,33 @@ def test_http_base_from_ws_url():
     assert module._http_base("ws://127.0.0.1:3000") == "http://127.0.0.1:3000"
     assert module._http_base("ws://127.0.0.1:3000/ws") == "http://127.0.0.1:3000"
     assert module._http_base("wss://qq.example.com/onebot/v11/ws") == "https://qq.example.com"
+
+async def test_multi_instance_one_channel_per_ai(migrated_db):
+    """NapCat 也是多实例：一个 AI 一条通道（实例名 agent-<agentId>），配置互不串"""
+    from app.database import async_session
+    from app.models.plugin import Plugin
+    from app.services.infrastructure.plugin_registry import PluginRegistry
+    from app.services.plugin import skill_bridge
+    from app.services.plugin.config import set_config
+
+    await _seed()
+    async with async_session() as db:
+        db.add(Plugin(id="qq-napcat", name="QQ 通道（NapCat）", category="service", enabled=True, builtin=True))
+        await db.commit()
+        await set_config("qq-napcat", {"ws_url": "ws://ai-a.invalid:3000", "copree_group_id": "11", "target_agent": "浮生"}, "agent-11", db=db)
+        await set_config("qq-napcat", {"ws_url": "ws://ai-b.invalid:3000", "copree_group_id": "12", "target_agent": "小满"}, "agent-12", db=db)
+        await skill_bridge.apply_skill_plugins(db)
+
+        a = PluginRegistry.get("qq-napcat:agent-11")
+        b = PluginRegistry.get("qq-napcat:agent-12")
+        assert a is not None and b is not None, "每个 AI 一条通道没有被建起来"
+        assert a.multi_instance is True and b.multi_instance is True
+        a_cfg, b_cfg = await a.config(), await b.config()
+        # 平台托管协议端时地址由平台给（客户端传什么都不算）；没托管才用各自传的值。
+        # 真正"每个实例各自一份"的是落点与目标 AI —— 这两项必须互不串。
+        hosted_ws = os.environ.get("NAPCAT_WS_URL", "").strip()
+        assert a_cfg["ws_url"] == (hosted_ws or "ws://ai-a.invalid:3000"), a_cfg
+        assert b_cfg["ws_url"] == (hosted_ws or "ws://ai-b.invalid:3000"), b_cfg
+        assert a_cfg["copree_group_id"] == "11" and b_cfg["copree_group_id"] == "12"
+        assert PluginRegistry.keys_of("qq-napcat") == ["qq-napcat:agent-11", "qq-napcat:agent-12"]
+

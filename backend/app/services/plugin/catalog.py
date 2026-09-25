@@ -107,6 +107,49 @@ def channel_kind(plugin_id: str) -> str:
     return kind or plugin_id
 
 
+def channels() -> list[dict[str, Any]]:
+    """声明了 channel 块的插件 —— 「有哪些外部通道」的唯一来源
+
+    通道卡片、路由、身份类别都读这里：第三方通道插件装上就出现、卸载就消失，
+    平台侧不再维护插件 id 常量表。
+    """
+    result: list[dict[str, Any]] = []
+    for plugin_id, manifest in sorted(scan_disk().items()):
+        block = manifest.get("channel")
+        if not isinstance(block, dict) or not block:
+            continue
+        name = str(manifest.get("name") or plugin_id)
+        label = str(block.get("label") or name)
+        desc = str(block.get("desc") or manifest.get("description") or "")
+        guide = block.get("guide")
+        result.append({
+            "plugin_id": plugin_id,
+            "kind": str(block.get("kind") or "").strip() or plugin_id,
+            "name": name,
+            # 通道名与说明都是插件的产品文案，三语由插件自带：不该在平台的 i18n 表里再抄一遍
+            "label": label,
+            "label_en": str(block.get("label_en") or label),
+            "label_ja": str(block.get("label_ja") or label),
+            "desc": desc,
+            "desc_en": str(block.get("desc_en") or desc),
+            "desc_ja": str(block.get("desc_ja") or desc),
+            # 开通指引进 manifest：q.qq.com 这类链接是插件自己的知识，平台不该替它记
+            "guide": [g for g in (guide if isinstance(guide, list) else []) if isinstance(g, dict) and g.get("text")],
+            # 能力与限制：同样是插件自己的知识（腾讯下线主动推送、私聊额度、封号风险…），
+            # 卡片直接照着显示，平台不替它总结
+            "limits": [x for x in (block.get("limits") if isinstance(block.get("limits"), list) else []) if isinstance(x, dict) and x.get("text")],
+            "pairing": bool(block.get("pairing", False)),
+            "supports_group": bool(block.get("supports_group", False)),
+            "default_enabled": bool(manifest.get("default_enabled", True)),
+        })
+    return result
+
+
+def channel_plugin(plugin_id: str) -> dict[str, Any] | None:
+    """按 id 取一条已声明的通道；没声明返回 None（路由拿它挡掉乱传的 plugin_id）"""
+    return next((c for c in channels() if c["plugin_id"] == plugin_id), None)
+
+
 def load_entry_payload(manifest: dict[str, Any]) -> dict[str, Any]:
     """读取插件 entry 载荷（skin.json / skill.json），无则返回 {}"""
     entry = manifest.get("entry")

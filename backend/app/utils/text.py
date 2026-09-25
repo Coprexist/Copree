@@ -69,6 +69,7 @@ def check_mention(content: str, target_name: str) -> bool:
 
 # Markdown 降级用的标记（QQ 群没开通原生 MD 时只能发纯文本，见 docs/develop 的 markdown 一节）
 _MD_FENCE_RE = re.compile(r'^\s*```[^\n]*$', re.M)
+_MD_INLINE_CODE_RE = re.compile(r'`([^`\n]+)`')
 _MD_IMAGE_RE = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
 _MD_LINK_RE = re.compile(r'\[([^\]]+)\]\(([^)]+)\)')
 _MD_BOLD_RE = re.compile(r'\*\*(.+?)\*\*|__(.+?)__', re.S)
@@ -82,11 +83,11 @@ _MD_HR_RE = re.compile(r'^\s{0,3}([-*_])\1{2,}\s*$', re.M)
 def plainify_markdown(content: str) -> str:
     """Markdown → 纯文本（保留换行与列表，只去掉排版符号）。
 
-    为什么需要：QQ 群的 markdown 是**内邀开通**的能力（官方：目前需要内邀开通，
-    且"被动 MD 仍需单独申请开通"——我们发的恰好都是被动回复）。没开通时只能发
-    msg_type=0 纯文本，AI 写的 **加粗**、# 标题就会原样露出来。
-    站内不动（Copree 自己渲染 markdown），只在外部通道出站时降级；
-    开通原生 MD 之后把出站换成 msg_type=2 + markdown.content 就能直接渲染。
+    为什么需要：QQ 群的 markdown 是**内邀开通**的能力，且 MD 权限是**机器人账号维度**的
+    （同一个平台里有的号有、有的没有）。出站已经改成"先按 msg_type=2 发 Markdown，
+    接口说没权限再退回纯文本"（QqClient._send_rich）——所以这里只服务没权限的那些号：
+    AI 写的 **加粗**、# 标题、`行内代码` 不能原样露在群里。
+    站内不动（Copree 自己渲染 markdown）。
     """
     if not content:
         return content
@@ -98,6 +99,7 @@ def plainify_markdown(content: str) -> str:
     text = _MD_BOLD_RE.sub(lambda m: m.group(1) or m.group(2), text)
     text = _MD_STRIKE_RE.sub(r"\1", text)
     text = _MD_ITALIC_RE.sub(lambda m: m.group(1) or m.group(2), text)
+    text = _MD_INLINE_CODE_RE.sub(r"\1", text)
     text = _MD_HEADING_RE.sub("", text)
     text = _MD_QUOTE_RE.sub("", text)
     return _MD_HR_RE.sub("", text)

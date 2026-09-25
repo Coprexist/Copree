@@ -83,7 +83,8 @@ async def test_service_plugin_lifecycle_and_secrets(migrated_db):
     catalog.BUILTIN_PLUGIN_DIR, catalog.USER_PLUGIN_DIR = root, root / "user"
     try:
         async with async_session() as db:
-            await db.execute(text("TRUNCATE plugin_configs, plugins CASCADE"))
+            from db_reset import clear
+            await clear(db, "plugin_configs", "plugins")
             db.add(Plugin(id="qq-demo", name="QQ Demo", category="service", enabled=True, builtin=True))
             await db.commit()
 

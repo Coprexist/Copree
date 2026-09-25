@@ -59,9 +59,45 @@ Copree 管三件事：**这个外部的人是谁**、**放不放行**、**消息
 | `kind` | 是 | 外部身份类别名。格式 `^[a-z][a-z0-9_-]{2,31}$`（小写，至少 3 位） |
 | `label` | 是 | 界面上的展示名（中文）。**插件自带文案**，不写进平台的 i18n 文件 |
 | `label_en` / `label_ja` | 否 | 缺省回落 `label` |
+| `desc` / `desc_en` / `desc_ja` | 否 | 子项下面那行说明；缺省回落顶层 `description` |
 | `pairing` | 否 | 是否用配对制（陌生私聊先领码）。通道卡片据此决定出不出配对区 |
 | `supports_group` | 否 | 是否有群聊。卡片据此决定出不出「消息落到哪个群」 |
+| `guide` | 否 | 开通指引：`[{text, text_en?, text_ja?, url?}]`，只在"还没配过"时显示。申请页面链接属于插件自己的知识，平台不替它记 |
+| `limits` | 否 | 能力与限制：`[{text, text_en?, text_ja?}]`，卡片上常驻显示（腾讯的主动推送下线、私聊额度、封号风险…）。同样是插件自己的知识，平台不替它总结 |
 | `icon`（顶层） | 否 | lucide 图标名，通道卡片与插件列表都用它 |
+
+卡片是**按 `config_schema` 渲染**的，插件只要遵守三条约定就不用动平台代码：
+
+1. 字段用 `title` / `description` 写文案（中文），要三语再加 `title_en` / `title_ja`、
+   `description_en` / `description_ja`；`secret: true` 走密码框且接口不回显。
+2. `target_agent` 由平台按路径上的 AI 自动填（`managed: true`），插件不要指望用户手填。
+   平台**托管**的字段统一用 `managed: true` + `default: <平台给的值>` 声明：卡片不显示、不算"还缺什么"，
+   保存时由 `plugin/config.py` 的 `managed_values()` 覆盖写入（客户端传什么都不算）。
+   NapCat 插件就是例子：平台自带协议端（`NAPCAT_WS_URL` / `NAPCAT_TOKEN` 环境变量，见
+   `docker-compose.yml` 的 `napcat` profile）时，地址与 token 直接不露给用户；用户自带协议端时才显示这两个字段。
+3. `copree_group_id`（消息落到哪个 Copree 群）与 `dm_policy`（私聊策略）是平台约定字段，
+   用这两个名字就自动获得"选群/新建群"和"四档策略"控件。
+
+状态里可选报两个键给卡片用：`recent_groups`（`[{origin, last_at, count, allowed}]`，最近见到过的群）
+与 `recent_field`（这些 `origin` 该写进哪个配置字段名）；`last_error` 会在卡片上原样显示。
+
+**托管运行时状态**（还没实例时也要能问）：`get_status()` 得先有实例，而后端协议端的"扫码登录"
+发生在实例配置之前。这类状态用类方法 `ServicePlugin.hosted_status()` 报，卡片从
+`detail.hosted_endpoint` 拿到，约定字段：
+
+| 键 | 说明 |
+| --- | --- |
+| `held_by_platform` | 这份服务由平台托管（卡片据此隐掉"你自己去跑一个"的指引） |
+| `logged_in` / `bot_name` | 登录到哪一步、登的是谁 |
+| `qr_png` / `qr_at` | 未登录时的登录二维码（base64 PNG，几百字节）与生成时间 |
+
+协议端的 **WebUI（6099）是管理员排障入口，不进卡片**：它带 token，等于协议端的管理权限。
+它默认只发布在宿主机上；要远程用就自己把它加进端口映射或走 SSH 隧道。
+AI 主人只需要卡片里那张二维码，不需要任何网址——把带 token 的登录页塞给用户
+既越权（协议端是全平台共用的），也常常根本没做端口映射、点了也打不开。
+
+NapCat 插件的实现就是例子：平台托管时从 `NAPCAT_CACHE` 读 NapCat 写下的 `qrcode.png`，
+卡片直接把码画出来；用户不必知道 6099 / WebUI / token 这些东西。
 
 规则：
 

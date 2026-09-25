@@ -1,4 +1,7 @@
-"""我的 AI · 通道 — 用户给自己的 AI 接上外部聊天软件（目前是 QQ）
+"""我的 AI · 通道 — 用户给自己的 AI 接上外部聊天软件（QQ 官方 / NapCat / 以后别的）
+
+通道清单由插件声明（manifest 的 channel 块）——路由上的 {plugin_id} 就是插件 id，
+平台侧没有"通道常量表"：插件装上就多一条，卸载就少一条。
 
 权限模型：通道属于 AI 的所有者（agent.user_id），入口就在那个 AI 的页面上。
 管理员那份插件配置接口仍然保留，用来排障；日常增删改走这里。
@@ -15,7 +18,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.services.plugin import channel, pairing
+from app.services.plugin import channel
 from app.services.plugin.runtime_control import StartFailed, UnknownInstance
 from app.utils.auth import get_current_user
 
@@ -34,8 +37,9 @@ class PairApproveRequest(BaseModel):
     code: str | None = None
 
 
-class OpenidRequest(BaseModel):
-    openid: str
+class OriginRequest(BaseModel):
+    """通道侧的那个人的标识（QQ 官方是 openid，NapCat 是 QQ 号）"""
+    origin: str
 
 
 class LandingGroupRequest(BaseModel):
@@ -51,30 +55,41 @@ async def _owned(db: AsyncSession, agent_id: int, user: dict):
         raise HTTPException(403, str(e))
 
 
+def _declared(plugin_id: str) -> dict:
+    """未知通道 404：插件没声明 channel 块，或插件根本不存在"""
+    try:
+        return channel.declared(plugin_id)
+    except channel.UnknownChannel as e:
+        raise HTTPException(404, str(e))
+
+
 @router.get("/{agent_id}/channels")
 async def list_channels(
     agent_id: int,
     user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """这个 AI 的通道列表（含配置、运行态、待批准与已配对的名单）"""
+    """这个 AI 的全部通道（含配置、运行态、待批准与已配对的名单）"""
     await _owned(db, agent_id, user)
-    return {"channels": [await channel.view(db, agent_id, int(user["user_id"]))]}
+    return {"channels": await channel.views(db, agent_id, int(user["user_id"]))}
 
 
-@router.put("/{agent_id}/channels/qq")
-async def save_qq_channel(
+@router.put("/{agent_id}/channels/{plugin_id}")
+async def save_channel(
     agent_id: int,
+    plugin_id: str,
     req: SaveChannelRequest,
     user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """保存 QQ 通道配置并让它生效（写配置 → 建实例 → 启动）"""
+    """保存通道配置并让它生效（写配置 → 建实例 → 启动）"""
+    _declared(plugin_id)
     agent = await _owned(db, agent_id, user)
     try:
         result = await channel.save(
-            db, agent_id=agent_id, user_id=int(user["user_id"]), values=req.values or {},
-            actor=str(user.get("username") or user["user_id"]), target_agent_name=agent.name,
+            db, plugin_id=plugin_id, agent_id=agent_id, user_id=int(user["user_id"]),
+            values=req.values or {}, actor=str(user.get("username") or user["user_id"]),
+            target_agent_name=agent.name,
         )
     except PermissionError as e:
         raise HTTPException(403, str(e))
@@ -83,14 +98,16 @@ async def save_qq_channel(
     return {"message": "已保存", **result}
 
 
-@router.post("/{agent_id}/channels/qq/landing-group")
+@router.post("/{agent_id}/channels/{plugin_id}/landing-group")
 async def create_landing_group(
     agent_id: int,
+    plugin_id: str,
     req: LandingGroupRequest,
     user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """在 Copree 新建一个群当 QQ 消息的落点（用户是群主，这个 AI 是成员）"""
+    """在 Copree 新建一个群当外部消息的落点（用户是群主，这个 AI 是成员）"""
+    _declared(plugin_id)
     await _owned(db, agent_id, user)
     try:
         return await channel.create_landing_group(
@@ -100,15 +117,17 @@ async def create_landing_group(
         raise HTTPException(400, str(e))
 
 
-@router.post("/{agent_id}/channels/qq/start")
-async def start_qq_channel(
+@router.post("/{agent_id}/channels/{plugin_id}/start")
+async def start_channel(
     agent_id: int,
+    plugin_id: str,
     user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    _declared(plugin_id)
     await _owned(db, agent_id, user)
     try:
-        return await channel.start(db, agent_id)
+        return await channel.start(db, plugin_id=plugin_id, agent_id=agent_id)
     except PermissionError as e:
         raise HTTPException(403, str(e))
     except UnknownInstance:
@@ -117,64 +136,69 @@ async def start_qq_channel(
         raise HTTPException(500, str(e))
 
 
-@router.post("/{agent_id}/channels/qq/stop")
-async def stop_qq_channel(
+@router.post("/{agent_id}/channels/{plugin_id}/stop")
+async def stop_channel(
     agent_id: int,
+    plugin_id: str,
     user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    _declared(plugin_id)
     await _owned(db, agent_id, user)
     try:
-        return await channel.stop(db, agent_id)
+        return await channel.stop(db, plugin_id=plugin_id, agent_id=agent_id)
     except UnknownInstance:
         raise HTTPException(404, "通道还没配置")
 
 
-@router.post("/{agent_id}/channels/qq/pairings/approve")
+@router.post("/{agent_id}/channels/{plugin_id}/pairings/approve")
 async def approve_pairing(
     agent_id: int,
+    plugin_id: str,
     req: PairApproveRequest,
     user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """批准一条待配对：点界面上的「批准」，或把 QQ 里收到的配对码抄回来"""
+    """批准一条待配对：点界面上的「批准」，或把通道里收到的配对码抄回来"""
+    _declared(plugin_id)
     await _owned(db, agent_id, user)
     try:
-        return {"message": "已批准", **await channel.approve(db, agent_id, pairing_id=req.pairing_id, code=req.code)}
+        return {"message": "已批准", **await channel.approve(
+            db, plugin_id=plugin_id, agent_id=agent_id, pairing_id=req.pairing_id, code=req.code
+        )}
     except ValueError as e:
         raise HTTPException(400, str(e))
 
 
-@router.post("/{agent_id}/channels/qq/pairings/block")
+@router.post("/{agent_id}/channels/{plugin_id}/pairings/block")
 async def block_pairing(
     agent_id: int,
-    req: OpenidRequest,
+    plugin_id: str,
+    req: OriginRequest,
     user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """拉黑一个 openid：不再回话，也不再发配对码"""
+    """拉黑一个人：不再回话，也不再发配对码"""
+    _declared(plugin_id)
     await _owned(db, agent_id, user)
-    row = await pairing.set_status(
-        db, kind=channel.channel_kind(), owner_scope=channel.instance_of(agent_id),
-        origin=req.openid, status=pairing.BLOCKED,
-    )
-    if row is None:
+    ok = await channel.block_pairing(db, plugin_id=plugin_id, agent_id=agent_id, origin=req.origin)
+    if not ok:
         raise HTTPException(404, "没有这条配对记录")
-    return {"message": "已拉黑", "openid": row.origin}
+    return {"message": "已拉黑", "origin": req.origin}
 
 
-@router.post("/{agent_id}/channels/qq/pairings/forget")
+@router.post("/{agent_id}/channels/{plugin_id}/pairings/forget")
 async def forget_pairing(
     agent_id: int,
-    req: OpenidRequest,
+    plugin_id: str,
+    req: OriginRequest,
     user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """解除配对：对方重新变回陌生人，下次私聊重新领码"""
+    _declared(plugin_id)
     await _owned(db, agent_id, user)
-    ok = await pairing.forget(
-        db, kind=channel.channel_kind(), owner_scope=channel.instance_of(agent_id), origin=req.openid
-    )
+    ok = await channel.forget_pairing(db, plugin_id=plugin_id, agent_id=agent_id, origin=req.origin)
     if not ok:
         raise HTTPException(404, "没有这条配对记录")
     return {"message": "已解除"}

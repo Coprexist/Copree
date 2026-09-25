@@ -7,5 +7,38 @@
   "author": "Copree",
   "icon": "MessageSquare",
   "default_enabled": false,
-  "channel": { "kind": "qq-napcat", "label": "QQ（NapCat）", "label_en": "QQ (NapCat)", "label_ja": "QQ（NapCat）", "pairing": true, "supports_group": true }
+  "channel": {
+    "kind": "qq-napcat",
+    "label": "QQ（NapCat）",
+    "label_en": "QQ (NapCat)",
+    "label_ja": "QQ（NapCat）",
+    "desc": "自建协议端接管一个真 QQ 号：群/私聊全量消息、支持富文本，代价是封号风险自担",
+    "desc_en": "Run your own protocol endpoint with a real QQ account: full group/DM messages and rich text, at the risk of a ban",
+    "desc_ja": "自前のプロトコル端末で実 QQ 番号を接続：グループ/DM の全メッセージとリッチテキストに対応（BAN リスクは自己責任）",
+    "pairing": true,
+    "supports_group": true,
+    "limits": [
+      {"text":"用真 QQ 号（协议端）：没有官方那套「只能被动回复 / 每天 2 条」的限制，群里被 @ 才唤醒，也能按需主动发", "text_en":"Uses a real QQ account (protocol endpoint): no official reply-only or 2-per-day limits; the AI wakes on @mentions and can also post proactively", "text_ja":"実 QQ 番号（プロトコル端末）を使用：公式のような受動返信のみ／1 日 2 通の制限はなく、@ で起動し主動送信も可能"},
+      {"text":"违反 QQ 用户协议，有封号风险：只挂备用号，别用主号", "text_en":"It violates the QQ ToS and risks a ban: use a spare account, never your main one", "text_ja":"QQ 利用規約に違反し BAN のリスクがあります。予備アカウントのみ使用してください"},
+      {"text":"富文本按协议端与 QQ 客户端的能力发，平台不做降级（渲染与否由客户端决定）", "text_en":"Rich text goes out as-is (no downgrade); whether it renders depends on the client", "text_ja":"リッチテキストはそのまま送信（降格なし）。描画されるかはクライアント次第"},
+      {"text":"私聊默认配对：陌生人只会收到一个配对码，你批准后才能跟 AI 说话", "text_en":"DMs default to pairing: strangers get a pairing code and cannot talk to the AI until you approve", "text_ja":"DM は既定でペアリング制：見知らぬ人はコードを受け取り、承認するまで AI と話せません"}
+    ],
+    "guide": [
+      {
+        "text": "在一台机器上跑起 NapCat（或任何支持 OneBot v11 的协议端），扫码登录要接管的 QQ 号",
+        "text_en": "Run NapCat (or any OneBot v11 endpoint) and sign in the QQ account it should take over",
+        "text_ja": "NapCat（または OneBot v11 対応のプロトコル端末）を起動し、担当させる QQ 番号でログイン"
+      },
+      {
+        "text": "在协议端里开一个正向 WebSocket 服务，记下地址与 access_token",
+        "text_en": "Enable a forward WebSocket service there and note its URL and access_token",
+        "text_ja": "順方向 WebSocket を有効にし、アドレスと access_token を控える"
+      },
+      {
+        "text": "填到下面并保存，通道会自动连上去；群里被 @ 才唤醒，私聊默认要配对",
+        "text_en": "Fill them in below and save — the channel connects; group @mentions wake the AI and DMs need pairing",
+        "text_ja": "下に入力して保存すると接続します。グループは @ で起動、DM は既定でペアリング制"
+      }
+    ]
+  }
 }

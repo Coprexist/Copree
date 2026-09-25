@@ -289,7 +289,8 @@ async def test_store_install_uninstall_aligns_db(migrated_db):
 
     with _Sandbox() as box:
         async with async_session() as db:
-            await db.execute(text("TRUNCATE plugins CASCADE"))
+            from db_reset import clear
+            await clear(db, "plugins")
             await db.commit()
 
             store.install_package(_zip({"plugin.json": _manifest(id="demo-db", name="入库演示")}))

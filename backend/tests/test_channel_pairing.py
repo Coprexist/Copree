@@ -59,6 +59,8 @@ class _FakePluginDir:
         (d / "plugin.json").write_text(json.dumps({
             "id": "qq-channel", "name": "QQ 通道", "category": "service",
             "version": "0.0.1", "default_enabled": True,
+            # 通道由 manifest 声明：没有 channel 块就不算通道（catalog.channels() 只认这个）
+            "channel": {"kind": "qq", "label": "QQ", "pairing": True, "supports_group": True},
         }, ensure_ascii=False), encoding="utf-8")
         (d / "plugin.py").write_text(FAKE_PLUGIN, encoding="utf-8")
 
@@ -83,7 +85,9 @@ async def _seed(db) -> tuple[int, int, int]:
     from app.models.user import User
     from app.utils.auth import hash_password
 
-    await db.execute(text("TRUNCATE external_identities, plugin_configs, plugin_service_states, plugins, agents, users CASCADE"))
+    from db_reset import clear
+    await clear(db, "external_identities", "plugin_configs", "plugin_service_states", "plugins",
+                "agents", "users")
     owner = User(username="owner-a", password_hash=hash_password("x" * 12), email="a@test.local", type="human")
     other = User(username="other-b", password_hash=hash_password("x" * 12), email="b@test.local", type="human")
     db.add_all([owner, other])
@@ -105,7 +109,8 @@ async def test_pairing_lifecycle(migrated_db):
     from app.services.plugin import pairing
 
     async with async_session() as db:
-        await db.execute(text("TRUNCATE external_identities"))
+        from db_reset import clear
+        await clear(db, "external_identities")
         await db.commit()
 
         row = await pairing.upsert_pending(
@@ -177,7 +182,7 @@ async def test_channel_ownership_and_save(migrated_db):
 
             # 保存：目标 AI 由路径决定，用户传什么都不算
             result = await channel.save(
-                db, agent_id=agent_id, user_id=owner_id,
+                db, plugin_id="qq-channel", agent_id=agent_id, user_id=owner_id,
                 values={"app_id": "1024", "client_secret": "s3cr3t", "target_agent": "别人的 AI"},
                 actor="owner-a", target_agent_name="小明",
             )
@@ -186,7 +191,7 @@ async def test_channel_ownership_and_save(migrated_db):
             assert cfg["target_agent"] == "小明"
             assert cfg["client_secret"] == "s3cr3t"
 
-            view = await channel.view(db, agent_id, owner_id)
+            view = (await channel.views(db, agent_id, owner_id))[0]
             assert view["running"] is True
             assert view["secrets"]["client_secret"] is True
             assert "s3cr3t" not in json.dumps(view, ensure_ascii=False, default=str)
@@ -194,7 +199,7 @@ async def test_channel_ownership_and_save(migrated_db):
             assert view["owner"] is None and view["pending"] == []
 
             # 空提交 = 什么都不改（允许部分保存的代价：这里必须靠"没传的键不动"兜住）
-            await channel.save(db, agent_id=agent_id, user_id=owner_id, values={}, actor="owner-a", target_agent_name="小明")
+            await channel.save(db, plugin_id="qq-channel", agent_id=agent_id, user_id=owner_id, values={}, actor="owner-a", target_agent_name="小明")
             cfg_after = await plugin_config.get_config("qq-channel", instance, db=db)
             assert cfg_after["app_id"] == "1024" and cfg_after["client_secret"] == "s3cr3t", cfg_after
 
@@ -205,7 +210,7 @@ async def test_channel_ownership_and_save(migrated_db):
             row.enabled = False
             await db.commit()
             try:
-                await channel.save(db, agent_id=agent_id, user_id=owner_id, values={"app_id": "1", "client_secret": "2"}, actor="owner-a", target_agent_name="小明")
+                await channel.save(db, plugin_id="qq-channel", agent_id=agent_id, user_id=owner_id, values={"app_id": "1", "client_secret": "2"}, actor="owner-a", target_agent_name="小明")
                 raise AssertionError("插件被全局关闭时不该能配")
             except PermissionError:
                 pass
@@ -225,7 +230,7 @@ async def test_admin_replace_keeps_owner_scoped(migrated_db):
         async with async_session() as db:
             owner_id, _other, agent_id = await _seed(db)
             await channel.save(
-                db, agent_id=agent_id, user_id=owner_id,
+                db, plugin_id="qq-channel", agent_id=agent_id, user_id=owner_id,
                 values={"app_id": "1", "client_secret": "2"},
                 actor="owner-a", target_agent_name="小明",
             )
@@ -261,7 +266,7 @@ async def test_partial_save_keeps_secret(migrated_db):
         async with async_session() as db:
             owner_id, _other, agent_id = await _seed(db)
             await channel.save(
-                db, agent_id=agent_id, user_id=owner_id,
+                db, plugin_id="qq-channel", agent_id=agent_id, user_id=owner_id,
                 values={"app_id": "1", "client_secret": "sec-keep-me"},
                 actor="owner-a", target_agent_name="小明",
             )
@@ -270,7 +275,7 @@ async def test_partial_save_keeps_secret(migrated_db):
 
             # 只提交白名单：凭据必须原封不动
             await channel.save(
-                db, agent_id=agent_id, user_id=owner_id,
+                db, plugin_id="qq-channel", agent_id=agent_id, user_id=owner_id,
                 values={"qq_group_allowlist": "GROUP-1"},
                 actor="owner-a", target_agent_name="小明",
             )
@@ -303,7 +308,7 @@ async def test_group_binding_must_be_owned_and_joined(migrated_db):
             db.add(GroupMember(group_id=foreign.id, member_type="ai", member_id=agent.user_id, role="member"))
             await db.commit()
             try:
-                await channel.save(db, agent_id=agent_id, user_id=owner_id,
+                await channel.save(db, plugin_id="qq-channel", agent_id=agent_id, user_id=owner_id,
                                    values={"app_id": "1", "client_secret": "2", "copree_group_id": str(foreign.id)},
                                    actor="owner-a", target_agent_name="小明")
                 raise AssertionError("别人的群不该能接")
@@ -315,7 +320,7 @@ async def test_group_binding_must_be_owned_and_joined(migrated_db):
             db.add(mine)
             await db.commit()
             try:
-                await channel.save(db, agent_id=agent_id, user_id=owner_id,
+                await channel.save(db, plugin_id="qq-channel", agent_id=agent_id, user_id=owner_id,
                                    values={"app_id": "1", "client_secret": "2", "copree_group_id": str(mine.id)},
                                    actor="owner-a", target_agent_name="小明")
                 raise AssertionError("AI 不在里面的群不该能接")
@@ -328,7 +333,7 @@ async def test_group_binding_must_be_owned_and_joined(migrated_db):
             options = await channel.group_options(db, agent_id, owner_id)
             assert [g["id"] for g in options] == [mine.id], options
 
-            result = await channel.save(db, agent_id=agent_id, user_id=owner_id,
+            result = await channel.save(db, plugin_id="qq-channel", agent_id=agent_id, user_id=owner_id,
                                         values={"app_id": "1", "client_secret": "2", "copree_group_id": str(mine.id)},
                                         actor="owner-a", target_agent_name="小明")
             assert result["running"] is True, result
@@ -336,7 +341,7 @@ async def test_group_binding_must_be_owned_and_joined(migrated_db):
 
             cfg = await plugin_config.get_config("qq-channel", channel.instance_of(agent_id), db=db)
             assert cfg["copree_group_id"] == str(mine.id)
-            view = await channel.view(db, agent_id, owner_id)
+            view = (await channel.views(db, agent_id, owner_id))[0]
             assert [g["id"] for g in view["group_options"]] == [mine.id]
 
             for plugin_id in list(skill_bridge._loaded):
@@ -349,11 +354,64 @@ async def test_channel_routes_registered():
     paths = {getattr(r, "path", "") for r in channels.router.routes}
     for expected in (
         "/me/agents/{agent_id}/channels",
-        "/me/agents/{agent_id}/channels/qq",
-        "/me/agents/{agent_id}/channels/qq/start",
-        "/me/agents/{agent_id}/channels/qq/stop",
-        "/me/agents/{agent_id}/channels/qq/pairings/approve",
-        "/me/agents/{agent_id}/channels/qq/pairings/block",
-        "/me/agents/{agent_id}/channels/qq/pairings/forget",
+        "/me/agents/{agent_id}/channels/{plugin_id}",
+        "/me/agents/{agent_id}/channels/{plugin_id}/start",
+        "/me/agents/{agent_id}/channels/{plugin_id}/stop",
+        "/me/agents/{agent_id}/channels/{plugin_id}/landing-group",
+        "/me/agents/{agent_id}/channels/{plugin_id}/pairings/approve",
+        "/me/agents/{agent_id}/channels/{plugin_id}/pairings/block",
+        "/me/agents/{agent_id}/channels/{plugin_id}/pairings/forget",
     ):
         assert expected in paths, "缺少路由 " + expected
+
+
+async def test_channel_registry_is_manifest_driven():
+    """通道清单来自插件声明：只有带 channel 块的插件才算通道，未知 plugin_id 是 404 的料"""
+    from app.services.plugin import catalog, channel
+
+    with _FakePluginDir():
+        declared = {c["plugin_id"]: c for c in catalog.channels()}
+        assert set(declared) == {"qq-channel"}, declared
+        assert declared["qq-channel"]["kind"] == "qq"
+        assert declared["qq-channel"]["pairing"] is True
+        assert channel.declared("qq-channel")["label"] == "QQ"
+        try:
+            channel.declared("no-such-channel")
+            raise AssertionError("没声明 channel 块的不该算通道")
+        except channel.UnknownChannel:
+            pass
+
+    # 真插件目录：两条 QQ 通道各自声明类别，平台侧没有插件 id 常量表
+    real = {c["plugin_id"]: c for c in catalog.channels()}
+    assert real["qq-channel"]["kind"] == "qq"
+    assert real["qq-napcat"]["kind"] == "qq-napcat"
+    assert real["qq-napcat"]["label"] != real["qq-channel"]["label"]
+
+async def test_group_brief_tells_ai_the_channel_rules(migrated_db):
+    """接了通道的群：AI 上下文里要有「我在群里只能被动回复」这句话
+
+    不然它会答应「我待会儿在群里提醒你」，而腾讯自 2025-04-21 起下线了主动推送——
+    答应的事根本发不出去。
+    """
+    from app.database import async_session
+    from app.services.plugin import channel, config as plugin_config, skill_bridge
+
+    with _FakePluginDir():
+        async with async_session() as db:
+            owner_id, _other, agent_id = await _seed(db)
+            assert await channel.group_brief(db, 999) == "", "没接通道的群不该多话"
+
+            skill_bridge.ensure_declared("qq-channel")
+            await plugin_config.set_config(
+                "qq-channel",
+                {"app_id": "1", "client_secret": "2", "copree_group_id": "7"},
+                channel.instance_of(agent_id), db=db,
+            )
+            brief = await channel.group_brief(db, 7)
+            assert "被动回复" in brief, brief
+            assert "2025-04-21" in brief and "2 条" in brief, brief
+
+            for plugin_id in list(skill_bridge._loaded):
+                await skill_bridge._unload_plugin(plugin_id)
+
+

@@ -49,10 +49,10 @@ async def _seed():
     from app.database import async_session
 
     async with async_session() as db:
-        await db.execute(text(
-            "TRUNCATE external_identities, plugin_service_states, plugin_configs, plugins, "
-            "pending_messages, messages, dm_messages, dm_sessions, group_members, groups, users, agents CASCADE"
-        ))
+        from db_reset import clear
+        await clear(db, "external_identities", "plugin_service_states", "plugin_configs", "plugins",
+                    "pending_messages", "messages", "dm_messages", "dm_sessions", "group_members",
+                    "groups", "users", "agents")
         # 下面用写死的 id 播种，序列要往前挪，否则插件新建用户会撞上 id=1/2
         for table in ("users", "agents", "groups", "messages", "dm_messages"):
             await db.execute(text(f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), 100)"))
@@ -147,15 +147,17 @@ async def test_group_round_trip(migrated_db):
         await plugin._on_group_at(dict(GROUP_EVENT))
 
         # 最近见过的 QQ 群要回报给卡片：白名单该怎么填，必须先看得见群 openid
+        # （条目里的键叫 origin：通道侧标识在身份层统一是这个名，插件侧不再用 openid 当字段名）
         status = await plugin.get_status()
-        assert [g["openid"] for g in status["recent_groups"]] == ["QQGROUP-AAA"], status["recent_groups"]
+        assert [g["origin"] for g in status["recent_groups"]] == ["QQGROUP-AAA"], status["recent_groups"]
         assert status["recent_groups"][0]["count"] == 1 and status["recent_groups"][0]["allowed"] is True
+        assert status["recent_field"] == "qq_group_allowlist"
 
         # 白名单把群挡下时也要记账（allowed=False），否则用户永远发现不了这个群
         plugin._allow = {"SOME-OTHER-GROUP"}
         await plugin._on_group_at({**GROUP_EVENT, "id": "MSG-2", "group_openid": "QQGROUP-BBB"})
         status = await plugin.get_status()
-        blocked = {g["openid"]: g for g in status["recent_groups"]}["QQGROUP-BBB"]
+        blocked = {g["origin"]: g for g in status["recent_groups"]}["QQGROUP-BBB"]
         assert blocked["allowed"] is False, blocked
         assert len(await _messages(GROUP_ID)) == 1, "被白名单挡下的群不该进 Copree"
 
@@ -326,7 +328,8 @@ async def test_multi_instance_one_per_config(migrated_db):
     finally:
         async with async_session() as db:
             await skill_bridge._unload_plugin("qq-channel")
-            await db.execute(text("TRUNCATE plugin_service_states, plugin_configs, plugins CASCADE"))
+            from db_reset import clear
+            await clear(db, "plugin_service_states", "plugin_configs", "plugins")
             await db.commit()
 
 
@@ -479,3 +482,28 @@ def test_readable_content_covers_media_placeholders():
     assert plugin._readable_content({"attachments": [{"content_type": "image/png"}]}) == "[图片]"
     assert plugin._readable_content({"attachments": [{"content_type": "voice", "asr_refer_text": "晚安"}]}) == "[语音] 晚安"
     assert plugin._readable_content({"attachments": [{"content_type": "file", "filename": "报表.xlsx"}]}) == "[文件] 报表.xlsx"
+
+async def test_markdown_first_with_plain_fallback():
+    """机器人有 MD 权限就发 Markdown，没有就在同一次发送里退回纯文本
+
+    MD 权限是机器人账号维度的（腾讯开通），所以降级放在发送这一层，不写死在平台配置里。
+    """
+    module = _load_plugin_module()
+    client = module.QqClient("app-id", "secret")
+    sent: list[dict] = []
+
+    async def fake_post(path, body):
+        sent.append(body)
+        if len(sent) == 1:
+            raise RuntimeError("发 QQ 消息失败（HTTP 400）：{'message': '无权限'}")
+        return {"id": "msg-1"}
+
+    client._post = fake_post
+    await client.send_group("GROUP-OPENID", "**粗体** 与 `代码`", msg_id="M-1", msg_seq=1)
+
+    assert sent[0]["msg_type"] == 2, sent
+    assert sent[0]["markdown"]["content"].startswith("**粗体**"), sent
+    assert sent[0]["msg_id"] == "M-1" and sent[0]["msg_seq"] == 1, sent
+    assert sent[1]["msg_type"] == 0, sent
+    assert "**" not in sent[1]["content"] and "`代码`" not in sent[1]["content"], sent
+

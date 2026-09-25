@@ -12,7 +12,50 @@
     "label": "QQ",
     "label_en": "QQ",
     "label_ja": "QQ",
+    "desc": "官方 QQ 机器人：群里被 @、或私聊机器人都进 Copree，回复发回 QQ",
+    "desc_en": "Official QQ bot: group @mentions and direct messages land in Copree, replies go back to QQ",
+    "desc_ja": "公式 QQ ボット：グループでの @ や DM は Copree に入り、返信は QQ に戻ります",
     "pairing": true,
-    "supports_group": true
+    "supports_group": true,
+    "limits": [
+      {
+        "text": "群里只能被动回复：别人 @ 或回复机器人时才发得出去（腾讯自 2025-04-21 起下线了主动推送），所以不能让 AI「待会儿在群里说一声」",
+        "text_en": "In groups the bot can only reply: it speaks when someone @mentions or replies to it (Tencent retired proactive pushes on 2025-04-21), so the AI cannot promise to post later",
+        "text_ja": "グループでは受動返信のみ：誰かが @ か返信したときだけ発言できます（Tencent は 2025-04-21 に主動推送を終了）。AI は「後でグループに投稿する」と約束できません"
+      },
+      {
+        "text": "被动回复窗口：群 5 分钟、私聊 60 分钟，同一条消息最多回 5 次，超时就发不出去",
+        "text_en": "Reply windows: 5 minutes in groups, 60 minutes in DMs, at most 5 replies per message",
+        "text_ja": "返信の有効期限：グループ 5 分、DM 60 分、1 メッセージにつき最大 5 回"
+      },
+      {
+        "text": "私聊可以主动发消息，但每天每个用户最多 2 条（机器人每天累计 200 条）",
+        "text_en": "DMs may be sent proactively, but at most 2 per user per day (200 per bot per day)",
+        "text_ja": "DM は主動送信できますが、1 ユーザーにつき 1 日 2 通まで（ボット全体で 200 通/日）"
+      },
+      {
+        "text": "Markdown：私聊已验证可用；群聊取决于该机器人是否开通（没开通时平台自动降级为纯文本，不会把 ** 露出来）",
+        "text_en": "Markdown: verified in DMs; in groups it depends on the bot's permission (the platform falls back to plain text automatically)",
+        "text_ja": "Markdown：DM では確認済み。グループはボットの権限次第（未開通なら自動でプレーンテキストに降格）"
+      }
+    ],
+    "guide": [
+      {
+        "text": "打开 QQ 开放平台，用手机 QQ 扫码登录后创建机器人",
+        "text_en": "Open the QQ Open Platform and create a bot after signing in with mobile QQ",
+        "text_ja": "QQ オープンプラットフォームを開き、スマホ QQ でログインしてボットを作成",
+        "url": "https://q.qq.com/"
+      },
+      {
+        "text": "在机器人设置页复制 AppID 与 AppSecret",
+        "text_en": "Copy AppID and AppSecret from the bot settings page",
+        "text_ja": "ボット設定ページで AppID と AppSecret をコピー"
+      },
+      {
+        "text": "填到下面并保存，通道会自动启动",
+        "text_en": "Fill them in below and save — the channel starts automatically",
+        "text_ja": "下に入力して保存すると、チャンネルが自動で起動します"
+      }
+    ]
   }
 }

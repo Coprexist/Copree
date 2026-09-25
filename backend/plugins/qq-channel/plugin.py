@@ -119,25 +119,37 @@ class QqClient:
             raise RuntimeError(f"发 QQ 消息失败（HTTP {res.status_code}）：{data}")
         return data
 
+    async def _send_rich(
+        self, path: str, content: str, msg_id: str | None, msg_seq: int
+    ) -> dict:
+        """先按 Markdown 发，机器人没有 MD 权限时退回纯文本。
+
+        MD 权限是**机器人账号维度**的（腾讯那边开通），同一个平台里有的号有、有的没有；
+        所以在同一次发送里降级，而不是在平台配置里写死——不然每接一个号都要先问一遍。
+        """
+        from app.utils.text import plainify_markdown
+
+        extra: dict[str, Any] = {"msg_id": msg_id, "msg_seq": msg_seq} if msg_id else {}
+        try:
+            return await self._post(path, {"msg_type": 2, "markdown": {"content": content[:TEXT_LIMIT]}, **extra})
+        except RuntimeError as e:
+            # 只对"没权限"这类降级；其它错误（频控、参数错）照旧抛出去，别吞
+            if not any(word in str(e) for word in ("无权限", "权限", "markdown", "msg_type")):
+                raise
+            logger.info("机器人没有 Markdown 权限，这条退回纯文本：%s", str(e)[:120])
+        return await self._post(path, {"msg_type": 0, "content": plainify_markdown(content)[:TEXT_LIMIT], **extra})
+
     async def send_group(
         self, group_openid: str, content: str, msg_id: str | None = None, msg_seq: int = 1
     ) -> dict:
         """发群消息；带 msg_id = 被动回复（5 分钟内、最多 5 次），不带 = 主动消息（有频控）"""
-        body: dict[str, Any] = {"msg_type": 0, "content": content[:TEXT_LIMIT]}
-        if msg_id:
-            body["msg_id"] = msg_id
-            body["msg_seq"] = msg_seq
-        return await self._post(f"/v2/groups/{group_openid}/messages", body)
+        return await self._send_rich(f"/v2/groups/{group_openid}/messages", content, msg_id, msg_seq)
 
     async def send_c2c(
         self, user_openid: str, content: str, msg_id: str | None = None, msg_seq: int = 1
     ) -> dict:
         """发私聊消息（被动回复 60 分钟内、最多 4 次）"""
-        body: dict[str, Any] = {"msg_type": 0, "content": content[:TEXT_LIMIT]}
-        if msg_id:
-            body["msg_id"] = msg_id
-            body["msg_seq"] = msg_seq
-        return await self._post(f"/v2/users/{user_openid}/messages", body)
+        return await self._send_rich(f"/v2/users/{user_openid}/messages", content, msg_id, msg_seq)
 
 
 @service(
@@ -148,10 +160,14 @@ class QqClient:
         "app_id": {
             "type": "string", "title": "AppID", "required": True,
             "description": "QQ 开放平台 → 机器人管理页获取",
+            "description_en": "From the QQ Open Platform bot settings page",
+            "description_ja": "QQオープンプラットフォームのボット管理ページで取得します",
         },
         "client_secret": {
             "type": "string", "title": "ClientSecret", "secret": True, "required": True,
             "description": "只在这里填，加密落库、接口不回显",
+            "description_en": "Enter it here only; stored encrypted and never echoed back",
+            "description_ja": "ここにのみ入力します。暗号化して保存し、APIは返しません",
         },
         "target_agent": {
             "type": "string", "title": "这个机器人是谁（AI 名字）", "required": True, "managed": True,
@@ -159,11 +175,15 @@ class QqClient:
         },
         "copree_group_id": {
             "type": "string", "title": "接入的 Copree 群 ID",
+            "title_en": "Landing Copree group ID", "title_ja": "接続先 Copree グループID",
             "description": "群消息落到哪个群；留空 = 只做私聊，不接群",
         },
         "qq_group_allowlist": {
             "type": "string", "title": "允许接入的 QQ 群",
+            "title_en": "Allowed QQ groups", "title_ja": "許可する QQ グループ",
             "description": "群 openid，多个用逗号分隔；留空 = 不限制",
+            "description_en": "Group openids, comma separated; empty = no limit",
+            "description_ja": "グループ openid をカンマ区切り。空欄＝制限なし",
         },
         "dm_policy": {
             "type": "string", "title": "私聊策略（pairing / owner / open / off）",
@@ -219,6 +239,8 @@ class QqChannelPlugin(ServicePlugin):
             "recent_groups": sorted(
                 self._seen_groups.values(), key=lambda r: float(r.get("last_at") or 0), reverse=True
             ),
+            # 卡片上的"一键加白名单"该往哪个字段写：插件自己说，平台不猜字段名
+            "recent_field": "qq_group_allowlist",
             "routed_groups": sorted({r.get("qq", "") for r in self._route.values() if r.get("qq")}),
             "dm_sessions": len(self._dm_route),
             "replies_sent": self.replies,
@@ -423,7 +445,7 @@ class QqChannelPlugin(ServicePlugin):
         row = self._seen_groups.get(openid)
         if row is None:
             self._seen_groups[openid] = {
-                "openid": openid, "first_at": now, "last_at": now, "count": 1, "allowed": allowed,
+                "origin": openid, "first_at": now, "last_at": now, "count": 1, "allowed": allowed,
             }
         else:
             row["last_at"] = now
@@ -431,7 +453,7 @@ class QqChannelPlugin(ServicePlugin):
             row["allowed"] = allowed
         if len(self._seen_groups) > 20:
             oldest = min(self._seen_groups.values(), key=lambda r: float(r.get("last_at") or 0))
-            self._seen_groups.pop(str(oldest.get("openid")), None)
+            self._seen_groups.pop(str(oldest.get("origin")), None)
 
     def _seen_before(self, msg_id: str) -> bool:
         """相同 msg_id 可能重复推送（官方明说），不去重就会重复回答"""
@@ -692,11 +714,10 @@ class QqChannelPlugin(ServicePlugin):
             return
         # QQ 的被动回复自己就会显示「@对方」，正文里再带一个 @名字 就成了两个 @
         # （用户 2026-09-25 实测）。只摘掉开头对**这次回的那个人**的 @，站内内容不动。
-        from app.utils.text import plainify_markdown, strip_leading_mention
+        # 正文里的 Markdown 不再在这里降级：能不能发 MD 由 QqClient._send_rich 按机器人权限决定
+        from app.utils.text import strip_leading_mention
 
-        text = strip_leading_mention(text, str(route.get("peer_name") or ""))
-        # QQ 没开通原生 MD：Markdown 标记会原样露出来（用户 2026-09-25 截图），出站降级成纯文本
-        text = plainify_markdown(text).strip()
+        text = strip_leading_mention(text, str(route.get("peer_name") or "")).strip()
         if not text:
             return
         asyncio.create_task(self._send_reply(route, text, kind="group"))
@@ -709,9 +730,8 @@ class QqChannelPlugin(ServicePlugin):
         sender_id = msg.get("sender_id")
         if int(sender_id or 0) != self._target_user_id:
             return                      # 只转发这个 AI 的回复
-        from app.utils.text import plainify_markdown
-
-        text = plainify_markdown(str(msg.get("content") or "")).strip()
+        # 同上：Markdown 由发送层按权限决定发 MD 还是降级纯文本
+        text = str(msg.get("content") or "").strip()
         if not text:
             return
         asyncio.create_task(self._send_reply(route, text, kind="dm"))

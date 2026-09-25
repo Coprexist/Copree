@@ -4,7 +4,7 @@ import { useT } from '../i18n/I18nContext'
 import { ArrowLeft, X, Loader2, RotateCw, Ticket, ChevronRight, MessageSquare } from 'lucide-react'
 import { STATUS_COLORS } from '../utils/statusColor.tsx'
 import SkillBackpack from './SkillBackpack'
-import QQChannelModal from './channels/QQChannelModal'
+import ChannelModal from './channels/ChannelModal'
 import Toggle from './Toggle'
 
 interface AgentData {
@@ -818,7 +818,7 @@ export default function AgentSettingsModal({
   </div>
 
     {/* QQ 通道：配置项多，单独一间屋子，别和这张长表单挤在一起 */}
-    {qqOpen && <QQChannelModal agentId={agent.id} onClose={() => setQqOpen(false)} />}
+    {qqOpen && <ChannelModal agentId={agent.id} onClose={() => setQqOpen(false)} />}
     </>
   )
 }

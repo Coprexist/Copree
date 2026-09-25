@@ -99,6 +99,19 @@ async def get_config(
     return values
 
 
+def managed_values(schema: dict[str, Any]) -> dict[str, Any]:
+    """schema 里 managed + default 的字段 → 平台应当写入的值
+
+    managed 的语义是"平台知道、用户看不到也不填"（如 target_agent = 这个 AI 自己，
+    或协议端也由平台提供时的地址与 token）。default 就是平台给的值。
+    """
+    return {
+        key: spec["default"]
+        for key, spec in (schema or {}).items()
+        if spec.get("managed") and "default" in spec
+    }
+
+
 async def set_config(
     plugin_id: str,
     values: dict[str, Any],
@@ -112,6 +125,8 @@ async def set_config(
     schema = await get_schema(plugin_id)
     if not schema:
         raise ValueError(f"插件 {plugin_id} 没有声明 config_schema，无法配置")
+    # 托管字段直接覆盖：值由平台提供，客户端传什么都不算（不给伪造留口子）
+    values = {**values, **managed_values(schema)}
     unknown = [k for k in values if k not in schema]
     if unknown:
         raise ValueError(f"未知配置项: {', '.join(unknown)}")
