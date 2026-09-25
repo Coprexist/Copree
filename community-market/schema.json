@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Copree community plugin index",
+  "type": "object",
+  "required": ["version", "packages"],
+  "properties": {
+    "version": { "const": 1 },
+    "updated_at": { "type": "string" },
+    "packages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "category", "version", "source", "asset", "sha256", "tier"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,39}$" },
+          "name": { "type": "string", "maxLength": 120 },
+          "description": { "type": "string", "maxLength": 2000 },
+          "category": { "enum": ["skin", "skill", "world", "service", "other"] },
+          "author": { "type": "string", "maxLength": 80 },
+          "version": { "type": "string", "pattern": "^[0-9]+[.][0-9]+[.][0-9]+" },
+          "source": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+$" },
+          "asset": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+[.]zip$" },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "tier": { "enum": ["verified", "community"] },
+          "channel_kind": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{2,31}$" },
+          "reviewed_by": { "type": "string" },
+          "reviewed_at": { "type": "string" },
+          "min_client": { "type": "string" },
+          "yanked": { "type": "boolean" },
+          "yank_reason": { "type": "string" }
+        }
+      }
+    }
+  }
+}

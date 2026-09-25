@@ -322,8 +322,8 @@ export default function MarketPage() {
               </div>
               <div className="text-3xs text-textMuted mt-0.5">
                 <span className="inline-flex items-center gap-1"><User size={10} /> {it.author_name || (isLocal ? `#${it.author_id}` : 'GitHub')}</span>
-                {isLocal && it.github_path && <span className="ml-2">📦 {it.github_path}</span>}
-                {!isLocal && it.slug && <span className="ml-2">📦 worlds/{it.slug}</span>}
+                {isLocal && it.github_path && <span className="ml-2">{it.github_path}</span>}
+                {!isLocal && it.slug && <span className="ml-2">worlds/{it.slug}</span>}
               </div>
             </div>
             <button onClick={() => setDetail(null)} className="p-1.5 text-textMuted hover:text-textPrimary transition-colors shrink-0"><X size={16} /></button>
@@ -642,7 +642,7 @@ export default function MarketPage() {
                       <div className="flex items-center gap-1.5">
                         <span className="text-sm font-semibold text-textPrimary truncate">{item.title}</span>
                         {item.is_mine ? (
-                          <span className="inline-flex items-center gap-1 text-3xs px-1.5 py-0.5 rounded bg-mint-500/15 text-mint-400 shrink-0" title="GitHub 数字 id 与你绑定的账户一致">👑 我的</span>
+                          <span className="inline-flex items-center gap-1 text-3xs px-1.5 py-0.5 rounded bg-mint-500/15 text-mint-400 shrink-0" title="GitHub 数字 id 与你绑定的账户一致">我的</span>
                         ) : item.is_local ? (
                           <span className="inline-flex items-center gap-1 text-3xs px-1.5 py-0.5 rounded bg-primary-500/15 text-primary-400 shrink-0"><Store size={9} /> 本地</span>
                         ) : (

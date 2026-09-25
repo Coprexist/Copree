@@ -1,0 +1,22 @@
+name: verify-index
+
+# 社区层的门禁就是这条 CI：索引格式 + 发布物 sha256 + manifest 一致性 + 目录新鲜度。
+# 通过即收录（tier=community）；要拿 tier=verified，还得人审源码（见 verified/）。
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: 索引与制品校验（下载 pin 住的发布物核对 sha256）
+        run: python3 tools/verify.py --index index.json --online
+      - name: 目录必须由 index.json 生成（手写列表一定漂移）
+        run: python3 tools/verify.py --index index.json --check-render
