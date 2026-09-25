@@ -1,6 +1,10 @@
 """
 加密工具模块
-使用 cryptography.fernet 加密用户的 API Key
+使用 cryptography.fernet 加密敏感值（用户 API Key、插件配置里的机密项）
+
+对外语义只有两个：encrypt_secret / decrypt_secret。
+encrypt_api_key / decrypt_api_key 保留为同义别名——调用点很多，
+但实现只有一份，将来换算法只改这里。
 """
 import logging
 from cryptography.fernet import Fernet, InvalidToken
@@ -12,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 class APIKeyDecryptError(ValueError):
-    """API Key 解密失败（密钥不匹配或数据损坏）"""
+    """解密失败（密钥不匹配或数据损坏）"""
     pass
 
 
@@ -24,16 +28,19 @@ def _get_fernet() -> Fernet:
     return Fernet(fernet_key)
 
 
-def encrypt_api_key(api_key: str) -> str:
-    """加密 API Key"""
-    fernet = _get_fernet()
-    return fernet.encrypt(api_key.encode()).decode()
+def encrypt_secret(value: str) -> str:
+    """加密一个敏感字符串"""
+    return _get_fernet().encrypt(value.encode()).decode()
 
 
-def decrypt_api_key(encrypted_key: str) -> str:
-    """解密 API Key"""
-    fernet = _get_fernet()
+def decrypt_secret(encrypted: str) -> str:
+    """解密一个敏感字符串；密钥不匹配或数据损坏时抛 APIKeyDecryptError"""
     try:
-        return fernet.decrypt(encrypted_key.encode()).decode()
+        return _get_fernet().decrypt(encrypted.encode()).decode()
     except InvalidToken:
-        raise APIKeyDecryptError("API Key 解密失败：密钥不匹配或数据已损坏，请重新填写 API Key")
+        raise APIKeyDecryptError("解密失败：密钥不匹配或数据已损坏，请重新填写")
+
+
+# 历史别名（同义，不是第二份实现）
+encrypt_api_key = encrypt_secret
+decrypt_api_key = decrypt_secret
