@@ -22,7 +22,10 @@
   （水位从账本自推、缺口同批在前、幂等）；`build_messages` 群聊历史段改读账本；
   `resolve_speaker_names` / `gm_message_entry` 收进 `chat/gm.py`、`chronological` / `keep_newest_within` 收进
   `utils/pure/prompting.py`（llm 里那三份私有副本删掉）；真机连续两次构建**字节完全一致**（8382 bytes）
-- 验证：全量 **265/0**（18.3s）；真库 `hot=0.60 → T_post=15.4K / T_idle=38.0K / T_hot=76.8K`；
+- **一次性事件落成条目**（第二批 b-3a）：能力变更通知 + 便签撤下通知都经 `context_sync.append_events`
+  写进账本、紧跟历史（排在尾部读数之前，否则下一轮顺序会变 → 断缓存）；
+  `_build_capability_notice` 一处实现（群/DM 共用）；去掉「当轮 append 即丢」
+- 验证：全量 **266/0**；真机连续两次构建字节完全一致（28 条 / 8935 bytes，修前 27/28）；
   真机 25 个会话体积**全部 < `T_idle`**（最大 34.7K）→ 旧逻辑逢 12h 闲置必压，现在不压；`health=healthy restarts=0`
 
 #### 会话历史账本 + 轮末结算（2026-09-25 定，待落地）

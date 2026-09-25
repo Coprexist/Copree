@@ -551,6 +551,18 @@ async def _deliver_frame_notes(db, agent, context_ref: str, messages: list[dict]
         return ""
 
 
+async def _build_capability_notice(db, agent) -> str:
+    """能力变更通知：增量 changelog（known 在这一步推进，与注入同事务）。无变化返回空串。"""
+    try:
+        from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
+        from app.services.capability_versioning import build_change_notice, SOURCE_PLATFORM
+        notice = await build_change_notice(
+            SQLAlchemyCapabilityRepository(db), agent, [SOURCE_PLATFORM, f"agent-prompt-{agent.id}"])
+        return notice or ""
+    except Exception:
+        return ""
+
+
 async def _inject_personality_anchor(db, agent, system_prompt: str, language: str = "zh") -> str:
     """
     人格锚点注入 — 设计文档 6.2：只读、始终在最前面、随一致性系数缩放。
@@ -1035,10 +1047,23 @@ async def build_messages(
         # 旧实现每轮按「最新 N 条」重建窗口，前缀每轮前移 → 整段 miss；
         # 现在渲染即落库（条目 content 就是发给模型的最终字节），新消息只往后追加。
         from app.models.message import Message as MessageModel
-        from app.services.history.context_sync import sync_group_history
+        from app.services.history.context_sync import append_events, context_ref, sync_group_history
         from app.utils.pure.history import ROLE_BY_ACTOR, latest_message_ref
 
         ledger = await sync_group_history(db, agent, group_id, cap=max_unread, max_len=max_len)
+        group_ref = context_ref(group_id)  # 会话键只在这里拼一次
+
+        # 一次性事件（能力变更通知 / 便签撤下）**落成条目**：它们属于「外界带来了什么」，
+        # 必须紧跟历史——落在尾部读数之前，否则下一轮它们会从末尾跑到中间（顺序变 = 断缓存）。
+        from app.utils.pure.history import make_entry
+        events: list[dict] = []
+        if notes_notice:
+            events.append(make_entry("note", notes_notice))
+        cap_notice = await _build_capability_notice(db, agent)
+        if cap_notice:
+            events.append(make_entry("notice", cap_notice))
+        ledger = ledger + await append_events(db, agent, group_ref, events)
+
         last_user_idx = None
         last_user_orm = None
         for entry in ledger:
@@ -1130,9 +1155,7 @@ async def build_messages(
     for block in tail_blocks:
         messages.append({"role": "system", "content": block})
 
-    # 📌 撤下的便签：前缀里那行不动，靠这条尾部通知压住它（每轮都发）
-    if notes_notice:
-        messages.append({"role": "system", "content": notes_notice})
+    # 撤下的便签 / 能力变更通知都在上面落成账本条目了——**这里不再当轮 append**（说完就没了正是要修的）
 
     # 📎 上一段对话的原文尾巴（切会话时的临时交接，只出现一轮）
     await _inject_cross_state_context(db, agent, f"group:{group_id}", messages)
@@ -1140,17 +1163,6 @@ async def build_messages(
     # 当前时间放在最后（每次变化，放末尾不影响前缀cache）
     current_ctx = await _build_current_context(db, agent, group_id, group_name, is_dm)
     messages.append({"role": "system", "content": current_ctx})
-
-    # 能力变更通知（懒加载：增量 changelog 追加尾部，known 更新与注入同轮；不影响前缀缓存）
-    try:
-        from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
-        from app.services.capability_versioning import build_change_notice, SOURCE_PLATFORM
-        notice = await build_change_notice(SQLAlchemyCapabilityRepository(db), agent, [SOURCE_PLATFORM, f"agent-prompt-{agent.id}"])
-        if notice:
-            messages.append({"role": "system", "content": notice})
-            await db.commit()
-    except Exception:
-        pass
 
     # 绑定世界（群绑定 + agent 直接绑定）→ 能力清单 + 世界侧 skill 变更通知（动态尾部，缓存友好）
     if group_id or True:
@@ -1505,6 +1517,7 @@ async def build_dm_messages(
         logger.warning(f"注入工具错误记录失败（非致命）: {e}")
 
     # 能力变更通知（懒加载：增量 changelog 追加尾部，known 更新与注入同轮；不影响前缀缓存）
+    # DM 还没走账本（第二批 b-2）：这里落条目会写进一段没人读的账本，等 b-2 接上再一起改。
     try:
         from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
         from app.services.capability_versioning import build_change_notice, SOURCE_PLATFORM

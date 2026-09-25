@@ -131,3 +131,26 @@ async def test_clear_is_the_unlock_rewrite(migrated_db):
         assert await hs.clear(db, 1, "group:64") == 1
         assert await hs.read(db, 1, "group:64") == []
         assert len(await hs.read(db, 1, "dm:1_40")) == 1
+
+
+async def test_events_land_in_the_ledger_not_just_this_turn(migrated_db):
+    """一次性事件（能力变更通知 / 便签撤下）要落成条目，且空内容不入账"""
+    from app.database import async_session
+    from app.services.history import history_service as hs
+    from app.services.history.context_sync import append_events
+    from app.utils.pure.history import make_entry
+
+    assert await append_events(None, object(), "group:64", []) == [], "没有事件不碰 DB"
+    assert await append_events(None, object(), "group:64",
+                               [make_entry("notice", "   ")]) == [], "空内容不入账"
+
+    async with async_session() as db:
+        await _seed(db)
+        written = await append_events(db, type("A", (), {"id": 1})(), "group:64",
+                                      [make_entry("notice", "【能力变更通知】v1→v2")])
+        await db.commit()
+
+        assert [e["kind"] for e in written] == ["notice"]
+        assert written[0]["seq"] == 1
+        assert (await hs.read(db, 1, "group:64"))[0]["content"].startswith("【能力变更通知】")
+

@@ -26,6 +26,18 @@ def context_ref(group_id: int) -> str:
     return f"group:{group_id}"
 
 
+async def append_events(db: AsyncSession, agent, context_ref: str, events: list[dict]) -> list[dict]:
+    """一次性事件（能力变更通知 / 便签撤下 / 建议回复）落成账本条目。
+
+    为什么非要落库：这些事件以前只 append 进当轮 messages，说完就没了——下一轮 AI 又按旧表述办事。
+    返回刚写入的条目，调用方要把它们接着渲染进**本轮**请求（账本读过的那段不变，事件永远在末尾）。
+    """
+    events = [e for e in (events or []) if (e.get("content") or "").strip()]
+    if not events:
+        return []
+    return await history_service.append(db, agent.id, context_ref, events)
+
+
 async def sync_group_history(db: AsyncSession, agent, group_id: int, *, cap: int, max_len: int) -> list[dict]:
     """把水位之后的新群消息补进账本，返回**整段**历史条目（供渲染请求体）。
 
