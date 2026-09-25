@@ -406,9 +406,56 @@
 - **验证**：全量 278/0；`test_read_conversation.py`：读尾部（不是最早几条）、别的会话不串进来、
   提示语说清「这不是当前会话」、不指定会话就报错而不是猜。
 
+### 本轮线上问题修复（2026-09-25，与账本设计无关但同批提交）
+
+- **两个 QQ 通道互相顶掉**（`0cc1184`）：出口注册表按**名字**存且「同名覆盖」，两个 qq-channel 实例都用插件类型 id 注册
+  → 后注册的 `agent-8` 顶掉 `agent-24` 的出口，群 64 的 AI 回复被分发到「只认群 65」的 sink 并静默 return
+  （现象：Copree 镜像有消息、QQ 收不到、日志干净）。改成**句柄制**（`register_sink` 返回句柄、同名不去重）+
+  分发 `asyncio.gather` **并发**跑全部出口；插件用 `ServicePlugin.key`（带实例）注册并存句柄，stop 时精确注销。
+  测试 `test_outbound_registry.py`：同名两个出口都要发 / 一个坏出口不拖累别的 / key 带实例。
+- **向量维度静默写失败**（`7b50515`）：`models/*.py` 的向量列是 `vector_column(settings.embedding_dimension)`，
+  **import 时**取静态值（容器无 `EMBEDDING_DIMENSION` → 默认 1536），而 DB 配置（768）、四个 `vector(768)` 列、
+  本地 `nomic-embed-text`（768）三者本来一致 → INSERT 生成 `::VECTOR(1536)` 去转 768 向量必然失败，
+  记忆一直写失败重排队（DB 覆盖在 bootstrap 之后加载，管不到已冻结的列类型）。
+  修法：compose 补 `EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-768}`；
+  **收尾**（`a3fb194`）：`check_dimension_consistency` 自检「ORM 列维度 / 生效配置 / 库里实际列维度」三者，
+  `prestart.py` 迁移后调用——不一致 stderr 打 `[ERROR]` + 修法，一致打「向量维度自检通过」。
+- **删池 Key 500**（`9005235`）：`api_usage_log.pool_key_id` 外键无 ON DELETE 规则，池 Key 一旦有用量记录就删不掉
+  （`DELETE /admin/api-key-pool/1` → ForeignKeyViolationError）。迁移 `b8c9d0e1f2a3` 改 `ON DELETE SET NULL`
+  （列本就可空）：用量历史保留、引用置空。
+- **池 Key 管理补齐**（`30bdf6c`）：① `PUT /admin/api-key-pool/{id}` 之前**不收 `api_key`** → 密文解不开时没有修法
+  （前端只能删了重建），现在支持重填明文；② 新增 `POST /admin/api-key-pool/{id}/test` 测通
+  （探测策略/文案/脱敏全复用 `api_probe.probe_provider`，不另写一套）；前端 `ApiKeyPoolTab` 加「编辑」「测通」
+  ＋ i18n 三语，并修标签键大小写（`admin.apikeyPool` vs 字典里的 `admin.apiKeyPool`）。
+  真机验证：key#1 → `decrypt_failed`；临时 key 指本地 Ollama → `ok`「连接成功，8 个模型可用」。
+- **用户已重填池 Key #1**：实测解密 OK（明文长度 35）——③ 收工。
+
+### ④ 待做：QQ mention 双向映射（现状、证据、为什么卡住）
+
+**入站（@别人 拿不到）**，两条证据：
+- 真实载荷：`GROUP_AT_MESSAGE_CREATE` 字段 = `[author, content, group_id, group_openid, id, message_scene,
+  message_type, timestamp]`，`mentions=null`；那条「@机器人 + @成员」的消息 content 到成员 @ 处就断了
+  （DB `messages.id=1350` 存的就是 13 字，不是我们截的）。
+- 官方文档（`tencent-connect/bot-docs` 的 `message_format.md`）：@ 是 `content` 里的内嵌格式 `<@user_id>` / `<@!user_id>`，
+  且入站抄送会把 `<` `>` 转义——但那是**频道**体系；群聊（@机器人模式）实测载荷里连 mentions 字段都没有。
+  **未验**：全量群消息模式（`GROUP_MESSAGE_CREATE`，需「接收所有消息」权限）是否带 mentions。
+
+**出站（能不能 @ 别人）**：未验，且**只能在服务进程内**跑——route（`msg_id` + 群 openid）与插件客户端都是内存态；
+另起进程 `PluginRegistry.get(…)` 是空的（实测 None），DB 里也没有 `plugin_configs.plugin_id='qq-channel:agent-24'`
+这一行（配置键格式待查）。计划：加 `POST /admin/channels/{plugin_key}/self-test`（admin 鉴权），
+用活的 route 发一条「（测试消息，请忽略）<@!<openid>> 你好」并返回 QQ 原始响应；顺带成为可复用的「通道自测」能力。
+看到 QQ 里渲染成 @ → 出站可行，再去开全量权限验入站；渲染成原样字符串 → 保留「文字 @」方案。
+
+### ① 待做：通道文案
+
+`app/services/plugin/channel.py:131 group_brief` 补一句：QQ 官方接口不转发 @其他成员 的内容，
+句子在 @ 处突然断掉是通道限制、不是对方没说完整；可以直接问一句或忽略。
+（若 ④ 证明全量模式能给 mentions，再升级成真映射。）
+
 ### 待落地
 
-
+- **①** 通道文案（见上）。
+- **④** 通道自测端点 + QQ mention 出站实测（见上）。
 - **第三批**：世界 AI（新增同名 `end_turn` + 现有强制收尾轮并入 + 历史走同一套服务）。
 - **第四批**：两级压缩（确定性修剪器 + 摘要模板：关键想法 / 必留项 / 裁剪优先级）+ **三档阈值落地**
   （三档阈值、解锁重写、系数可配、窗口按模型都已落地，见上；剩下**两级压缩器**与用 `cached_tokens` 标定数值）+ 图片不降级。
