@@ -12,7 +12,8 @@ async def _seed():
     from app.database import async_session
 
     async with async_session() as db:
-        await db.execute(text("TRUNCATE dm_messages, dm_sessions, agents, users CASCADE"))
+        from db_reset import clear
+        await clear(db, "dm_messages", "dm_sessions", "agents", "users")
         await db.execute(text(
             "INSERT INTO users (id, username, password_hash, type) VALUES "
             "(1, '人类', 'x', 'human'), (41, '浮生', 'x', 'ai')"

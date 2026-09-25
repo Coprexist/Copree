@@ -66,7 +66,8 @@ async def _seed_world(db, *, with_image: bool) -> tuple[int, dict]:
     from app.models.user import User
     from app.models.world import World
 
-    await db.execute(text("TRUNCATE worlds, users CASCADE"))
+    from db_reset import clear
+    await clear(db, "worlds", "users")
     await db.commit()
 
     db.add(User(id=USER_ID, username="smoke-image", password_hash="x", type="human"))

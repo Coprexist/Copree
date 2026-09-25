@@ -196,7 +196,12 @@ async def _startup_plugins() -> None:
     except Exception as e:
         logger.warning(f"[WARN] 插件目录同步失败（不影响启动）: {e}", exc_info=True)
 
-    # 平台能力版本化（skills/tools 懒加载）：启动时对比内置工具定义，变更则写新版本
+    # 平台能力版本化（skills/tools 懒加载）：对比内置工具定义、变更则写新版本。
+    # 纯 DB 记账，不挡启动关键路径（2026-09-25：实测这一步要 ~1.5s）
+    spawn_task(_ensure_platform_version_once, "_ensure_platform_version_once")
+
+
+async def _ensure_platform_version_once() -> None:
     try:
         async with async_session() as cap_db:
             from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
@@ -288,15 +293,21 @@ async def _startup_world() -> None:
     except Exception as e:
         logger.warning(f"[WARN] 禁用后缀扫描失败（不影响启动）: {e}")
 
-    # 世界商城 GitHub 自动同步（配置开启时启动拉取一次最新索引）
+    # 世界商城 GitHub 自动同步：要打外网，绝不能挡在启动路径上（网络一慢就拖长启动）
+    spawn_task(_sync_market_once, "_sync_market_once")
+
+
+async def _sync_market_once() -> None:
+    """启动后拉一次商城索引（后台跑）"""
     try:
-        from app.services.world.market_github import refresh_from_github, get_market_config
-        async with async_session() as _mdb:
-            _mcfg = await get_market_config(_mdb)
-        if _mcfg.get("auto_sync_enabled") and _mcfg.get("github_repo") and _mcfg.get("github_token"):
-            async with async_session() as _mdb2:
-                r = await refresh_from_github(_mdb2)
-            logger.info(f"[OK] 商城 GitHub 启动同步完成: +{r.get('added', 0)} 新增")
+        from app.services.world.market_github import get_market_config, refresh_from_github
+        async with async_session() as mdb:
+            cfg = await get_market_config(mdb)
+        if not (cfg.get("auto_sync_enabled") and cfg.get("github_repo") and cfg.get("github_token")):
+            return
+        async with async_session() as mdb:
+            r = await refresh_from_github(mdb)
+        logger.info(f"[OK] 商城 GitHub 启动同步完成: +{r.get('added', 0)} 新增")
     except Exception as e:
         logger.warning(f"[WARN] 商城 GitHub 启动同步失败（不影响启动）: {e}")
 
@@ -395,6 +406,7 @@ async def _startup_brain_and_skills() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
+    started_at = time.perf_counter()   # 启动耗时：以后"为什么重启这么久"看这一行就够
     logger.info("[START] AI群聊社交网络系统启动中...")
     logger.info(f"  默认聊天模型: {settings.default_chat_model}")
     logger.info(f"  默认工作模型: {settings.default_work_model}")
@@ -420,10 +432,11 @@ async def lifespan(app: FastAPI):
     spawn_task(lambda: event_bus.emit(EventType.SYSTEM_STARTUP), "event_bus")
 
     # 启动完成，退出自动维护（但手动维护仍生效）
+    elapsed = time.perf_counter() - started_at
     if maintenance.clear_auto():
         logger.info(
-            "[OK] 自动维护已关闭，服务就绪" if not maintenance.is_soft()
-            else "[OK] 服务就绪但软维护仍开启"
+            (f"[OK] 自动维护已关闭，服务就绪（启动耗时 {elapsed:.1f}s）" if not maintenance.is_soft()
+             else f"[OK] 服务就绪但软维护仍开启（启动耗时 {elapsed:.1f}s）")
         )
 
     yield

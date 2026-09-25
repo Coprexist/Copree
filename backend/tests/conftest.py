@@ -38,6 +38,30 @@ os.environ["DATABASE_URL_SYNC"] = TEST_DATABASE_URL_SYNC
 os.environ["JWT_SECRET_KEY"] = "test-secret"
 
 
+def _tune_test_db() -> None:
+    """测试库单条 GUC：synchronous_commit=off。
+
+    测试全是「建几条数据 → 断言 → 清掉」的短小写入，每次提交都等 WAL 落盘纯属浪费；
+    关掉后提交只写 WAL、不等 flush（崩溃可能丢最后几条，测试库无所谓）。
+    只改 TEST_DATABASE_URL 指向的库，且**必须**以 _test 结尾——同一个 PostgreSQL 实例上
+    就是生产库，改错会拖累线上。写在这里而不是让人手动 ALTER，是为了换机器跑测试时自动生效。
+    """
+    from sqlalchemy import create_engine, text
+
+    db_name = TEST_DATABASE_URL_SYNC.rsplit("/", 1)[-1].split("?")[0]
+    if not db_name.endswith("_test"):
+        raise RuntimeError(f"测试库名必须以 _test 结尾，当前是 {db_name!r}；拒绝改 GUC")
+    engine = create_engine(TEST_DATABASE_URL_SYNC, isolation_level="AUTOCOMMIT")
+    try:
+        with engine.connect() as conn:
+            conn.execute(text(f'ALTER DATABASE "{db_name}" SET synchronous_commit = off'))
+    finally:
+        engine.dispose()
+
+
+_tune_test_db()
+
+
 @pytest.fixture(scope="session")
 def anyio_backend():
     return "asyncio"

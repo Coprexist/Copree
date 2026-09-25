@@ -34,8 +34,9 @@ async def expect_value_error(awaitable, match: str) -> None:
 
 async def _seed(db, *, auto_approve_join: bool = False, approve_invites: bool = True):
     """1=群主 2=普通成员 3=申请人(非成员) 5=管理员 7=被邀请人(非成员)"""
-    await db.execute(text("TRUNCATE groups CASCADE"))
-    await db.execute(text("TRUNCATE users CASCADE"))
+    from db_reset import clear
+
+    await clear(db, "groups", "users")
     await db.execute(text("""
         INSERT INTO users (id, username, password_hash, type) VALUES
         (1, '群主', 'x', 'human'),

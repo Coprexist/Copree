@@ -19,7 +19,8 @@ async def test_billing_person_for_group_and_external_dm(migrated_db):
     from app.utils.crypto import encrypt_api_key
 
     async with async_session() as db:
-        await db.execute(text("TRUNCATE agents, users CASCADE"))
+        from db_reset import clear
+        await clear(db, "agents", "users")
         owner = User(username="通道主人", password_hash=hash_password("x" * 12), email="o@test.local",
                      type="human", api_key_encrypted=encrypt_api_key("sk-owner"),
                      api_base_url="https://api.deepseek.com")

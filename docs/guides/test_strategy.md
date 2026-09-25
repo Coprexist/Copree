@@ -53,12 +53,13 @@
 | `backend/tests/test_session_title.py` | 单元（零网络） | 4 | 对话命名：清洗/限长、只写当前会话、默认会话兜底、空名清除 |
 | `backend/tests/test_agent_resolution.py` | 集成（真库） | 2 | 群成员 `member_id` 解析优先级 |
 
-合计 **90 条**（`run_without_pytest.py` 全量约 65s）。
+合计 **245 条**（`run_without_pytest.py` 全量约 **19s**；2026-09-25 提速前是 108s，见 §1.5）。
 
 辅助文件：
 
-- `backend/tests/conftest.py` —— 测试库环境变量与 `migrated_db` fixture
-- `backend/tests/run_without_pytest.py` —— 后端容器里**没装 pytest**，这是最小运行器
+- `backend/tests/conftest.py` —— 测试库环境变量、`migrated_db` fixture、测试库 GUC
+- `backend/tests/run_without_pytest.py` —— 后端容器里**没装 pytest**，这是最小运行器（每例打耗时）
+- `backend/tests/db_reset.py` —— `clear(db, *roots)`：按外键闭包 DELETE 清表（替代 `TRUNCATE … CASCADE`，见 §1.5）
 
 ### 1.1 两种跑法
 
@@ -90,9 +91,10 @@ docker exec -w /app -e TEST_DATABASE_URL="$TEST" -e TEST_DATABASE_URL_SYNC="${TE
   ai_group_backend python tests/run_without_pytest.py test_world_chat_images
 ```
 
-实测差距：只跑发图链路 **5.8s**，全量 47 条 **49.8s**。改哪个文件就跑哪个，只在推送前跑全量。
+实测差距：单跑一个文件（含进程启动与建表）约 **5s**，全量 245 条 **19s**。
+改哪个文件就跑哪个，只在推送前跑全量。
 
-**启动闸**：库名不以 `_test` 结尾直接拒绝启动。运行器会 `drop_all` + `TRUNCATE`，
+**启动闸**：库名不以 `_test` 结尾直接拒绝启动。运行器会 `drop_all` + 清表，
 而生产库与测试库在同一个 PostgreSQL 实例里、只差库名——这个闸不是形式主义。
 
 ### 1.2 写完用例要证明「它会红」
@@ -182,6 +184,39 @@ node frontend/scripts/check-i18n.mjs     # 等价于 cd frontend && npm run i18n
 为什么需要 i18n 这条：`getTranslation()` **找不到 key 时原样返回 key**，界面上就会把
 `admin.addProvider`、`adminConfig:sourceDb` 这样的源码串显示给用户——不报错、不崩溃，
 只靠肉眼发现。2026-09 就是这么攒出 48 个三语全缺 + 62 处单语缺的 key 的。
+
+### 1.5 清表与提速：为什么不用 TRUNCATE … CASCADE（2026-09-25）
+
+全量从 **108s 降到 19s**，只做了三件事，都在测试侧：
+
+**1) 清表改成「删外键闭包」（`tests/db_reset.py`）。** 此前每个用例的 seed 都跑
+`TRUNCATE users CASCADE`，实测一次 **4163ms**——它要给闭包里 51 张表逐张换 relfilenode
+（建文件 + WAL + 目录 fsync），跟表里有没有数据无关，在这台机器的存储上就是几百毫秒一张。
+同样范围的 `DELETE` 只要 **13ms**：
+
+```python
+from db_reset import clear
+
+async with async_session() as db:
+    await clear(db, "groups", "users")   # 等价 TRUNCATE groups, users CASCADE
+```
+
+`clear()` 用递归查询算出外键闭包，删之前把 `session_replication_role` 设成 `replica`
+（`SET LOCAL`，只影响本事务），这样不用关心删除顺序、也不用管那些没写 ON DELETE 的外键；
+删完立刻调回 `DEFAULT`，后面的 INSERT 仍然正常做外键检查。测试 id 都是显式写的，
+不需要 TRUNCATE 的重置序列。
+
+**2) 测试库关掉每次提交等磁盘。** `conftest.py` 在导入时装一条库级 GUC
+`synchronous_commit = off`（提交只写 WAL、不等 flush；崩溃可能丢最后几条，测试库无所谓）。
+**强制库名以 `_test` 结尾才允许改**——同一个 PostgreSQL 实例上就是生产库。
+
+**3) 别在测试里等真实时间。** `test_world_ai_guardrails` 里那个门禁用例没有页面，
+却按产品行为白等了 `_WAIT_FOR_VIEWER = 20` 秒才走"无人应答"分支；现在它自己把该值压到 0
+（同文件另一个用例本来就是这么做的）。
+
+排查手法（下次变慢照这个走）：运行器现在**每个用例都打耗时**，末尾还给最慢 8 名；
+还嫌不够就 `python -m cProfile -s tottime tests/run_without_pytest.py`——
+这套问题就是靠它定位的：`epoll.poll` 占了 90s（都在等 I/O），CPU 几乎不花。
 
 ---
 
@@ -415,7 +450,8 @@ async def migrated_db():
 ```
 
 注意 `migrated_db` 是 **session 级**且会 `drop_all`：用例自己负责播种
-（现有集成用例的做法是开头 `TRUNCATE ... CASCADE`，再插入自己需要的最小数据）。
+（现有集成用例的做法是开头 `await clear(db, ...)` 清掉相关外键闭包，再插入自己需要的最小数据；
+不要再用 `TRUNCATE ... CASCADE`，见 §1.5）。
 
 ### 5.4 运行
 
@@ -429,7 +465,7 @@ async def migrated_db():
 | 辅助函数 | 作用 | 注意 |
 |---------|------|------|
 | `_temp_data_dir()` | 上下文管理器，把 `settings.data_dir` 指向临时目录 | `data_dir` 是只读 property，实现上替换类描述符并在退出时还原；不做这一步会污染生产数据目录，且在 CI 上不可写 |
-| `_seed_world(db, with_image=)` | 清库 → 建临时用户 + 世界 → 可选地落一张真实 1×1 PNG | 开头 `TRUNCATE worlds, users CASCADE`；返回 `(world_id, attachment)` |
+| `_seed_world(db, with_image=)` | 清库 → 建临时用户 + 世界 → 可选地落一张真实 1×1 PNG | 开头 `await clear(db, "worlds", "users")`；返回 `(world_id, attachment)` |
 | `_prepare(db, world_id, items)` | 走真实链路调 `_prepare_world_chat`（`stream_world_chat` 的准备阶段）| 它会**落库**用户消息，所以多轮用例天然带历史 |
 | `_last_user(messages)` | 取最后一条 user 消息 | 尾部还挂着时间/访客等 system 段，**不能取 `messages[-1]`** |
 | `_notes(messages)` | 取尾部「本轮附图」便签 | 用 `IMAGE_NOTE_PREFIX` 前缀识别 |
@@ -542,7 +578,7 @@ flowchart LR
 
 - schema 由 `migrated_db` 从**模型 metadata** 建全量（`drop_all` + `create_all`）。
   历史迁移链无法从空库重建，所以**模型即 schema**，测试库不跑 alembic；
-- 数据由每个用例自己播种，开头 `TRUNCATE ... CASCADE` 保证从干净状态开始；
+- 数据由每个用例自己播种，开头 `await clear(db, ...)`（`tests/db_reset.py`）保证从干净状态开始；
 - 用例造的临时文件（如 `test_world_chat_images.py` 的 1×1 PNG）自己删干净。
 
 ---

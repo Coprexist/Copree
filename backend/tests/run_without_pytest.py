@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import time
 import inspect
 import os
 import sys
@@ -119,6 +120,7 @@ async def _run(selector: str) -> int:
     resolver = _FixtureResolver(conftest)
 
     passed, failures, matched = 0, [], 0
+    timings: list[tuple[float, str]] = []
     for path in sorted(TESTS_DIR.glob("test_*.py")):
         # 选择器不含 :: 时按文件名过滤，避免白导入无关模块
         if selector and "::" not in selector and selector not in path.stem:
@@ -132,6 +134,7 @@ async def _run(selector: str) -> int:
             if selector and selector not in node:
                 continue
             matched += 1
+            t0 = time.monotonic()
             try:
                 kwargs = {
                     p: await resolver.resolve(p)
@@ -141,7 +144,10 @@ async def _run(selector: str) -> int:
                 if inspect.isawaitable(result):
                     await result
                 passed += 1
-                print(f"  PASS  {node}")
+                cost = time.monotonic() - t0
+                timings.append((cost, node))
+                # 每个用例耗时都打出来：无 pytest 时排查"整套为什么慢"只能靠这个
+                print(f"  PASS  {node}  ({cost:.2f}s)")
             except Exception:
                 failures.append(node)
                 print(f"  FAIL  {node}")
@@ -153,6 +159,11 @@ async def _run(selector: str) -> int:
         return 1
 
     print()
+    slowest = sorted(timings, reverse=True)[:8]
+    total = sum(t for t, _ in timings)
+    print(f"用例耗时合计 {total:.1f}s；最慢 8 个：")
+    for cost, node in slowest:
+        print(f"  {cost:6.2f}s  {node}")
     print(f"RESULT passed={passed} failed={len(failures)}")
     for f in failures:
         print(f"  - {f}")

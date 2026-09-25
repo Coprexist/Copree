@@ -27,7 +27,8 @@ async def test_resolve_speaker_names_fills_local_messages(migrated_db):
     from app.database import async_session
 
     async with async_session() as db:
-        await db.execute(text("TRUNCATE messages, group_members, groups, users CASCADE"))
+        from db_reset import clear
+        await clear(db, "messages", "group_members", "groups", "users")
         await db.execute(text(
             "INSERT INTO users (id, username, password_hash, type) VALUES "
             "(1, 'ShuAICFR', 'x', 'human'), (40, '化学老师', 'x', 'ai'), (90, 'QQ用户6682BD', 'x', 'external')"

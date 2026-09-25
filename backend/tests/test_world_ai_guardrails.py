@@ -158,27 +158,36 @@ def test_mode_defaults_to_review_and_ignores_garbage():
 
 async def test_gate_auto_allows_plan_blocks_review_needs_a_human():
     """三种模式的门禁行为（没有可交互前端时审阅按「不同意」处理，不空等）"""
+    from app.services.world import world_ai_mode as wam
+
+    # _WAIT_FOR_VIEWER 是产品行为（留 20 秒给页面接上），可测试里根本没有页面，
+    # 白等满 20 秒才走「无人应答」分支。这里测的就是"没有前端"，所以压到 0
+    # （同文件 test_no_viewer_follows_unattended_policy 同款）。
     args = {"url": "https://example.com/a.js"}
+    old_wait = wam._WAIT_FOR_VIEWER
+    wam._WAIT_FOR_VIEWER = 0
+    try:
+        allowed, approved, _ = await gate_tool_call(_World("auto"), WORLD_ID, "web_download", args, {})
+        assert allowed and approved
 
-    allowed, approved, _ = await gate_tool_call(_World("auto"), WORLD_ID, "web_download", args, {})
-    assert allowed and approved
+        allowed, _, reason = await gate_tool_call(_World("plan"), WORLD_ID, "file_write", {"path": "a.js"}, {})
+        assert not allowed and "计划" in reason
+        allowed, approved, _ = await gate_tool_call(
+            _World("plan"), WORLD_ID, "file_write", {"path": "a.js"}, {"plan_approved": True},
+        )
+        assert allowed and approved
 
-    allowed, _, reason = await gate_tool_call(_World("plan"), WORLD_ID, "file_write", {"path": "a.js"}, {})
-    assert not allowed and "计划" in reason
-    allowed, approved, _ = await gate_tool_call(
-        _World("plan"), WORLD_ID, "file_write", {"path": "a.js"}, {"plan_approved": True},
-    )
-    assert allowed and approved
+        state: dict = {}
+        allowed, _, reason = await gate_tool_call(_World("review"), WORLD_ID, "file_delete", {"path": "a.js"}, state)
+        assert not allowed and "没有同意" in reason
+        assert state.get("approved_classes", set()) == set()
 
-    state: dict = {}
-    allowed, _, reason = await gate_tool_call(_World("review"), WORLD_ID, "file_delete", {"path": "a.js"}, state)
-    assert not allowed and "没有同意" in reason
-    assert state.get("approved_classes", set()) == set()
-
-    # 只读工具在任何模式下都不设卡
-    for mode in MODES:
-        allowed, approved, _ = await gate_tool_call(_World(mode), WORLD_ID, "file_read", {"path": "a.js"}, {})
-        assert allowed and not approved
+        # 只读工具在任何模式下都不设卡
+        for mode in MODES:
+            allowed, approved, _ = await gate_tool_call(_World(mode), WORLD_ID, "file_read", {"path": "a.js"}, {})
+            assert allowed and not approved
+    finally:
+        wam._WAIT_FOR_VIEWER = old_wait
 
 
 def test_unattended_policy_follows_mode():

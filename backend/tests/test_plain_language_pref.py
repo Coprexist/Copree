@@ -18,7 +18,8 @@ async def _seed_user() -> None:
     from app.database import async_session
 
     async with async_session() as db:
-        await db.execute(text("TRUNCATE users CASCADE"))
+        from db_reset import clear
+        await clear(db, "users")
         await db.execute(text(
             "INSERT INTO users (id, username, password_hash, type, ui_prefs) "
             "VALUES (:uid, '通俗自测', 'x', 'human', CAST(:prefs AS json))"

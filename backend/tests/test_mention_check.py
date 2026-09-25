@@ -11,11 +11,12 @@ from app.utils.text import check_mention, extract_mentions, plainify_markdown, s
 
 
 def test_plainify_markdown_keeps_text_drops_markers():
-    """QQ 群只能发纯文本：出站把 Markdown 标记洗掉，正文一个字不少。"""
-    src = "# 氯气 Cl2\n\n**一、物理性质**\n- 黄绿色\n- 有毒\n\n[官方网站](https://example.com)\n~~删掉~~\n> 引用\n---\n```py\nprint(1)\n```"
+    """没开通 MD 权限的机器人退到纯文本时：标记洗掉，正文一个字不少。"""
+    src = "# 氯气 Cl2\n\n**一、物理性质**\n- 黄绿色\n- 有毒\n\n[官方网站](https://example.com)\n~~删掉~~\n> 引用\n---\n```py\nprint(1)\n```\n行内 `Cl2` 也要洗"
     out = plainify_markdown(src)
     assert "**" not in out and "#" not in out and "~~" not in out and ">" not in out
-    for keep in ("氯气 Cl2", "一、物理性质", "黄绿色", "官方网站（https://example.com）", "删掉", "引用", "print(1)"):
+    assert "`" not in out, out
+    for keep in ("氯气 Cl2", "一、物理性质", "黄绿色", "官方网站（https://example.com）", "删掉", "引用", "print(1)", "行内 Cl2 也要洗"):
         assert keep in out, keep
     assert "- 黄绿色" in out, "列表符号留着，纯文本里也有用"
     assert plainify_markdown("") == ""

@@ -52,9 +52,8 @@ async def test_stored_message_shows_up_in_unread_summary(migrated_db):
     from app.database import async_session
 
     async with async_session() as db:
-        await db.execute(text(
-            "TRUNCATE pending_messages, messages, group_members, groups, agents, users CASCADE"
-        ))
+        from db_reset import clear
+        await clear(db, "pending_messages", "messages", "group_members", "groups", "agents", "users")
         await db.execute(text(
             "INSERT INTO users (id, username, password_hash, type) VALUES "
             "(1, '群主', 'x', 'human'), (41, '浮生', 'x', 'ai')"

@@ -12,8 +12,9 @@ pytestmark = pytest.mark.anyio
 
 async def _seed(db):
     from sqlalchemy import text
-    await db.execute(text("TRUNCATE agents CASCADE"))
-    await db.execute(text("TRUNCATE users CASCADE"))
+    from db_reset import clear
+
+    await clear(db, "agents", "users")
     await db.execute(text("""
         INSERT INTO users (id, username, password_hash, type) VALUES
         (1, '测试用户', 'x', 'human'),
