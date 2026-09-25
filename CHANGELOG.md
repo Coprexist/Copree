@@ -50,6 +50,11 @@
 - **便签投递 = 账本条目**（第二批 b-3b）：不再往 message 0 后面插前缀块，改成逐条 `note` 条目
   （`ref=note:<id>`，以账本为幂等锚点）；撤下补通知；`rewrite_context` 新增通用规则——
   带 `drop_on_unlock` 的条目只活到解锁（哪怕在保留窗口里），解锁时便签连同通知一起离场
+- **通道出口注册改句柄 + 并发分发**：两个 QQ 通道实例不再互相顶掉（线上事故：第二个实例按同名注册把第一个
+  的出口覆盖，群 64 的 AI 回复被静默丢弃）；分发改 `asyncio.gather` 并发跑全部出口，一个坏/慢不拖累别的
+- **向量维度对齐**：`docker-compose.yml` 补 `EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-768}`
+  （模型向量列在 import 时读它，DB 覆盖管不到；不一致时 INSERT 生成 `::VECTOR(1536)` 写 768 向量必然失败，
+  记忆一直静默写失败重排队）。待办：启动自检三者不一致时大声报错
 - **跨对话回复的「读」**：新工具 `read_conversation` 读别的会话最近几条原文（群传 `group_id`、私信传
   `target_user_id`；只读不切状态）+ `history_service.tail` 读账本尾部的唯一入口 —— 写早就能发，
   补上读之后「跨对话回复」才成立

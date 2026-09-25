@@ -36,6 +36,10 @@ services:
       NAPCAT_TOKEN: ${NAPCAT_TOKEN:-}
       # 托管协议端时读它的登录二维码用（NapCat 把码写在 cache 目录里）
       NAPCAT_CACHE: ${NAPCAT_CACHE:-/app/data/napcat/cache}
+      # 向量维度必须与「表列维度 + embedding 模型输出维度」三者一致：
+      # 模型列定义在 import 时读这个值（DB 里的 embedding 配置来得太晚，管不到列类型），
+      # 本地 nomic-embed-text = 768，四个向量列也都是 vector(768) —— 不一致时写入会静默失败
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-768}
     volumes:
       - ${DATA_DIR:-./data}:/app/data
       - ${DATA_DIR:-./data}/uploads:/app/uploads
