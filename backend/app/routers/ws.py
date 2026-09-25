@@ -5,19 +5,27 @@ WebSocket 实时通信处理器
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from sqlalchemy import select, func, update as sa_update
+
+# 常驻通知最多挂多少个私信会话（按最近消息排序取前 N；几百个考古会话没必要挂）
+NOTIFICATION_SESSION_LIMIT = 200
 from app.database import async_session
 from app.models.user import User as UserModel
-from app.models.agent import Agent as AgentModel
 from app.models.group import GroupMember as GroupMemberModel
 from app.utils.auth import decode_access_token
 from app.utils.error_handler import build_ws_error, log_error
 from app.chat.connection import ConnectionManager
 from app.chat import chat_api
-from app.chat.gm import send_gm_message, gm_message_to_dict, is_group_member
-from app.chat.delivery import store_pending_message
+from app.chat.gm import send_gm_message, is_group_member
+from app.chat.dm_delivery import fanout_dm_message, forward_dm_federated, wake_dm_ai
+from app.chat.group_delivery import (
+    fanout_group_message,
+    forward_group_message_federated,
+    maybe_vectorize_group_message,
+    message_view,
+    wake_group_ai,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -107,11 +115,11 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     await ws.send_json(build_ws_error("MISSING_GROUP", "缺少 group_id 或 session_id"))
                     continue
 
-                # 断开旧连接
+                # 断开旧连接（只摘这一条 socket：同一个人可能还有常驻通知连接/另一个标签页）
                 if current_group_id is not None:
-                    manager.disconnect(current_group_id, user_id)
+                    manager.disconnect(ws, current_group_id, user_id)
                 if current_session_id is not None:
-                    manager.disconnect_dm(current_session_id, user_id)
+                    manager.disconnect_dm(ws, current_session_id, user_id)
 
                 if conversation_type == "group":
                     # 群订阅：校验成员身份（与 DM 分支同口径，防止越权订阅任意群直播）
@@ -166,6 +174,41 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         exclude_user_id=user_id,
                     )
 
+            # ---- 常驻通知订阅（站内弹窗） ----
+            # 不占用"当前会话订阅位"：同一条连接只收弹窗，不影响 ChatView 的会话推送
+            elif msg_type == "notifications_subscribe":
+                try:
+                    from app.models.dm import DMSession
+                    from sqlalchemy import or_ as sa_or
+
+                    async with async_session() as sub_db:
+                        # 我所在的群（一次查询；不逐个群验权，避免 N 次往返）
+                        group_ids = [
+                            row[0] for row in (await sub_db.execute(
+                                select(GroupMemberModel.group_id).where(
+                                    GroupMemberModel.member_type == "human",
+                                    GroupMemberModel.member_id == user_id,
+                                )
+                            )).all()
+                        ]
+                        # 我参与的私信（按最近消息排序截断：几百个考古会话不值得挂通知）
+                        session_ids = [
+                            row[0] for row in (await sub_db.execute(
+                                select(DMSession.session_id).where(
+                                    sa_or(DMSession.user1_id == user_id, DMSession.user2_id == user_id)
+                                ).order_by(DMSession.last_message_at.desc().nullslast())
+                                .limit(NOTIFICATION_SESSION_LIMIT)
+                            )).all()
+                        ]
+                    await manager.subscribe_notifications(ws, user_id, group_ids, session_ids)
+                    await ws.send_json({
+                        "type": "notifications_subscribed",
+                        "data": {"groups": len(group_ids), "sessions": len(session_ids)},
+                    })
+                except Exception as e:
+                    logger.warning(f"常驻通知订阅失败（用户 {user_id}）：{e}", exc_info=True)
+                    await ws.send_json(build_ws_error("SUBSCRIBE_FAILED", "通知订阅失败"))
+
             # ---- 发送消息（群聊或私信） ----
             elif msg_type == "send":
                 session_id = data.get("session_id")
@@ -204,37 +247,10 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                     asyncio.create_task(_log_message_audit(user_id, "dm", session_id, msg["id"]))
                     # 回显给发送者
                     await ws.send_json({"type": "message", "conversation_type": "dm", "data": msg})
-                    # 推送给对方（排除发送者）
-                    await manager.broadcast_to_dm(
-                        session_id,
-                        {"type": "message", "conversation_type": "dm", "data": msg},
-                        exclude_user_id=user_id,
-                    )
-
-                    # 触发 AI 回复（如果对方是 AI）
-                    if sender_type == "human":
-                        from app.ai.response_worker import message_queue
-                        try:
-                            message_queue.put_nowait({
-                                "conversation_type": "dm",
-                                "session_id": session_id,
-                                "message_id": msg["id"],
-                                "content": content,
-                                "sender_type": sender_type,
-                                "sender_id": user_id,
-                                "chain_depth": 0,
-                            })
-                        except asyncio.QueueFull:
-                            logger.warning("AI 回复队列已满，丢弃 DM 事件")
-
-                    # Federation: forward DM to connected peers
-                    try:
-                        from app.services.federation.federation_manager import federation_manager as fed_mgr
-                        asyncio.create_task(
-                            fed_mgr.forward_dm_message(session_id, msg)
-                        )
-                    except Exception:
-                        pass  # 联邦转发失败不影响本地消息
+                    # 推给会话另一端 + 唤醒 AI + 联邦转发（与外部通道共用同一条分发）
+                    await fanout_dm_message(session_id, msg, user_id)
+                    wake_dm_ai(session_id, msg, sender_id=user_id, sender_type=sender_type)
+                    await forward_dm_federated(session_id, msg)
 
                 else:
                     # ── 群聊消息（原有逻辑） ──
@@ -256,24 +272,8 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                             await ws.send_json(build_ws_error("SEND_FAILED", "消息发送失败"))
                             continue
 
-                        # 统一走 users 表
-                        sender_avatar = None
-                        sender_state = None
-                        try:
-                            from app.models.user import User as UserModel
-                            u = (await db.execute(select(UserModel).where(UserModel.id == user_id))).scalar_one_or_none()
-                            if u:
-                                username = u.username  # 名字以库为准（ws 上报值可能过期）
-                                sender_avatar = u.avatar_url
-                                if u.type == "ai":
-                                    a = (await db.execute(select(AgentModel).where(AgentModel.user_id == user_id))).scalar_one_or_none()
-                                    if a:
-                                        sender_avatar = a.avatar_url or sender_avatar
-                                        sender_state = a.state
-                        except Exception as e:
-                            logger.error(f"获取头像失败: {e}", exc_info=True)
-
-                        msg_data = gm_message_to_dict(message, sender_name=username, sender_avatar_url=sender_avatar, sender_state=sender_state)
+                        # 统一走 users 表；视图构建收在 chat.group_delivery（外部通道复用同一条）
+                        msg_data = await message_view(db, message, sender_name=username)
 
                         # 审计日志：用户发送消息（fire-and-forget）
                         asyncio.create_task(_log_message_audit(user_id, "group", group_id, message.id))
@@ -281,81 +281,8 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                         # 先回显给发送者
                         await ws.send_json({"type": "message", "conversation_type": "group", "data": msg_data})
 
-                        # 收集在线成员 ID 列表
-                        online_ids = [
-                            uid for uid in manager.group_connections.get(group_id, {})
-                            if uid != user_id
-                        ]
-
-                        if online_ids:
-                            try:
-                                # 批量查询所有在线成员的 DND 状态（替代逐个 N+1 查询）
-                                paused_result = await db.execute(
-                                    select(AgentModel.id).where(
-                                        AgentModel.id.in_(online_ids),
-                                        AgentModel.is_paused == True,
-                                    )
-                                )
-                                paused_ids = {row[0] for row in paused_result.all()}
-
-                                now = datetime.utcnow()
-                                dnd_result = await db.execute(
-                                    select(GroupMemberModel.member_id, GroupMemberModel.dnd_until).where(
-                                        GroupMemberModel.group_id == group_id,
-                                        GroupMemberModel.member_type == "ai",
-                                        GroupMemberModel.member_id.in_(online_ids),
-                                    )
-                                )
-                                dnd_map: dict[int, datetime | None] = {row[0]: row[1] for row in dnd_result.all()}
-
-                                # 广播：DND 成员暂存消息，但 @提及 强制推送
-                                from app.utils.text import extract_mentions
-                                mentioned_names = extract_mentions(content)
-                                is_all_call = "@all" in content.lower() or "@ai" in content.lower()
-                                mentioned_agents = set()
-                                for uid in online_ids:
-                                    agent_name_result = await db.execute(
-                                        select(AgentModel.name).where(AgentModel.id == uid)
-                                    )
-                                    agent_name = agent_name_result.scalar_one_or_none()
-                                    if agent_name and (agent_name in mentioned_names or is_all_call):
-                                        mentioned_agents.add(uid)
-
-                                for uid, user_ws in manager.group_connections[group_id].items():
-                                    if uid == user_id:
-                                        continue
-
-                                    in_dnd = (
-                                        uid in paused_ids
-                                        or (uid in dnd_map and (dnd_map[uid] is None or dnd_map[uid] > now))
-                                    )
-
-                                    # @提及强制推送（即使 DND 也推送）
-                                    if in_dnd and uid in mentioned_agents:
-                                        try:
-                                            await user_ws.send_json({"type": "message", "conversation_type": "group", "data": msg_data})
-                                        except Exception as e:
-                                            logger.warning(f"发送消息给用户 {uid} 失败: {e}")
-                                        continue
-
-                                    if in_dnd:
-                                        try:
-                                            await store_pending_message(
-                                                db, agent_id=uid, group_id=group_id,
-                                                message_id=message.id,
-                                            )
-                                        except Exception as e:
-                                            logger.warning(f"暂存消息给 AI {uid} 失败: {e}")
-                                        continue
-
-                                    try:
-                                        await user_ws.send_json({"type": "message", "conversation_type": "group", "data": msg_data})
-                                    except Exception as e:
-                                        logger.warning(f"发送消息给用户 {uid} 失败: {e}")
-                            except Exception as e:
-                                logger.error(f"广播消息给群成员失败: {e}", exc_info=True)
-                                # 广播失败不阻断消息已创建的事实
-
+                        # 群消息投递：以「AI 成员」为准（判定收在 delivery_decision 一处）
+                        await fanout_group_message(db, group_id, message, content, msg_data)
                         # 持久化提交
                         try:
                             await db.commit()
@@ -365,54 +292,11 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                             continue
 
                         # 联邦通信：异步转发到共享此群的对等端
-                        try:
-                            from app.services.federation.federation_service import is_group_federated as check_grp_fed
-                            is_fed = await check_grp_fed(db, group_id)
-                            if is_fed:
-                                from app.services.federation.federation_manager import federation_manager as fed_mgr
-                                asyncio.create_task(
-                                    fed_mgr.forward_message(group_id, msg_data)
-                                )
-                        except Exception:
-                            pass  # 联邦转发失败不影响本地消息
-
-                        # 触发 AI 自动回复 worker（仅人类消息，始终触发不受在线用户数影响）
-                        if sender_type == "human":
-                            from app.ai.response_worker import message_queue
-                            try:
-                                message_queue.put_nowait({
-                                    "conversation_type": "group",
-                                    "group_id": group_id,
-                                    "message_id": message.id,
-                                    "content": content,
-                                    "sender_type": sender_type,
-                                    "sender_id": user_id,
-                                    "chain_depth": 0,
-                                })
-                                logger.info(f"📨 消息已推入 AI 队列: group={group_id}, msg={message.id}, queue_size={message_queue.qsize()}")
-                            except asyncio.QueueFull:
-                                logger.warning("AI 回复队列已满，丢弃事件")
-
+                        await forward_group_message_federated(group_id, msg_data, db)
+                        # 触发 AI 自动回复 worker（仅人类消息；网页端与外部通道同一条路径）
+                        wake_group_ai(group_id, message, content)
                         # 触发向量化 pipeline（仅向量加速群聊）
-                        try:
-                            from app.models.group import Group as GroupModel
-                            group_check = await db.execute(
-                                select(GroupModel.is_vector_accelerated).where(
-                                    GroupModel.id == group_id,
-                                )
-                            )
-                            is_accelerated = group_check.scalar_one_or_none()
-                            if is_accelerated:
-                                from app.services.memory.vector_pipeline import embedding_queue
-                                try:
-                                    embedding_queue.put_nowait({
-                                        "group_id": group_id,
-                                        "message_id": message.id,
-                                    })
-                                except asyncio.QueueFull:
-                                    pass  # 向量化队列满则丢弃，不影响主流程
-                        except Exception as e:
-                            logger.warning(f"向量化 pipeline 触发失败: {e}")
+                        await maybe_vectorize_group_message(db, group_id, message)
 
             # ---- 输入状态 ----
             elif msg_type == "typing":
@@ -482,7 +366,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
         except Exception:
             pass
         if current_group_id is not None:
-            manager.disconnect(current_group_id, user_id)
+            manager.disconnect(ws, current_group_id, user_id)
             await manager.broadcast_to_group(
                 current_group_id,
                 {"type": "user_offline", "conversation_type": "group", "data": {"user_id": user_id, "username": username}},
@@ -498,7 +382,9 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
                 }},
                 exclude_user_id=user_id,
             )
-            manager.disconnect_dm(current_session_id, user_id)
+            manager.disconnect_dm(ws, current_session_id, user_id)
+        # 兜底：常驻通知连接、以及切过订阅后残留在别的群/私信池里的这条 socket
+        manager.disconnect_all(ws, user_id)
 
 async def _log_message_audit(user_id: int, conv_type: str, conv_id: int | str, message_id: int):
     """审计日志：用户发送消息（只记 message_id，内容查消息表）"""

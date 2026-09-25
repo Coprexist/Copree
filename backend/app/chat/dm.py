@@ -320,7 +320,14 @@ async def send_dm_message(
         if agent_avatar:
             sender_avatar_url = agent_avatar
 
-    return _dm_message_to_dict(msg, sender_name, sender_type, sender_avatar_url)
+    payload = _dm_message_to_dict(msg, sender_name, sender_type, sender_avatar_url)
+
+    # 私信出口：所有关心这条私信的通道从这里接出去（QQ 通道等）
+    from app.chat.outbound import dispatch_dm_message
+
+    await dispatch_dm_message(db, session_id, payload)
+
+    return payload
 
 
 async def set_dm_dnd(db: AsyncSession, session_id: str, user_id: int,

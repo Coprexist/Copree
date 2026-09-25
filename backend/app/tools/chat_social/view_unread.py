@@ -11,7 +11,8 @@ logger = logging.getLogger(__name__)
 
 class ViewUnread(ToolPlugin):
     name = "view_unread"
-    description = "查看你所在的所有群聊及其未读消息。即使某个群没有未读消息，你也能看到它的存在。这样你就不会误以为自己不在任何群聊里。"
+    description = ("查看你所在的所有群聊及其未读消息，以及你还没处理的私信。"
+                   "即使某个群没有未读消息，你也能看到它的存在。这样你就不会误以为自己不在任何群聊里。")
     segment = "chat_social"
     parameters = {}
     required = []
@@ -21,7 +22,7 @@ class ViewUnread(ToolPlugin):
 
     async def execute(self, db: AsyncSession, agent_id: int, group_id: int | None,
                       arguments: dict, context: dict) -> dict:
-        from app.chat.delivery import check_unread
+        from app.chat.delivery import check_unread, check_unread_dms
         from app.models.group import GroupMember, Group
         from app.models.agent import Agent as AgentModel
 
@@ -42,8 +43,11 @@ class ViewUnread(ToolPlugin):
         )
         memberships = member_result.scalars().all()
 
+        # 私信未读来自 dm_messages.read_at（单一真相），不额外记账
+        dms = await check_unread_dms(db, agent_id)
+
         if not memberships:
-            return {"groups": [], "message": "你不在任何群聊中"}
+            return {"groups": [], "dms": dms, "message": "你不在任何群聊中"}
 
         group_ids = [m.group_id for m in memberships]
         group_result = await db.execute(
@@ -68,7 +72,7 @@ class ViewUnread(ToolPlugin):
                 })
 
         groups.sort(key=lambda g: g.get("unread_count", 0), reverse=True)
-        return {"groups": groups}
+        return {"groups": groups, "dms": dms}
 
 
 ToolRegistry.register(ViewUnread)

@@ -163,6 +163,18 @@ async def send_dm(
             reply_to=body.get("reply_to"),
             attachments=body.get("attachments"),
         )
+        # 推给对方：人类发的私信以前**没有任何 WebSocket 推送**，对方只能等轮询
+        #（AI 回复走 agent_service/response_worker 自己的 broadcast，人类这条要在这里补）
+        try:
+            from app.routers.ws import manager
+            await manager.broadcast_to_dm(
+                session_id,
+                {"type": "message", "conversation_type": "dm", "data": msg},
+                exclude_user_id=current_user["user_id"],
+            )
+        except Exception as e:
+            logger.warning(f"私信推送失败（非致命）: {e}")
+
         # 触发 AI 回复（如果对方是 AI）
         await _maybe_trigger_dm_ai_reply(
             db, session_id, msg, current_user["user_id"],
