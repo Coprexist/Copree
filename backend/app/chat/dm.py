@@ -15,6 +15,8 @@ from app.models.user import User
 from app.models.agent import Agent
 from app.models.federation import FederatedEntity
 from app.models.friendship import Friendship
+from app.utils.pure.history import make_entry
+from app.utils.pure.prompting import format_message, format_time_shanghai
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +33,44 @@ def _dm_message_to_dict(m: DMMessage, sender_name: str, sender_type: str,
         conversation_key='session_id',
         include_read_at=True,
     )
+
+
+async def resolve_dm_sender_names(db, messages) -> dict[int, str]:
+    """一次把私信里「谁在说话」查成名字（同一人只查一次）。"""
+    names: dict[int, str] = {}
+    for m in messages:
+        if m.sender_id in names:
+            continue
+        u = await db.get(User, m.sender_id)
+        names[m.sender_id] = (getattr(u, "username", "") or "").strip() or f"用户{m.sender_id}"
+    return names
+
+
+def dm_message_entry(message, *, agent_name: str, agent_user_id: int | None,
+                     sender_name: str | None = None) -> dict:
+    """一条私信 → 账本条目（**渲染即落库**：content 就是发给模型的最终字节）。
+
+    附件名注入正文（对方发了什么文件，AI 得知道）；私信不截断正文（与旧路径同口径）。
+    """
+    content = message.content or ""
+    if message.attachments:
+        try:
+            atts = json.loads(message.attachments) if isinstance(message.attachments, str) else message.attachments
+            file_names = [a.get("name", a.get("path", "file")) for a in atts]
+            desc = f"[文件: {', '.join(file_names)}]"
+            content = f"{desc} {content}" if content else desc
+        except (json.JSONDecodeError, TypeError):
+            pass
+    is_self = message.sender_id == agent_user_id
+    rendered = format_message({
+        "time": format_time_shanghai(message.created_at),
+        "speaker_name": sender_name or f"用户{message.sender_id}",
+        "speaker_id": None if is_self else message.sender_id,
+        "is_self": is_self,
+        "content": content,
+        "message_id": message.id,
+    }, agent_name, max_content_len=-1)
+    return make_entry("message", rendered, actor="self" if is_self else "user", ref=str(message.id))
 
 
 async def _require_friendship(db: AsyncSession, user_a_id: int, user_b_id: int):

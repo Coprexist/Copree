@@ -1427,51 +1427,33 @@ async def build_dm_messages(
     # ── 当前私信（最后一个会话标题，位置即语义）──
     messages.append({"role": "system", "content": f"在私信「{partner_name}」(id={partner_user_id})中："})
 
-    # ── DM 历史消息 ──
-    result = await db.execute(
-        sa_select(DMMessage)
-        .where(DMMessage.session_id == session_id)
-        .order_by(DMMessage.created_at.desc())
-        .limit(limit)
-    )
-    # 私信查询是 DESC（新→旧）：归一成正序，再按字符上限保留最新的
-    dm_messages = keep_newest_within(chronological(result.scalars().all()), 40000)
+    # ── DM 历史消息：账本（只追加 + 缺口）——与群聊同一套入口 ──
+    from app.models.dm import DMMessage as DMMessageModel
+    from app.services.history.context_sync import append_events, context_ref, sync_dm_history
+    from app.utils.pure.history import ROLE_BY_ACTOR, make_entry
+
+    ledger = await sync_dm_history(db, agent, session_id, cap=limit)
+    dm_ref = context_ref(session_id=session_id)  # 会话键只在这里拼一次
+
+    # 一次性事件（能力变更通知 / 便签撤下）落成条目：紧跟历史、排在尾部读数之前
+    events: list[dict] = []
+    if notes_notice:
+        events.append(make_entry("note", notes_notice))
+    cap_notice = await _build_capability_notice(db, agent)
+    if cap_notice:
+        events.append(make_entry("notice", cap_notice))
+    ledger = ledger + await append_events(db, agent, dm_ref, events)
 
     last_user_idx = None
     last_user_orm = None
-    # 同上：正序注入（旧→新），最新那条在最后
-    for m in dm_messages:
-        role = "assistant" if m.sender_id == agent.user_id else "user"
-        name_result = await db.execute(
-            sa_select(User.username).where(User.id == m.sender_id)
-        )
-        sender_name = name_result.scalar_one_or_none() or f"用户{m.sender_id}"
-        # 附件名称注入到消息内容中，让 AI 知道对方发了什么文件
-        msg_content = m.content or ''
-        if m.attachments:
-            try:
-                atts = json.loads(m.attachments) if isinstance(m.attachments, str) else m.attachments
-                file_names = [a.get('name', a.get('path', 'file')) for a in atts]
-                desc = f"[文件: {', '.join(file_names)}]"
-                msg_content = f"{desc} {msg_content}" if msg_content else desc
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-        msg_struct = {
-            "time": format_time_shanghai(m.created_at),
-            "speaker_name": sender_name,
-            "speaker_id": None if m.sender_id == agent.user_id else m.sender_id,
-            "is_self": m.sender_id == agent.user_id,
-            "content": msg_content,
-            "message_id": m.id,
-        }
+    for entry in ledger:
         messages.append({
-            "role": role,
-            "content": format_message(msg_struct, agent.name, max_content_len=-1),
+            "role": ROLE_BY_ACTOR.get(entry["actor"], "system"),
+            "content": entry["content"],
         })
-        if role == "user":
+        if entry["actor"] == "user":
             last_user_idx = len(messages) - 1
-            last_user_orm = m
+            last_user_orm = (await db.get(DMMessageModel, int(entry["ref"]))) if entry.get("ref") else None
 
     # 🖼️ 为最后一条用户消息注入图片附件
     _n_img = _attach_image_to_message(messages, last_user_idx, last_user_orm, settings.data_dir)
@@ -1516,25 +1498,13 @@ async def build_dm_messages(
     except Exception as e:
         logger.warning(f"注入工具错误记录失败（非致命）: {e}")
 
-    # 能力变更通知（懒加载：增量 changelog 追加尾部，known 更新与注入同轮；不影响前缀缓存）
-    # DM 还没走账本（第二批 b-2）：这里落条目会写进一段没人读的账本，等 b-2 接上再一起改。
-    try:
-        from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
-        from app.services.capability_versioning import build_change_notice, SOURCE_PLATFORM
-        notice = await build_change_notice(SQLAlchemyCapabilityRepository(db), agent, [SOURCE_PLATFORM, f"agent-prompt-{agent.id}"])
-        if notice:
-            messages.append({"role": "system", "content": notice})
-            await db.commit()
-    except Exception:
-        pass
+    # 能力变更通知已在上面的历史段落成账本条目了（b-2：DM 与群聊同一套）
 
     # 尾部动态块（顺序即语义：先「我该干什么」，再「我有哪些会话」）
     for block in tail_blocks:
         messages.append({"role": "system", "content": block})
 
-    # 📌 撤下的便签：前缀里那行不动，靠这条尾部通知压住它（每轮都发）
-    if notes_notice:
-        messages.append({"role": "system", "content": notes_notice})
+    # 撤下的便签通知也在上面的历史段落成账本条目了
 
     # 📎 上一段对话的原文尾巴（切会话时的临时交接，只出现一轮）
     await _inject_cross_state_context(db, agent, session_id, messages)

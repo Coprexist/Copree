@@ -74,6 +74,52 @@ async def rewrite_context(db: AsyncSession, agent, context_ref: str, *,
     return rewritten
 
 
+async def sync_dm_history(db: AsyncSession, agent, session_id: str, *, cap: int) -> list[dict]:
+    """把水位之后的新私信补进账本，返回**整段**历史条目（与群聊同一套语义）。
+
+    cap = 一批最多几条（旧窗口的 limit）。私信不按字符二次裁剪（与旧路径同口径）。
+    """
+    from sqlalchemy import select as sa_select
+
+    from app.chat import dm as dm_api
+    from app.models.dm import DMMessage
+
+    ref = context_ref(session_id=session_id)
+    entries = await history_service.read(db, agent.id, ref)
+    watermark = latest_message_ref(entries)
+
+    rows = (await db.execute(
+        sa_select(DMMessage).where(DMMessage.session_id == session_id, DMMessage.id > watermark)
+        .order_by(DMMessage.id.desc()).limit(cap)
+    )).scalars().all()
+    rows = list(reversed(rows))  # 按 id 倒序取"最新 cap 条"，再归一回正序
+
+    skipped = 0
+    if rows:
+        from sqlalchemy import func as sa_func
+        q = sa_select(sa_func.count(DMMessage.id)).where(
+            DMMessage.session_id == session_id, DMMessage.id < rows[0].id)
+        if watermark:
+            q = q.where(DMMessage.id > watermark)
+        skipped = (await db.execute(q)).scalar() or 0
+
+    batch: list[dict] = []
+    if skipped:
+        batch.append(gap_entry(skipped, ref=str(rows[0].id)))
+    if rows:
+        names = await dm_api.resolve_dm_sender_names(db, rows)
+        agent_name = getattr(agent, "name", "") or ""
+        agent_user_id = getattr(agent, "user_id", None)
+        for m in rows:
+            batch.append(dm_api.dm_message_entry(
+                m, agent_name=agent_name, agent_user_id=agent_user_id,
+                sender_name=names.get(m.sender_id),
+            ))
+    if batch:
+        entries = entries + await history_service.append(db, agent.id, ref, batch)
+    return entries
+
+
 async def sync_group_history(db: AsyncSession, agent, group_id: int, *, cap: int, max_len: int) -> list[dict]:
     """把水位之后的新群消息补进账本，返回**整段**历史条目（供渲染请求体）。
 
