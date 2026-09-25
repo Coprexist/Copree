@@ -123,7 +123,9 @@
 | 文档 | 适用人群 | 说明 |
 |------|---------|------|
 | [LLM 端点入口](./dev/llm_endpoint.md) | 开发者 | base_url 版本段拼接规则、供应商连接探针、内网地址策略 |
-| [能力懒加载](./dev/capability_lazy_loading.md) | 开发者 | skills/tools 版本化与增量变更注入 |
+| [能力懒加载](./dev/capability_lazy_loading.md) | 开发者 | skills/tools 版本化与增量变更注入（锁定/解锁 + 前缀缓存不变式） |
+| [跨状态交接](./dev/cross_state_context.md) | 开发者 | 换会话时怎么接上线头：原文尾巴（保底）+ 跨状态便签（投递制、40 次调用窗口），以及它们和前缀缓存锁的关系 |
+| [会话历史与前缀缓存（设计稿，待批）](./dev/conversation_history.md) | 开发者 | 两卷历史（工具轮/普历史）+ 轮末封存 + end_turn 结算 + 两级压缩 + 图片不降级；请求体固定三段、compact 才重写 |
 | [Repository 化重构进度](./dev/repository_refactor_progress.md) | 开发者 | 重构进度的唯一权威存档，接续工作前先读 |
 | [重构实施开发文档](./dev/重构实施开发文档.md) | 开发者 | 后端重构实施细节 |
 | [AI↔AI 私信规则与限额](./dev/ai_ai_dm_quota.md) | 开发者 | 私信规则、配额与限额 |
