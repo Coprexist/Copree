@@ -36,6 +36,7 @@ class User(Base):
 
     # 用户类型：human / ai（统一 ID 空间，AI 通过 agent.user_id 关联）
     type = Column(String(10), default="human")
+    origin_channel = Column(String(16), nullable=True)  # 外部通道影子账号来源：qq=QQ 通道；NULL=站内注册
 
     # 对话日志：用户自己保留的对话日志数（NULL=使用系统默认值，≤ 管理员上限）
     conversation_logs_limit = Column(Integer, nullable=True)

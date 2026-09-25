@@ -279,11 +279,13 @@ async def send_gm_message(
     attachments: list[dict] | None = None,
     source: str = "user",
     allow_non_member: bool = False,
+    via: str | None = None,
 ) -> Message:
     """创建消息（支持附件，非 owner 发送含附件消息时自动创建转发引用）
 
     source："user"=人/工具发起（会触发群消息钩子→世界程序感知）；
            "world"=世界程序/世界 AI 自己发的（不触发，防死循环）
+    via：消息入口通道（NULL=站内，qq=QQ 通道）——只用于界面画"来源"标识，不影响投递
 
     安全（2026-08-05 产品发现）：非群成员默认禁止发消息——
     任意登录用户不能给任意群灌水；allow_non_member=True 供
@@ -298,6 +300,7 @@ async def send_gm_message(
         content=content,
         reply_to=reply_to,
         attachments=attachments,
+        via=via,
     )
     db.add(message)
     await db.flush()
@@ -311,12 +314,10 @@ async def send_gm_message(
 
     await db.refresh(message)
 
-    # 群消息钩子：群里有消息 → 异步喂给绑定世界的入口（世界程序感知）
-    try:
-        from app.services.world.world_event_hook import notify_group_message
-        await notify_group_message(db, group_id, message, source)
-    except Exception as e:
-        logger.warning(f"🌐 群消息钩子异常（group #{group_id}）: {e}")
+    # 群消息出口：所有关心这条消息的消费者从这里接出去（世界感知、QQ 通道…）
+    from app.chat.outbound import dispatch_group_message
+
+    await dispatch_group_message(db, group_id, message, source)
 
     return message
 

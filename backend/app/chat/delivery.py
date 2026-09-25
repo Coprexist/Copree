@@ -14,7 +14,7 @@
 import logging
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, update, desc, func as sqlfunc
+from sqlalchemy import select, and_, or_, update, desc, func as sqlfunc
 from app.models.group import Group, GroupMember
 from app.models.message import PendingMessage, Message
 from app.models.agent import Agent
@@ -161,6 +161,25 @@ async def is_member_muted(db: AsyncSession, agent_id: int, group_id: int) -> boo
 # 暂存消息 (Pending Messages)
 # ============================================================
 
+def delivery_decision(*, online: bool, in_dnd: bool, mentioned: bool) -> str:
+    """群消息对某个 AI 成员的处置（**唯一口径**）：返回 "push" 或 "pending"。
+
+    依据文档的可达性矩阵（docs/chat_service/design/chat_service_design.md §4.2）：
+
+    | 情形 | 处置 |
+    |------|------|
+    | 在线且不 DND/暂停 | push |
+    | 在线但 DND/暂停、**被 @** | push（@提及 穿透） |
+    | 在线但 DND/暂停、没被 @ | pending |
+    | **不在线（不论有没有被 @）** | pending（cpec.md：dnd/offline 则暂存） |
+
+    「不在线也暂存」这一格以前是漏的：投递循环只遍历在线连接，离线成员没人管。
+    """
+    if online and (not in_dnd or mentioned):
+        return "push"
+    return "pending"
+
+
 async def store_pending_message(
     db: AsyncSession,
     agent_id: int,
@@ -288,6 +307,74 @@ async def check_unread(db: AsyncSession, agent_id: int) -> list[dict]:
             "last_message_at": str(row.last_message_at) if row.last_message_at else None,
         })
 
+    return summaries
+
+
+async def check_unread_dms(db: AsyncSession, agent_id: int) -> list[dict]:
+    """AI 还没处理的私信（按会话聚合）。
+
+    私信不另存一份"暂存"：**`dm_messages.read_at` 就是唯一真相** —— 对方打开会话、
+    AI 回复（send_dm_message 的"回复即阅读"）都会把它标上。pending_messages 是群聊那条
+    投递链的账本，私信再记一份等于同一件事两处真相，迟早对不上。
+    所以这里只做"读出来"，不加表、不加迁移。
+    """
+    from app.models.dm import DMMessage, DMSession
+    from app.models.user import User
+
+    agent = (await db.execute(select(Agent).where(Agent.id == agent_id))).scalar_one_or_none()
+    if agent is None or not agent.user_id:
+        return []
+    me = agent.user_id
+
+    rows = (await db.execute(
+        select(
+            DMMessage.session_id,
+            sqlfunc.count(DMMessage.id).label("unread_count"),
+            sqlfunc.max(DMMessage.created_at).label("last_message_at"),
+        )
+        .join(DMSession, DMSession.session_id == DMMessage.session_id)
+        .where(
+            or_(DMSession.user1_id == me, DMSession.user2_id == me),
+            DMMessage.sender_id != me,
+            DMMessage.read_at.is_(None),
+        )
+        .group_by(DMMessage.session_id)
+    )).all()
+
+    summaries = []
+    for session_id, unread_count, last_message_at in rows:
+        session = (await db.execute(
+            select(DMSession).where(DMSession.session_id == session_id)
+        )).scalar_one_or_none()
+        peer_id = None
+        if session is not None:
+            peer_id = session.user2_id if session.user1_id == me else session.user1_id
+        peer_name = None
+        if peer_id is not None:
+            peer_name = (await db.execute(
+                select(User.username).where(User.id == peer_id)
+            )).scalar_one_or_none()
+        preview = (await db.execute(
+            select(DMMessage.content)
+            .where(
+                DMMessage.session_id == session_id,
+                DMMessage.sender_id != me,
+                DMMessage.read_at.is_(None),
+            )
+            .order_by(DMMessage.created_at.desc())
+            .limit(1)
+        )).scalar_one_or_none()
+
+        summaries.append({
+            "session_id": session_id,
+            "peer_id": peer_id,
+            "peer_name": peer_name or f"用户{peer_id}",
+            "unread_count": unread_count,
+            "last_message_preview": (preview or "")[:100] or None,
+            "last_message_at": str(last_message_at) if last_message_at else None,
+        })
+
+    summaries.sort(key=lambda s: s["last_message_at"] or "", reverse=True)
     return summaries
 
 

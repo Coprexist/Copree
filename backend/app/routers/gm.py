@@ -107,12 +107,10 @@ async def send_gm(
 
     msg_data = gm_message_to_dict(message, sender_name=current_user["username"], sender_avatar_url=sender_avatar)
 
-    # WebSocket 广播
-    try:
-        from app.routers.ws import manager
-        await manager.broadcast_to_group(group_id, {"type": "message", "data": msg_data})
-    except Exception:
-        pass
+    # WebSocket 广播（外部通道也用同一个入口，别让两条链路各写一遍）
+    from app.chat.group_delivery import broadcast_group_message
+
+    await broadcast_group_message(group_id, msg_data)
 
     # 触发 AI 回复
     try:

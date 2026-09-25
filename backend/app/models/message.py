@@ -21,6 +21,7 @@ class Message(Base):
     content = Column(Text, nullable=False)
     reply_to = Column(Integer, nullable=True)
     source_public_id = Column(String(50), nullable=True)  # 远程消息来源实例公网 ID（NULL=本地）
+    via = Column(String(16), nullable=True)  # 消息入口通道：NULL=站内；qq=QQ 通道（联邦来源另见 source_public_id）
     sender_avatar_url = Column(Text, nullable=True, default='')  # 联邦消息的发送者头像 URL（本地消息为 NULL）
     attachments = Column(json_column(), nullable=True)  # [{file_id, path, name, size, mime_type}, ...]
     created_at = Column(DateTime, server_default=func.now())

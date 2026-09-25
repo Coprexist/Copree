@@ -162,9 +162,10 @@ def format_message(msg: dict, agent_name: str = "", max_content_len: int = 200) 
     if msg.get("is_self"):
         speaker = f"你（{agent_name}）"
     elif msg.get("speaker_id") is not None:
-        speaker = f"{msg['speaker_name']}（id={msg['speaker_id']}）"
+        # 名字为空时不能原样渲染：模型看到「None（id=90）」会真的 @None（用户 2026-09-25 实测）
+        speaker = f"{msg.get('speaker_name') or '未知'}（id={msg['speaker_id']}）"
     else:
-        speaker = msg.get("speaker_name", "未知")
+        speaker = msg.get("speaker_name") or "未知"
 
     content = msg.get('content', '')
     if max_content_len > 0:

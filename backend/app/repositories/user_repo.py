@@ -44,7 +44,8 @@ class SQLAlchemyUserRepository:
 
     async def count_non_system_users(self) -> int:
         result = await self.session.execute(
-            select(func.count(User.id)).where(User.type != 'system')
+            # 系统账号与外部身份都不是"本实例的注册用户"：注册引导（首个用户即管理员）只数真人
+            select(func.count(User.id)).where(User.type.notin_(("system", "external")))
         )
         return result.scalar() or 0
 

@@ -95,6 +95,18 @@ def scan_disk() -> dict[str, dict[str, Any]]:
     return plugins
 
 
+def channel_kind(plugin_id: str) -> str:
+    """插件声明的外部身份类别（manifest 的 channel.kind）
+
+    类别名由插件自带 —— 第三方通道插件不该等我们在平台里加一个常量。
+    没声明就退回插件 id：老插件不用改也能跑（kind 只是身份的归类标签，不改身份本身）。
+    """
+    manifest = scan_disk().get(plugin_id) or {}
+    block = manifest.get("channel")
+    kind = str((block or {}).get("kind") or "").strip() if isinstance(block, dict) else ""
+    return kind or plugin_id
+
+
 def load_entry_payload(manifest: dict[str, Any]) -> dict[str, Any]:
     """读取插件 entry 载荷（skin.json / skill.json），无则返回 {}"""
     entry = manifest.get("entry")

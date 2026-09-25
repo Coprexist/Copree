@@ -761,6 +761,29 @@ async def _versioned_agent_prompt(db: AsyncSession, agent, system_prompt_overrid
     return await get_effective_text(SQLAlchemyCapabilityRepository(db), agent, source, cur)
 
 
+async def _resolve_speaker_names(db, messages) -> dict[tuple[str, int], str]:
+    """一次把「谁在说话」查成名字。
+
+    本地消息的 sender_name 列是空的（网页端靠 sender_id 自己查名字），可 AI 的上下文
+    必须有人名：空名字会被 format_message 原样渲染成字面 "None"，模型真的会把 None
+    当成一个可 @ 的人（用户 2026-09-25 在 QQ 群里看到 AI 回 "@None"）。
+    联邦消息自带 sender_name，优先用它；AI 的 sender_id 也是它的用户行 id，所以一张表查得到。
+    """
+    from app.models.user import User  # 函数内导入：与其它模型引用保持一致，避免循环导入
+
+    names: dict[tuple[str, int], str] = {}
+    for m in messages:
+        key = (m.sender_type, m.sender_id)
+        if key in names:
+            continue
+        name = (getattr(m, "sender_name", None) or "").strip()
+        if not name:
+            u = await db.get(User, m.sender_id)
+            name = (getattr(u, "username", "") or "").strip()
+        names[key] = name or f"用户{m.sender_id}"
+    return names
+
+
 async def build_messages(
     db: AsyncSession,
     agent,
@@ -810,28 +833,12 @@ async def build_messages(
     # 2. 获取最近消息（用于记忆检索 + 历史消息）
     recent_for_query = await chat_api.get_gm_messages(db, group_id, limit=5)
     query_parts: list[str] = []
-    sender_names: dict[tuple[str, int], str] = {}
     for m in recent_for_query:
         if m.content:
             query_parts.append(m.content[:200])
-        key = (m.sender_type, m.sender_id)
-        if key not in sender_names:
-            sender_names[key] = ""
-    if sender_names:
-        from app.models.user import User as UserModel
-        from app.models.agent import Agent as AgentModel
-        for (stype, sid) in list(sender_names.keys()):
-            if stype == "human":
-                u = await db.get(UserModel, sid)
-                if u:
-                    sender_names[(stype, sid)] = u.username
-            elif stype == "ai":
-                a = await db.get(AgentModel, sid)
-                if a:
-                    sender_names[(stype, sid)] = a.name
-        names = [n for n in sender_names.values() if n]
-        if names:
-            query_parts.append("涉及用户: " + " ".join(names))
+    speaker_names = await _resolve_speaker_names(db, recent_for_query)
+    if speaker_names:
+        query_parts.append("涉及用户: " + " ".join(sorted(set(speaker_names.values()))))
     query_text = " ".join(query_parts)
 
     # ── 获取用户语言偏好 ──
@@ -965,7 +972,7 @@ async def build_messages(
             for r in reversed(relevant):
                 messages.append({
                     "role": role,
-                    "content": f"[历史消息] {r.get('sender_name', '未知')}: {r.get('content', '')}",
+                    "content": f"[历史消息] {r.get('sender_name') or '未知'}: {r.get('content', '')}",
                 })
         except Exception as e:
             logger.warning(f"向量检索失败，回退到最近消息: {e}")
@@ -993,14 +1000,18 @@ async def build_messages(
 
         last_user_idx = None
         last_user_orm = None
+        # 说话人名字先批量查好：本地消息的 sender_name 是空的，直接渲染会让 AI 看到说话人叫 "None"
+        speaker_names = await _resolve_speaker_names(db, recent_messages)
         for m in reversed(recent_messages):
-            md = await chat_api.gm_message_to_dict(m)
+            md = await chat_api.gm_message_to_dict(
+                m, sender_name=speaker_names.get((m.sender_type, m.sender_id))
+            )
             content = m.content or ""
             if max_len > 0 and len(content) > max_len:
                 content = content[:max_len] + '...[展开 id=' + str(m.id) + ']'
             msg_struct = {
                 "time": format_time_shanghai(m.created_at),
-                "speaker_name": md.get("sender_name", "未知"),
+                "speaker_name": md.get("sender_name") or speaker_names.get((m.sender_type, m.sender_id)) or "未知",
                 "speaker_id": None if m.sender_type == "ai" and m.sender_id == agent.user_id else m.sender_id,
                 "is_self": m.sender_type == "ai" and m.sender_id == agent.user_id,
                 "content": content,

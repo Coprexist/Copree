@@ -280,6 +280,8 @@ async def _process_group_event(db, event: dict):
 
     # 群管理暂停了 AI 触发
     if getattr(group, "is_paused", False):
+        # 以前这里是静默 return：AI 不说话到底是没人 @、被暂停、还是没触发，查日志看不出来
+        logger.info(f"⏸️ 群 {group_id}「{group.name}」已暂停 AI 触发（群设置里的暂停开关），本条消息不触发任何 AI")
         return
     # 对话链深度限制：根据群设置动态计算
     if group.owner_type == "ai":
@@ -756,8 +758,10 @@ async def _maybe_trigger_ai_reply(
         return
 
     # 5. 获取 API 配置（v0.1.4: 公共辅助函数；v0.1.5: 四层优先链含池 Key）
+    # conversation_type 必须传：文档里的规则是"群聊扣群主（group_owner_pays）"，
+    # 不传就会被当成私聊、落到聊天者头上 —— QQ 群@来的影子账号没有额度，解析必然为空。
     api_key, api_base, credit_source, pool_key_id, provider_info = await _get_api_config(
-        db, agent, chatter_id=sender_id
+        db, agent, chatter_id=sender_id, conversation_type="group"
     )
     logger.info(f"🔍 AI {agent.name}: api_base={api_base}, has_api_key={api_key is not None}, "
                 f"credit_source={credit_source}")
@@ -1015,10 +1019,17 @@ async def _trigger_dm_ai_reply(
     effective_cfg = await _get_eff_cfg(db, agent_id, sender_id)
 
     # 获取 API 配置（v0.1.8: 按 AI 类型 + force_own_key 决定账单人）
+    # 外部通道（QQ 等）来的私聊：对方不是平台用户，账单记在 AI 主人头上，
+    # 否则"通用/半通用 AI 私聊扣聊天者"这条规则会解析成空 Key，AI 只能发系统通知。
+    from app.models.user import User as _UserModel
+
+    _chatter = await db.get(_UserModel, sender_id) if sender_id else None
     api_key, api_base, credit_source, pool_key_id, provider_info = await _get_api_config(
         db, agent,
         chatter_id=sender_id,
         force_own_key=force_own_key,
+        conversation_type="dm",
+        bill_to_owner=bool(getattr(_chatter, "origin_channel", None)),
     )
 
     # 无 API Key → 发送 DM 系统通知后跳过

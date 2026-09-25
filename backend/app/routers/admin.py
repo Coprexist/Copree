@@ -110,7 +110,10 @@ async def system_overview(
     db: AsyncSession = Depends(get_db),
 ):
     """系统概览统计"""
-    user_count = (await db.execute(select(func.count(User.id)))).scalar()
+    # 用户数只数本实例的账号：系统账号与外部身份（QQ/联邦）不是"用户"
+    user_count = (await db.execute(
+        select(func.count(User.id)).where(User.type.notin_(("system", "external")))
+    )).scalar()
     agent_count = (await db.execute(select(func.count(Agent.id)))).scalar()
     group_count = (await db.execute(select(func.count(Group.id)))).scalar()
 
@@ -133,9 +136,10 @@ async def list_users(
 ):
     """用户列表（分页）"""
     offset = (page - 1) * page_size
-    total = (await db.execute(select(func.count(User.id)))).scalar()
+    _local = User.type.notin_(("system", "external"))
+    total = (await db.execute(select(func.count(User.id)).where(_local))).scalar()
     result = await db.execute(
-        select(User).order_by(User.created_at.desc()).offset(offset).limit(page_size)
+        select(User).where(_local).order_by(User.created_at.desc()).offset(offset).limit(page_size)
     )
     users = result.scalars().all()
 

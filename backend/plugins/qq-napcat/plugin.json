@@ -1,0 +1,11 @@
+{
+  "id": "qq-napcat",
+  "name": "QQ 通道（NapCat / OneBot v11）",
+  "description": "把 AI 接进 QQ（非官方协议端 NapCat / OneBot v11）。注意：协议端违反 QQ 用户协议，有封号风险，建议只用自己的备用号、自担风险；对外提供服务请用官方 QQ 通道。",
+  "category": "service",
+  "version": "0.1.0",
+  "author": "Copree",
+  "icon": "MessageSquare",
+  "default_enabled": false,
+  "channel": { "kind": "qq-napcat", "label": "QQ（NapCat）", "label_en": "QQ (NapCat)", "label_ja": "QQ（NapCat）", "pairing": true, "supports_group": true }
+}

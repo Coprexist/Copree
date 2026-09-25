@@ -1,0 +1,18 @@
+{
+  "id": "qq-channel",
+  "name": "QQ 通道",
+  "description": "把 Copree 的 AI 接入 QQ 群：被 @ 时唤醒，走官方 QQ 机器人 API（WebSocket 收事件 + REST 回消息）",
+  "category": "service",
+  "version": "0.1.0",
+  "author": "Copree",
+  "icon": "MessageSquare",
+  "default_enabled": false,
+  "channel": {
+    "kind": "qq",
+    "label": "QQ",
+    "label_en": "QQ",
+    "label_ja": "QQ",
+    "pairing": true,
+    "supports_group": true
+  }
+}

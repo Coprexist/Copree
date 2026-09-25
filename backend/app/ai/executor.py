@@ -201,6 +201,7 @@ async def _get_api_config(
     force_own_key: bool = False,
     conversation_type: str | None = None,
     excluded_sources: set[str] | None = None,
+    bill_to_owner: bool = False,
 ) -> tuple[str | None, str, str, int | None, dict]:
     """
     获取 API Key 和 Base URL（四层优先链 + 平台赠送额度）。
@@ -217,6 +218,9 @@ async def _get_api_config(
             force_own_key=True 时跳过池 Key，直接走账单人自有 Key。
     v0.2.2: 返回 provider_info 字典，含 thinking_supported / models / base_url。
     v1.1.0: conversation_type + group_owner_pays 控制群聊账单人。
+    v1.2.0: bill_to_owner — 外部通道（QQ 等）来的会话一律记在 AI 主人头上：
+            对方不是平台用户，没有 Key 也没有额度，按"聊天者付费"必然解析成空。
+            调用方判断"这条是不是外部通道来的"，这里只负责照办。
 
     返回: (api_key, api_base, credit_source, pool_key_id, provider_info)
     """
@@ -245,7 +249,9 @@ async def _get_api_config(
             return None
 
     # 确定账单人
-    if conversation_type and conversation_type != "dm" and getattr(agent, 'group_owner_pays', True):
+    if bill_to_owner:
+        bill_user_id = agent.owner_id
+    elif conversation_type and conversation_type != "dm" and getattr(agent, 'group_owner_pays', True):
         bill_user_id = agent.owner_id
     elif chatter_id and agent.ai_type in ("general", "semi_general"):
         bill_user_id = chatter_id
