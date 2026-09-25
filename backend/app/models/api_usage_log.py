@@ -13,7 +13,8 @@ class ApiUsageLog(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, comment="哪个用户消耗的")
     agent_id = Column(Integer, ForeignKey("agents.id"), nullable=True, comment="哪个 AI 产生的调用")
-    pool_key_id = Column(Integer, ForeignKey("api_key_pool.id"), nullable=True, comment="使用的池 Key（NULL=用户自有 Key）")
+    pool_key_id = Column(Integer, ForeignKey("api_key_pool.id", ondelete="SET NULL"), nullable=True,
+                         comment="使用的池 Key（NULL=用户自有 Key 或该 Key 已删除）")
     source = Column(String(20), nullable=False, default="user_key", comment="来源：user_key | pool_key")
     tokens_used = Column(Integer, nullable=False)
     credit_spent = Column(Numeric(6, 2), nullable=False, default=0)

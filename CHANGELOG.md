@@ -55,6 +55,8 @@
 - **向量维度对齐**：`docker-compose.yml` 补 `EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-768}`
   （模型向量列在 import 时读它，DB 覆盖管不到；不一致时 INSERT 生成 `::VECTOR(1536)` 写 768 向量必然失败，
   记忆一直静默写失败重排队）。待办：启动自检三者不一致时大声报错
+- **删池 Key 不再 500**：`api_usage_log.pool_key_id` 外键改 `ON DELETE SET NULL`（迁移 `b8c9d0e1f2a3`）——
+  用量历史保留、引用置空；之前有用量记录的 Key 一删就 ForeignKeyViolationError（线上实测 `DELETE /admin/api-key-pool/1`）
 - **跨对话回复的「读」**：新工具 `read_conversation` 读别的会话最近几条原文（群传 `group_id`、私信传
   `target_user_id`；只读不切状态）+ `history_service.tail` 读账本尾部的唯一入口 —— 写早就能发，
   补上读之后「跨对话回复」才成立
