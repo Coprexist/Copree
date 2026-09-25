@@ -370,6 +370,13 @@
   与任务/状态栈/通道规矩同一位置。
   **实测**：插一条新消息前后两次构建，`message 0` 字节一致；首个差异下标从 **0 → 4**
   （等于只能断在「新追加的那条」上，这正是只追加该有的样子）。
+- **记忆索引挂上同一条版本链（冻结 + 差分通知都复用现成机制）**：`injected_skills` 段里的东西按
+  「当轮输入」一分为二——**索引**（`format_db_records_for_prompt` 只看 `agent.id`，稳定）走
+  `memory_index_source(agent.id)` → `ensure_text_source_version` / `get_effective_text`，**回锁定段**；
+  **召回 + 技能注入**（检索词是最近 5 条消息）留尾部读数。`build_change_notice` 的源列表加上索引源，
+  改动自动走既有尾部 changelog。
+  **实测**（真机草稿会话）：写一条记忆前后 `message 0` 字节一致；尾部出现记忆索引变更通知；
+  版本链 v1(161 字) → v2(185 字)、`known=2 / effective=1`——**AI 已被告知，但前缀仍用 v1，等解锁才对齐**。
 
 ### 待落地
 

@@ -29,6 +29,14 @@ logger = logging.getLogger(__name__)
 
 SOURCE_PLATFORM = "platform"
 
+
+def memory_index_source(agent_id: int) -> str:
+    """记忆索引（目录树）的版本源——与提示词/能力**共用同一条版本链**：
+
+    冻结（锁定态取 effective 快照）+ 差分通知（尾部 changelog）都是现成的，不新造机制。
+    """
+    return f"memory-index-{agent_id}"
+
 # 解锁上下文标记：apply_pending_changes（compact/clear）期间置 True，
 # guard_apply_change 检查它——锁定态尝试应用变更 → 拒绝 + 报错（防御未来"强制修改"逻辑）
 _unlock_ctx: contextvars.ContextVar[bool] = contextvars.ContextVar("cap_unlock_ctx", default=False)

@@ -556,8 +556,10 @@ async def _build_capability_notice(db, agent) -> str:
     try:
         from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
         from app.services.capability_versioning import build_change_notice, SOURCE_PLATFORM
+        from app.services.capability_versioning import memory_index_source
         notice = await build_change_notice(
-            SQLAlchemyCapabilityRepository(db), agent, [SOURCE_PLATFORM, f"agent-prompt-{agent.id}"])
+            SQLAlchemyCapabilityRepository(db), agent,
+            [SOURCE_PLATFORM, f"agent-prompt-{agent.id}", memory_index_source(agent.id)])
         return notice or ""
     except Exception:
         return ""
@@ -735,16 +737,33 @@ async def _build_injected_skills(
     except Exception as e:
         logger.warning(f"Skill 注入失败（非致命）: {e}")
 
-    # ── v0.1.8: 数据库版目录级记忆注入（替代文件系统版）──
-    try:
-        from app.services.memory.structured_memory_service import format_db_records_for_prompt
-        db_records_text = await format_db_records_for_prompt(db, agent.id)
-        if db_records_text:
-            parts.append(db_records_text)
-    except Exception as e:
-        logger.warning(f"数据库记忆注入失败（非致命）: {e}")
-
     return "\n\n".join(parts) if parts else ""
+
+
+async def _build_memory_index(db, agent) -> str:
+    """记忆索引（目录树）：**走版本链冻结**，所以它能安全地待在锁定段里。
+
+    为什么必须冻结：索引原本每轮现读 DB，AI 中途 store_memory 一次，下一轮索引文本就变 →
+    整个前缀从第 0 字节起 miss。它与当轮消息无关（只看 agent.id），本来就该在锁定段。
+    冻结后：改动只写新版本 + 尾部 changelog 告知，解锁（compact/清空）后才对齐最新。
+    """
+    try:
+        from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
+        from app.services.capability_versioning import (
+            ensure_text_source_version, get_effective_text, memory_index_source,
+        )
+        from app.services.memory.structured_memory_service import format_db_records_for_prompt
+
+        cur = await format_db_records_for_prompt(db, agent.id)
+        if not cur:
+            return ""
+        repo = SQLAlchemyCapabilityRepository(db)
+        source = memory_index_source(agent.id)
+        await ensure_text_source_version(repo, source, cur, f"AI{agent.id}记忆索引")
+        return await get_effective_text(repo, agent, source, cur)
+    except Exception as e:
+        logger.warning(f"记忆索引注入失败（非致命）: {e}")
+        return ""
 
 
 def _attach_image_to_message(
@@ -931,6 +950,8 @@ async def build_messages(
     # 按 §3 的规矩它就是「当轮事实」，跟状态栈/任务一起沉到尾部读数。
     dynamic_readings: list[str] = []
     if "injected_skills" in enabled_segments and context_config_parser.should_inject_skills(context_config):
+        # 索引（冻结）进锁定段；召回 + 技能注入（检索词是当轮消息）进尾部读数
+        segments["injected_skills"] = await _build_memory_index(db, agent)
         _memory_block = await _build_injected_skills(
             db, agent, group_id, query_text, api_base_url, api_key, trigger_user_id)
         if _memory_block:
@@ -1328,8 +1349,9 @@ async def build_dm_messages(
         "personality": build_personality_segment(agent, language, eff_personality),
         "protocol": dm_protocol,
         "tools": await _build_tools_segment(db, agent, is_dm=True),
+        "injected_skills": await _build_memory_index(db, agent),  # 索引（冻结）进锁定段
     }
-    # 同上：记忆注入的检索词是「最近 5 条消息」，每轮都变 → 沉到尾部读数（§3）
+    # 召回 + 技能注入的检索词是「最近 5 条消息」，每轮都变 → 沉到尾部读数（§3）
     dynamic_readings: list[str] = []
     _memory_block = await _build_injected_skills(
         db, agent, group_id=0,  # group_id=0 表示非群聊上下文
