@@ -1,70 +1,28 @@
 """
-世界代码沙箱（阶段 2.1 MVP）— subprocess + resource.rlimit + 超时强制杀进程组
+世界代码沙箱 —— 世界侧适配层。
 
-方案（产品定）：成本最低、代码最简单，快速验证"世界代码执行"核心流程。
-生产加固（后置）：只担心资源耗尽 → 加严配额；需强安全边界 → seccomp+Landlock（evalbox 路线）或容器。
-
-设计参考 sandtrap 的 Policy 模式：
-- Policy：timeout / memory_mb / cpu_seconds 集中配置，每世界配额从 worlds.config 读取（默认 24MB）
-- 执行：python3 -I 子进程（隔离模式：不吃用户 site、不继承 PYTHON* 环境），start_new_session 独立进程组
-- 隔离：cwd 锁世界目录；env 白名单（不泄漏 DATABASE_URL/JWT 等后端密钥）；rlimit 内存/CPU/文件大小/进程数
-- 超时：killpg 强杀整个进程组（含子进程/孙进程）
+执行/隔离/配额/超时都在 app/services/sandbox/runner.py；这里只留世界独有的三件事：
+工作目录（data/worlds/{id}）、WORLD_* 环境（含受控 API token）、worlds.config 配额，
+外加跑完的语法自检。详见 docs/dev/code_sandbox.md。
 """
 import asyncio
 import json
 import logging
 import os
-import resource
-import signal
-import sys
-import uuid
-from dataclasses import dataclass
 from pathlib import Path
 
+from app.services.sandbox.runner import (
+    DEFAULT_CPU_SECONDS,
+    DEFAULT_MEMORY_MB,
+    DEFAULT_RUNTIME_MEMORY_MB,
+    DEFAULT_TIMEOUT_SECONDS,
+    Policy,
+    acquire_slot,
+    base_env,
+)
+from app.services.sandbox.runner import run_code as _run_sandbox_code
+
 logger = logging.getLogger(__name__)
-
-DEFAULT_MEMORY_MB = 64          # 无人/后台内存配额（sleep_memory_mb 可覆盖）
-# ⚠️ 2026-08-05 实测：24MB 下 python -I 连标准库 import 都跑不动（RLIMIT_AS 虚拟内存口径，解释器约需 ≥32MB）。
-# 产品拍板：多群多解释器（默认形态）→ 上限 64MB；单解释器共享场景 → 32MB（policy 硬下限）。
-DEFAULT_RUNTIME_MEMORY_MB = 128  # 有人在线内存配额（runtime_memory_mb 可覆盖）——产品 2026-08-05 定
-DEFAULT_TIMEOUT_SECONDS = 10.0  # 默认墙钟超时
-DEFAULT_CPU_SECONDS = 5.0       # 默认 CPU 时间上限
-MAX_FSIZE_BYTES = 4 * 1024 * 1024   # 单文件写入上限 4MB（防写爆磁盘）
-MAX_NPROC = 16                  # 子进程数上限（防 fork 炸弹）
-MAX_OUTPUT_CHARS = 20000        # stdout/stderr 各截断长度
-
-# 全局沙箱并发上限（产品 2026-08-05 拍板方案 1：各用各的解释器 + 排队）
-# - 排队的是「一次代码执行任务」（短任务，有超时兜底），不是人/群
-# - 在线不占位：只有执行中的那几秒占一个槽位，跑完释放
-# - 管理员可配：环境变量 SANDBOX_MAX_CONCURRENT（默认 4，范围 1-32）
-DEFAULT_MAX_CONCURRENT = 4
-_sandbox_sem: asyncio.Semaphore | None = None
-
-
-def _max_concurrent() -> int:
-    try:
-        return max(1, min(int(os.environ.get("SANDBOX_MAX_CONCURRENT", DEFAULT_MAX_CONCURRENT)), 32))
-    except (TypeError, ValueError):
-        return DEFAULT_MAX_CONCURRENT
-
-
-def _get_semaphore() -> asyncio.Semaphore:
-    """全局沙箱信号量（单 worker 进程内生效）：并发执行上限，超出排队等待"""
-    global _sandbox_sem
-    if _sandbox_sem is None:
-        _sandbox_sem = asyncio.Semaphore(_max_concurrent())
-    return _sandbox_sem
-
-
-@dataclass
-class Policy:
-    """沙箱配额（集中配置，参考 sandtrap Policy 模式）
-
-    memory_mb=None 表示不设内存上限（保留能力，当前默认有人在线 128MB）
-    """
-    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
-    memory_mb: int | None = DEFAULT_RUNTIME_MEMORY_MB
-    cpu_seconds: float = DEFAULT_CPU_SECONDS
 
 
 def policy_for_world(world, background: bool = False) -> Policy:
@@ -109,21 +67,6 @@ def _world_dir(world_id: int) -> Path:
     return (Path("data/worlds") / str(world_id)).resolve()
 
 
-def _apply_rlimits(policy: Policy) -> None:
-    """子进程内设置资源限制（preexec_fn 中执行，必须在 exec 之前）"""
-    if policy.memory_mb is not None:
-        mem_bytes = policy.memory_mb * 1024 * 1024
-        resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
-    cpu = int(policy.cpu_seconds)
-    resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu + 1))
-    resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_FSIZE_BYTES, MAX_FSIZE_BYTES))
-    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-    try:
-        resource.setrlimit(resource.RLIMIT_NPROC, (MAX_NPROC, MAX_NPROC))
-    except (ValueError, OSError):
-        pass  # 部分系统不可用（如非 root 调整 hard limit），尽力而为
-
-
 def _sanitized_env(world, *, readonly: bool = False) -> dict:
     """env 白名单：不继承后端密钥（DATABASE_URL/JWT_SECRET/API Key 等），只给运行必需项。
 
@@ -138,14 +81,9 @@ def _sanitized_env(world, *, readonly: bool = False) -> dict:
       假错，AI 白花轮次排查（python -I 会忽略 PYTHON* 环境变量，故必须同时加 -B）。
     """
     env = {
-        "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
-        "LANG": os.environ.get("LANG", "C.UTF-8"),
-        "TZ": os.environ.get("TZ", "Asia/Shanghai"),
-        "HOME": "/tmp",
+        **base_env(),                      # PATH/LANG/TZ/HOME + 隔离库目录（沙箱层给）
         "WORLD_ID": str(world.id),
         "WORLD_DIR": str(_world_dir(world.id)),
-        # 隔离库目录（子进程 import sandbox_isolate 用；-I 模式下 sys.path 不含脚本目录）
-        "SANDBOX_LIB_DIR": str(Path(__file__).parent),
     }
     if readonly:
         # 子进程入口读它决定 apply_isolate 是否给世界目录写权限（隔离在子进程内施加，
@@ -160,12 +98,6 @@ def _sanitized_env(world, *, readonly: bool = False) -> dict:
             "WORLD_API_BASE", f"http://127.0.0.1:8000/world/{world.id}/api"
         )
     return env
-
-
-def _truncate(s: str) -> str:
-    if len(s) > MAX_OUTPUT_CHARS:
-        return s[:MAX_OUTPUT_CHARS] + f"\n…[输出已截断，前 {MAX_OUTPUT_CHARS} 字符]"
-    return s
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -244,7 +176,7 @@ async def run_world_code(
     _t0 = asyncio.get_event_loop().time()
     workdir = _world_dir(world.id)
     before = {} if readonly else _code_snapshot(workdir)      # 只读运行不会写盘，不必快照
-    async with _get_semaphore():
+    async with acquire_slot():
         _result = await _run_world_code(world, code=code, entry=entry, background=background, readonly=readonly)
     _result["queued_ms"] = max(0, int((asyncio.get_event_loop().time() - _t0) * 1000) - int(_result.get("duration_ms") or 0))
     if before:
@@ -263,113 +195,32 @@ async def _run_world_code(
     background: bool = False,
     readonly: bool = False,
 ) -> dict:
-    policy = policy_for_world(world, background=background)
-    workdir = _world_dir(world.id)
-    workdir.mkdir(parents=True, exist_ok=True)
+    """世界代码执行：世界目录 + 世界环境 + 世界配额 → 共用沙箱（sandbox.runner）。
 
-    tmp_file: Path | None = None
-    target: Path | None = None
-    try:
-        if entry:
-            target = (workdir / entry).resolve()
-            # 防越界：入口必须在世界目录内
-            if not str(target).startswith(str(workdir)):
-                return {"success": False, "stdout": "", "stderr": "", "exit_code": -1,
-                        "duration_ms": 0, "timed_out": False, "reason": f"入口文件越界: {entry}"}
-            if not target.exists():
-                return {"success": False, "stdout": "", "stderr": "", "exit_code": -1,
-                        "duration_ms": 0, "timed_out": False, "reason": f"入口文件不存在: {entry}"}
-        elif code:
-            tmp_file = workdir / f".sandbox_{uuid.uuid4().hex[:8]}.py"
-            tmp_file.write_text(code, encoding="utf-8")
-            target = tmp_file
-        else:
-            return {"success": False, "stdout": "", "stderr": "", "exit_code": -1,
-                    "duration_ms": 0, "timed_out": False, "reason": "code 和 entry 至少给一个"}
-
-        cmd = [sys.executable, "-I", "-X", "utf8", "-c", _SANDBOX_RUNNER_TEMPLATE, str(target)]
-        if readonly:
-            cmd.insert(2, "-B")   # 只读运行不写 .pyc（-I 忽略 PYTHON* 环境变量，只能用命令行开关）
-        # 2026-08-07 加固：经 _SANDBOX_RUNNER_TEMPLATE 执行（Landlock 锁世界目录 + seccomp 禁进程/危险调用，保留网络）
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            cwd=str(workdir),
-            env=_sanitized_env(world, readonly=readonly),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            start_new_session=True,          # 独立进程组 → 超时可 killpg 连子进程一起杀
-            preexec_fn=lambda: _apply_rlimits(policy),
-        )
-
-        t0 = asyncio.get_event_loop().time()
-        timed_out = False
-        try:
-            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=policy.timeout_seconds)
-        except asyncio.TimeoutError:
-            timed_out = True
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)   # 强杀整个进程组
-            except ProcessLookupError:
-                pass
-            stdout_b, stderr_b = await proc.communicate()
-        duration_ms = int((asyncio.get_event_loop().time() - t0) * 1000)
-
-        stdout = _truncate(stdout_b.decode("utf-8", errors="replace"))
-        stderr = _truncate(stderr_b.decode("utf-8", errors="replace"))
-        return {
-            "success": proc.returncode == 0 and not timed_out,
-            "stdout": stdout,
-            "stderr": stderr,
-            "exit_code": proc.returncode,
-            "duration_ms": duration_ms,
-            "timed_out": timed_out,
-            "reason": "执行超时，已强制终止进程组" if timed_out else
-                      (stderr.strip()[:200] if proc.returncode != 0 else ""),
-        }
-    except Exception as e:
-        logger.warning(f"🌐 世界 #{world.id} 沙箱执行异常: {e}")
-        return {"success": False, "stdout": "", "stderr": "", "exit_code": -1,
-                "duration_ms": 0, "timed_out": False, "reason": f"沙箱异常: {str(e)[:200]}"}
-    finally:
-        if tmp_file is not None:
-            try:
-                tmp_file.unlink(missing_ok=True)
-            except Exception:
-                pass
-
-
-# ── 隔离执行器（2026-08-07 加固）：Landlock 锁世界目录 + seccomp 禁进程/危险调用（保留网络）──
-# 经此 runner 执行目标 .py：应用隔离 → runpy 执行（世界内相对导入可用）
-_SANDBOX_RUNNER_TEMPLATE = r'''
-import os, runpy, sys
-
-def _main():
-    target = sys.argv[1]
-    world_dir = os.environ.get("WORLD_DIR", "")
-    sys.path.insert(0, os.environ.get("SANDBOX_LIB_DIR", ""))
-    from sandbox_isolate import apply_isolate
-    readonly = os.environ.get("WORLD_READONLY") == "1"   # 只读运行：世界目录不给写权限（计划模式强制）
-    apply_isolate(world_dir=world_dir, readonly=readonly, deny_net=False, deny_process_creation=False)  # 世界代码保留网络（受控 API）+ 线程兼容（NPROC 限制，execve 仍禁）
-    sys.path.insert(0, world_dir)
-    runpy.run_path(target, run_name="__main__")
-
-_main()
-'''
+    隔离档位：世界代码要出网（受控 API 是 HTTP）、可能用线程池，故两者都保留；
+    内存/CPU/进程数仍由 Policy 与 rlimit 锁死。
+    """
+    return await _run_sandbox_code(
+        _world_dir(world.id),
+        code=code,
+        entry=entry,
+        policy=policy_for_world(world, background=background),
+        env=_sanitized_env(world, readonly=readonly),
+        readonly=readonly,
+        deny_net=False,
+        deny_fork=False,
+        tag=f"世界 #{world.id}",
+    )
 
 
 # ── 2.2 触发文件约定 ──
 # 世界目录 main.py 实现 handle(event) -> dict（可 async），平台 harness 导入并调用。
 # 世界代码零框架依赖；print 重定向到 stdout 字段，不污染结果 JSON。
-# 2026-08-07 加固：执行前 apply_isolate（Landlock 锁世界目录 + seccomp 禁进程，保留网络）。
+# 隔离与 sys.path 由共用沙箱层施加（sandbox/runner 的 _RUNNER_TEMPLATE 用 runpy 执行本
+# 模板），所以 harness 里不再重复 apply_isolate：隔离只在一处施加，才不会两处走样。
 _TRIGGER_HARNESS_TEMPLATE = r'''
-import importlib, json, sys, asyncio, io, contextlib, os
+import asyncio, contextlib, importlib, io, json, sys
 
-sys.path.insert(0, os.environ.get("SANDBOX_LIB_DIR", ""))
-from sandbox_isolate import apply_isolate
-_READONLY = os.environ.get("WORLD_READONLY") == "1"   # 只读运行：世界目录不给写权限（计划模式强制）
-apply_isolate(world_dir=os.environ.get("WORLD_DIR", ""), readonly=_READONLY, deny_net=False, deny_process_creation=False)
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 ENTRY = "__ENTRY__"
 
 def _main():
@@ -426,7 +277,7 @@ async def run_world_trigger(
     （duration_ms = 执行耗时；queued_ms = 全局并发排队等待耗时）
     """
     _t0 = asyncio.get_event_loop().time()
-    async with _get_semaphore():
+    async with acquire_slot():
         _result = await _run_world_trigger(world, event=event, entry=entry, background=background, readonly=readonly)
     _result["queued_ms"] = max(0, int((asyncio.get_event_loop().time() - _t0) * 1000) - int(_result.get("duration_ms") or 0))
     return _result
@@ -439,68 +290,32 @@ async def _run_world_trigger(
     background: bool = False,
     readonly: bool = False,
 ) -> dict:
-    policy = policy_for_world(world, background=background)
-    workdir = _world_dir(world.id)
-    workdir.mkdir(parents=True, exist_ok=True)
-
-    target = (workdir / entry).resolve()
-    if not str(target).startswith(str(workdir)):
-        return _fail(f"入口文件越界: {entry}")
-    if not target.exists():
-        return _fail(f"入口文件不存在: {entry}")
-
-    harness = _TRIGGER_HARNESS_TEMPLATE.replace("__ENTRY__", target.stem)
-    tmp_file = workdir / f".sandbox_trigger_{uuid.uuid4().hex[:8]}.py"
+    """世界触发器执行：harness 导入入口的 handle(event)，stdin 喂事件、stdout 收 JSON。"""
+    result = await _run_sandbox_code(
+        _world_dir(world.id),
+        entry=entry,
+        harness=_TRIGGER_HARNESS_TEMPLATE,
+        stdin_text=json.dumps(event or {}, ensure_ascii=False),
+        policy=policy_for_world(world, background=background),
+        env=_sanitized_env(world, readonly=readonly),
+        readonly=readonly,
+        deny_net=False,
+        deny_fork=False,
+        tag=f"世界 #{world.id} 触发",
+    )
+    duration_ms = int(result.get("duration_ms") or 0)
+    stdout = (result.get("stdout") or "").strip()
+    if not result.get("success"):
+        # 沙箱层的失败原因已经是人话（超时/退出码+stderr 摘要/入口越界），原样带出去
+        return _fail(result.get("reason") or "执行失败", exit_code=int(result.get("exit_code") or -1),
+                     duration_ms=duration_ms, timed_out=bool(result.get("timed_out")), stdout=stdout)
     try:
-        tmp_file.write_text(harness, encoding="utf-8")
-        cmd = [sys.executable, "-I", "-X", "utf8", str(tmp_file)]
-        if readonly:
-            cmd.insert(2, "-B")   # 只读运行不写 .pyc（-I 忽略 PYTHON* 环境变量，只能用命令行开关）
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            cwd=str(workdir),
-            env=_sanitized_env(world, readonly=readonly),
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            start_new_session=True,
-            preexec_fn=lambda: _apply_rlimits(policy),
-        )
-        event_json = json.dumps(event or {}, ensure_ascii=False).encode("utf-8")
-        t0 = asyncio.get_event_loop().time()
-        timed_out = False
-        try:
-            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(event_json), timeout=policy.timeout_seconds)
-        except asyncio.TimeoutError:
-            timed_out = True
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            stdout_b, stderr_b = await proc.communicate()
-        duration_ms = int((asyncio.get_event_loop().time() - t0) * 1000)
-        stdout = stdout_b.decode("utf-8", errors="replace").strip()
-        stderr = _truncate(stderr_b.decode("utf-8", errors="replace"))
-        if timed_out:
-            return _fail("执行超时，已强制终止进程组", exit_code=proc.returncode, duration_ms=duration_ms, timed_out=True)
-        if proc.returncode != 0:
-            return _fail(stderr.strip()[:200] or f"进程退出码 {proc.returncode}", exit_code=proc.returncode,
-                         duration_ms=duration_ms, stdout=stdout)
-        try:
-            payload = json.loads(stdout)
-        except json.JSONDecodeError:
-            return _fail("入口无有效 JSON 结果", exit_code=proc.returncode, duration_ms=duration_ms, stdout=stdout)
-        if not payload.get("ok"):
-            err = payload.get("error", "未知错误")
-            return {"success": False, "result": None, "stdout": payload.get("stdout", ""), "error": err,
-                    "exit_code": proc.returncode, "duration_ms": duration_ms, "timed_out": False, "reason": err}
-        return {"success": True, "result": payload.get("result"), "stdout": payload.get("stdout", ""),
-                "error": "", "exit_code": 0, "duration_ms": duration_ms, "timed_out": False, "reason": ""}
-    except Exception as e:
-        logger.warning(f"🌐 世界 #{world.id} 触发执行异常: {e}")
-        return _fail(f"沙箱异常: {str(e)[:200]}")
-    finally:
-        try:
-            tmp_file.unlink(missing_ok=True)
-        except Exception:
-            pass
+        payload = json.loads(stdout)
+    except json.JSONDecodeError:
+        return _fail("入口无有效 JSON 结果", exit_code=0, duration_ms=duration_ms, stdout=stdout)
+    if not payload.get("ok"):
+        err = payload.get("error", "未知错误")
+        return {"success": False, "result": None, "stdout": payload.get("stdout", ""), "error": err,
+                "exit_code": 0, "duration_ms": duration_ms, "timed_out": False, "reason": err}
+    return {"success": True, "result": payload.get("result"), "stdout": payload.get("stdout", ""),
+            "error": "", "exit_code": 0, "duration_ms": duration_ms, "timed_out": False, "reason": ""}

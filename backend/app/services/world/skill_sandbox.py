@@ -43,12 +43,17 @@ MAX_REPLY_CHARS = 20000       # 单次 ctx 返回数据截断（防子进程拖�
 
 
 def _skill_env() -> dict:
-    """纯净 env：不泄漏 DATABASE_URL/JWT 等后端密钥；只给最小运行所需"""
+    """纯净 env：不泄漏 DATABASE_URL/JWT 等后端密钥；只给最小运行所需。
+
+    SANDBOX_LIB_DIR：隔离库目录（沙箱子进程 -I 模式下靠它 import sandbox_isolate）。
+    """
+    from app.services.sandbox.runner import lib_dir
     return {
         "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
         "LANG": os.environ.get("LANG", "C.UTF-8"),
         "PYTHONIOENCODING": "utf-8",
         "TZ": os.environ.get("TZ", "UTC"),
+        "SANDBOX_LIB_DIR": lib_dir(),
     }
 
 

@@ -343,6 +343,22 @@ async def _process_alarm_event(db, event: dict):
         logger.warning(f"⏰ 闹钟 #{alarm_id}: agent {agent_id} 不存在")
         return
 
+    # 决策技能：定时情景。命中且 notify=false → 程序跑完即止，不唤醒本体
+    decision_note = ""
+    try:
+        from app.services.world.decision_skill import run_decision_engine
+        dec = await run_decision_engine(
+            db, "agent", agent_id, None, "scheduled",
+            {"event": "scheduled", "trigger": "alarm", "task": task, "alarm_id": alarm_id},
+        )
+        if dec.get("hit") and dec.get("handled"):
+            logger.info(f"⏰ 闹钟 #{alarm_id}: 决策技能命中，程序化处理（不唤醒 {agent.name}）")
+            await db.commit()
+            return
+        decision_note = dec.get("note") or ""
+    except Exception as e:
+        logger.warning(f"🎲 闹钟决策技能异常（agent={agent_id}）: {e}")
+
     ctx = ActionContext(
         event_type="alarm",
         agent_id=agent_id,
@@ -412,6 +428,8 @@ async def _process_alarm_event(db, event: dict):
         f"\n\n## 当前可用工具（技能段：自我管理 / 闹钟唤醒）\n"
         f"你当前加载的工具：{tool_list}\n"
     )
+    if decision_note:
+        system_prompt += "\n\n" + decision_note
 
     messages = [
         {"role": "system", "content": system_prompt},

@@ -1,17 +1,9 @@
 """
-沙箱隔离原语 — Landlock（文件系统）+ seccomp-BPF（系统调用黑名单）
+沙箱隔离原语 — Landlock（文件系统）+ seccomp-BPF（系统调用黑名单）。
 
-2026-08-07 沙箱加固（对抗性安全，v2）：
-- Landlock：把进程的文件系统访问锁死在授权路径（世界目录读写 + skill 目录只读），
-  其他路径（/etc、后端代码、其他世界数据…）一律 EACCES——比 chroot 轻量且无需 root
-- seccomp：黑名单禁危险系统调用（execve/网络/挂载/ptrace/内核接口…），
-  世界代码沙箱保留网络（受控 API 是 HTTP），skill 沙箱连网络一起禁
-- 两者都在子进程 python 启动后（exec 完成后）应用，不干扰解释器加载；
-  no_new_privs 前置，非 root 也可用
-
-实现：ctypes 直调 syscall（glibc 无 landlock 符号），x86_64 syscall 号；
-非 x86_64 平台跳过 seccomp（Landlock 仍生效），失败一律降级不阻断（try/except，
-日志告警）——沙箱是纵深防御的一层，不因它本身故障影响功能。
+Landlock 把文件系统访问锁死在授权路径，其余路径一律 EACCES（比 chroot 轻量、无需 root）；
+seccomp 按调用方档位禁网络/进程创建与危险系统调用。两者都在 exec 之后施加，失败只告警降级
+（纵深防御的一层，不因自身故障影响功能）。构成与档位见 docs/dev/code_sandbox.md。
 """
 from __future__ import annotations
 
@@ -46,9 +38,9 @@ LANDLOCK_ACCESS_FS_MAKE_SYM = 1 << 12
 LANDLOCK_ACCESS_FS_TRUNCATE = 1 << 13
 # 全部 14 项（ABI v1 全集；不含 EXECUTE 时单独处理）
 ALL_FS_ACCESS = (1 << 14) - 1
-# 世界目录授予全集（不含 EXECUTE——世界/skill 代码不需要执行文件）
+# 工作目录授予全集（不含 EXECUTE——被跑的代码不需要执行文件）
 FS_FULL_NO_EXEC = ALL_FS_ACCESS & ~LANDLOCK_ACCESS_FS_EXECUTE
-# 只读授予（skill 目录读 code.py 用）
+# 只读授予（额外只读目录，如 skill 代码目录）
 FS_READONLY = LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR
 
 
@@ -198,25 +190,26 @@ def apply_seccomp(deny_net: bool = True, deny_process_creation: bool = False) ->
     return True
 
 
-def apply_isolate(*, world_dir: str | None = None, read_dirs: list[str] | None = None,
+def apply_isolate(*, work_dir: str | None = None, read_dirs: list[str] | None = None,
                   deny_net: bool = True, deny_process_creation: bool = True,
                   stdlib_readonly: bool = True, readonly: bool = False) -> dict:
     """子进程入口统一调用：Landlock（锁文件系统）+ seccomp（禁危险调用）。
 
-    - world_dir：授权读写（世界目录）；read_dirs：额外只读目录（如 skill 目录）
-    - deny_net：禁网络（skill 沙箱 True；世界代码沙箱 False——受控 API 是 HTTP）
-    - deny_process_creation：禁 fork/clone（skill 沙箱 True；世界代码沙箱 False——线程池兼容）
-    - stdlib_readonly：授权标准库目录只读（世界代码/skill 隔离后仍可 import 标准库；
+    - work_dir：本次执行授权读写的那个目录（世界目录 / AI 文件空间）；
+      read_dirs：额外只读目录（如 skill 代码目录）
+    - deny_net：禁网络（AI 脚本 True；世界代码沙箱 False——受控 API 是 HTTP）
+    - deny_process_creation：禁 fork/clone（AI 脚本 True；世界代码沙箱 False——线程池兼容）
+    - stdlib_readonly：授权标准库目录只读（隔离后仍可 import 标准库；
       标准库是公开代码无敏感信息，只读授权风险可忽略）
-    - readonly：世界目录只进 read_dirs、不进 write_dirs（计划模式的只读运行；
-      写文件一律 EACCES。注意仍有两条不经文件系统的写路径——受控数据 API 与群聊写
-      API——由 API token 的只读前缀在服务端封堵，见 world_proxy._authorize_world_api）
+    - readonly：work_dir 只进 read_dirs、不进 write_dirs（计划模式的只读运行；
+      写文件一律 EACCES。注意世界代码仍有两条不经文件系统的写路径——受控数据 API 与
+      群聊写 API——由 API token 的只读前缀在服务端封堵，见 world_proxy._authorize_world_api）
     返回 {"landlock": bool, "seccomp": bool} 各层是否生效（仅记录用）。
     """
     read_dirs = list(read_dirs or [])
-    write_dirs = [] if readonly else ([world_dir] if world_dir else [])
-    if world_dir:
-        read_dirs.append(world_dir)
+    write_dirs = [] if readonly else ([work_dir] if work_dir else [])
+    if work_dir:
+        read_dirs.append(work_dir)
     if stdlib_readonly:
         try:
             import sysconfig

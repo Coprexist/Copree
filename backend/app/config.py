@@ -17,8 +17,8 @@ logger = logging.getLogger(__name__)
 class Settings(BaseSettings):
     """全局应用配置 — 所有字段由 pydantic-settings 自动从环境变量读取"""
 
-    # ── 应用版本（可从环境变量 APP_VERSION 注入，默认 0.4.11）──
-    app_version: str = "0.4.11"
+    # ── 应用版本（可从环境变量 APP_VERSION 注入，默认 0.4.12）──
+    app_version: str = "0.4.12"
 
     # ── 数据库 ──
     db_backend: str = "postgres"
@@ -108,6 +108,15 @@ class Settings(BaseSettings):
     def data_dir(self) -> str:
         """容器内文件存储路径（docker-compose bind mount 目标，非宿主机 DATA_DIR）"""
         return "/app/data"
+
+    @property
+    def agents_dir(self) -> str:
+        """每个 AI 的独立文件空间根目录（也是它的代码沙箱目录）：data/agents/{agent_id}/
+
+        file_* 工具、OpenCLI 文件操作、run_script 沙箱都以此为准——同一个目录，
+        同一条边界，避免「工具能写的地方」和「脚本能跑的地方」各说各话。
+        """
+        return str(Path(self.data_dir) / "agents")
 
     # ── 文件上传 ──
     avatar_max_size_mb: int = 10

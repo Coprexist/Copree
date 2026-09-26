@@ -165,7 +165,7 @@ import os
 import shutil
 from pathlib import Path
 
-AGENTS_DATA_DIR = Path("/app/data/agents")
+AGENTS_DATA_DIR = Path(settings.agents_dir)
 
 
 def _resolve_agent_path(agent_id: int, file_path: str) -> Path:

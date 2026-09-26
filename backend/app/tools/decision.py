@@ -15,17 +15,7 @@ from app.tools.base import ToolPlugin, ToolRegistry
 
 logger = logging.getLogger(__name__)
 
-_RULE_SCHEMA_DESC = (
-    "决策技能对象：{name, when:{event, conditions}, do:{action,...}, notify}。"
-    "event 支持 group_message（字段：content/sender_id/sender_name/sender_type/group_id/is_mention/is_at_all/group_type）。"
-    "conditions 递归条件树：{\"and\":[...]}/{\"or\":[...]}/{\"not\":{...}} 自由组装；"
-    "叶子 {\"字段\":值}=等于，{\"字段_contains\":\"子串\"}、{\"字段_starts_with\":\"前缀\"}、"
-    "{\"字段_matches\":\"正则\"}、{\"字段_gt/gte/lt/lte\":数值}。"
-    "do 三选一：reply_template（{action,reply}固定回复，零成本）/ call_tool（{action,name,arguments}调平台工具）/ "
-    "run_script（{action,code}沙箱脚本）。"
-    "notify=true=命中后仍唤醒本体（关键时刻必须你来）；false=程序处理完即止（省调用）。同名覆盖，上限 20 条。"
-    "示例：签到自动回复={\"name\":\"签到\",\"when\":{\"event\":\"group_message\",\"conditions\":{\"and\":[{\"content_contains\":\"签到\"},{\"not\":{\"is_mention\":true}}]}},\"do\":{\"action\":\"reply_template\",\"reply\":\"已记录签到 ✅\"},\"notify\":false}"
-)
+from app.services.world.decision_skill import rule_schema_desc  # noqa: E402
 
 
 class ListDecisionSkills(ToolPlugin):
@@ -45,10 +35,7 @@ class ListDecisionSkills(ToolPlugin):
 
 class WriteDecisionSkill(ToolPlugin):
     name = "write_decision_skill"
-    description = (
-        "配置你自己的决策技能：声明「遇到什么情景我干什么、是否必须唤醒我本体」。"
-        + _RULE_SCHEMA_DESC
-    )
+    description = rule_schema_desc()
     parameters: dict = {
         "rule": {"type": "object", "description": "完整决策技能对象（见描述）"},
     }

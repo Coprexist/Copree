@@ -338,6 +338,15 @@ async def _process_group_event(db, event: dict):
     if not candidates:
         return
 
+    # 全量消息下每个 AI 都要过一遍决策层：规则一次批量取，别按 AI 各查一次。
+    # 候选是 user_id（group_members.member_id），规则按 agent.id 存，这里把映射一并取出来
+    _rows = (await db.execute(
+        select(AgentModel.id, AgentModel.user_id).where(AgentModel.user_id.in_(candidates))
+    )).all()
+    from app.services.world.decision_skill import load_rules_map
+    _by_agent = await load_rules_map(db, "agent", [r[0] for r in _rows])
+    rules_map = {r[1]: _by_agent.get(r[0], []) for r in _rows}
+
     logger.info(
         f"群聊 {group_id} 收到消息 (sender={sender_type}:{sender_id}, depth={chain_depth})，"
         f"触发 {len(candidates)} 个 AI: {candidates}"
@@ -396,6 +405,7 @@ async def _process_group_event(db, event: dict):
                             sender_id=sender_id,
                             message_type=event.get("message_type", "normal"),
                             world_trigger_mode=world_trigger_mode,
+                            decision_rules=rules_map.get(aid),
                         )
                 except Exception as e:
                     logger.error(f"AI {aid} 触发异常 (group={group_id}): {e}", exc_info=True)
@@ -486,15 +496,8 @@ async def _trigger_group_assistant(
                 )
                 if dec.get("hit") and dec.get("handled"):
                     if dec.get("reply"):
-                        from app.chat.gm import send_gm_message
-                        from app.routers.ws import manager
-                        msg = await send_gm_message(db, group_id, "ai", -ga.id, dec["reply"],
-                                        source="world", allow_non_member=True)
-                        await db.flush()
-                        try:
-                            await manager.broadcast_to_group(group_id, {"type": "message", "data": {"id": msg.id, "content": dec["reply"]}})
-                        except Exception:
-                            pass
+                        from app.services.world.decision_skill import send_group_reply
+                        await send_group_reply(db, group_id, -ga.id, dec["reply"], allow_non_member=True)
                     logger.info(f"🎲 群助手「{ga.name}」决策技能命中，程序化处理（不唤醒 LLM）")
                     return
             except Exception as e:
@@ -612,8 +615,12 @@ async def _maybe_trigger_ai_reply(
     sender_id: int | None = None,
     message_type: str = "normal",
     world_trigger_mode: str | None = None,
+    decision_rules: list | None = None,
 ):
-    """检查单个 AI 是否应该回复，如果是则调用 LLM 生成回复"""
+    """检查单个 AI 是否应该回复，如果是则调用 LLM 生成回复
+
+    decision_rules：调用方批量预取的该 AI 决策规则（全量消息下省掉每个 AI 一次查库）
+    """
     from app.services.agent.agent_service import get_agent
     from app.ai.decider import decide_action, ActionContext, ActionType
     from app.models.agent import Agent as AgentModel
@@ -661,35 +668,29 @@ async def _maybe_trigger_ai_reply(
     is_at_all = any(tag in content for tag in ("@all", "@everyone", "@全体"))
     is_announcement = message_type == "announcement"
 
-    # 决策技能（入驻 AI 自写规则，产品 2026-08-13 定）：命中且 notify=false →
-    # 程序化处理（reply 代发到群），不唤醒 LLM 本体；未命中/notify=true → 继续
-    # ⚠️ 优先于 mention_only 触发模式（AI 自写规则 > 平台默认兜底）
+    # 决策技能优先于触发模式（AI 自写规则 > 平台默认兜底，产品 2026-08-13 定）。
+    # 不要求绑定世界；命中的代发标 source="world" 防回灌。见 docs/dev/decision_layer.md。
+    decision_note = ""
     try:
         from app.services.world.decision_skill import run_decision_engine, build_group_message_ctx
-        from app.services.world.world_service import find_worlds_by_entity
-        _worlds = await find_worlds_by_entity(db, "agent", agent.user_id or 0)
-        _gworlds = await find_worlds_by_entity(db, "group", group_id) if group_id else []
-        _w = (_gworlds or _worlds or [None])[0]
-        if _w is not None:
-            dec = await run_decision_engine(
-                db, "agent", resolved_agent_id, _w, "group_message",
-                build_group_message_ctx(
-                    content, sender_id, sender_name, sender_type, group_id,
-                    is_mention=is_mentioned, is_at_all=is_at_all,
-                ),
-            )
-            if dec.get("hit") and dec.get("handled"):
-                if dec.get("reply"):
-                    try:
-                        from app.chat.gm import send_gm_message
-                        from app.routers.ws import manager
-                        msg = await send_gm_message(db, group_id, "ai", agent.user_id or 0, dec["reply"])
-                        await db.flush()
-                        await manager.broadcast_to_group(group_id, {"type": "message", "data": {"id": msg.id, "content": dec["reply"]}})
-                    except Exception:
-                        pass
-                logger.info(f"🎲 AI {agent.name}(id={resolved_agent_id}) 决策技能命中，程序化处理（不唤醒 LLM）")
-                return
+        dec = await run_decision_engine(
+            db, "agent", resolved_agent_id, None, "group_message",
+            build_group_message_ctx(
+                content, sender_id, sender_name, sender_type, group_id,
+                is_mention=is_mentioned, is_at_all=is_at_all,
+            ),
+            rules=decision_rules,
+        )
+        if dec.get("hit") and dec.get("handled"):
+            if dec.get("reply"):
+                try:
+                    from app.services.world.decision_skill import send_group_reply
+                    await send_group_reply(db, group_id, agent.user_id or 0, dec["reply"])
+                except Exception:
+                    pass
+            logger.info(f"🎲 AI {agent.name}(id={resolved_agent_id}) 决策技能命中，程序化处理（不唤醒 LLM）")
+            return
+        decision_note = dec.get("note") or ""
     except Exception as e:
         logger.warning(f"🎲 AI {agent.name} 决策引擎异常: {e}")
 
@@ -827,6 +828,10 @@ async def _maybe_trigger_ai_reply(
         system_prompt_override=effective_cfg.get("system_prompt"),
     )
     logger.info(f"🔍 AI {agent.name}: 构建了 {len(messages)} 条消息")
+
+    # notify=true 的决策技能：动作已由程序跑完，结果必须让本体看见，否则它会重复做一遍
+    if decision_note:
+        messages.append({"role": "system", "content": decision_note})
 
     # DND 被 @ 穿透时，提醒 AI 重新评估免打扰/聊天链状态
     if decision.details.get("dnd_penetrated"):

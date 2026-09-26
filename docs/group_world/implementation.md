@@ -192,7 +192,7 @@ window.WorldUI = {              // UI 桥（postMessage → 宿主 Layout）
 5. ✅ **2.3 受控数据 API + 2.4 群聊写 API**（2026-08-05 已完成，见下）
 6. ✅ 受控 API token 机制（每世界一个，懒生成存 worlds.config.api_token；沙箱 env 注入 WORLD_API_TOKEN/WORLD_API_BASE）
 7. ✅ 动态限流（10 秒窗口 = 基础 + 每人加成 × 活跃人数；worlds.config 可配 4 个字段）
-8. ✅ **群消息钩子**（2026-08-05 已完成：群消息→世界入口 handle(event) 异步感知；2s 节流合并可配；source=world 防死循环）
+8. ✅ **群消息钩子**（2026-08-05 已完成：群消息→世界入口 handle(event) 异步感知；首条立即触发 + 2s 合并窗口可配；source=world 防死循环）
 9. ✅ **唤醒改手动模式**（2026-08-05：AUTO_MANAGE=False，状态只由手动 wake/sleep 控制，唤醒后保持活跃）
 10. ✅ **后台配额修复**（2026-08-05：sleep_memory_mb 默认 24→64MB，policy 硬下限 32MB——24MB 下解释器连 import 都跑不动）
 11. ✅ **全局并发排队**（2026-08-05：asyncio.Semaphore，SANDBOX_MAX_CONCURRENT 默认 4 可配；返回 queued_ms）
@@ -250,8 +250,8 @@ window.WorldUI = {              // UI 桥（postMessage → 宿主 Layout）
 
 ### 12.5 群消息钩子：为什么 `source="world"` 不触发
 
-- **实现要点**：`create_message` 加 `source` 参数（默认 `"user"`）；世界程序/世界 AI 发消息传 `source="world"` → 钩子跳过；同世界 2 秒窗口内消息合并成一条 event（`group_trigger_interval` 可配，0=每条）。
-- **这么做的原因**：防**自触发死循环**（世界程序 handle 里发群消息 → 又触发自己 → 无限递归）；节流合并是防群消息爆发把沙箱跑死，同时不丢信息（合并进 `event.messages` 数组）。
+- **实现要点**：`create_message` 加 `source` 参数（默认 `"user"`）；世界程序/世界 AI 发消息传 `source="world"` → 钩子跳过；**第一条消息立即触发**（保证瞬时可达），随后 `group_trigger_interval` 秒（默认 2s，0=每条）窗口内到达的消息合并成一条 event 再触发一次。
+- **这么做的原因**：防**自触发死循环**（世界程序 handle 里发群消息 → 又触发自己 → 无限递归）；合并窗口是防群消息爆发把沙箱跑死，同时不丢信息（合并进 `event.messages` 数组）。等满窗口才触发会让世界对第一条消息的延迟等于窗口长度，故改成首条立即 + 后续合并。
 - **提示**：event 的 messages 带 `sender_name`（批量查 User 一次）；世界入口缺失/异常时静默跳过，不影响群聊主流程；钩子触发不改世界 status（沉睡世界也可感知，唤醒保持手动）。
 
 ### 12.6 唤醒为什么改手动模式

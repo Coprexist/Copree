@@ -26,8 +26,9 @@ import os
 import sys
 from types import SimpleNamespace
 
-# -I 隔离模式下 sys.path 不含脚本目录：手动加回（sandbox_isolate 同目录可导入）
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# -I 隔离模式下 sys.path 不含脚本目录：手动加回隔离库目录（宿主经 SANDBOX_LIB_DIR 告知，
+# 见 sandbox/runner.base_env）——沙箱隔离库已收归 app/services/sandbox/，不在本目录
+sys.path.insert(0, os.environ.get("SANDBOX_LIB_DIR", ""))
 
 
 def _read_meta() -> dict:
@@ -55,7 +56,7 @@ def _preload_safe_modules(safe_imports: list[str]) -> None:
 def _apply_isolate(meta: dict) -> None:
     from sandbox_isolate import apply_isolate
     apply_isolate(
-        world_dir=meta.get("world_dir") or None,
+        work_dir=meta.get("world_dir") or None,
         read_dirs=[meta["skill_dir"]],
         deny_net=True,  # skill 纯计算 + 协议 IO，网络禁死
     )

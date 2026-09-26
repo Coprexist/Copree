@@ -820,7 +820,7 @@ async def _handle_typing_indicator(...): ...
 | `world_service.py` | 世界 CRUD、入口绑定、唤醒/休眠 |
 | `world_scheduler.py` | 世界懒加载调度器 |
 | `world_resident.py` | 常驻世界管理 |
-| `world_sandbox.py` | 世界代码沙箱 |
+| `world_sandbox.py` | 世界代码沙箱（适配层；执行归 `services/sandbox/runner.py`，见 `docs/dev/code_sandbox.md`） |
 | `world_skill_runtime.py` | 世界 Skill 运行时 |
 | `world_chat_service.py` | 世界聊天服务 |
 | `world_file_service.py` | 世界文件服务 |
@@ -831,9 +831,11 @@ async def _handle_typing_indicator(...): ...
 | `world_api_docs.py` | 世界 API 文档 |
 | `world_event_hook.py` | 世界事件钩子 |
 | `market_github.py` | 商城 GitHub 同步 |
-| `sandbox_isolate.py` | 沙箱隔离（Landlock + seccomp） |
-| `decision_skill.py` | 决策技能（事件 → AI 自写规则 → 程序化处理 or 唤醒本体） |
-| `skill_sandbox.py` / `skill_runner.py` | 世界 skill 沙箱执行 |
+| `sandbox_isolate.py` | 已迁至 `services/sandbox/`：Landlock + seccomp 隔离原语，世界与 AI 共用 |
+| `decision_skill.py` | 决策技能（事件 → AI 自写规则 → 程序化处理 or 唤醒本体）；情景表与分派见 `docs/dev/decision_layer.md` |
+| `skill_sandbox.py` / `skill_runner.py` | 世界 skill 沙箱执行（协议式：stdin/stdout JSON 行） |
+| `services/sandbox/runner.py` | 代码沙箱唯一执行层：rlimit + 隔离档位 + 超时 killpg + 输出截断 |
+| `services/sandbox/agent_sandbox.py` | AI 沙箱适配层：AI 文件空间 `data/agents/{id}/` 即沙箱 |
 | `world_turn.py` | 对话轮次 worker + `TurnBroadcast` 直播通道 |
 | `realtime_connection_manager.py` | 世界实时通道（WS 状态广播） |
 | `group_type_service.py` | 群类型模板与助手配置 |

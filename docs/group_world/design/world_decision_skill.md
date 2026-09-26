@@ -1,6 +1,8 @@
 # 世界 AI 决策技能与触发模式（Decision Skill & Trigger Mode）
 
-> 状态：设计定稿，阶段一（触发模式）已落地，阶段二（决策技能）待实现
+> 状态：已落地。触发模式（阶段一）与决策技能（阶段二）均已实现；2026-09-26 起决策技能
+> 不再要求绑定世界，改为平台通用（AI 的沙箱就是它自己的文件空间）。现行实现、情景表与
+> 分派规则以 [决策层](../../dev/decision_layer.md) 为准，本文保留设计演化过程。
 > 关联：`world_skill_design.md`（世界侧技能）、`world_agent_capabilities.md`（能力边界）、`capability_lazy_loading.md`（能力版本化）
 
 ## 1. 背景与目标
@@ -34,7 +36,7 @@
 
 | 通道 | 入口 | 行为 | 是否唤醒 LLM |
 |---|---|---|---|
-| 世界程序感知 | `world_event_hook.notify_group_message` | 节流合并（`worlds.config.group_trigger_interval`，默认 2s）后喂给世界程序 `handle(event)`，处理与否由世界程序自决 | 否（沙箱内程序逻辑） |
+| 世界程序感知 | `world_event_hook.notify_group_message` | **首条立即**喂给世界程序 `handle(event)`，随后 `worlds.config.group_trigger_interval`（默认 2s）窗口内的消息合并成一条再喂一次；处理与否由世界程序自决 | 否（沙箱内程序逻辑） |
 | 群助手 LLM 触发 | `response_worker._process_group_event` | 群内 AI 成员（群助手 agent）逐一决策（`decide_action`）→ 是否 LLM 回复 | 是 |
 
 问题：通道 2 对**每条**群消息都会执行决策（LLM 层判断），即便最终"不回复"也消耗了决策与上下文构建的开销；且默认行为是"所有成员都触发、AI 自主决定"，与"AI 不该一直触发"的定位不符。

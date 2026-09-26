@@ -95,7 +95,8 @@
 | [群视界 API 文档](./group_world/api/world_api_docs.md) | 开发者 / 世界 AI | 10 大分区接口手册（变量/文件/积木/群聊/同步限流/受控 API…） |
 | [世界 Skill 机制](./group_world/design/world_skill_design.md) | 开发者 | 文件式 skill/tool 机制（world skill runtime） |
 | [世界工具插件开发](./group_world/development/world_tools_plugin.md) | 开发者 / 社区 | 一个工具一个文件：契约、注册、展示文案、外部插件目录、性能 |
-| [世界决策技能](./group_world/design/world_decision_skill.md) | 开发者 | Decision Skill 与触发模式 |
+| [世界决策技能](./group_world/design/world_decision_skill.md) | 开发者 | Decision Skill 与触发模式（现行实现见 [决策层](./dev/decision_layer.md)） |
+| [世界事件 → AI（规范草案，待批）](./group_world/design/world_ai_events.md) | 开发者 | 世界事件契约、投递语义、限额与防循环、世界侧发送入口 |
 | [世界能力注入](./group_world/design/world_agent_capabilities.md) | 开发者 | 群 AI / 世界 AI 的能力边界与路径 |
 
 ### 五、探索与讨论
@@ -137,6 +138,8 @@
 | [写一个通道插件](./dev/channel-plugins.md) | 插件开发者 | 外部身份怎么接：manifest 的 channel 块、出站三条（group/dm/revoke）、@ 翻译、通道自测、全量事件、信任边界 |
 | [@ 提及统一用 id](./dev/mention_ids.md) | 开发者 | 令牌写法（`<@!id>`）、入口归一、识别兼容、通道出站翻译、群推送模式观测与通知、展示层与测试 |
 | [消息撤回](./dev/message_revoke.md) | 开发者/运维 | 撤回语义、唯一入口、数据模型、接口与前端、通道侧规则与限制 |
+| [代码沙箱](./dev/code_sandbox.md) | 开发者/运维 | 一层实现（世界代码与 AI 脚本共用）、AI 文件空间即沙箱、隔离构成与档位、失败文案、实测数据、新增 owner 三步 |
+| [决策层](./dev/decision_layer.md) | 开发者 | 决策技能：情景表、条件 DSL、三态返回与 notify 语义、do 的分派（平台身份/沙箱归属）、触发点、QQ 全量消息漏斗、未落地项 |
 | [会话历史与上下文纪律](./dev/conversation_history.md) | 开发者 | 账本分层、三段请求体、阈值三档、压缩与解锁、迁移方案 |
 | [前端界面统一规范](./dev/ui_system.md) | 前端开发者 | **单一来源**：尺度令牌 / 语义类 / 组件库 / 照抄模式 / 提交前自检——写界面前先读它 |
 | [演示截图流水线](../scripts/screenshot/README.md) | 文档/推广维护者 | 一键生成 README 演示图：演示数据脱敏规则、CDP 截图与新增一张图的做法（中英双语） |

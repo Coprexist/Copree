@@ -28,7 +28,7 @@
 | 2.5 | **后台常驻任务** | ✅ **已实现**（2026-08-05）：`world_resident.py` 常驻进程（handle/on_tick/on_stop + stdin 行协议）；config `resident:true`+`tick_interval` 开启；wake 启动/sleep 优雅停止/后端重启 restore；**实时状态通道**：POST /api/state（世界代码发布）+ GET /world/{id}/events（页面 SSE，零轮询）；默认不限常驻个数（预留可配）；配额 64MB（多解释器）/32MB 硬下限 | 2.1 |
 | 2.6 | **世界 AI 记忆表** | ✅ **已实现**（2026-08-05）：`world_ai_memories` 专属表（title/content/embedding Vector(1536)）+ 工具 store_memory/recall_memory（向量检索 + 文本回退）；迁移 `b3c4d5e6f7a8` **待产品跑** | 无 |
 | 2.7 | **缓存命中统计** | ✅ **已实现**（2026-08-05）：`world_llm_usage` 专属表，首轮（stream_options.include_usage）/工具轮/收尾轮全部落库；`GET /worlds/{id}/usage` 返回调用次数/token/命中率；设计页配置表单展示命中率；迁移 `c4d5e6f7a8b9` | 无 |
-| 2.9 | **群消息钩子** | ✅ **已实现**（2026-08-05）：群消息 → 世界入口 `handle(event)` 异步感知（2s 节流合并，`group_trigger_interval` 可配；`source="world"` 防死循环）；唤醒改手动模式（AUTO_MANAGE=False，唤醒后保持活跃） | 2.2 |
+| 2.9 | **群消息钩子** | ✅ **已实现**（2026-08-05）：群消息 → 世界入口 `handle(event)` 异步感知（首条立即触发 + 2s 合并窗口，`group_trigger_interval` 可配；`source="world"` 防死循环）；唤醒改手动模式（AUTO_MANAGE=False，唤醒后保持活跃） | 2.2 |
 | 2.8 | **会话状态服务** | 状态化会话管理器（不可变追加日志 + 规范化序列化 + 缓存统计 + 压缩管理）；为世界代码提供对话状态；DeepSeek 无服务端会话，本质是"请求形状稳定 + 可观测" | 2.3 配合 |
 
 ---

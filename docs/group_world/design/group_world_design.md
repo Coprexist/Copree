@@ -501,7 +501,7 @@ HTTP 三种入参（`items` / `messages` / `message`）只在**路由层归一�
 |------|---------|-------------------|------|
 | **群 AI（通过群聊进世界的 AI/群助手）** | 群消息 → response_worker → chat_chain_manager | ✅ **受影响** | 与普通群 AI 相同：`MAX_CONCURRENT_PER_GROUP=3` + 信号量 + try_claim 抢占；群里 AI 多/并发忙时排队等并发名额 |
 | **世界 AI（群视界机器人）** | 用户打开世界聊天界面 → world_api_chat → stream_world_chat（HTTP 流式） | ❌ 不受影响 | **拉模式**：用户主动打开聊天界面才回复；不是群成员，不参与 group_members 的 AI 触发 |
-| **世界程序（main.py）** | 群消息 → notify_group_message（2 秒节流合并）→ 世界程序 handle(event) | ❌ 不受影响 | 独立通道，节流合并防消息爆发；发消息走 create_message(source="world")，不经过红黑树 |
+| **世界程序（main.py）** | 群消息 → notify_group_message（首条立即 + 2 秒合并窗口）→ 世界程序 handle(event) | ❌ 不受影响 | 独立通道，首条立即保证瞬时可达、后续合并防消息爆发；发消息走 create_message(source="world")，不经过红黑树 |
 
 **已知特点（待产品确认是否符合设计）**：世界 AI 是拉模式——群里有新消息时它不会像群 AI 那样自动触发回复，只有用户进入世界聊天界面才回复。如果希望世界 AI 在群里也能被消息自动触发（推模式），则需要接入并发调度（考虑排队影响）。
 

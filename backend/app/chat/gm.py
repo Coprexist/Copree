@@ -277,6 +277,9 @@ async def add_member(
     )
     db.add(member)
     await db.flush()
+    if resolved_type == "human":
+        from app.services.world.decision_skill import emit_member_event
+        await emit_member_event(db, group_id, "member_join", resolved_id)
     return member
 
 
@@ -578,6 +581,9 @@ async def remove_member(
         raise ValueError("管理员不能踢其他管理员")
     await db.delete(target)
     await db.flush()
+    if target_type == "human":
+        from app.services.world.decision_skill import emit_member_event
+        await emit_member_event(db, group_id, "member_leave", target_id, operator_id=operator_id)
     logger.info(f"成员 {target_type}:{target_id} 已被踢出群聊 {group_id}")
 
 
@@ -597,6 +603,9 @@ async def leave_group(
             raise ValueError("群主不能退群，请先将群主转让给其他成员")
     await db.delete(member)
     await db.flush()
+    if member_type == "human":
+        from app.services.world.decision_skill import emit_member_event
+        await emit_member_event(db, group_id, "member_leave", member_id)
     logger.info(f"成员 {member_type}:{member_id} 已退出群聊 {group_id}")
 
 
