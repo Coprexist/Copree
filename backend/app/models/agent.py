@@ -267,10 +267,10 @@ class AgentHistoryEntry(Base):
     agent_id = Column(Integer, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
     context_ref = Column(String(64), nullable=False, comment="会话标识：group:{id} / dm:{session}")
     seq = Column(Integer, nullable=False, comment="同一会话内的单调序号，唯一的排序依据")
-    kind = Column(String(16), nullable=False, comment="message/gap/backfill/tool/note/notice/suggestion/summary/thinking")
+    kind = Column(String(16), nullable=False, comment="message/gap/tool/note/notice/suggestion/summary/thinking")
     actor = Column(String(16), nullable=False, default="system", comment="self=我 / user=用户 / world=外界 / system=平台")
     content = Column(Text, nullable=False, comment="渲染好的最终字节（渲染即落库）")
-    ref = Column(String(128), nullable=True, comment="来源锚点：message_id / tool_call_id（补看定位与排查用）")
+    ref = Column(String(128), nullable=True, comment="来源锚点：message_id / tool_call_id（水位推导与排查用）")
     flags = Column(json_column(), default=dict, comment="可压/已撤下等标记（只由解锁点改写）")
     created_at = Column(DateTime, server_default=func.now())
 

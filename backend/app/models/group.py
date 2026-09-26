@@ -3,7 +3,7 @@
 """
 from sqlalchemy import (
     Column, Integer, String, Boolean, DateTime, CheckConstraint, func, Text, text,
-    ForeignKey, PrimaryKeyConstraint, Index,
+    ForeignKey, PrimaryKeyConstraint, Index, UniqueConstraint,
 )
 from app.database import Base
 
@@ -44,6 +44,32 @@ class Group(Base):
     )
 
 
+class MemberSilence(Base):
+    """按人静音：某个 AI 在这个群里不听某个人的消息（连 @ 都不唤醒）
+
+    为什么单开一张表：group_members 记的是「谁在这个群里」、dnd_until 记的是「整个群要不要
+    静音」；「只对某个人静音」是第三种关系，塞进成员表没处挂。
+
+    until_at 与 remaining_count 各自可空：空 = 那一维不限制（都空 = 永久静音）；
+    谁先用完/先到点都算失效——用户 2026-09-26 要的正是「多少条内 / 多少分钟内不再唤醒」。
+    """
+    __tablename__ = "member_silences"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    agent_id = Column(Integer, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
+    group_id = Column(Integer, ForeignKey("groups.id", ondelete="CASCADE"), nullable=False)
+    target_user_id = Column(Integer, nullable=False)
+    until_at = Column(DateTime, nullable=True)
+    remaining_count = Column(Integer, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("agent_id", "group_id", "target_user_id", name="uq_member_silence"),
+        Index("ix_member_silences_lookup", "agent_id", "group_id", "target_user_id"),
+    )
+
+
 class GroupMember(Base):
     __tablename__ = "group_members"
 
@@ -51,7 +77,7 @@ class GroupMember(Base):
     member_type = Column(String(10), nullable=False)  # 'human' | 'ai'
     member_id = Column(Integer, nullable=False)
     role = Column(String(20), default="member")  # owner|admin|member
-    dnd_until = Column(DateTime, nullable=True)  # NULL=永久免打扰; 有值=临时截止时间
+    dnd_until = Column(DateTime, nullable=True)  # NULL=永久免打扰; 有值=临时截止时间（@/@all/公告/特别关心都穿透）
     muted_until = Column(DateTime, nullable=True)  # 屏蔽截止时间，期间 @/公告也不穿透
     last_read_at = Column(DateTime, nullable=True)  # 用户上次查看群聊的时间
     joined_at = Column(DateTime, server_default=func.now())

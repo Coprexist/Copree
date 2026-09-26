@@ -50,6 +50,10 @@ from app.chat.delivery import (
     cancel_group_dnd,
     is_member_in_dnd,
     is_member_muted,
+    get_active_silence,
+    silence_member,
+    consume_silence,
+    cancel_member_silence,
     store_pending_message,
     get_pending_messages,
     mark_pending_read,
@@ -194,6 +198,14 @@ class ChatApi(BaseChatApi):
             "is_muted": is_muted,
             "is_offline": is_offline,
         }
+
+    # ── 按人静音（只对某个人不响应，连 @ 也不唤醒）──
+
+    async def get_active_silence(self, db, agent_id: int, group_id: int, target_user_id: int):
+        return await get_active_silence(db, agent_id, group_id, target_user_id)
+
+    async def consume_silence(self, db, row) -> None:
+        return await consume_silence(db, row)
 
     async def store_pending(self, db, agent_id, group_id, message_id):
         return await store_pending_message(db, agent_id, group_id, message_id)

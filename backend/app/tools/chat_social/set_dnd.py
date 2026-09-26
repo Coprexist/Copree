@@ -12,7 +12,10 @@ class SetDND(ToolPlugin):
     name = "set_dnd"
     description = (
         "设置群聊免打扰状态。免打扰期间你不会被该群的普通消息触发，"
-        "但以下情况仍会穿透免打扰并唤醒你：@提及你的消息、@all/@everyone/@全体、群公告。"
+        "但以下情况仍会穿透免打扰并唤醒你：@提及你的消息、@all/@everyone/@全体、群公告、特别关心的人。"
+        "要连这些也不被叫（连 @ 都不唤醒）那是**屏蔽**，不是免打扰——用 mute_group（≤30 分钟）。"
+        "只静音某一个人（连他的 @ 也不理）用 silence_member。"
+        "免打扰期间消息一律暂存，等你自己 enter_group / view_unread 去看。"
         "你可以稍后通过 enter_group 主动进入查看错过的消息，或调用 cancel_dnd 取消免打扰。"
     )
     segment = "chat_social"

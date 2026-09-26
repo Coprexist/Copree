@@ -15,7 +15,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, update, desc, func as sqlfunc
-from app.models.group import Group, GroupMember
+from app.models.group import Group, GroupMember, MemberSilence
 from app.models.message import PendingMessage, Message
 from app.models.agent import Agent
 
@@ -25,6 +25,33 @@ logger = logging.getLogger(__name__)
 # ============================================================
 # 群聊 DND
 # ============================================================
+
+async def _agent_member(db: AsyncSession, agent_id: int, group_id: int,
+                        member_type: str = "ai") -> GroupMember | None:
+    """某个 AI（或人）在某个群里的成员行 —— 找这一段只有这一个入口。
+
+    为什么收敛：member_id 存的是 user_id（v2.0 统一口径），每加一个开关（免打扰 / 屏蔽 /
+    不允许穿透）都要重抄一遍"先按 agent.id 反查 user_id、再查成员行"，抄第三遍就是漂的开始。
+    """
+    lookup_id = agent_id
+    if member_type == "ai":
+        agent = await db.get(Agent, agent_id)
+        if agent is None:
+            agent = (await db.execute(
+                select(Agent).where(Agent.user_id == agent_id)
+            )).scalar_one_or_none()
+        if agent:
+            lookup_id = agent.user_id
+    return (await db.execute(
+        select(GroupMember).where(
+            and_(
+                GroupMember.group_id == group_id,
+                GroupMember.member_type == member_type,
+                GroupMember.member_id == lookup_id,
+            )
+        )
+    )).scalar_one_or_none()
+
 
 async def set_group_dnd(
     db: AsyncSession,
@@ -37,28 +64,11 @@ async def set_group_dnd(
     为群成员设置免打扰（支持 human 和 ai）。
     - duration_minutes = 0 或 None → 永久免打扰 (dnd_until = 2099-12-31)
     - duration_minutes > 0 → 临时免打扰
-    """
-    lookup_id = agent_id
-    if member_type == "ai":
-        agent = await db.get(Agent, agent_id)
-        if agent is None:
-            agent_result = await db.execute(
-                select(Agent).where(Agent.user_id == agent_id)
-            )
-            agent = agent_result.scalar_one_or_none()
-        if agent:
-            lookup_id = agent.user_id
 
-    result = await db.execute(
-        select(GroupMember).where(
-            and_(
-                GroupMember.group_id == group_id,
-                GroupMember.member_type == member_type,
-                GroupMember.member_id == lookup_id,
-            )
-        )
-    )
-    member = result.scalar_one_or_none()
+    免打扰与屏蔽是两件事（见 docs/chat_service/design/chat_service_design.md §4.2）：
+    免打扰的 @/@all/群公告/特别关心**都穿透**；"连 @ 都不唤醒"归屏蔽（muted_until）。
+    """
+    member = await _agent_member(db, agent_id, group_id, member_type)
     if member is None:
         raise ValueError(f"用户 {agent_id} 不在群聊 {group_id} 中")
 
@@ -80,27 +90,7 @@ async def cancel_group_dnd(
     member_type: str = "ai",
 ) -> GroupMember:
     """取消群聊免打扰"""
-    lookup_id = agent_id
-    if member_type == "ai":
-        agent = await db.get(Agent, agent_id)
-        if agent is None:
-            agent_result = await db.execute(
-                select(Agent).where(Agent.user_id == agent_id)
-            )
-            agent = agent_result.scalar_one_or_none()
-        if agent:
-            lookup_id = agent.user_id
-
-    result = await db.execute(
-        select(GroupMember).where(
-            and_(
-                GroupMember.group_id == group_id,
-                GroupMember.member_type == member_type,
-                GroupMember.member_id == lookup_id,
-            )
-        )
-    )
-    member = result.scalar_one_or_none()
+    member = await _agent_member(db, agent_id, group_id, member_type)
     if member is None:
         raise ValueError(f"用户 {agent_id} 不在群聊 {group_id} 中")
 
@@ -111,50 +101,101 @@ async def cancel_group_dnd(
 
 
 async def is_member_in_dnd(db: AsyncSession, agent_id: int, group_id: int) -> bool:
-    """检查成员在指定群聊是否处于免打扰状态"""
-    agent_result = await db.execute(select(Agent).where(Agent.id == agent_id))
-    agent = agent_result.scalar_one_or_none()
+    """检查成员在指定群聊是否处于免打扰状态（整群被暂停也算）"""
+    agent = await db.get(Agent, agent_id)
     if agent and agent.is_paused:
         return True
 
-    lookup_id = agent.user_id if agent else agent_id
-    result = await db.execute(
-        select(GroupMember).where(
-            and_(
-                GroupMember.group_id == group_id,
-                GroupMember.member_type == "ai",
-                GroupMember.member_id == lookup_id,
-            )
-        )
-    )
-    member = result.scalar_one_or_none()
-    if member is None:
+    member = await _agent_member(db, agent_id, group_id)
+    if member is None or member.dnd_until is None:
         return False
-    if member.dnd_until is None:
-        return False
-    now = datetime.utcnow()
-    return member.dnd_until > now
+    return member.dnd_until > datetime.utcnow()
 
 
 async def is_member_muted(db: AsyncSession, agent_id: int, group_id: int) -> bool:
     """检查成员在指定群聊是否处于屏蔽状态（比 DND 更强，@/公告也不穿透）"""
-    agent_result = await db.execute(select(Agent).where(Agent.id == agent_id))
-    agent = agent_result.scalar_one_or_none()
-    lookup_id = agent.user_id if agent else agent_id
-    result = await db.execute(
-        select(GroupMember).where(
-            and_(
-                GroupMember.group_id == group_id,
-                GroupMember.member_type == "ai",
-                GroupMember.member_id == lookup_id,
-            )
-        )
-    )
-    member = result.scalar_one_or_none()
+    member = await _agent_member(db, agent_id, group_id)
     if member is None or member.muted_until is None:
         return False
-    now = datetime.utcnow()
-    return member.muted_until > now
+    return member.muted_until > datetime.utcnow()
+
+
+# ============================================================
+# 按人静音（只对某个人不响应：连 @ 也不唤醒）
+# ============================================================
+
+def _silence_active(row: MemberSilence, now: datetime) -> bool:
+    """这条静音现在还算数吗：时间没到点、条数没扣完（两个维度都空 = 永久）"""
+    if row.until_at is not None and row.until_at <= now:
+        return False
+    if row.remaining_count is not None and row.remaining_count <= 0:
+        return False
+    return True
+
+
+async def get_active_silence(db: AsyncSession, agent_id: int, group_id: int,
+                             target_user_id: int) -> MemberSilence | None:
+    """这个 AI 在这个群里现在静音着这个人吗 —— 是就把那一行交给调用方（它可能还要扣一次条数）"""
+    row = (await db.execute(
+        select(MemberSilence).where(
+            MemberSilence.agent_id == agent_id,
+            MemberSilence.group_id == group_id,
+            MemberSilence.target_user_id == target_user_id,
+        )
+    )).scalar_one_or_none()
+    if row is None or not _silence_active(row, datetime.utcnow()):
+        return None
+    return row
+
+
+async def silence_member(db: AsyncSession, agent_id: int, group_id: int, target_user_id: int,
+                         *, duration_minutes: int | None = None,
+                         message_count: int | None = None) -> MemberSilence:
+    """给某个人上静音。再设一次 = 覆盖（以这次的时长/条数为准，不叠加）"""
+    row = (await db.execute(
+        select(MemberSilence).where(
+            MemberSilence.agent_id == agent_id,
+            MemberSilence.group_id == group_id,
+            MemberSilence.target_user_id == target_user_id,
+        )
+    )).scalar_one_or_none()
+    if row is None:
+        row = MemberSilence(agent_id=agent_id, group_id=group_id, target_user_id=target_user_id)
+        db.add(row)
+    row.until_at = (datetime.utcnow() + timedelta(minutes=int(duration_minutes))
+                    if duration_minutes else None)
+    row.remaining_count = int(message_count) if message_count else None
+    await db.flush()
+    logger.info(
+        f"AI {agent_id} 在群 {group_id} 静音了用户 {target_user_id}"
+        f"（{duration_minutes or '-'} 分钟 / {message_count or '-'} 条）"
+    )
+    return row
+
+
+async def consume_silence(db: AsyncSession, row: MemberSilence) -> None:
+    """扣一次条数（时间维度不用扣，自己会过期）——扣到 0 这条静音就失效了"""
+    if row.remaining_count is not None:
+        row.remaining_count = max(0, int(row.remaining_count) - 1)
+        await db.flush()
+
+
+async def cancel_member_silence(db: AsyncSession, agent_id: int, group_id: int,
+                                target_user_id: int) -> bool:
+    """取消按人静音（删行）。返回是否真有一条（幂等：没有也当成功）"""
+    row = (await db.execute(
+        select(MemberSilence).where(
+            MemberSilence.agent_id == agent_id,
+            MemberSilence.group_id == group_id,
+            MemberSilence.target_user_id == target_user_id,
+        )
+    )).scalar_one_or_none()
+    if row is None:
+        return False
+    await db.delete(row)
+    await db.flush()
+    logger.info(f"AI {agent_id} 在群 {group_id} 取消了静音用户 {target_user_id}")
+    return True
 
 
 # ============================================================

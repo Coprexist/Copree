@@ -126,6 +126,19 @@ async def _decide_reply_action(db, agent, context: ActionContext) -> ActionDecis
     is_mentioned = context.is_mentioned
     profile = getattr(agent, 'config_profile', 'chat') or 'chat'
 
+    # Gate 0: 按人静音（只对某个人：连 @ 也不唤醒）
+    #   为什么排在最前面：这条规则存在的意义就是"这个人说话别叫我，哪怕 @ 我"——
+    #   排在离线/@ 唤醒之后就等于形同虚设。条数维度在这里扣（这条也算他说的一条）。
+    if context.group_id and context.sender_id and context.sender_id != getattr(agent, "user_id", None):
+        silence = await chat_api.get_active_silence(db, agent_id, context.group_id, context.sender_id)
+        if silence is not None:
+            await chat_api.consume_silence(db, silence)
+            return ActionDecision(
+                False, ActionType.NONE, 0,
+                f"AI {agent.name} 静音了这个人的消息（连 @ 也不唤醒）",
+                details={"store_pending": True, "silenced_user_id": context.sender_id},
+            )
+
     # Gate 1: 离线 + 未被 @ → 跳过；离线 + 被 @ → 唤醒
     if agent.state == "inactive":
         if not is_mentioned:
@@ -141,7 +154,8 @@ async def _decide_reply_action(db, agent, context: ActionContext) -> ActionDecis
         return ActionDecision(False, ActionType.NONE, 0,
             f"AI {agent.name} 屏蔽中，不响应任何消息", details={"store_pending": True})
 
-    # Gate 2b: DND（@/公告可穿透）(v0.2.1): @提及 / @all / 群公告 可穿透 DND
+    # Gate 2b: DND（@/公告可穿透）(v0.2.1): @提及 / @all / 群公告 / 特别关心 都可穿透 DND
+    #   不穿透的那种是**屏蔽**（Gate 2a，muted_until）——两件事，别混（chat_service_design.md §4.2）
     in_dnd = reachability["is_dnd"]
     dnd_penetrate = is_mentioned or context.is_at_all or context.is_announcement or context.is_priority_friend
     dnd_was_penetrated = in_dnd and dnd_penetrate  # DND 被穿透时后续提醒 AI
