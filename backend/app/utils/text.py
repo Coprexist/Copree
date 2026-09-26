@@ -146,6 +146,16 @@ def extract_mentions(content: str) -> set[str]:
     return mentions
 
 
+def mentions_all(content: str) -> bool:
+    """@all：点名全体成员 —— 人也在内，所以"给人看"的判词（浮窗）认它"""
+    return "@all" in (content or "").lower()
+
+
+def mentions_all_ai(content: str) -> bool:
+    """@ai：点名的是"所有 AI"，人不在其中；与 mentions_all 一起构成 check_mention 的兜底判词"""
+    return "@ai" in (content or "").lower()
+
+
 def check_mention(content: str, target_name: str = "", target_id: int | None = None) -> bool:
     """
     检查消息中是否 @ 提及了指定名称，或 @all/@ai。
@@ -178,8 +188,7 @@ def check_mention(content: str, target_name: str = "", target_id: int | None = N
         ):
             return True
         idx = content.find(full, idx + 1)
-    content_lower = content.lower()
-    return "@all" in content_lower or "@ai" in content_lower
+    return mentions_all(content) or mentions_all_ai(content)
 
 
 # Markdown 降级用的标记（QQ 群没开通原生 MD 时只能发纯文本，见 docs/develop 的 markdown 一节）
@@ -187,30 +196,38 @@ _MD_FENCE_RE = re.compile(r'^\s*```[^\n]*$', re.M)
 _MD_INLINE_CODE_RE = re.compile(r'`([^`\n]+)`')
 _MD_IMAGE_RE = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
 _MD_LINK_RE = re.compile(r'\[([^\]]+)\]\(([^)]+)\)')
-_MD_BOLD_RE = re.compile(r'\*\*(.+?)\*\*|__(.+?)__', re.S)
+# 星号强调照旧；下划线要挡"词内下划线"：AI 常写 file_read / snake_case_name 这种标识符，
+# 无脑配对会把下划线吃掉（snake_case_name → snakecasename）。这条与 CommonMark「词内下划线
+# 不算强调」一致；\w 含中日韩，所以中文夹着的下划线也一并按字面留着。
+_MD_BOLD_RE = re.compile(r'\*\*(.+?)\*\*|(?<!\w)__(.+?)__(?!\w)', re.S)
 _MD_STRIKE_RE = re.compile(r'~~(.+?)~~', re.S)
-_MD_ITALIC_RE = re.compile(r'\*(.+?)\*|_(.+?)_', re.S)
+_MD_ITALIC_RE = re.compile(r'\*(.+?)\*|(?<!\w)_(.+?)_(?!\w)', re.S)
 _MD_HEADING_RE = re.compile(r'^\s{0,3}#{1,6}\s*', re.M)
 _MD_QUOTE_RE = re.compile(r'^\s{0,3}>\s?', re.M)
 _MD_HR_RE = re.compile(r'^\s{0,3}([-*_])\1{2,}\s*$', re.M)
 
 
-def plainify_markdown(content: str) -> str:
+def plainify_markdown(content: str, *, keep_url: bool = True) -> str:
     """Markdown → 纯文本（保留换行与列表，只去掉排版符号）。
 
     为什么需要：QQ 群的 markdown 是**内邀开通**的能力，且 MD 权限是**机器人账号维度**的
     （同一个平台里有的号有、有的没有）。出站已经改成"先按 msg_type=2 发 Markdown，
     接口说没权限再退回纯文本"（QqClient._send_rich）——所以这里只服务没权限的那些号：
     AI 写的 **加粗**、# 标题、`行内代码` 不能原样露在群里。
-    站内不动（Copree 自己渲染 markdown）。
+    站内聊天界面不动（Copree 自己渲染 markdown）；站内的**浮窗预览**用它——那条只有两行，
+    链接里的长 URL 会把正文挤没，所以那里传 keep_url=False（只留可读文字）。
     """
     if not content:
         return content
     text = _MD_FENCE_RE.sub("", content)
-    text = _MD_IMAGE_RE.sub(r"\1", text)
-    text = _MD_LINK_RE.sub(
-        lambda m: m.group(1) if m.group(1) == m.group(2) else f"{m.group(1)}（{m.group(2)}）", text
-    )
+    # 图片只留说明文字；没有说明文字就退回占位——纯图片消息否则会变成一条空白正文
+    text = _MD_IMAGE_RE.sub(lambda m: m.group(1) or "[图片]", text)
+    if keep_url:
+        text = _MD_LINK_RE.sub(
+            lambda m: m.group(1) if m.group(1) == m.group(2) else f"{m.group(1)}（{m.group(2)}）", text
+        )
+    else:
+        text = _MD_LINK_RE.sub(r"\1", text)
     text = _MD_BOLD_RE.sub(lambda m: m.group(1) or m.group(2), text)
     text = _MD_STRIKE_RE.sub(r"\1", text)
     text = _MD_ITALIC_RE.sub(lambda m: m.group(1) or m.group(2), text)

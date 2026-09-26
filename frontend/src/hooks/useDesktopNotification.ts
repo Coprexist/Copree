@@ -17,7 +17,7 @@ import { CHAT_REFRESH_EVENT } from '../constants'
 const STORAGE_KEY = 'notifications_enabled'
 const BASE_TITLE = 'Copree'
 
-/** 从 groups + dm_sessions API 计算总未读数，排除 DND */
+/** 从 groups + dm_sessions API 计算总未读数：免打扰只挡常规消息，被点名到个人的那条照算 */
 async function fetchTotalUnread(): Promise<number> {
   try {
     const [groups, dmSessions] = await Promise.all([
@@ -27,8 +27,14 @@ async function fetchTotalUnread(): Promise<number> {
     let total = 0
     if (Array.isArray(groups)) {
       for (const g of groups) {
-        // 免打扰的群不计入
-        if (g.dnd_until) continue
+        if (g.dnd_until) {
+          // 免打扰群不整段跳过：被点名时记 1（语义是"有一处找你"，不是这个群的未读数，
+          // 所以不把几十条闲聊一起算进来）。这是**有意的产品口径**——@ 穿透免打扰、
+          // @all 不穿透，与站内浮窗一致；看到"免打扰群怎么还会显示 1"别当成 bug 改掉。
+          // 依据：后端 has_mention 只认点名到个人的令牌/名字，@all 不算。
+          if (g.has_mention) total += 1
+          continue
+        }
         if (g.unread_count > 0) total += g.unread_count
       }
     }

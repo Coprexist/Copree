@@ -77,7 +77,9 @@ class GroupMember(Base):
     member_type = Column(String(10), nullable=False)  # 'human' | 'ai'
     member_id = Column(Integer, nullable=False)
     role = Column(String(20), default="member")  # owner|admin|member
-    dnd_until = Column(DateTime, nullable=True)  # NULL=永久免打扰; 有值=临时截止时间（@/@all/公告/特别关心都穿透）
+    # NULL/过去 = 没设免打扰；有值且在将来 = 免打扰中；"永久"存 2099-12-31（见 chat/delivery.py）
+    # 免打扰挡的是常规消息：@/@all/公告/特别关心都穿透
+    dnd_until = Column(DateTime, nullable=True)
     muted_until = Column(DateTime, nullable=True)  # 屏蔽截止时间，期间 @/公告也不穿透
     last_read_at = Column(DateTime, nullable=True)  # 用户上次查看群聊的时间
     joined_at = Column(DateTime, server_default=func.now())

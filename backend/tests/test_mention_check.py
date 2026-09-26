@@ -22,6 +22,33 @@ def test_plainify_markdown_keeps_text_drops_markers():
     assert plainify_markdown("") == ""
 
 
+def test_plainify_markdown_does_not_maul_code_or_tokens():
+    """真机踩点：这个函数原先只服务 QQ 纯文本降级，站内浮窗接上之前先把它钉死
+
+    三件事：@令牌与 CQ 码原样留着（不是 CQ 解析器）、词内下划线不当强调、
+    图片没有说明文字时给占位（否则纯图片消息会变成一条空白正文）。
+    """
+    # @令牌与 CQ 码：原样传过。浮窗那条链路是先 render_mention_names 再进这里，
+    # 所以令牌本来就已经换成名字了；这里钉的是"它不会把令牌/CQ 当 Markdown 吃掉"
+    assert plainify_markdown("你好 <@!12> 看下") == "你好 <@!12> 看下"
+    cq = "看这个 [CQ:image,file=a.jpg] 和 [CQ:at,qq=123]"
+    assert plainify_markdown(cq) == cq
+
+    # 词内下划线：AI 写的标识符不能被当成斜体吃掉
+    assert plainify_markdown("函数 file_read 与 a_b_c") == "函数 file_read 与 a_b_c"
+    assert plainify_markdown("snake_case_name") == "snake_case_name"
+    # 正常的下划线强调照旧洗掉
+    assert plainify_markdown("_斜体_ 和 __粗体__") == "斜体 和 粗体"
+
+    # 图片：有说明留说明，没有就给占位
+    assert plainify_markdown("![示意图](https://x/a.png)") == "示意图"
+    assert plainify_markdown("![](https://x/a.png)") == "[图片]"
+
+    # 链接：默认保留地址（QQ 纯文本降级要它）；浮窗传 keep_url=False 只留文字
+    assert plainify_markdown("见 [文档](https://x/y)") == "见 文档（https://x/y）"
+    assert plainify_markdown("见 [文档](https://x/y)", keep_url=False) == "见 文档"
+
+
 def test_strip_leading_mention_only_for_that_person():
     """出站摘 @：只摘开头、只摘对那个人的；正文中间的一律不动。"""
     assert strip_leading_mention("@小明 今天天气不错", "小明") == "今天天气不错"

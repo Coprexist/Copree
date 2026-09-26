@@ -26,6 +26,42 @@ GROUP_INVITE_ACCEPTED = "group_invite_accepted"  # → 邀请人：对方接受�
 GROUP_INVITE_DECLINED = "group_invite_declined"  # → 邀请人：对方拒绝了邀请
 
 
+# 浮窗正文长度：前端两行截断，80 与旧的前端摘要口径一致
+TOAST_MAX_LEN = 80
+
+
+async def message_toast(data: dict) -> tuple[str, set[int], bool]:
+    """一条会话消息 → 浮窗要的正文，以及"这条点了谁"
+
+    返回 (正文, 被 @ 的用户 id, 是否 @ 全体)。
+    正文与侧栏预览同一套拼法（令牌换名字 → 去 Markdown → 截断），只多一步 plainify：
+    浮窗只有两行，`**` 这种半截排版符号比在列表里更扎眼；先降级再截断，免得截出没闭合的标记。
+
+    为什么自己开会话：推送路径（connection_manager._push_to_scopes）手里没有 db，而令牌要换成
+    人名；只在正文真有令牌时查一次库 —— 这条在消息广播链路上被 await，能省的往返要省掉。
+    """
+    from app.utils.message_serializer import make_preview, mention_names
+    from app.utils.text import (
+        iter_mention_ids, mentions_all, plainify_markdown, render_mention_names,
+    )
+
+    content = str((data or {}).get("content") or "")
+    ids = set(iter_mention_ids(content))
+    names: dict[int, str] = {}
+    if ids:
+        from app.database import async_session
+
+        async with async_session() as db:
+            names = await mention_names(db, [content])
+    preview = make_preview(
+        # keep_url=False：两行浮窗里塞一个长 URL 就等于没有正文
+        plainify_markdown(render_mention_names(content, names), keep_url=False),
+        (data or {}).get("attachments"),
+        max_len=TOAST_MAX_LEN,
+    )
+    return preview, ids, mentions_all(content)
+
+
 async def approver_ids(db: AsyncSession, group_id: int) -> list[int]:
     """该群的审批人（群主/管理员）。角色口径与审批权同一处，不另写一份。"""
     rows = await db.execute(

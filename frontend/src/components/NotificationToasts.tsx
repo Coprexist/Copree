@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Bell, CheckCircle2, Mail, Megaphone, MessageSquare, UserPlus, Users, X, XCircle,
+  AtSign, Bell, CheckCircle2, Mail, Megaphone, MessageSquare, UserPlus, Users, X, XCircle,
 } from 'lucide-react'
 import { useT } from '../i18n/I18nContext'
 import type { NotificationItem, NotificationKind } from '../hooks/useNotificationSocket'
@@ -17,7 +17,7 @@ import type { NotificationItem, NotificationKind } from '../hooks/useNotificatio
 /** 自动收起时间（悬停时暂停：人正看着别抢走） */
 const AUTO_DISMISS_MS = 6000
 
-type Tone = 'message' | 'success' | 'error' | 'system'
+type Tone = 'message' | 'success' | 'error' | 'system' | 'mention'
 
 const KIND_STYLE: Record<NotificationKind, { icon: typeof Bell; tone: Tone }> = {
   group_message: { icon: Users, tone: 'message' },
@@ -42,22 +42,43 @@ const TONE_CLASS: Record<Tone, string> = {
   success: 'text-mint-400',
   error: 'text-rose-400',
   system: 'text-accent-400',
+  // 被点名的（个人点名或 @all）用会话列表同款"未读红"：一眼分出"值得马上看"和"路过一条消息"
+  mention: 'text-rose-400',
 }
 
 /** 用 ' · ' 拼非空片段：免得出现「· 群名」这种开头孤零零的分隔符 */
 function joinParts(...parts: (string | null | undefined)[]): string {
-  return parts.filter((p) => !!p && String(p).trim()).join(' · ')
+  // 只认字符串：早先用 !!p 判空，将来有人塞数字进来，0 会被静默丢掉
+  return parts.filter((p): p is string => typeof p === 'string' && p.trim() !== '').join(' · ')
+}
+
+/**
+ * 被点名时标题前挂一句说明，其余照旧
+ *
+ * 个人点名优先于 @all：两个都为真说明这条既 @ 了全体又点到你，说"有人 @ 你"更准；
+ * 反过来（@all 却说"你"）是撒谎。
+ */
+function withMention(item: NotificationItem, title: string, t: (k: string) => string): string {
+  const label = item.mentionedMe
+    ? t('notify.mentionedYou')
+    : (item.mentionedAll ? t('notify.mentionedAll') : '')
+  return label ? (joinParts(label, title) || title) : title
 }
 
 function describe(item: NotificationItem, t: (k: string) => string): { title: string; body: string } {
   const { kind, place, sender, preview } = item
   switch (kind) {
     case 'group_message':
-      return { title: place || t('notify.groupMessage'), body: joinParts(sender, preview) }
+      return { title: withMention(item, place || t('notify.groupMessage'), t), body: joinParts(sender, preview) }
     case 'dm_message':
-      return { title: place || t('notify.dmMessage'), body: preview || '' }
+      return { title: withMention(item, place || t('notify.dmMessage'), t), body: preview || '' }
     case 'announcement':
-      return { title: joinParts(place, t('notify.announcement')) || t('notify.announcement'), body: preview || '' }
+      return {
+        // 目前公告都是经 push 以 group_message 落下来的（见 connection_manager._push_to_scopes），
+        // 走不到这个分支；真收到裸 announcement 帧时也照挂点名说明，别把"这事和你有关"吞掉
+        title: withMention(item, joinParts(place, t('notify.announcement')) || t('notify.announcement'), t),
+        body: preview || '',
+      }
     case 'group_invite_card':
       return { title: t('notify.groupInviteCard'), body: joinParts(place, preview) }
     case 'friend_request':
@@ -82,6 +103,12 @@ function describe(item: NotificationItem, t: (k: string) => string): { title: st
       return { title: t('notify.groupInviteDeclined'), body: joinParts(sender, place) }
     case 'system':
       return { title: t('notify.system'), body: preview || '' }
+    default: {
+      // 新增 kind 忘了加分支时这里编译不过（KIND_STYLE 那张表靠 Record 守住，这张靠 never 守）；
+      // 真到了运行时（新后端 + 老前端）给个兜底标题，别白屏
+      const _exhaustive: never = kind
+      return { title: t('notify.system'), body: preview || '' }
+    }
   }
 }
 
@@ -93,25 +120,36 @@ function Toast({ item, onDismiss, onOpen }: {
   const t = useT()
   const [hovering, setHovering] = useState(false)
   const { title, body } = describe(item, t)
-  const { icon: Icon, tone } = KIND_STYLE[item.kind]
+  // 计时器与回调身份无关，所以 onDismiss 走 ref：父组件每次渲染都给新函数，
+  // 直接进依赖会让 6 秒计时器被反复重置——症状就是"浮窗永远不消失"
+  const dismissRef = useRef(onDismiss)
+  dismissRef.current = onDismiss
+
+  const { icon, tone } = KIND_STYLE[item.kind]
+  // 被点名的换图标与颜色：和普通群消息长得一样，等于没做特殊处理
+  //（个人点名与 @all 都算点名；破免打扰的只有前者，判定在 useNotificationSocket 里）
+  const highlighted = item.mentionedMe || item.mentionedAll
+  const Icon = highlighted ? AtSign : icon
+  const cardTone = highlighted ? 'mention' : tone
 
   useEffect(() => {
-    if (hovering) return
-    const timer = setTimeout(() => onDismiss(item.id), AUTO_DISMISS_MS)
+    // 被点名的不自动收起：等人自己看（其余照旧 6 秒，免得回到电脑前积一屏）
+    if (hovering || highlighted) return
+    const timer = setTimeout(() => dismissRef.current(item.id), AUTO_DISMISS_MS)
     return () => clearTimeout(timer)
-  }, [hovering, item.id, onDismiss])
+  }, [hovering, item.id, highlighted])
 
   return (
     <div
       onClick={() => onOpen(item)}
       onMouseEnter={() => setHovering(true)}
       onMouseLeave={() => setHovering(false)}
-      className={`pointer-events-auto flex items-start gap-3 p-3 bg-elevated border border-border rounded-dialog shadow-2xl shadow-black/30 animate-slide-in ${item.to ? 'cursor-pointer hover:border-primary-400/40' : ''}`}
+      className={`pointer-events-auto flex items-start gap-3 p-3 bg-elevated border rounded-dialog shadow-2xl shadow-black/30 animate-slide-in cursor-pointer ${highlighted ? 'border-rose-400/40' : 'border-border'} ${item.to ? 'hover:border-primary-400/40' : ''}`}
     >
       {item.avatarUrl ? (
         <img src={item.avatarUrl} alt="" className="w-8 h-8 rounded-full object-cover shrink-0" loading="lazy" />
       ) : (
-        <span className={`w-8 h-8 rounded-control bg-canvas flex items-center justify-center shrink-0 ${TONE_CLASS[tone]}`}>
+        <span className={`w-8 h-8 rounded-control bg-canvas flex items-center justify-center shrink-0 ${TONE_CLASS[cardTone]}`}>
           <Icon size={15} />
         </span>
       )}

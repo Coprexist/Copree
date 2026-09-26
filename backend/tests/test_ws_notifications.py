@@ -157,3 +157,65 @@ async def test_notification_subscribe_is_handle_in_ws_loop():
     assert "notifications_subscribe" in source
     assert "subscribe_notifications" in source
 
+
+async def test_mention_push_carries_preview_and_flag(migrated_db):
+    """弹窗要带两样东西：人话正文（@ 换人名、去 Markdown）与"这条点到谁"
+
+    正文与收件人无关，只整理一次；点名逐人算，且两种点名分开放：
+    mentioned_me 只认"点到你个人"（浮窗据此破免打扰），mentions_all 认 @all（不破）。
+    """
+    from sqlalchemy import text
+
+    from app.database import async_session
+
+    async with async_session() as db:
+        from db_reset import clear
+        await clear(db, "external_identities", "plugin_service_states", "plugin_configs", "plugins",
+                    "pending_messages", "messages", "dm_messages", "dm_sessions", "group_members",
+                    "groups", "users", "agents")
+        await db.execute(text(
+            "INSERT INTO users (id, username, password_hash, type) VALUES "
+            "(2, '小明', 'x', 'human'), (3, '小红', 'x', 'human')"
+        ))
+        await db.commit()
+
+    mgr = ConnectionManager()
+    me, other = FakeWS(), FakeWS()
+    await mgr.subscribe_notifications(me, 2, group_ids=[7], session_ids=[])
+    await mgr.subscribe_notifications(other, 3, group_ids=[7], session_ids=[])
+
+    original = "**重要** <@!2> 看一下"
+    await mgr.broadcast_to_group(7, {"type": "message", "data": {"content": original}})
+    mine, theirs = me.pushes()[0]["data"], other.pushes()[0]["data"]
+    assert mine["preview"] == "重要 @小明 看一下", mine["preview"]
+    assert mine["message"]["content"] == original, "浮窗正文是给人看的另一版，推送里的原文不能被动过"
+    assert mine["mentioned_me"] is True and theirs["mentioned_me"] is False
+    assert mine["mentions_all"] is False and theirs["mentions_all"] is False
+
+    # @all 是"喊所有人"：mentions_all 置位，但**不算点到我个人**——它也就不破免打扰
+    await mgr.broadcast_to_group(7, {"type": "message", "data": {"content": "@all 开会了"}})
+    for push in (me.pushes()[1]["data"], other.pushes()[1]["data"]):
+        assert push["mentions_all"] is True
+        assert push["mentioned_me"] is False, "@all 不该被当成'点名到个人'"
+    # @ai 是叫 AI：人两种都不算
+    await mgr.broadcast_to_group(7, {"type": "message", "data": {"content": "@ai 帮忙看下"}})
+    assert me.pushes()[2]["data"]["mentioned_me"] is False
+    assert me.pushes()[2]["data"]["mentions_all"] is False
+
+    # 纯附件：正文要给占位，别弹出一条空白的
+    await mgr.broadcast_to_group(7, {"type": "message", "data": {
+        "content": "", "attachments": [{"mime_type": "image/png", "name": "a.png"}],
+    }})
+    assert me.pushes()[3]["data"]["preview"] == "[图片]", me.pushes()[3]["data"]["preview"]
+
+
+async def test_no_recipient_means_no_payload_work():
+    """没人开着浮窗时不该为通知做任何加工（正文整理要查库，这条在消息广播链路上）"""
+    mgr = ConnectionManager()
+    notifier = FakeWS()
+    await mgr.subscribe_notifications(notifier, 2, group_ids=[7], session_ids=[])
+    # 别的群没有订阅者：不该炸、也不该推给任何人
+    await mgr.broadcast_to_group(8, {"type": "message", "data": {"content": "<@!2> 在吗"}})
+    assert notifier.pushes() == []
+
+

@@ -312,7 +312,8 @@ const ChatSidebar = memo(function ChatSidebar({
           </div>
           <div className="text-2xs text-textMuted mt-0.5 flex items-center gap-1 min-w-0">
             {g.dnd_until && <BellOff size={10} className="text-rose-400 shrink-0" />}
-            {g.has_mention && !g.dnd_until && (
+            {/* 免打扰照显：被点名是"叫我"，跟"别拿常规消息打扰我"不是一回事 */}
+            {g.has_mention && (
               <span className="text-rose-400 font-medium shrink-0">{t('chatlist.atYou')}</span>
             )}
             <span className="min-w-0 flex-1" style={{ display: 'block' }}>

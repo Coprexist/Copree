@@ -44,6 +44,10 @@ export interface NotificationItem {
   sender: string | null
   /** 正文摘要 */
   preview: string | null
+  /** 这条点名到我个人（<@!我的id>）——浮窗加强提示，且**只有它**穿透免打扰 */
+  mentionedMe: boolean
+  /** 这条 @all（喊全体）——浮窗照旧加强提示，但不穿透免打扰 */
+  mentionedAll: boolean
   avatarUrl: string | null
   /** 点击跳转的路由（没有就只是个提示） */
   to: string | null
@@ -94,16 +98,23 @@ async function loadSessionCache(): Promise<SessionCache> {
 /** 群消息/私信消息 → 弹窗条目（其余 kind 的字段直接来自后端） */
 function toItem(kind: NotificationKind, data: any, cache: SessionCache): NotificationItem | null {
   const id = `${kind}-${data.conversation_id ?? data.group_id ?? data.session_id ?? ''}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
-  const base = { id, kind, receivedAt: Date.now(), avatarUrl: null as string | null }
+  const base = {
+    id, kind, receivedAt: Date.now(), avatarUrl: null as string | null,
+    mentionedMe: data.mentioned_me === true,
+    mentionedAll: data.mentions_all === true,
+  }
 
   if (kind === 'group_message') {
     const gid = data.group_id ?? data.conversation_id
-    if (cache.mutedGroups.has(Number(gid))) return null
+    // 免打扰挡的是"常规消息"，不是"别叫我"：点名到**我个人**的那条照样弹。
+    // @all 不破例——喊所有人不该打扰已经关掉免打扰的人。
+    // 没开免打扰的群任何消息都弹：@ 只是加强提示，不是弹窗的门槛
+    if (cache.mutedGroups.has(Number(gid)) && !base.mentionedMe) return null
     return {
       ...base,
       place: cache.groupNames[gid] ?? null,
       sender: data.message?.sender_name ?? null,
-      preview: summarize(data.message),
+      preview: summarize(data.message, data.preview),
       avatarUrl: data.message?.sender_avatar_url ?? cache.groupAvatars[gid] ?? null,
       to: gid ? `/chat/gm/${gid}` : null,
     }
@@ -115,7 +126,8 @@ function toItem(kind: NotificationKind, data: any, cache: SessionCache): Notific
       ...base,
       place: cache.dmPeers[sid] ?? null,
       sender: null,
-      preview: summarize(data.message) ?? (kind === 'group_invite_card' ? data.message?.attachments?.[0]?.group_name ?? null : null),
+      preview: summarize(data.message, data.preview)
+        ?? (kind === 'group_invite_card' ? data.message?.attachments?.[0]?.group_name ?? null : null),
       avatarUrl: data.message?.sender_avatar_url ?? null,
       to: sid ? `/chat/dm/${sid}` : null,
     }
@@ -148,12 +160,17 @@ function toItem(kind: NotificationKind, data: any, cache: SessionCache): Notific
   }
 }
 
-/** 消息摘要：附件消息也要说得出话，别弹出一条空白 */
-function summarize(message: any): string | null {
+/**
+ * 消息摘要：优先用后端给的浮窗正文
+ *
+ * 后端那一版已经把 @令牌换成名字、去掉 Markdown 排版符号（`**重点**` → `重点`）、
+ * 纯附件给成 `[图片]`/`[3个文件]`；前端只在没有它时（直推的 message 事件）退回原文。
+ */
+function summarize(message: any, preview?: string | null): string | null {
+  if (preview) return preview
   if (!message) return null
   const text = typeof message.content === 'string' ? message.content.trim() : ''
   if (text) return text.length > 80 ? `${text.slice(0, 80)}...` : text
-  if (Array.isArray(message.attachments) && message.attachments.length > 0) return null
   return null
 }
 

@@ -227,6 +227,8 @@ const zh: TranslationDict = {
 
   // ======================== 站内通知 / In-app popups ========================
   'notify.groupMessage': '新消息',
+  'notify.mentionedYou': '有人 @ 你',
+  'notify.mentionedAll': '@ 全体成员',
   'notify.dmMessage': '新私信',
   'notify.announcement': '群公告',
   'notify.groupInviteCard': '群聊邀请',
@@ -2197,6 +2199,8 @@ const en: TranslationDict = {
 
   // ======================== 站内通知 / In-app popups ========================
   'notify.groupMessage': 'New message',
+  'notify.mentionedYou': 'You were mentioned',
+  'notify.mentionedAll': '@everyone',
   'notify.dmMessage': 'New DM',
   'notify.announcement': 'Announcement',
   'notify.groupInviteCard': 'Group invitation',
@@ -4166,6 +4170,8 @@ const ja: TranslationDict = {
 
   // ======================== 站内通知 / In-app popups ========================
   'notify.groupMessage': '新着メッセージ',
+  'notify.mentionedYou': 'あなたがメンションされました',
+  'notify.mentionedAll': '@全体メンバー',
   'notify.dmMessage': '新着DM',
   'notify.announcement': 'お知らせ',
   'notify.groupInviteCard': 'グループ招待',

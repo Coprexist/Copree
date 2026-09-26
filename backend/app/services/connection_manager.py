@@ -254,20 +254,35 @@ class ConnectionManager:
         """
         if message.get("type") not in NOTIFIABLE_MESSAGE_TYPES:
             return
-        payload = {
-            "type": "push",
-            "data": {
-                "kind": "group_message" if room_kind == "group" else "dm_message",
-                "conversation_type": room_kind,
-                "conversation_id": room_id,
-                "message": message.get("data"),
-            },
-        }
-        for user_id, scopes in list(self.notification_scopes.items()):
-            if exclude_user_id is not None and user_id == exclude_user_id:
-                continue
-            if (room_kind, room_id) in scopes:
-                await self.send_notification(user_id, payload)
+        recipients = [
+            user_id for user_id, scopes in list(self.notification_scopes.items())
+            if user_id != exclude_user_id and (room_kind, room_id) in scopes
+        ]
+        if not recipients:
+            return                      # 没人在看浮窗：连正文都不用整理
+
+        # 浮窗正文是"给人看"的一版（@ 换人名、去 Markdown、纯附件给占位），与侧栏预览同一套拼法；
+        # 是否"点了你"因人而异，所以正文只整理一次、标记在循环里算
+        from app.services.infrastructure.notification_service import message_toast
+
+        data = message.get("data") or {}
+        preview, mentioned_ids, mentions_all = await message_toast(data)
+        for user_id in recipients:
+            await self.send_notification(user_id, {
+                "type": "push",
+                "data": {
+                    "kind": "group_message" if room_kind == "group" else "dm_message",
+                    "conversation_type": room_kind,
+                    "conversation_id": room_id,
+                    "message": data,
+                    "preview": preview,
+                    # 两个标记分开送：浮窗把两者都当"点名了"来加强提示，
+                    # 但**只有点到你个人**才穿透免打扰——@all 是喊所有人，
+                    # 人人被喊一遍不该打扰关掉免打扰的人
+                    "mentioned_me": user_id in mentioned_ids,
+                    "mentions_all": mentions_all,
+                },
+            })
 
     def get_offline_timestamp(self, user_id: int) -> datetime | None:
         """获取心跳首次检测到离线的时间戳（仅超时断开时有值，正常断开返回 None）。
