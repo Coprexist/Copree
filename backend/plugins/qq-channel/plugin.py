@@ -169,10 +169,16 @@ class QqClient:
         )
 
     async def send_c2c(
-        self, user_openid: str, content: str, msg_id: str | None = None, msg_seq: int = 1
+        self, user_openid: str, content: str, msg_id: str | None = None, msg_seq: int = 1,
+        force_type: int | None = None,
     ) -> dict:
-        """发私聊消息（被动回复 60 分钟内、最多 4 次）"""
-        return await self._send_rich(f"/v2/users/{user_openid}/messages", content, msg_id, msg_seq)
+        """发私聊消息（被动回复 60 分钟内、最多 4 次）
+
+        force_type 与群一致：正文格式是通道级配置，私聊也要能固定成纯文本。
+        """
+        return await self._send_rich(
+            f"/v2/users/{user_openid}/messages", content, msg_id, msg_seq, force_type=force_type
+        )
 
     async def delete_group_message(self, group_openid: str, message_id: str) -> dict:
         """撤回群消息（官方：发送超过 2 分钟不可撤回；机器人是群管理员时还能撤普通成员的消息）"""
@@ -1094,7 +1100,7 @@ class QqChannelPlugin(ServicePlugin):
         sender_id = msg.get("sender_id")
         if int(sender_id or 0) != self._target_user_id:
             return                      # 只转发这个 AI 的回复
-        # 同上：Markdown 由发送层按权限决定发 MD 还是降级纯文本
+        # 同上：正文格式在 _deliver 里统一施加（群与私聊同一份配置）
         text = str(msg.get("content") or "").strip()
         if not text:
             return
@@ -1118,11 +1124,8 @@ class QqChannelPlugin(ServicePlugin):
                 logger.warning(f"QQ 群 @ 映射失败，按原文发送：{type(e).__name__}: {e}")
         reference_id = await self._reply_reference(reply_to, kind)
         try:
-            # 群回复按配置的消息类型发（留空 = 默认：先 Markdown、没权限降级纯文本）
-            result = await self._deliver(
-                route, kind, text, reference_id=reference_id,
-                msg_type=self._msg_type if kind == "group" else None,
-            )
+            # 正文格式由 _deliver 统一施加（群与私聊一致；留空 = 先 Markdown、没权限降级纯文本）
+            result = await self._deliver(route, kind, text, reference_id=reference_id)
         except Exception as e:
             self.last_error = f"发送失败：{type(e).__name__}: {e}"
             logger.warning(
@@ -1241,8 +1244,11 @@ class QqChannelPlugin(ServicePlugin):
         return render_mentions(text, _render)
 
     async def _deliver(self, route: dict, kind: str, text: str, *, passive_only: bool = False,
-                       reference_id: str = "", msg_type: int | None = None) -> dict:
+                       reference_id: str = "") -> dict:
         """把一条消息发到 route 指向的会话（频控与被动回复窗口都在这里）
+
+        正文格式（self._msg_type）在这里统一施加：群与私聊共用同一份配置，
+        留空才走"先 Markdown、没权限降级纯文本"。
 
         失败一律抛异常：调用方一个要记状态（后台回复）、一个要把原因给用户看（自测），
         各写一份"为什么没发出去"迟早不一致。
@@ -1272,11 +1278,12 @@ class QqChannelPlugin(ServicePlugin):
         if kind == "group":
             data = await client.send_group(
                 target, text, msg_id=msg_id, msg_seq=seq + 1, message_reference=reference_id,
-                force_type=msg_type,
+                force_type=self._msg_type,
             )
         else:
             # 私聊的引用字段官方没给（也没实测过），宁可不发也不发错
-            data = await client.send_c2c(target, text, msg_id=msg_id, msg_seq=seq + 1)
+            data = await client.send_c2c(target, text, msg_id=msg_id, msg_seq=seq + 1,
+                                         force_type=self._msg_type)
         if kind == "group":
             self.replies += 1
         else:
@@ -1316,11 +1323,8 @@ class QqChannelPlugin(ServicePlugin):
         ) if p]
         text = "（通道自测，请忽略）" + " ／ ".join(probes)
         try:
-            # 也按配置的消息类型发：点一次自测＝用当前配置的真实发一条
-            result = await self._deliver(
-                route, kind, text, passive_only=True,
-                msg_type=self._msg_type if kind == "group" else None,
-            )
+            # 也按配置的正文格式发：点一次自测＝用当前配置的真实发一条
+            result = await self._deliver(route, kind, text, passive_only=True)
         except Exception as e:
             return {"sent": False, "target": kind, "reason": f"{type(e).__name__}: {e}"}
         return {"sent": True, "target": kind, "text": text, **result}

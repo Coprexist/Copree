@@ -42,9 +42,9 @@ class FakeClient:
                           "force_type": force_type})
         return {"id": "fake", "ext_info": {"ref_idx": "REFIDX-OUT"}}
 
-    async def send_c2c(self, user_openid, content, msg_id=None, msg_seq=1):
+    async def send_c2c(self, user_openid, content, msg_id=None, msg_seq=1, force_type=None):
         self.sent.append({"kind": "dm", "target": user_openid, "content": content,
-                          "msg_id": msg_id, "seq": msg_seq})
+                          "msg_id": msg_id, "seq": msg_seq, "force_type": force_type})
         return {"id": "fake"}
 
     async def aclose(self):
@@ -258,6 +258,35 @@ async def test_private_chat_round_trip(migrated_db):
         sent = plugin._client.sent[0]
         assert sent["kind"] == "dm" and sent["target"] == "OPENID-DM"
         assert sent["content"] == "在的" and sent["msg_id"] == "DMMSG-1"
+        assert sent["force_type"] is None, "留空 = 默认：先 Markdown、没权限降级纯文本"
+    finally:
+        _cleanup(plugin)
+
+
+async def test_body_format_pins_private_chat_too(migrated_db):
+    """正文格式是通道级的：固定成纯文本后私聊也按它发。
+
+    此前只有群回复读这个配置，私聊永远"先 Markdown 后降级"——
+    同一个开关，群消息成了纯文本、私聊还是 Markdown。
+    """
+    from app.chat.dm import send_dm_message
+    from app.database import async_session
+
+    await _seed()
+    plugin = await _make_plugin()
+    plugin._dm_policy = "open"
+    plugin._msg_type = 0                      # 配置里选了「纯文本」
+    try:
+        await plugin._on_c2c(dict(DM_EVENT))
+        async with async_session() as db:
+            session_id = (await db.execute(text("SELECT session_id FROM dm_sessions"))).scalar()
+            await send_dm_message(db, session_id, sender_id=AGENT_USER, content="**重点**：在的")
+            await db.commit()
+        await _wait_sent(plugin)
+
+        sent = plugin._client.sent[-1]
+        assert sent["kind"] == "dm", sent
+        assert sent["force_type"] == 0, sent      # 固定成文本，不再"先 Markdown"
     finally:
         _cleanup(plugin)
 
@@ -966,6 +995,12 @@ async def test_markdown_first_with_plain_fallback():
     assert sent[0]["msg_id"] == "M-1" and sent[0]["msg_seq"] == 1, sent
     assert sent[1]["msg_type"] == 0, sent
     assert "**" not in sent[1]["content"] and "`代码`" not in sent[1]["content"], sent
+
+    # 私聊走同一个发送层：固定成文本就只发一次，不再先试 Markdown
+    await client.send_c2c("OPENID-DM", "**粗体** 与 `代码`", msg_id="M-2", msg_seq=1, force_type=0)
+    assert sent[2]["msg_type"] == 0, sent
+    assert "**" not in sent[2]["content"] and "`代码`" not in sent[2]["content"], sent
+    assert sent[2]["msg_id"] == "M-2", sent
 
 
 async def test_reply_task_drained_before_client_close(migrated_db):
