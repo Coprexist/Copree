@@ -51,7 +51,8 @@ class ConversationLog(Base):
     # 统计信息
     message_count = Column(Integer, default=0)  # messages 数组长度
     token_usage = Column(json_column(), nullable=True)  # {prompt_tokens, completion_tokens, total_tokens}
-    # 是否有实际产出（AI 说了话或调了工具）
+    # 本轮是否真的产出了对用户可见的东西（发出了消息）。只调了工具、一句话没发出去的轮次
+    # 在监控里必须显示为「无输出」——不然截断/空转的轮次和正常回复长得一样
     has_output = Column(Boolean, default=False)
     # 使用的模型
     model = Column(String(50), nullable=True)

@@ -76,6 +76,39 @@ async def test_seal_turn_writes_tools_handoff_and_thinking(migrated_db):
         await hs.clear(db, 1, ref)
         await db.commit()
 
+async def test_seal_turn_records_the_cutoff_honestly(migrated_db):
+    """轮次用尽被平台收尾时补一条系统通知：上一轮不是 AI 自己收的尾
+
+    少了它，后面的自己只看到一串工具名，会以为那轮已经张口说过。
+    """
+    from app.ai.executor import _seal_turn
+    from app.database import async_session
+    from app.models.agent import Agent
+    from app.services.history import history_service as hs
+
+    async with async_session() as db:
+        await _seed(db)
+        agent = await db.get(Agent, 1)
+        ref = "group:999002"
+
+        await _seal_turn(
+            db, agent, group_id=999002, session_id=None, conversation_type="group",
+            tool_log=[{"name": "web_fetch", "note": "ok"}],
+            settlement={"keep_thinking": True},
+            reasoning="在核版本号",
+            cutoff="工具轮次用尽，本轮由平台结束，没走 end_turn。一条消息都没发出去。",
+        )
+        await db.commit()
+
+        entries = await hs.read(db, 1, ref)
+        assert [e["kind"] for e in entries] == ["tool", "notice", "thinking"],             [e["kind"] for e in entries]
+        assert entries[1]["content"].startswith("[本轮收尾] 工具轮次用尽")
+        assert entries[1]["actor"] == "system"
+
+        await hs.clear(db, 1, ref)
+        await db.commit()
+
+
 async def test_sync_group_history_uses_the_shared_context_key(migrated_db):
     """群聊同步要能真的跑起来（会话键是关键字参数——踩过：位置调用直接 TypeError）"""
     from app.database import async_session

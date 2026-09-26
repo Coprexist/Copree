@@ -694,6 +694,28 @@ async def _build_current_context(
     return context
 
 
+def set_round_budget(messages: list[dict], *, round_no: int, total: int,
+                     free: bool = False) -> bool:
+    """把工具轮次读数写进尾部动态块（`## 当前时间` 那条 system 消息）。
+
+    为什么改这条而不是新 append 一条：尾部动态块的位置本来就是「每轮都变、放在最后」，
+    改它不动前缀 cache；每轮追加会让读数在上下文里堆成 N 条。
+    找不到那块（别的拼装路径）就返回 False——读数缺席不影响主流程。
+    """
+    from app.utils.pure.round_budget import HEADER, round_budget_text
+
+    text = round_budget_text(round_no=round_no, total=total, free=free)
+    for msg in reversed(messages):
+        if msg.get("role") != "system":
+            continue
+        content = msg.get("content")
+        if not isinstance(content, str) or "## 当前时间" not in content:
+            continue
+        msg["content"] = content.split("\n\n" + HEADER)[0] + "\n\n" + text
+        return True
+    return False
+
+
 async def _build_injected_skills(
     db: AsyncSession, agent, group_id: int,
     query_text: str,

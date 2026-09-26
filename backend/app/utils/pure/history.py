@@ -190,6 +190,17 @@ def thinking_entry(text: str) -> dict:
     return make_entry("thinking", f"[本轮思考] {text.strip()}", actor="self")
 
 
+def cutoff_entry(reason: str) -> dict:
+    """轮次用尽被平台收尾的条目：**上一轮不是 AI 自己 end_turn 收的尾**。
+
+    与 handoff 分开：handoff 是 AI 自己写的交接，这条是平台对「怎么结束的」的如实记录。
+    少了它，后面的自己只看到一串工具名，会以为那轮已经张口说过、或者只是被打断。
+    只活到解锁：它讲的是上一轮的死法，压缩后由摘要接手。
+    """
+    return make_entry("notice", f"[本轮收尾] {reason.strip()}", actor="system",
+                      flags={"drop_on_unlock": True})
+
+
 def note_entry(note_id: str, text: str) -> dict:
     """一条跨状态便签的**投递条目**——ref 记 note id，账本里有了就不再投（幂等）。
 

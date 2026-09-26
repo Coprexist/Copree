@@ -24,6 +24,23 @@ from app.utils.pure.tool_chain import heal_tool_chain
 
 # ── 中断消息注入：AI 忙碌时，新消息不另起 executor，注入当前循环 ──
 # {agent_id: [{type: "user_message", content, sender_id, sender_name, session_id}]}
+# 只发消息的工具：一轮里除了它们什么都没干时，思考痕迹没有留的价值
+_MESSAGE_ONLY_TOOLS = ("send_gm", "send_dm")
+
+# 额度外轮次（收尾轮）允许的工具：能说话、能收尾，不能再开检索
+_CLOSING_TOOLS = ("send_gm", "send_dm", "end_turn")
+
+# 强制留痕的思考上限：各轮拼起来可能很长，超了留头尾
+_FORCED_THINKING_MAX = 6000
+
+# 收尾轮指令：轮次已用尽，这一轮白送（不占额度）
+_CLOSING_INSTRUCTION = (
+    "[收尾] 工具轮次已经用完，这一轮是白送的：现在只能 send_gm/send_dm/end_turn。\n"
+    "- 把已经查到、有把握的先发出去；没查到就说没查到，别硬编；\n"
+    "- 发完再 end_turn。\n"
+    "再调别的工具不会有结果，只会把这最后一次机会也浪费掉。"
+)
+
 _pending_interrupts: dict[int, list[dict]] = {}
 # 当前正在 _tool_call_loop 中的 agent ID 集合
 _active_run_agent_ids: set[int] = set()
@@ -415,7 +432,7 @@ async def _tool_call_loop(
     """
     if effective_cfg is None:
         effective_cfg = {}
-    from app.ai.llm import chat_completion
+    from app.ai.llm import chat_completion, set_round_budget
     from app.services.tool_registry import dispatch_tool_call
 
     context = {
@@ -445,17 +462,74 @@ async def _tool_call_loop(
     _has_sent_message = False
     # 轮末封存用的工具总账（工具轮历史 → 账本）
     _tool_log: list[dict] = []
+    # 收尾轮：轮次用尽却一句话没发时白送一轮（只送一次），否则整轮检索等于白做
+    _closing_extra = 0
+    _closing_active = False
+    # 下一个 LLM 调用是额度外白送的轮次（提醒轮 / 收尾轮）
+    _free_next = False
+    # 本轮是 AI 自己收的尾（end_turn 工具 / intent=end_turn），不是被平台结束的
+    _self_ended = False
+    # 各轮思考：没走 end_turn 就被收尾时，它是「为什么在干这件事」的唯一记录
+    _reasoning_log: list[str] = []
 
-    async def _seal(reasoning: str = "") -> None:
-        """三个出口（end_turn 工具 / intent=end_turn / 循环走完）共用这一次封存。"""
+    def _did_real_work() -> bool:
+        """本轮除了发消息/结束，还干过别的事没有。"""
+        return any(
+            (it.get("name") or "") not in _MESSAGE_ONLY_TOOLS
+            for it in _tool_log
+        )
+
+    def _forced_reasoning() -> str:
+        """没走 end_turn 就收尾时留下的思考：各轮拼起来，超长留头尾。"""
+        text = "\n\n".join(t for t in _reasoning_log if (t or "").strip())
+        if len(text) <= _FORCED_THINKING_MAX:
+            return text
+        half = _FORCED_THINKING_MAX // 2
+        return f"{text[:half]}\n…（中略）…\n{text[-half:]}"
+
+    def _cutoff_text(reason: str) -> str:
+        """收尾说明的两种口径：话已经说出去了 / 一句都没发。"""
+        tail = ("消息已经发出去了，但事情可能没做完。" if _has_sent_message
+                else "一条消息都没发出去——上面的工具过程别当成已经说过的话。")
+        return f"{reason}{tail}"
+
+    async def _seal(reasoning: str = "", cutoff: str = "") -> None:
+        """三个出口（end_turn 工具 / intent=end_turn / 循环走完）共用这一次封存。
+
+        不是 AI 自己收的尾（轮次用尽、模型只回了文字）时思考必须留：它是「为什么在干这件事」
+        的唯一记录；只发过消息的轮次没有这个负担，照旧不留。
+        """
+        if not (_end_turn or _self_ended) and _did_real_work():
+            _settlement["keep_thinking"] = True
+            reasoning = _forced_reasoning() or reasoning
         try:
             await _seal_turn(
                 db, agent, group_id=group_id, session_id=session_id,
                 conversation_type=conversation_type, tool_log=_tool_log,
-                settlement=_settlement, reasoning=reasoning,
+                settlement=_settlement, reasoning=reasoning, cutoff=cutoff,
             )
         except Exception as e:
             logger.warning(f"轮末封存失败（非致命，下一轮只少了这一笔）: {e}")
+
+    def _grant_closing_round() -> None:
+        """轮次用尽却一句话没发 → 白送一轮收尾（只送一次）。
+
+        不送的话这一轮检索全白做，用户侧只看到「AI 不回我了」——静默收尾是必须堵死的出口。
+        只在额度真的用完时送；提醒轮（system_reminder）自己也会送免费轮，别叠加。
+        """
+        nonlocal _closing_extra, _free_next, _closing_active
+        if _closing_extra or _has_sent_message or _end_turn or _self_ended:
+            return
+        if loop_idx < max_loops + _reminder_extra + _closing_extra:
+            return
+        _closing_extra += 1
+        _free_next = True
+        _closing_active = True
+        messages.append({"role": "user", "content": _CLOSING_INSTRUCTION})
+        logger.info(
+            f"AI {agent.name}({agent.id}) 工具轮次用尽且一条消息都没发，白送收尾轮"
+            f"（上限 {max_loops} 轮）"
+        )
 
     # ── 空闲强制压缩（2026-08-13 前移）：在第一次 LLM 调用之前检查 12h 空闲。
     # 之前放在工具循环内（调用成功后），key 失效等早期失败时根本执行不到——
@@ -517,7 +591,11 @@ async def _tool_call_loop(
         logger.warning(f"调用前空闲压缩跳过（非致命）: {e}")
 
     loop_idx = 0
-    while loop_idx < max_loops + _reminder_extra:
+    while loop_idx < max_loops + _reminder_extra + _closing_extra:
+        # 轮次读数：AI 不知道额度还剩几次，就会把每一轮都花在检索上、用尽后静默收尾
+        _free_round = _free_next
+        _free_next = False
+        set_round_budget(messages, round_no=loop_idx + 1, total=max_loops, free=_free_round)
         # ── v0.1.5: 带分类重试的 LLM 调用 ──
         from app.ai.llm import RateLimitError, ServerError, KeyFatalError
         from app.services.infrastructure.api_key_concurrency import concurrency_mgr
@@ -592,7 +670,7 @@ async def _tool_call_loop(
                 return None
 
             async def _dispatch_one_tool(tc: dict):
-                nonlocal last_task, _end_turn, _settlement
+                nonlocal last_task, _end_turn, _settlement, _closing_active
                 if _end_turn:
                     # 同一批里前一个工具已 end_turn → 后面的不执行，但**必须**留一条 tool 响应：
                     # assistant(tool_calls) 里每个 id 都要有回应，少一条整次请求 400
@@ -605,6 +683,14 @@ async def _tool_call_loop(
                 tc_id = tc.get("id", "")
                 func_info = tc.get("function", {})
                 tool_name = func_info.get("name", "")
+                if _closing_active and tool_name not in _CLOSING_TOOLS:
+                    # 收尾轮里开新检索 = 把最后一轮也烧掉，直接挡在这里
+                    _pending_results.append({"tc_id": tc_id, "result": {
+                        "success": False,
+                        "error": "收尾轮：工具轮次已用完，只能 send_gm/send_dm/end_turn。"
+                                 "请把已有结论发出去。",
+                    }})
+                    return
                 arguments_str = func_info.get("arguments", "{}")
                 try:
                     arguments = json.loads(arguments_str)
@@ -886,6 +972,9 @@ async def _tool_call_loop(
                                      conversation_type, group_id, session_id)
             return
 
+        if response.get("reasoning_content"):
+            _reasoning_log.append(response["reasoning_content"])
+
         # ── end_turn 已在流式回调中触发 → 补 assistant_msg + tool results 后退出 ──
         if _end_turn:
             assistant_msg = {"role": "assistant", "content": response.get("content")}
@@ -905,7 +994,7 @@ async def _tool_call_loop(
             )
             await _save_conversation_log_safe(
                 db, agent, messages, conversation_type,
-                group_id, session_id, has_output=True, model=model,
+                group_id, session_id, has_output=_has_sent_message, model=model,
                 token_usage=total_usage,
             )
             return
@@ -936,6 +1025,7 @@ async def _tool_call_loop(
             logger.info(
                 f"AI {agent.name}({agent.id}) intent={parsed_intent}，本轮结束"
             )
+            _self_ended = True
             await _seal(response.get("reasoning_content") or "")
             if last_task:
                 try:
@@ -951,7 +1041,7 @@ async def _tool_call_loop(
             await _save_conversation_log_safe(
                 db, agent, messages, conversation_type,
                 group_id, session_id,
-                has_output=bool(content), model=model,
+                has_output=_has_sent_message, model=model,
                 token_usage=total_usage,
             )
             return
@@ -1002,6 +1092,7 @@ async def _tool_call_loop(
             })
             if reminder_grace != 'off':
                 _reminder_extra += 1
+                _free_next = True
             logger.info(f"AI {agent.name}({agent.id}) system_reminder 注入"
                         f"（grace={reminder_grace}, 额外={_reminder_extra}）")
             await asyncio.sleep(0.3)
@@ -1009,7 +1100,7 @@ async def _tool_call_loop(
 
         # ── 无工具调用也没有文字 → 退出 ──
         if not tool_calls:
-            if last_task:
+            if last_task and _has_sent_message:
                 try:
                     from app.services.agent.workspace_service import save_current_task
                     from app.services.agent.state_stack_service import persist_last_task_as_state
@@ -1020,10 +1111,14 @@ async def _tool_call_loop(
                     )
                 except Exception:
                     pass
+            # 没走 end_turn 就被收尾：如实入账，别让下一轮以为这轮说过了
+            await _seal(response.get("reasoning_content") or "", cutoff=_cutoff_text(
+                "模型只回了文字、没调用工具，本轮由平台结束，没走 end_turn。"
+            ))
             await _save_conversation_log_safe(
                 db, agent, messages, conversation_type,
                 group_id, session_id,
-                has_output=bool(content), model=model,
+                has_output=_has_sent_message, model=model,
                 token_usage=total_usage,
             )
             return
@@ -1058,11 +1153,12 @@ async def _tool_call_loop(
         if _pending_results:
             await asyncio.sleep(0.5)
             loop_idx += 1
+            _grant_closing_round()
             continue
 
         # LLM 未请求 tool_calls → 已完成，保存并退出
         if finish_reason != "tool_calls":
-            if last_task:
+            if last_task and _has_sent_message:
                 try:
                     from app.services.agent.workspace_service import save_current_task
                     from app.services.agent.state_stack_service import persist_last_task_as_state
@@ -1073,10 +1169,13 @@ async def _tool_call_loop(
                     )
                 except Exception:
                     pass
+            await _seal(response.get("reasoning_content") or "", cutoff=_cutoff_text(
+                "模型没请求工具就结束了本轮，没走 end_turn。"
+            ))
             await _save_conversation_log_safe(
                 db, agent, messages, conversation_type,
                 group_id, session_id,
-                has_output=True, model=model,
+                has_output=_has_sent_message, model=model,
                 token_usage=total_usage,
             )
             return
@@ -1084,9 +1183,16 @@ async def _tool_call_loop(
         # 短暂延迟，避免过于频繁的 API 调用
         await asyncio.sleep(0.5)
         loop_idx += 1
+        _grant_closing_round()
 
-    # 循环耗尽
-    if last_task:
+
+    # 循环耗尽。没走 end_turn 就是被平台收的尾，得如实记进账本——
+    # 少了这条，后面的自己只看到一串工具名，会以为那轮已经说过了
+    cutoff = "" if _self_ended else _cutoff_text(
+        "工具轮次用尽，本轮由平台结束，没走 end_turn。"
+    )
+    # 没发过消息的轮次里 last_task 只是「最后碰的那个工具」，不是任务，别留成幻影任务
+    if last_task and _has_sent_message:
         try:
             from app.services.agent.workspace_service import save_current_task
             await save_current_task(db, agent.id, last_task)
@@ -1112,11 +1218,11 @@ async def _tool_call_loop(
         except Exception as e:
             logger.warning(f"  扣除额度失败（不阻塞主流程）: {e}")
 
-    await _seal(response.get("reasoning_content") or "")
+    await _seal(response.get("reasoning_content") or "", cutoff=cutoff)
     await _save_conversation_log_safe(
         db, agent, messages, conversation_type,
         group_id, session_id,
-        has_output=True, model=model,
+        has_output=_has_sent_message, model=model,
         token_usage=total_usage,
     )
 
@@ -1223,18 +1329,21 @@ def _context_ref(group_id, session_id, conversation_type) -> str:
 
 
 async def _seal_turn(db, agent, *, group_id, session_id, conversation_type,
-                     tool_log: list[dict], settlement: dict, reasoning: str = "") -> None:
+                     tool_log: list[dict], settlement: dict, reasoning: str = "",
+                     cutoff: str = "") -> None:
     """**轮末封存**：把轮内的东西（工具轮历史 + 轮末结算）写进账本。
 
     不封存的话，AI 下一轮只看得见消息、看不见自己上一轮干了什么——工具轮历史原本只活在当轮
     messages 里，轮一结束就没了。这里是它进账本的唯一入口。
     """
     from app.services.history.context_sync import append_events
-    from app.utils.pure.history import handoff_entry, thinking_entry, tools_entry
+    from app.utils.pure.history import cutoff_entry, handoff_entry, thinking_entry, tools_entry
 
     entries = []
     if tool_log:
         entries.append(tools_entry(tool_log))
+    if cutoff:
+        entries.append(cutoff_entry(cutoff))
     note = (settlement.get("key_note") or "").strip()
     if note:
         entries.append(handoff_entry(note))
