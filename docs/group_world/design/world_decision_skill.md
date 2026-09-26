@@ -3,7 +3,7 @@
 > 状态：已落地。触发模式（阶段一）与决策技能（阶段二）均已实现；2026-09-26 起决策技能
 > 不再要求绑定世界，改为平台通用（AI 的沙箱就是它自己的文件空间）。现行实现、情景表与
 > 分派规则以 [决策层](../../dev/decision_layer.md) 为准，本文保留设计演化过程。
-> 关联：`world_skill_design.md`（世界侧技能）、`world_agent_capabilities.md`（能力边界）、`capability_lazy_loading.md`（能力版本化）
+> 关联：`world_skill_design.md`（世界侧技能）、`world_agent_capabilities.md`（能力边界）、[触发规则](../../dev/trigger_rules.md)（工具事件的动作组合）
 
 ## 1. 背景与目标
 
@@ -76,7 +76,8 @@
 
 ## 4. 阶段二：决策技能（Decision Skill）机制
 
-> 设计定稿，实现待排期。阶段一（触发模式）是它的第一个内置决策规则的特例。
+> 阶段二核心闭环已落地（清单见 §5），本节保留设计意图；现行情景表、校验规则与 do 分派以
+> [决策层](../../dev/decision_layer.md) 为准。阶段一（触发模式）是它的第一个内置决策规则的特例。
 
 ### 4.1 预置情景列表（Event）
 
@@ -92,9 +93,18 @@
 | `world_event` | 世界程序事件 | `{event_type, payload}` |
 | `command` | 世界命令 | `{command, args}` |
 
+> 现状：除 `command` 外均已接入（`command` 不做——群消息链路没有斜杠命令入口，见
+> [决策层](../../dev/decision_layer.md) §7）；字段以该文 §2 为准，上表是设计时的列举。
+
 ### 4.2 决策技能结构（Decision Skill）
 
-在世界侧技能（`worlds/{id}/skills/`）体系上扩展新类型 `type: "decision"`：
+> 下文的 `字段_contains` 这类下划线写法是决策技能的**历史形态**：引擎的规范写法只有一种
+> （`{"field": ..., "op": ...}`，见[触发规则](../../dev/trigger_rules.md) 的条件一节），下划线形态只为
+> 兼容库里已有的规则而保留（`conditions._LEGACY_SUFFIX`）。工具描述目前仍在教历史形态，
+> 迁移与删除判定见该文"历史写法什么时候删"。
+
+决策技能沿用世界侧技能的对象形态，原设计是扩展新类型 `type: "decision"` 挂在 `worlds/{id}/skills/` 上；
+现存储落在 `agent_skills(skill_type='decision')`，群助手为 `group_assistants.config`：
 
 ```jsonc
 {
@@ -105,15 +115,14 @@
     "conditions": {                 // 条件树（DSL，递归组合，见下）
       "and": [
         { "is_mention": false },
-        { "content_contains": ["签到", "打卡"] },
+        { "content_contains": "签到" },   // contains 只接标量；多关键词写 or
         { "not": { "content_contains": "停止" } }
       ]
     }
   },
   "do": {
     "action": "run_script",         // run_script / call_tool / reply_template / silent
-    "script": "auto_reply.py",      // 世界沙箱内脚本（sandbox_isolate）
-    "reply": "已记录你的签到 ✅"
+    "code": "import json; print(json.dumps({'reply': '已记录你的签到'}))"   // 要说的话 = stdout 末行 JSON 的 reply
   },
   "notify": false                   // false = 程序化处理完即结束；true = 命中后仍唤醒本体
 }
@@ -130,40 +139,40 @@
     - 保留字段：`is_mention` / `is_at_all` / `sender_type` / `group_type` / `content` / `sender_id` 等
   - 例：`or: [{content_contains: "天气"}, {and: [{content_contains: "签到"}, {not: {is_mention: true}}]}]`
   - 进阶（后续）：表达式字符串模式（`(content contains '天气' or group_type == '冒险团') and not is_mention`），白名单解析器，供高级场景；初期以条件树为准。
-- `do`：四选一——`run_script`（沙箱 Python，能力最全）/ `call_tool`（平台工具，如 `world_data_put`）/ `reply_template`（固定回复，零成本）/ `silent`（静默：不回也不唤醒本体）。
+- `do`：四选一——`run_script`（沙箱 Python，能力最全）/ `call_tool`（按身份分派：AI 走平台工具如 `web_search`，群助手走世界工具如 `send_group_message`）/ `reply_template`（固定回复，零成本）/ `silent`（静默：不回也不唤醒本体）。
 - `notify`：关键语义——**"什么情景才触发我"**。`notify: true` 的情景命中后仍唤醒 LLM 本体（AI 声明"这种时候必须我来"）；`false` 则程序处理完即止。
-- AI 自写：提供 `write_decision_skill` / `update_decision_skills` 工具，AI 自己生成、迭代自己的决策技能（走 `capability_versioning` 版本化，前缀缓存稳定）。
+- AI 自写：提供 `write_decision_skill` / `list_decision_skills` / `delete_decision_skill` 工具（`app/tools/decision.py`），
+  AI 自己生成、迭代自己的决策技能；同名覆盖、每个实体上限 20 条。
 
 ### 4.3 决策引擎（Decision Engine）
 
 事件 → 按序匹配该 AI 的决策技能：
 
-1. 遍历 `type="decision"` 的技能（能力版本化 effective 快照）；
+1. 遍历该实体的决策技能（`agent_skills.skill_type='decision'`，按 id 序；群消息链路一次批量预取）；
 2. `when` 命中 → 执行 `do`：
-   - `notify=false` → 结束（记决策日志 + 用量统计）；
-   - `notify=true` → 执行 `do` 后**继续唤醒本体**（带 `do` 结果上下文）；
+   - `notify=false` → 程序处理完即止（`reply` 非空则代发，不唤醒本体）；
+   - `notify=true` → 执行 `do` 后**继续唤醒本体**（结果作为 `note` 注入本轮上下文）；
 3. 全部未命中 → 走阶段一触发模式判定（`group_trigger_mode`）→ 决定是否唤醒本体。
 
 ### 4.4 安全与防循环
 
-- `do` 脚本走世界沙箱（复用 `sandbox_isolate`，资源配额沿用 worlds.config）；
-- 决策技能执行有独立日志与限额（防死循环：技能触发的动作产生的消息不再反喂同技能，参照通道 1 的 `source="world"` 防循环）；
-- 条件 DSL 白名单化，不开放任意表达式求值（阶段二初期）；沙箱脚本受技能审核与版本化约束。
+- `do` 脚本走沙箱（原设计复用世界 `sandbox_isolate` 与世界配额；现 AI 走自己的 `agent_sandbox`、群助手走 `skill_sandbox`，见 [决策层](../../dev/decision_layer.md) §5）；
+- 决策技能执行需要独立日志与限额（防死循环：技能触发的动作产生的消息不再反喂同技能，参照通道 1 的 `source="world"` 防循环）——独立限额与审计见 §5 待补项；
+- 条件 DSL 白名单化，不开放任意表达式求值；沙箱脚本沿用沙箱策略（禁网、禁 fork）。
 
 ## 5. 落地清单
 
-阶段一（本次）：
+阶段一（触发模式）——已落地：
 - [x] 设计文档（本文件）
-- [ ] `response_worker` 触发拦截（群绑定世界 + `group_trigger_mode` 判定）
-- [ ] `world_tools.update_trigger_mode` 工具（AI 可改）
-- [ ] `export_zip` / `import_zip` 附 `world_meta.json`（config 白名单快照随包）
-- [ ] CHANGELOG 补记
+- [x] `response_worker` 触发拦截（群绑定世界 + `group_trigger_mode` 判定）
+- [x] `world_tools.update_trigger_mode` 工具（AI 可改）
+- [x] `export_zip` / `import_zip` 附 `world_meta.json`（config 白名单快照随包）
+- [x] CHANGELOG 补记
 
 阶段二（决策技能）——核心闭环已落地（2026-08-13）：
-- [x] 预置情景列表（group_message 已接入；member_join/leave、friend_request、scheduled 引擎通用、事件钩子陆续接）
+- [x] 预置情景列表（`group_message` / `member_join` / `member_leave` / `scheduled` / `friend_request` / `world_event` 均已接入；`command` 不做）
 - [x] 决策技能模型（type=decision：when 条件 DSL + do 四动作 + notify）——存 agent_skills / group_assistants.config
 - [x] 决策引擎（事件→技能匹配→程序化处理 or 唤醒 LLM；优先于 mention_only 触发模式）
 - [x] `write_decision_skill` / `list_decision_skills` / `delete_decision_skill` 工具（ToolRegistry 插件，AI 自配置；群助手独立入口）
-- [x] do 执行（reply_template 零成本 / call_tool 平台工具 / run_script 沙箱复用 skill_sandbox / silent 静默不唤醒）
+- [x] do 执行（reply_template 零成本 / call_tool 按身份分派 / run_script 沙箱——群助手复用 skill_sandbox、AI 走自己的 agent_sandbox / silent 静默不唤醒）
 - [ ] 决策执行限额/日志（目前依赖世界沙箱配额，独立限额与审计待补）
-- [ ] 其余情景事件钩子（member_join/leave、friend_request、scheduled）

@@ -1,8 +1,8 @@
 # 会话历史与前缀缓存：两卷历史 + 轮末结算（设计稿）
 
-> 2026-09-25 讨论定稿的**待批设计稿**，代码未动。批准后按"表与骨架 → 写入与封存 → 世界 AI 并入 → 两级压缩 → 收尾"分批落地。
+> 设计稿已分批落地，进度与实现细节见 §13；本文件与代码不一致时以代码为准，并回填 §13。
 >
-> 相关旧文档：[能力懒加载（锁/解锁）](./capability_lazy_loading.md)、[跨状态交接](./cross_state_context.md)、[群视界实现](../group_world/implementation.md)。
+> 相关：[帧、锁与重建点](./frame_lifecycle.md)（compact/clear 重建什么）、[能力懒加载（锁/解锁）](./capability_lazy_loading.md)、[跨状态交接](./cross_state_context.md)、[群视界实现](../group_world/implementation.md)。
 
 ## 0. 一句话
 
@@ -118,7 +118,7 @@
   判定改用**会话最后活跃时间**（别依赖消息正文里的时间戳）；**对齐缓存寿命、用数据定阈值**——DeepSeek 没公开 TTL，
   用我们已经在记的 `cached_tokens`（主站 `llm.py:283/373`；世界侧 `WorldLLMUsage.cached_tokens` +
   `routers/worlds.py` 的 `cache_hit_rate_pct`）看命中率随空闲时长怎么衰减，再定 12h/18h 还是别的值。
-- **解锁必须"整套"**：重写历史（摘要 + 最近 N 条）+ 复位思考保留标记 + 卸载最旧的图 + 清便签副本/条目。
+- **解锁必须"整套"**：重写历史（摘要 + 最近 N 条）+ 复位触发规则状态 + 复位思考保留标记 + 卸载最旧的图 + 清便签副本/条目。
   少做一样就是半解锁（上次便签就是只清了一类）。
   **纪律做成了契约**（第四批 d）：`executor.UNLOCK_STEPS` 是唯一清单（新增动作只加一行、顺序也在这），
   `_unlock_context` 按清单执行并把**实际执行的步骤**返回；`tests/test_unlock_steps.py` 拿它跟清单对账
@@ -182,7 +182,7 @@
 |---|---|---|
 | 服务 | `history_service`（append / read / seal_turn / compress / clear）、压缩提示模板、确定性修剪器 | —— |
 | 存储 | —— | 主站新建表；世界侧复用 `world_chat_messages` 加列（它本来就是持久历史，不迁移） |
-| 阈值 | `T_post / T_idle / T_hot` 三档口径与判定公式 | 主站 `T_hot` = 60%（DB 现值、128K 窗口）/ 12h；世界 60% / 18h（分档是**有意**的） |
+| 阈值 | `T_post / T_idle / T_hot` 三档口径与判定公式 | 主站 `T_hot` = 60%（DB 现值、128K 窗口）/ 12h；世界 60% / 18h（当前就是分档，是否统一待 §12） |
 | 思考 | `end_turn.keep_thinking` | 世界 AI 的 `reasoning` 从"展示用，不进上下文"改为**进上下文**（历史会变重，需接受） |
 
 ## 10. 迁移
@@ -310,6 +310,10 @@
   压了等于没压还每轮白付一次摘要调用；② `read` 不带上限，请求体随会话单调增长。
 - `context_sync.rewrite_context(db, agent, ref, *, summary, keep_last)`：**唯一**允许动中段的地方——
   `clear` 后写回「摘要 + 原样搬运的事件（缺口/便签/通知）+ 最近 keep_last 条」；账本空则什么都不做。
+- **一次性条目在解锁时离场**：`gap`（缺口）/ `handoff`（轮末交接）/ `notice`（能力变更通知、决策技能
+  命中提示）都带 `drop_on_unlock`——它们讲的是"这一段上下文里发生过什么"，压缩完由摘要接手，
+  留着只会每次解锁都原样搬一遍、越堆越多。解锁后账本结构：`summary + 最近 keep_last 条`
+  （便签投递与撤下通知本来就是同款待遇，见 b-3b）。
 - `context_ref(*, group_id=None, session_id=None)`：会话键**唯一来源**（群 `group:{id}` / 私信 `session_id`），
   关键字参数逼调用点说清在哪个会话。
 - `compress_messages` / `inline_compress` 的 stats 带上 `summary` 文本（不留就写不出摘要条目）；
@@ -318,6 +322,7 @@
   调用前（`:494`）与工具循环（`:684`）两条路径共用。顺带修掉调用前那条「半解锁」（以前只压内存）。
 - **验证**：全量 267/0；重启 `health=healthy restarts=0`；真机库（agent 24，草稿会话，跑完即清）
   40 条 / 10423 bytes → **22 条 / 5426 bytes**（结构 `summary + 1 缺口 + 最近 20 条`，seq 重排，二次重写稳定）。
+  （当时缺口还随解锁保留；现已改成随解锁离场，见上。）
 
 ### 第二批 b-2：DM 走账本（已完成 2026-09-25）
 
@@ -413,29 +418,10 @@
 - **验证**：全量 278/0；`test_read_conversation.py`：读尾部（不是最早几条）、别的会话不串进来、
   提示语说清「这不是当前会话」、不指定会话就报错而不是猜。
 
-### 本轮线上问题修复（2026-09-25，与账本设计无关但同批提交）
+### 同批提交的线上修复（4 条，与账本设计无关）
 
-- **两个 QQ 通道互相顶掉**（`0cc1184`）：出口注册表按**名字**存且「同名覆盖」，两个 qq-channel 实例都用插件类型 id 注册
-  → 后注册的 `agent-8` 顶掉 `agent-24` 的出口，群 64 的 AI 回复被分发到「只认群 65」的 sink 并静默 return
-  （现象：Copree 镜像有消息、QQ 收不到、日志干净）。改成**句柄制**（`register_sink` 返回句柄、同名不去重）+
-  分发 `asyncio.gather` **并发**跑全部出口；插件用 `ServicePlugin.key`（带实例）注册并存句柄，stop 时精确注销。
-  测试 `test_outbound_registry.py`：同名两个出口都要发 / 一个坏出口不拖累别的 / key 带实例。
-- **向量维度静默写失败**（`7b50515`）：`models/*.py` 的向量列是 `vector_column(settings.embedding_dimension)`，
-  **import 时**取静态值（容器无 `EMBEDDING_DIMENSION` → 默认 1536），而 DB 配置（768）、四个 `vector(768)` 列、
-  本地 `nomic-embed-text`（768）三者本来一致 → INSERT 生成 `::VECTOR(1536)` 去转 768 向量必然失败，
-  记忆一直写失败重排队（DB 覆盖在 bootstrap 之后加载，管不到已冻结的列类型）。
-  修法：compose 补 `EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-768}`；
-  **收尾**（`a3fb194`）：`check_dimension_consistency` 自检「ORM 列维度 / 生效配置 / 库里实际列维度」三者，
-  `prestart.py` 迁移后调用——不一致 stderr 打 `[ERROR]` + 修法，一致打「向量维度自检通过」。
-- **删池 Key 500**（`9005235`）：`api_usage_log.pool_key_id` 外键无 ON DELETE 规则，池 Key 一旦有用量记录就删不掉
-  （`DELETE /admin/api-key-pool/1` → ForeignKeyViolationError）。迁移 `b8c9d0e1f2a3` 改 `ON DELETE SET NULL`
-  （列本就可空）：用量历史保留、引用置空。
-- **池 Key 管理补齐**（`30bdf6c`）：① `PUT /admin/api-key-pool/{id}` 之前**不收 `api_key`** → 密文解不开时没有修法
-  （前端只能删了重建），现在支持重填明文；② 新增 `POST /admin/api-key-pool/{id}/test` 测通
-  （探测策略/文案/脱敏全复用 `api_probe.probe_provider`，不另写一套）；前端 `ApiKeyPoolTab` 加「编辑」「测通」
-  ＋ i18n 三语，并修标签键大小写（`admin.apikeyPool` vs 字典里的 `admin.apiKeyPool`）。
-  真机验证：key#1 → `decrypt_failed`；临时 key 指本地 Ollama → `ok`「连接成功，8 个模型可用」。
-- **用户已重填池 Key #1**：实测解密 OK（明文长度 35）——③ 收工。
+已移出本节：[线上问题修复记录](./online_fixes.md)——QQ 两个通道实例互相顶掉、向量维度静默写失败、
+删池 Key 500、池 Key 管理补齐（编辑/测通）。
 
 ### ④ 待做：QQ mention 双向映射（现状、证据、为什么卡住）
 
