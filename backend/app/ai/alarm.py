@@ -487,6 +487,56 @@ async def _process_alarm_event(db, event: dict):
     logger.info(f"⏰ 闹钟 #{alarm_id}: AI {agent.name}({agent_id}) 执行完成")
 
 
+async def _standalone_agent_turn(db, agent, *, session_block: str, user_content: str,
+                               conversation_type: str, tag: str) -> None:
+    """不在群聊/私信里的独立事件唤醒（好友申请、世界事件共用）。
+
+    这些唤醒只差提示词几行：API 配置、能力版本、工具列表、收尾提交完全一样——
+    两处各写一遍必漏改。conversation_type 会进用量记账，便于按来源查账。
+    """
+    from app.ai.llm import CORE_IDENTITY, resolve_model, PROTOCOL_BY_PROFILE, PROTOCOL_CHAT
+    from app.services.tool_registry import get_allowed_tools
+    from app.ai.executor import _get_api_config, _tool_call_loop
+    from app.ai.response_worker import _run_serialized
+    from app.services.agent.agent_service import get_effective_config as _get_eff_cfg
+    from app.services.skill.skill_engine import _is_delay_reply_allowed
+
+    api_key, api_base, credit_source, pool_key_id, provider_info = await _get_api_config(db, agent)
+    profile = getattr(agent, "config_profile", "chat") or "chat"
+    protocol = PROTOCOL_BY_PROFILE.get(profile, PROTOCOL_CHAT)
+    custom_prompt = agent.current_system_prompt or f"你是 {agent.name}，一个 AI 群聊参与者。"
+    system_prompt = CORE_IDENTITY + "\n\n" + custom_prompt + "\n\n" + protocol
+
+    effective_cfg = await _get_eff_cfg(db, agent.id, user_id=None)
+    delay_allowed = await _is_delay_reply_allowed(db, agent)
+    tools = get_allowed_tools("active", thinking_enabled=effective_cfg["thinking_enabled"],
+                              delay_reply_allowed=delay_allowed)
+    tool_list = "、".join(t["function"]["name"] for t in tools)
+    system_prompt += f"\n\n## 当前会话\n{session_block}\n\n## 当前可用工具\n{tool_list}\n"
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content},
+    ]
+    model = resolve_model(agent, global_default_model=provider_info.get("global_default_chat_model"))
+
+    try:
+        await _run_serialized(agent, _tool_call_loop(
+            db=db, agent=agent, group_id=None, messages=messages, tools=tools,
+            model=model, api_base_url=api_base, api_key=api_key,
+            max_loops=effective_cfg.get("alarm_max_tool_rounds") or 5,
+            chain_depth=0, conversation_type=conversation_type, session_id=None,
+            trigger_user_id=None, effective_cfg=effective_cfg,
+            credit_source=credit_source, pool_key_id=pool_key_id,
+            provider_supports_thinking=provider_info.get("thinking_supported"),
+            trigger="auto",
+        ))
+    except Exception as e:
+        logger.error(f"{tag}: AI {agent.name} 处理失败: {e}", exc_info=True)
+
+    await db.commit()
+
+
 async def _process_friend_request_event(db, event: dict):
     """处理好友申请事件：触发 AI（auto_respond 开启时）自主决定是否通过。
 
@@ -499,72 +549,108 @@ async def _process_friend_request_event(db, event: dict):
     message = event.get("message") or ""
 
     from app.models.agent import Agent as AgentModel
-    from app.ai.llm import CORE_IDENTITY, resolve_model, PROTOCOL_BY_PROFILE, PROTOCOL_CHAT
-    from app.services.tool_registry import get_allowed_tools
-    from app.ai.executor import _get_api_config, _tool_call_loop
-    from app.ai.response_worker import _run_serialized
 
-    agent_result = await db.execute(select(AgentModel).where(AgentModel.id == agent_id))
-    agent = agent_result.scalar_one_or_none()
+    agent = await db.get(AgentModel, agent_id)
     if agent is None:
         logger.warning(f"💌 好友申请事件: agent {agent_id} 不存在")
         return
 
-    api_key, api_base, credit_source, pool_key_id, provider_info = await _get_api_config(db, agent)
-    profile = getattr(agent, 'config_profile', 'chat') or 'chat'
-    protocol = PROTOCOL_BY_PROFILE.get(profile, PROTOCOL_CHAT)
-    custom_prompt = agent.current_system_prompt or f"你是 {agent.name}，一个 AI 群聊参与者。"
-    system_prompt = CORE_IDENTITY + "\n\n" + custom_prompt + "\n\n" + protocol
-
-    from app.services.agent.agent_service import get_effective_config as _get_eff_cfg
-    from app.services.skill.skill_engine import _is_delay_reply_allowed
-    effective_cfg = await _get_eff_cfg(db, agent.id, user_id=None)
-    delay_allowed = await _is_delay_reply_allowed(db, agent)
-    tools = get_allowed_tools("active", thinking_enabled=effective_cfg["thinking_enabled"], delay_reply_allowed=delay_allowed)
-    tool_list = "、".join(t["function"]["name"] for t in tools)
-    system_prompt += (
-        f"\n\n## 当前会话\n"
-        f"- 这是**好友申请事件**——有人现在申请加你为好友\n"
-        f"- 你不在群聊或私信中，这是独立的事件处理\n"
-        f"- 通过与否由你自己判断（对方留言如下）\n"
-        f"- 决定后调用 handle_friend_request 工具（accept/reject + request_id）\n"
-        f"- 想先不处理也可以，申请会保持待处理（下次对话时你仍能看到）\n\n"
-        f"## 当前可用工具\n{tool_list}\n"
-    )
-
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {
-            "role": "user",
-            "content": (
-                f"💌 **有人申请加你为好友！**\n\n"
-                f"申请人：{requester_name}\n"
-                f"留言：{message or '（无留言）'}\n\n"
-                f"你可以：\n"
-                f"1. 通过 → 调 handle_friend_request（action=accept）\n"
-                f"2. 拒绝 → 调 handle_friend_request（action=reject）\n"
-                f"3. 暂不处理 → 不调用工具，干净结束\n\n"
-                f"请根据你的判断处理。"
-            ),
-        },
-    ]
-
-    model = resolve_model(agent, global_default_model=provider_info.get("global_default_chat_model"))
-    logger.info(f"💌 好友申请事件: AI {agent.name}({agent_id}) 处理来自 {requester_name} 的申请")
-
+    # 决策技能优先（AI 自写规则，命中即程序处理，不唤醒本体）
+    decision_note = ""
     try:
-        await _run_serialized(agent, _tool_call_loop(
-            db=db, agent=agent, group_id=None, messages=messages, tools=tools,
-            model=model, api_base_url=api_base, api_key=api_key,
-            max_loops=effective_cfg.get("alarm_max_tool_rounds") or 5,
-            chain_depth=0, conversation_type="friend_request", session_id=None,
-            trigger_user_id=None, effective_cfg=effective_cfg,
-            credit_source=credit_source, pool_key_id=pool_key_id,
-            provider_supports_thinking=provider_info.get("thinking_supported"),
-            trigger="auto",
-        ))
+        from app.services.world.decision_skill import (
+            build_friend_request_ctx, run_decision_engine, send_dm_reply,
+        )
+        request_id = await _pending_friend_request_id(db, agent.user_id, requester_id)
+        dec = await run_decision_engine(
+            db, "agent", agent_id, None, "friend_request",
+            build_friend_request_ctx(requester_id, requester_name, message, request_id),
+        )
+        if dec.get("hit") and dec.get("handled"):
+            if dec.get("reply"):
+                # 通过申请后两人已是好友，话才发得出去；没通过就发不了，如实记日志
+                delivered = await send_dm_reply(db, agent.user_id, requester_id, dec["reply"])
+                logger.info(f"💌 好友申请事件: 决策技能代发私信 "
+                            f"{'成功' if delivered['sent'] else '未送出（' + delivered['reason'] + '）'}")
+            logger.info(f"💌 好友申请事件: AI {agent.name}({agent_id}) 决策技能命中，程序化处理（不唤醒）")
+            await db.commit()
+            return
+        decision_note = dec.get("note") or ""
     except Exception as e:
-        logger.error(f"💌 好友申请事件: AI {agent.name} 处理失败: {e}", exc_info=True)
+        logger.warning(f"🎲 好友申请决策引擎异常（agent={agent_id}）: {e}")
 
-    await db.commit()
+    session_block = (
+        "- 这是**好友申请事件**——有人现在申请加你为好友\n"
+        "- 你不在群聊或私信中，这是独立的事件处理\n"
+        "- 通过与否由你自己判断（对方留言如下）\n"
+        "- 决定后调用 handle_friend_request 工具（accept/reject + request_id）\n"
+        "- 想先不处理也可以，申请会保持待处理（下次对话时你仍能看到）"
+    )
+    if decision_note:
+        session_block += f"\n{decision_note}"
+    user_content = (
+        f"💌 **有人申请加你为好友！**\n\n"
+        f"申请人：{requester_name}\n"
+        f"留言：{message or '（无留言）'}\n\n"
+        f"你可以：\n"
+        f"1. 通过 → 调 handle_friend_request（action=accept）\n"
+        f"2. 拒绝 → 调 handle_friend_request（action=reject）\n"
+        f"3. 暂不处理 → 不调用工具，干净结束\n\n"
+        f"请根据你的判断处理。"
+    )
+    logger.info(f"💌 好友申请事件: AI {agent.name}({agent_id}) 处理来自 {requester_name} 的申请")
+    await _standalone_agent_turn(db, agent, session_block=session_block, user_content=user_content,
+                                conversation_type="friend_request", tag="💌 好友申请事件")
     logger.info(f"💌 好友申请事件: AI {agent.name}({agent_id}) 处理完成")
+
+
+async def _pending_friend_request_id(db, agent_user_id: int | None, requester_id: int | None) -> int | None:
+    """取这条好友申请的 id（规则里 call_tool handle_friend_request 要用它）"""
+    if not agent_user_id or not requester_id:
+        return None
+    try:
+        from app.repositories.friend_repo import SQLAlchemyFriendRepository
+        from app.services.social.friend_service import get_pending_friend_requests_for_ai
+        reqs = await get_pending_friend_requests_for_ai(
+            friend_repo=SQLAlchemyFriendRepository(db), agent_user_id=agent_user_id,
+        )
+        for r in reqs or []:
+            if r.get("requester_id") == requester_id and r.get("id"):
+                return int(r["id"])
+    except Exception as e:  # noqa: BLE001 —— 取不到 id 只是规则里那个动作不能用，不致命
+        logger.warning(f"💌 好友申请 id 查询失败: {e}")
+    return None
+
+
+async def _process_world_event(db, event: dict) -> None:
+    """世界事件唤醒：世界发来的事件没被规则处理掉时叫醒 AI 本体（用户 2026-09-26 定）"""
+    import json
+
+    from app.models.agent import Agent as AgentModel
+
+    agent_id = event["agent_id"]
+    agent = await db.get(AgentModel, agent_id)
+    if agent is None:
+        logger.warning(f"🌐 世界事件: agent {agent_id} 不存在")
+        return
+
+    name = str(event.get("name") or "")
+    title = str(event.get("title") or "")
+    payload = event.get("payload") or {}
+    note = str(event.get("note") or "")
+    session_block = (
+        "- 这是**世界事件**——你所在的世界刚发生了它认为你该知道的事\n"
+        "- 你不在群聊或私信中，这是独立的事件处理\n"
+        f"- 事件：{name}（{title}）\n"
+        "- 怎么反应由你决定：要说话用 send_gm（群）或 send_dm（私信）；觉得这类事件以后该自动\n"
+        "  处理，就用 write_decision_skill 写一条 world_event 规则，下次它直接由程序跑"
+    )
+    if note:
+        session_block += f"\n{note}"
+    body = json.dumps(payload, ensure_ascii=False, indent=2)[:1500] if payload else "（无附加内容）"
+    user_content = (f"🌐 **世界事件：{title}**\n\n{body}\n\n"
+                    f"请判断是否需要行动；不需要就干净结束。")
+    logger.info(f"🌐 世界事件「{name}」: 唤醒 AI {agent.name}({agent_id})")
+    await _standalone_agent_turn(db, agent, session_block=session_block, user_content=user_content,
+                                conversation_type="world_event", tag="🌐 世界事件")
+    logger.info(f"🌐 世界事件「{name}」: AI {agent.name}({agent_id}) 处理完成")

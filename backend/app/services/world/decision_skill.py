@@ -93,6 +93,8 @@ SCENARIOS: dict[str, str] = {
     "member_join": "有人入群（member_id/member_name/operator_id/operator_name）",
     "member_leave": "有人退群（member_id/member_name/operator_id/operator_name）",
     "scheduled": "定时到点（trigger/task）",
+    "friend_request": "收到好友申请（requester_id/requester_name/message/request_id）",
+    "world_event": "世界事件（name/title/world_id/group_id/payload_*）",
 }
 
 
@@ -287,6 +289,21 @@ async def run_decision_engine(
         return {"hit": False}
 
 
+async def send_dm_reply(db, sender_user_id: int, target_user_id: int, content: str) -> dict:
+    """代发一条私信回复，返回 {sent, reason}。
+
+    对方还不是好友时（AI 主动私信生人会被拒）不抛错，只回报原因——调用方要把它写进
+    给 AI 的提示里，别让它以为话说出口了。规则见 chat/dm._require_friendship。
+    """
+    from app.chat.dm import get_or_create_dm_session, send_dm_message
+    try:
+        dm = await get_or_create_dm_session(db, sender_user_id, target_user_id)
+        await send_dm_message(db, dm["session_id"], sender_id=sender_user_id, content=content)
+        return {"sent": True, "reason": ""}
+    except ValueError as e:
+        return {"sent": False, "reason": str(e)}
+
+
 async def send_group_reply(db, group_id: int, sender_id: int, content: str,
                           *, sender_type: str = "ai", allow_non_member: bool = False) -> None:
     """代发一条决策技能回复：标 source="world"（不回灌世界程序；AI 唤醒链只看人类消息，
@@ -395,6 +412,34 @@ async def load_rules_map(db, kind: str, entity_ids) -> dict[int, list[dict]]:
     for row in rows:
         out.setdefault(int(row.agent_id), []).append(dict(row.config or {}))
     return out
+
+
+def build_world_event_ctx(world_id: int, event: dict) -> dict:
+    """world_event 情景的上下文：固定字段 + payload 展平成 payload_*（DSL 只认扁平字段）"""
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    ctx = {
+        "event": "world_event",
+        "world_id": world_id,
+        "name": str(event.get("name") or ""),
+        "title": str(event.get("title") or ""),
+        "group_id": event.get("group_id"),
+        "payload": payload,
+    }
+    for key, value in payload.items():
+        ctx[f"payload_{key}"] = value
+    return ctx
+
+
+def build_friend_request_ctx(requester_id: int, requester_name: str,
+                             message: str, request_id: int | None) -> dict:
+    """friend_request 情景的上下文"""
+    return {
+        "event": "friend_request",
+        "requester_id": requester_id,
+        "requester_name": requester_name or "",
+        "message": message or "",
+        "request_id": request_id,
+    }
 
 
 def build_group_message_ctx(

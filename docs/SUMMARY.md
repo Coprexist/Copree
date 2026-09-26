@@ -96,7 +96,7 @@
 | [世界 Skill 机制](./group_world/design/world_skill_design.md) | 开发者 | 文件式 skill/tool 机制（world skill runtime） |
 | [世界工具插件开发](./group_world/development/world_tools_plugin.md) | 开发者 / 社区 | 一个工具一个文件：契约、注册、展示文案、外部插件目录、性能 |
 | [世界决策技能](./group_world/design/world_decision_skill.md) | 开发者 | Decision Skill 与触发模式（现行实现见 [决策层](./dev/decision_layer.md)） |
-| [世界事件 → AI（规范草案，待批）](./group_world/design/world_ai_events.md) | 开发者 | 世界事件契约、投递语义、限额与防循环、世界侧发送入口 |
+| [世界事件 → AI](./group_world/design/world_ai_events.md) | 开发者 | 世界事件契约、收件人（可按类型选）、投递语义（未命中一律唤醒）、限额与防循环、世界侧发送入口 |
 | [世界能力注入](./group_world/design/world_agent_capabilities.md) | 开发者 | 群 AI / 世界 AI 的能力边界与路径 |
 
 ### 五、探索与讨论

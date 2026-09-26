@@ -22,6 +22,8 @@ AI 不该被每条消息唤醒。事件先过一层决策：**AI 自己写的规
 | `member_join` | member_id / member_name / operator_id / operator_name | `chat/gm.add_member`（人类成员） |
 | `member_leave` | member_id / member_name / operator_id / operator_name | `chat/gm.remove_member` / `leave_group`（人类成员） |
 | `scheduled` | trigger / task / alarm_id | 闹钟唤醒前（`ai/alarm._process_alarm_event`） |
+| `friend_request` | requester_id / requester_name / message / request_id | 好友申请唤醒前（`ai/alarm._process_friend_request_event`） |
+| `world_event` | name / title / world_id / group_id / payload_* | 世界发来的事件（`services/world/world_ai_events.py`，契约见 `docs/group_world/design/world_ai_events.md`） |
 
 规则结构：`{name, when:{event, conditions}, do:{action,...}, notify}`；
 条件 DSL 为递归逻辑树（and/or/not + 字段等于/contains/starts_with/matches/gt·gte·lt·lte）。
@@ -76,9 +78,11 @@ AI 不该被每条消息唤醒。事件先过一层决策：**AI 自己写的规
 
 | 情景 | 卡在哪 |
 |------|--------|
-| `friend_request` | do 能跑（如 `handle_friend_request`），但 `reply_template` 的回复通道是私信：需要先确定"申请未通过时能否私信对方"，否则 AI 会写出一条永远发不出去的规则 |
-| `world_event` | 世界程序事件的派发对象还没定：是世界的群助手、绑定群的居民 AI，还是两者，语义不同 |
 | `command` | **不做**（用户 2026-09-26 定）：`world_chat_commands` 的 7 个命令（/new /sessions /use /pin /unpin /clear /compact）只服务群视界页面对话，群消息链路没有斜杠入口，没有可挂的事件 |
+
+> `friend_request` 与 `world_event` 已落地（2026-09-26）。前者允许带话：`reply_template` 只写进
+> 日志或实际私信，取决于执行 do 之后两人是否已是好友（通过申请即成为好友，拒绝则发不出）。
+> 后者一律唤醒本体（用户定），唤醒链路见 `ai/alarm._process_world_event`。
 
 ## 8. 验证
 

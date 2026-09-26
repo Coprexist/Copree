@@ -120,6 +120,10 @@ async def _process_event(db, event: dict):
     if event_type == "trigger":
         await _process_trigger_event(db, event)
         return
+    if event_type == "world_event":
+        from app.ai.alarm import _process_world_event
+        await _process_world_event(db, event)
+        return
 
     conversation_type = event.get("conversation_type", "group")
 

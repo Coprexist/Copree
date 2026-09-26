@@ -462,6 +462,27 @@ async def world_api_publish_state(
     return {"ok": True}
 
 
+@router.post("/{world_id}/api/ai_event")
+async def world_api_ai_event(
+    world_id: int,
+    request: Request,
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """受控 API：给 AI 发一条世界事件（契约见 docs/group_world/design/world_ai_events.md）
+
+    世界决定发给谁（按 id 或按类型）；平台按收件人过决策技能，没处理掉的叫醒 AI 本体。
+    """
+    world = await _authorize_world_api(db, world_id, request, write=True)
+    _rate_limit_write(world)
+    from app.services.world.world_ai_events import emit_event
+    result = await emit_event(db, world, body or {})
+    if not result.get("ok"):
+        raise HTTPException(status_code=422, detail=result.get("error"))
+    await db.commit()
+    return result
+
+
 # ═══════════════════════════════════════════════════════════════
 # 世界数据（world_data 表）— 世界代码经受控 API 读写结构化数据
 # ═══════════════════════════════════════════════════════════════
