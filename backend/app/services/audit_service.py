@@ -11,6 +11,7 @@ from typing import Any, Optional
 from app.repositories.audit_repo import AuditRepository
 from app.services.audit import get_backend, set_backend
 from app.services.audit.postgres_backend import PostgresAuditBackend
+from app.utils.pure.timeutil import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +72,7 @@ async def verify_audit_chain(audit_repo: AuditRepository, limit: int = 1000) -> 
 async def cleanup_old_logs(audit_repo: AuditRepository, days: int = LOG_RETENTION_DAYS) -> dict:
     """删除超过保留天数的日志"""
     await _ensure_backend()
-    cutoff = datetime.utcnow() - timedelta(days=days)
+    cutoff = utc_now() - timedelta(days=days)
     return await get_backend().cleanup(before=cutoff.isoformat(), db=audit_repo)
 
 

@@ -292,6 +292,11 @@ class MemoryDistributionEngine:
 
 ## 七、分级记忆 + 遗忘机制
 
+> **现行实现（2026-09-26）**：本节的分级与衰减口径已由 `utils/pure/memory_weight.py`
+> （设定权值 1-5 + 时间权值）与 `services/memory/tidy_service.py`（每日整理）取代；
+> 下文保留为设计来路，代码里的写回式衰减已删除。
+
+
 ### 7.1 分级模型
 
 ```python
@@ -410,7 +415,7 @@ flowchart TB
 | `backend/app/services/vector_memory_service.py` | 向量记忆 CRUD |
 | `backend/app/services/structured_memory_service.py` | 结构记忆 CRUD |
 | `backend/app/services/memory_distribution.py` | 记忆分发引擎 |
-| `backend/app/services/forgetting_mechanism.py` | 遗忘机制 |
+| `backend/app/services/memory/tidy_service.py` | 记忆整理（低权值清理 + 待归档去重，每日） |
 | `backend/app/tools/memory/store_memory.py` | 存储记忆工具 |
 | `backend/app/tools/memory/recall_memory.py` | 召回记忆工具 |
 | `backend/app/tools/memory/manage_records.py` | 管理记录工具 |

@@ -143,6 +143,22 @@ def latest_message_ref(entries: list[dict]) -> int:
     return latest
 
 
+def tool_ledger_note(result: dict | None) -> str:
+    """一次工具调用在账本中留下的括注：失败记原因，工具自报 __note 则记该摘要，其余为 ok。
+
+    账本若只记工具名与结果，后续轮次无从判断当时的调用语义：`silence_member(ok)`
+    曾被理解为「对方已被禁言」。状态变更类工具因此以 __note 自报一句摘要。
+    __note 仅供账本使用，在此一并摘除——返回给模型的工具响应已有 message。
+    """
+    if not isinstance(result, dict):
+        return "ok"
+    note = str(result.pop("__note", "") or "").strip()
+    if result.get("error") or result.get("success") is False:
+        reason = str(result.get("message") or result.get("error") or "失败")[:60]
+        return f"失败：{reason}"
+    return note or "ok"
+
+
 def tools_entry(items: list[dict]) -> dict:
     """本轮工具调用一笔总账（**我干了什么**）——一条条目，不是每个调用一条：
 

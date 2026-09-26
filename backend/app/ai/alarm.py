@@ -14,6 +14,7 @@ from sqlalchemy import select, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import async_session
 from app.models.alarm import AgentAlarm
+from app.utils.pure.timeutil import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,7 @@ async def set_alarm(
         wake_at=wake_at,
         task=task,
         status="pending",
-        created_at=datetime.utcnow(),  # ⚠️ TIMESTAMP WITHOUT TIME ZONE
+        created_at=utc_now(),  # ⚠️ TIMESTAMP WITHOUT TIME ZONE
     )
     db.add(alarm)
     await db.flush()
@@ -382,6 +383,7 @@ async def _process_alarm_event(db, event: dict):
             api_key=api_key,
             top_k=5,
             group_id=None,
+            call_count=agent.llm_call_count or 0,
         )
         if memories:
             memory_text = format_memories_for_prompt(memories)

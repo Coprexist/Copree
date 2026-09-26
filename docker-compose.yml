@@ -40,6 +40,13 @@ services:
       # 模型列定义在 import 时读这个值（DB 里的 embedding 配置来得太晚，管不到列类型），
       # 本地 nomic-embed-text = 768，四个向量列也都是 vector(768) —— 不一致时写入会静默失败
       EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-768}
+    # 容器内用 host.docker.internal 指向宿主机。Linux 靠这行（host-gateway 由 Docker 解析网关）；
+    # Docker Desktop（macOS/Windows）本来就自带这个名字，重复声明无副作用。
+    # 于是 embedding_base_url 可以跨平台统一写 http://host.docker.internal:11434，
+    # 不必猜 docker0 网段（每个部署都不一样）。若 Ollama 是 compose 里的另一个服务，
+    # 填服务名即可（http://ollama:11434）；后端不在容器里跑则用 127.0.0.1。
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ${DATA_DIR:-./data}:/app/data
       - ${DATA_DIR:-./data}/uploads:/app/uploads

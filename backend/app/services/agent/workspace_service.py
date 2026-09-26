@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.workspace import AgentWorkspace
 from app.repositories.agent_repo import AgentRepository, SQLAlchemyAgentRepository
+from app.utils.pure.timeutil import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ async def save_current_task(
 ) -> None:
     """保存 AI 的当前任务。每次 tool_call_loop 结束时调用。"""
     db = _ensure_repo(db)
-    now = datetime.utcnow()
+    now = utc_now()
     result = await db.execute(
         select(AgentWorkspace).where(AgentWorkspace.agent_id == agent_id)
     )
@@ -59,7 +60,7 @@ async def mark_interrupted(
 ) -> None:
     """标记 AI 的当前任务被中断（有人发消息来了）"""
     db = _ensure_repo(db)
-    now = datetime.utcnow()
+    now = utc_now()
     result = await db.execute(
         select(AgentWorkspace).where(AgentWorkspace.agent_id == agent_id)
     )
@@ -92,7 +93,7 @@ async def get_recovery_context(
         return None
 
     # 检查是否在恢复窗口内
-    now = datetime.utcnow()
+    now = utc_now()
     if now - ws.interrupted_at > timedelta(minutes=RECOVERY_WINDOW_MINUTES):
         # 太久远了，清除旧任务
         ws.current_task = None
@@ -167,7 +168,7 @@ async def get_current_task_text(db: AsyncSession, agent_id: int) -> str | None:
         lines.append(f"- 开始于: {ws.current_task_at.strftime('%H:%M:%S')}")
 
     if ws.interrupted_at:
-        now = datetime.utcnow()
+        now = utc_now()
         if now - ws.interrupted_at < timedelta(minutes=RECOVERY_WINDOW_MINUTES):
             lines.append(f"- ⚠️ 在 {ws.interrupted_at.strftime('%H:%M:%S')} 被「{ws.interruption_reason or '新消息'}」打断")
             lines.append("- 你可以：继续之前的任务，或者调用 clear_current_task 放弃，或者更新你的计划")
@@ -188,7 +189,7 @@ async def clear_task(db: AsyncSession, agent_id: int) -> None:
         ws.current_task_at = None
         ws.interrupted_at = None
         ws.interruption_reason = None
-        ws.updated_at = datetime.utcnow()
+        ws.updated_at = utc_now()
         await db.flush()
 
 
@@ -200,7 +201,7 @@ async def _get_or_create_ws(db: AsyncSession, agent_id: int) -> AgentWorkspace:
     )
     ws = result.scalar_one_or_none()
     if ws is None:
-        ws = AgentWorkspace(agent_id=agent_id, updated_at=datetime.utcnow())
+        ws = AgentWorkspace(agent_id=agent_id, updated_at=utc_now())
         db.add(ws)
         await db.flush()
     return ws
@@ -221,7 +222,7 @@ async def set_workspace_file(db: AsyncSession, agent_id: int, file_type: str, co
         raise ValueError(f"无效的文件类型: {file_type}")
     ws = await _get_or_create_ws(db, agent_id)
     setattr(ws, file_type, content)
-    ws.updated_at = datetime.utcnow()
+    ws.updated_at = utc_now()
     await db.flush()
     logger.info(f"📝 AI({agent_id}) 更新工作区 {file_type}: {len(content)} 字符")
 

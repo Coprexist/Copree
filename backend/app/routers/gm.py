@@ -15,13 +15,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.chat.gm import get_gm_messages, gm_message_to_dict, send_gm_message
 from app.database import get_db
 from app.routers.deps import require_group_member
-from app.schemas.message import MessageResponse
 from app.utils.auth import get_current_user
 
 router = APIRouter(tags=["群聊消息"])
 
 
-@router.get("/gm/{group_id}/messages", response_model=list[MessageResponse])
+# 不声明 response_model：响应体即 gm_message_to_dict → serialize_message 的产物，与 WS 推送同形。
+# 另立响应模型等同于手抄第二份字段清单，超出清单的字段会被静默丢弃
+# （via / revoked / sender_state 曾因此丢失：刷新后「来自 QQ」标签与撤回状态一并消失）。
+@router.get("/gm/{group_id}/messages")
 async def get_gm_message_list(
     group_id: int,
     limit: int = Query(20, ge=1, le=200),

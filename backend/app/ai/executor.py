@@ -19,6 +19,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.database import async_session
 from app.chat import chat_api
+from app.utils.pure.history import tool_ledger_note
 from app.utils.pure.tool_chain import heal_tool_chain
 
 # ── 中断消息注入：AI 忙碌时，新消息不另起 executor，注入当前循环 ──
@@ -647,12 +648,8 @@ async def _tool_call_loop(
                     if isinstance(result, dict):
                         result["__task"] = task_summary
                 _pending_results.append({"tc_id": tc_id, "result": result})
-                # 工具总账：名字 + 失败原因（成功就一个字）——轮末封存成一条 tool 条目
-                _note = "ok"
-                if isinstance(result, dict) and (result.get("error") or result.get("success") is False):
-                    _reason = str(result.get("message") or result.get("error") or "失败")[:60]
-                    _note = f"失败：{_reason}"
-                _tool_log.append({"name": tool_name, "note": _note})
+                # 工具总账：工具名 + 失败原因或工具自报的摘要——轮末封存为一条 tool 条目
+                _tool_log.append({"name": tool_name, "note": tool_ledger_note(result)})
                 if isinstance(result, dict) and result.get("end_turn"):
                     _end_turn = True
                     # 收下结算决定（还没接账本：账本封存落地后在这里写条目）

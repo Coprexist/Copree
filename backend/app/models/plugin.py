@@ -12,10 +12,11 @@ from sqlalchemy import (
     Column, Integer, String, Boolean, Text, DateTime, ForeignKey, UniqueConstraint,
 )
 from app.database import Base
+from app.utils.pure.timeutil import utc_now
 
 
 def _now() -> datetime:
-    return datetime.utcnow()
+    return utc_now()
 
 
 class Plugin(Base):

@@ -27,6 +27,7 @@ from app.chat.delivery import delivery_decision, store_pending_message
 from app.chat.gm import gm_message_to_dict
 from app.models.agent import Agent as AgentModel
 from app.models.group import GroupMember as GroupMemberModel
+from app.utils.pure.timeutil import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +112,7 @@ async def fanout_group_message(
             from app.utils.text import extract_mentions, mentions_user
             mentioned_names = extract_mentions(content)
             is_all_call = "@all" in content.lower() or "@ai" in content.lower()
-            now = datetime.utcnow()
+            now = utc_now()
 
             for uid in member_ids:
                 agent_row = agent_by_user.get(uid)

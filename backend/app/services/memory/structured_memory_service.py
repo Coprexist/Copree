@@ -13,6 +13,7 @@ from sqlalchemy import select, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.structured_record import StructuredRecord
 from app.repositories.memory_repo import MemoryRepository, SQLAlchemyMemoryRepository
+from app.utils.pure.memory_weight import clamp_weight, default_weight
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +32,15 @@ async def sr_set(
     sub_key: str,
     field: str,
     value: str,
+    mem_type: str | None = None,
+    weight: int | None = None,
+    session_foci: list | None = None,
+    semantic_foci: list | None = None,
 ) -> dict:
-    """写入一个字段（upsert：同路径重复写入自动覆盖）"""
+    """写入一个字段（upsert：同路径重复写入自动覆盖）。
+
+    类型、权值与焦段锚点都是可选的：不传保持原值，新建则按类型默认。
+    """
     db = _ensure_repo(db)
     try:
         result = await db.execute(
@@ -47,16 +55,29 @@ async def sr_set(
         now = datetime.now(timezone.utc)
         if existing:
             existing.value = value
+            if mem_type:
+                existing.mem_type = mem_type
+            if weight is not None:
+                existing.value_score = clamp_weight(weight)
+            if session_foci is not None:
+                existing.session_foci = list(session_foci)
+            if semantic_foci is not None:
+                existing.semantic_foci = list(semantic_foci)
             existing.updated_at = now
             await db.commit()
             return {"ok": True, "action": "updated", "id": existing.id}
         else:
+            kind = mem_type or "daily"
             record = StructuredRecord(
                 agent_id=agent_id,
                 category=category,
                 sub_key=sub_key,
                 field=field,
                 value=value,
+                mem_type=kind,
+                value_score=clamp_weight(weight) if weight is not None else default_weight(kind),
+                session_foci=list(session_foci or []),
+                semantic_foci=list(semantic_foci or []),
             )
             db.add(record)
             await db.commit()

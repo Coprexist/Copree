@@ -50,6 +50,27 @@ async def _set_stack(db: AsyncSession, agent_id: int, stack: list[dict]) -> None
     )
 
 
+async def set_active_semantic_focus(db: AsyncSession, agent_id: int, focus_id: str) -> str:
+    """把栈顶帧的当前语义焦段换成 focus_id（空串 = 清空）。
+
+    没有帧时什么都不做：语义焦段是「这段会话正在聊什么」，没有会话就无处可挂。
+    """
+    db = _ensure_repo(db)
+    stack = await _get_stack(db, agent_id)
+    if not stack:
+        return ""
+    stack[-1]["semantic_focus"] = str(focus_id or "")
+    await _set_stack(db, agent_id, stack)
+    return stack[-1]["semantic_focus"]
+
+
+async def get_active_semantic_focus(db: AsyncSession, agent_id: int) -> str:
+    """读栈顶帧的当前语义焦段。"""
+    db = _ensure_repo(db)
+    stack = await _get_stack(db, agent_id)
+    return str(stack[-1].get("semantic_focus") or "") if stack else ""
+
+
 def _left_conversation(prev: dict | None) -> dict:
     """离开一个会话/状态时打的交接包：从哪来、在干嘛、那段对话的原文尾巴。
 
@@ -241,7 +262,15 @@ async def get_state_stack_summary(db: AsyncSession, agent_id: int, max_chars: in
         row = (await db.execute(_text("SELECT state_stack_max_chars FROM agents WHERE id = :aid"),
                                 {"aid": agent_id})).first()
         max_chars = int(row[0]) if row and row[0] else 500
-    return format_state_stack_summary(stack, max_chars=max_chars)
+    # 焦段归属每轮复述给 AI：它不必重新判断自己在哪些焦段里，也看得见当初怎么归的
+    from app.services.agent import focus_service
+    from app.utils.pure import focus as pure_focus
+
+    top = stack[-1]
+    foci = await focus_service.load(db, agent_id)
+    focus_line = pure_focus.describe(foci, top.get("context_ref") or "",
+                                     top.get("semantic_focus") or "")
+    return format_state_stack_summary(stack, max_chars=max_chars, focus_line=focus_line)
 
 
 async def set_frame_notes(db: AsyncSession, agent_id: int, context_ref: str, copies: list[dict]) -> list[dict]:

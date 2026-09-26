@@ -2,7 +2,7 @@
 记忆仓库接口（Protocol）+ SQLAlchemy 实现。
 
 记忆相关服务（memory_service / structured_memory_service / summary_cache_service /
-vector_memory_service / forgetting_mechanism / context_config_parser）共用的通用数据访问接口。
+vector_memory_service / tidy_service / context_config_parser）共用的通用数据访问接口。
 """
 from typing import Any, Protocol
 from sqlalchemy.ext.asyncio import AsyncSession

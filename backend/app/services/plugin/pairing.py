@@ -27,6 +27,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.external import APPROVED, BLOCKED, PENDING, ExternalIdentity
+from app.utils.pure.timeutil import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +67,7 @@ async def ensure(
         row.display_name = display_name[:120]
     if avatar_url:
         row.avatar_url = avatar_url
-    row.last_seen_at = datetime.utcnow()
+    row.last_seen_at = utc_now()
     if commit:
         await db.commit()
     else:
@@ -164,7 +165,7 @@ async def approve(
     if row.status == BLOCKED:
         raise ValueError("这条申请已被拉黑，先解除拉黑再批准")
     row.status = APPROVED
-    row.approved_at = datetime.utcnow()
+    row.approved_at = utc_now()
     await db.commit()
     logger.info("通道配对已批准：%s/%s → %s（%s）", kind, owner_scope, row.display_name or "?", row.origin[-6:])
     return row
@@ -180,7 +181,7 @@ async def set_status(
         return None
     row.status = status
     if status == APPROVED:
-        row.approved_at = datetime.utcnow()
+        row.approved_at = utc_now()
     await db.commit()
     return row
 

@@ -24,6 +24,7 @@ import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Dict, List
+from app.utils.pure.timeutil import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -268,7 +269,7 @@ async def metrics_flush_worker():
                         from sqlalchemy import text
                         from datetime import datetime, timedelta
 
-                        cutoff = datetime.utcnow() - timedelta(
+                        cutoff = utc_now() - timedelta(
                             days=settings.agent_metrics_retention_days
                         )
                         result = await db.execute(

@@ -1,12 +1,11 @@
-"""按人静音 + 免打扰的"不接受穿透"（2026-09-26）
+"""按人静音（静音三档里针对个人的那条，2026-09-26）
 
-用户要的三件事：
-1. 只对某个人静音（哪怕他 @ 你也不唤醒）；
-2. 按"多少条内 / 多少分钟内"——条数按他说的每条扣，扣完自动恢复；
-3. 免打扰可以选择"连 @ 都不穿透"。
+1. 只对某个人：哪怕他 @ 你也不唤醒，而且是**单向**的——他照常在群里说话、别人照常收到；
+2. 按"多少分钟内 / 他再说多少条内"，条数按他说的每条扣，扣完自动恢复；
+3. 与免打扰、屏蔽的分工见 docs/chat_service/design/chat_service_design.md §4.2/§4.3。
 
-判定在 app/ai/decider.py 的 Gate 0（按人静音）与 Gate 2b（穿透与否），
-状态在 member_silences / group_members.dnd_no_penetration，存取在 app/chat/delivery.py。
+判定在 app/ai/decider.py 的 Gate 0（按人静音）与 Gate 2a/2b（屏蔽 / 免打扰穿透），
+状态在 member_silences / group_members.muted_until，存取在 app/chat/delivery.py。
 """
 import pytest
 
@@ -122,3 +121,24 @@ async def test_silence_tool_is_registered(migrated_db):
     spec = next(d["function"] for d in ToolRegistry.get_all_definitions()
                 if d["function"]["name"] == "silence_member")
     assert "@" in spec["description"] and "message_count" in spec["parameters"]["properties"]
+
+
+async def test_silence_tool_says_it_is_one_way(migrated_db):
+    """工具返回值是 AI 当场唯一的解释：须自述「单向、无人被禁言」，并向账本自报一句摘要
+    （账本仅记工具名时，后续轮次易误判为「对方已被禁言」）"""
+    from app.database import async_session
+    from app.tools.base import ToolRegistry
+    from app.tools.chat_social.silence_member import SilenceMember
+
+    async with async_session() as db:
+        await _seed(db)
+        out = await SilenceMember().execute(
+            db, 24, 64, {"target_user_id": 90, "duration_minutes": 30}, {})
+
+    assert out["success"] is True, out
+    assert "只对你自己" in out["message"] and "没人被禁言" in out["message"], out["message"]
+    assert out["__note"] == "只对 90 单向（30 分钟）", out["__note"]
+
+    spec = next(d["function"] for d in ToolRegistry.get_all_definitions()
+                if d["function"]["name"] == "silence_member")
+    assert "单向" in spec["description"] and "禁言" in spec["description"], spec["description"]

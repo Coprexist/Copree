@@ -4,8 +4,9 @@
 """
 import re
 import logging
+from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from app.repositories.memory_repo import MemoryRepository, SQLAlchemyMemoryRepository
 
 logger = logging.getLogger(__name__)
@@ -183,7 +184,8 @@ async def _text_search_memories(
     # 排序：标题命中优先（对齐 dsh-mneme），再按时间倒序
     # kw0 = 整段查询词，title LIKE 命中排最前（用户/AI 的原文词在标题里 = 高相关）
     sql = text(f"""
-        SELECT rm.id, rm.title, rm.scope, 0.0 AS similarity, dm.content
+        SELECT rm.id, rm.title, rm.scope, 0.0 AS similarity, dm.content,
+               rm.value_score, rm.last_touched_at, rm.last_touched_call
         FROM rough_memories rm
         LEFT JOIN detail_memories dm ON dm.rough_id = rm.id
         WHERE {where_clause}
@@ -205,12 +207,49 @@ async def _text_search_memories(
             "similarity": 0.0,  # 文本匹配，无向量相似度
             "content": row.content or "",
             "source": "text",
+            # 有效权重过滤要用到的三列（口径见 utils/pure/memory_weight.py）
+            "value_score": row.value_score,
+            "last_touched_at": row.last_touched_at,
+            "last_touched_call": row.last_touched_call,
         })
 
     if memories:
         logger.info(f"📝 文本回退搜索为 AI agent_id={agent_id} 找到 {len(memories)} 条记忆")
 
     return memories
+
+
+def _is_injectable(mem: dict, call_count: int, now: datetime) -> bool:
+    """这条记忆此刻还在有效期吗——自动注入与自动召回只认「inject」档。
+
+    口径只有一处（utils/pure/memory_weight.py），这里不再写第二套判断。
+    """
+    from app.utils.pure.memory_weight import disposition_at
+
+    return disposition_at(
+        mem.get("value_score") or 3,
+        mem.get("last_touched_at"),
+        mem.get("last_touched_call"),
+        now,
+        call_count,
+    ) == "inject"
+
+
+async def _touch_memories(db, ids: list[int], call_count: int, now: datetime) -> None:
+    """把刚被想起的条目的时间基准推到当下：设定权值不动，只是重新计时。
+
+    刷新失败不该影响本轮检索（下一轮再更新即可），所以整段吞异常。
+    """
+    if not ids:
+        return
+    try:
+        stmt = text(
+            "UPDATE rough_memories SET last_touched_at = :now, last_touched_call = :call "
+            "WHERE id IN :ids"
+        ).bindparams(bindparam("ids", expanding=True))
+        await db.execute(stmt, {"now": now, "call": call_count, "ids": list(ids)})
+    except Exception as e:
+        logger.warning(f"记忆时间基准刷新失败（非致命）: {e}")
 
 
 async def recall_relevant_memories(
@@ -224,6 +263,8 @@ async def recall_relevant_memories(
     group_id: int | None = None,
     user_id: int | None = None,
     ai_type: str = "resonance",
+    call_count: int = 0,
+    only_injectable: bool = True,
 ) -> list[dict]:
     """
     检索与当前对话相关的记忆（关键词优先 + 向量补位，对齐 dsh-mneme）。
@@ -241,7 +282,10 @@ async def recall_relevant_memories(
     共振 AI 检索所有记忆（user_id IS NULL），
     通用/半通用 AI 仅检索该用户的记忆。
 
-    返回: [{id, title, content, scope, similarity, source}]
+    v1.1: call_count + only_injectable 决定要不要做有效权重过滤——
+    自动注入只收还在有效期的条目；显式检索（recall_memory 工具）传 False 看全部。
+
+    返回: [{id, title, content, scope, similarity, source, value_score, ...}]
     """
     db = _ensure_repo(db)
     from app.utils.embedding import get_embedding
@@ -249,9 +293,12 @@ async def recall_relevant_memories(
 
     provider = get_provider()
 
+    # 自动注入先多取再筛：已退场的比例不可预知，按 top_k 取满会在筛后不足
+    fetch_k = top_k * 3 if only_injectable else top_k
+
     # ═══ 第一轮：关键词搜索（总是执行，字面词命中优先） ═══
     keyword_memories = await _text_search_memories(
-        db, agent_id, query, top_k=top_k, group_id=group_id,
+        db, agent_id, query, top_k=fetch_k, group_id=group_id,
         user_id=user_id, ai_type=ai_type,
     )
 
@@ -274,7 +321,7 @@ async def recall_relevant_memories(
                 sql = text(f"""
                     SELECT rm.id, rm.title, rm.scope,
                             {provider.vector_similarity_expr("rm.embedding", "embedding")} AS similarity,
-                           dm.content
+                           dm.content, rm.value_score, rm.last_touched_at, rm.last_touched_call
                     FROM rough_memories rm
                     LEFT JOIN detail_memories dm ON dm.rough_id = rm.id
                     WHERE rm.embedding IS NOT NULL
@@ -293,7 +340,7 @@ async def recall_relevant_memories(
                     "agent_id": agent_id,
                     "group_id": group_id,
                     "threshold": similarity_threshold,
-                    "top_k": top_k,
+                    "top_k": fetch_k,
                 }
                 if user_id is not None and ai_type != "resonance":
                     params["user_id"] = user_id
@@ -302,7 +349,7 @@ async def recall_relevant_memories(
                 sql = text(f"""
                     SELECT rm.id, rm.title, rm.scope,
                             {provider.vector_similarity_expr("rm.embedding", "embedding")} AS similarity,
-                           dm.content
+                           dm.content, rm.value_score, rm.last_touched_at, rm.last_touched_call
                     FROM rough_memories rm
                     LEFT JOIN detail_memories dm ON dm.rough_id = rm.id
                     WHERE rm.owner_type = 'ai'
@@ -317,7 +364,7 @@ async def recall_relevant_memories(
                     "embedding": embedding_str,
                     "agent_id": agent_id,
                     "threshold": similarity_threshold,
-                    "top_k": top_k,
+                    "top_k": fetch_k,
                 }
                 if user_id is not None and ai_type != "resonance":
                     params["user_id"] = user_id
@@ -331,6 +378,9 @@ async def recall_relevant_memories(
                     "similarity": round(float(row.similarity), 4),
                     "content": row.content or "",
                     "source": "vector",
+                    "value_score": row.value_score,
+                    "last_touched_at": row.last_touched_at,
+                    "last_touched_call": row.last_touched_call,
                 })
 
             if vector_memories:
@@ -340,8 +390,17 @@ async def recall_relevant_memories(
             logger.warning(f"记忆检索向量化失败（仅用关键词结果）: {e}")
 
     # ═══ 合并：关键词优先 + 向量补位 ═══
-    memories, _mode = merge_keyword_and_vector(keyword_memories, vector_memories, top_k)
+    memories, _mode = merge_keyword_and_vector(keyword_memories, vector_memories, fetch_k)
 
+    # 有效权重过滤：自动注入只收「inject」档，筛完再截回 top_k
+    from app.utils.pure.timeutil import utc_now
+
+    now = utc_now()
+    if only_injectable:
+        memories = [m for m in memories if _is_injectable(m, call_count, now)][:top_k]
+
+    # 被想起过就重新计时（设定权值不动）
+    await _touch_memories(db, [m["id"] for m in memories], call_count, now)
     return memories
 
 

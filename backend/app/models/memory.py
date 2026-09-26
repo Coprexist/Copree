@@ -6,7 +6,7 @@ from sqlalchemy import (
     CheckConstraint,
 )
 from app.config import settings
-from app.db_providers import vector_column
+from app.db_providers import json_column, vector_column
 from app.database import Base
 
 class RoughMemory(Base):
@@ -24,7 +24,18 @@ class RoughMemory(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     # v0.1.4: 延迟归档字段
     status = Column(String(20), default="active", comment="active | pending_archive | discarded")
-    value_score = Column(Integer, default=5, comment="记忆价值评分: 1=低价值(自动提取), 5=正常, 10=高价值")
+    # 设定权值 1-5（v1.1）：1=日常流水, 3=一般, 5=人物与关系定位。
+    # 时间权值不落库——读取时按「最近一次被召回」现算，设定权值始终保持不动
+    value_score = Column(Integer, default=5, comment="设定权值 1-5: 1=日常流水, 3=一般, 5=人物与关系定位")
+    mem_type = Column(String(20), default="daily",
+                      comment="类型: person|relationship|promise|event|preference|daily")
+    # 焦段锚点：适用范围。三组各自可空，全空 = 当前会话 + 当前语义焦段
+    session_refs = Column(json_column(), default=list)
+    session_foci = Column(json_column(), default=list)
+    semantic_foci = Column(json_column(), default=list)
+    # 时间权值的基准：最近一次被召回的时刻与当时的调用刻度
+    last_touched_at = Column(DateTime, nullable=True)
+    last_touched_call = Column(Integer, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 
     __table_args__ = (

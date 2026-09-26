@@ -263,6 +263,10 @@ async def _startup_workers() -> None:
     from app.services.memory.memory_buffer import memory_flush_worker
     spawn_task(memory_flush_worker, "memory_flush_worker", restart=True)
 
+    # 记忆整理（每日）：低权值流水物理删除、待归档条目去重（services/memory/tidy_service.py）
+    from app.services.memory.tidy_service import memory_tidy_worker
+    spawn_task(memory_tidy_worker, "memory_tidy_worker", restart=True)
+
     from app.services.content.file_service import orphan_cleanup_worker
     spawn_task(orphan_cleanup_worker, "orphan_cleanup_worker", restart=True)
 

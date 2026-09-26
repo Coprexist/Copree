@@ -722,6 +722,7 @@ async def _build_injected_skills(
                 group_id=group_id,
                 user_id=trigger_user_id,
                 ai_type=agent.ai_type or "resonance",
+                call_count=agent.llm_call_count or 0,
             )
             if memories:
                 parts.append(format_memories_for_prompt(memories))
@@ -968,7 +969,8 @@ async def build_messages(
 
     # 动态内容一律沉到尾部（message 0 只留静态段）：状态栈每次切会话都在变、任务/通道规矩/
     # 好友申请也会变——写进前缀等于每轮重建整个前缀，缓存全废。它们按「当轮事实」跟在历史后面。
-    tail_blocks: list[str] = list(dynamic_readings)  # 先记忆注入（当轮事实），再任务/状态/通道
+    # 记忆单独提前（见下）；其余动态块（任务/状态/通道）仍沉在末尾
+    tail_blocks: list[str] = []
 
     # ✨ 工作区任务（配置驱动）
     if context_config_parser.should_inject_workspace(context_config):
@@ -1018,6 +1020,11 @@ async def build_messages(
             logger.warning(f"好友申请注入失败（非致命）: {e}")
 
     messages = [{"role": "system", "content": system_prompt}]
+
+    # 记忆紧跟系统提示、排在对话历史之前：让 AI 先想起这个人，再读他说的话。
+    # 它仍在 message 0 之外的"当轮区域"，所以前缀缓存不受影响。
+    for block in dynamic_readings:
+        messages.append({"role": "system", "content": block})
 
     # ── 多会话上下文（配置驱动）──
     if context_config_parser.should_inject_cross_conversation(context_config):
@@ -1372,7 +1379,8 @@ async def build_dm_messages(
 
     # 动态内容一律沉到尾部（message 0 只留静态段）：切会话时状态栈会变，写进前缀
     # 等于每轮重建前缀、缓存全废。它们按「当轮事实」跟在历史后面。
-    tail_blocks: list[str] = list(dynamic_readings)  # 先记忆注入，再任务/状态/会话列表
+    # 记忆单独提前（见下）；其余动态块仍沉在末尾
+    tail_blocks: list[str] = []
 
     # ✨ 工作区任务
     try:
@@ -1443,6 +1451,11 @@ async def build_dm_messages(
         logger.warning(f"DM 好友申请注入失败（非致命）: {e}")
 
     messages = [{"role": "system", "content": system_prompt}]
+
+    # 记忆紧跟系统提示、排在对话历史之前：让 AI 先想起这个人，再读他说的话。
+    # 它仍在 message 0 之外的"当轮区域"，所以前缀缓存不受影响。
+    for block in dynamic_readings:
+        messages.append({"role": "system", "content": block})
 
     # ── 统一上下文：数字生命档/沉浸档/共振 → 加载多会话上下文 ──
     cross_msgs = await _build_cross_conversation_context(

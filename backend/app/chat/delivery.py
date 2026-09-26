@@ -18,6 +18,7 @@ from sqlalchemy import select, and_, or_, update, desc, func as sqlfunc
 from app.models.group import Group, GroupMember, MemberSilence
 from app.models.message import PendingMessage, Message
 from app.models.agent import Agent
+from app.utils.pure.timeutil import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ async def set_group_dnd(
         raise ValueError(f"用户 {agent_id} 不在群聊 {group_id} 中")
 
     if duration_minutes is not None and duration_minutes > 0:
-        member.dnd_until = datetime.utcnow() + timedelta(minutes=duration_minutes)
+        member.dnd_until = utc_now() + timedelta(minutes=duration_minutes)
         logger.info(f"用户 {agent_id} 在群聊 {group_id} 设置临时免打扰 {duration_minutes} 分钟")
     else:
         member.dnd_until = datetime(2099, 12, 31, 23, 59, 59)
@@ -109,7 +110,7 @@ async def is_member_in_dnd(db: AsyncSession, agent_id: int, group_id: int) -> bo
     member = await _agent_member(db, agent_id, group_id)
     if member is None or member.dnd_until is None:
         return False
-    return member.dnd_until > datetime.utcnow()
+    return member.dnd_until > utc_now()
 
 
 async def is_member_muted(db: AsyncSession, agent_id: int, group_id: int) -> bool:
@@ -117,7 +118,7 @@ async def is_member_muted(db: AsyncSession, agent_id: int, group_id: int) -> boo
     member = await _agent_member(db, agent_id, group_id)
     if member is None or member.muted_until is None:
         return False
-    return member.muted_until > datetime.utcnow()
+    return member.muted_until > utc_now()
 
 
 # ============================================================
@@ -143,7 +144,7 @@ async def get_active_silence(db: AsyncSession, agent_id: int, group_id: int,
             MemberSilence.target_user_id == target_user_id,
         )
     )).scalar_one_or_none()
-    if row is None or not _silence_active(row, datetime.utcnow()):
+    if row is None or not _silence_active(row, utc_now()):
         return None
     return row
 
@@ -162,7 +163,7 @@ async def silence_member(db: AsyncSession, agent_id: int, group_id: int, target_
     if row is None:
         row = MemberSilence(agent_id=agent_id, group_id=group_id, target_user_id=target_user_id)
         db.add(row)
-    row.until_at = (datetime.utcnow() + timedelta(minutes=int(duration_minutes))
+    row.until_at = (utc_now() + timedelta(minutes=int(duration_minutes))
                     if duration_minutes else None)
     row.remaining_count = int(message_count) if message_count else None
     await db.flush()

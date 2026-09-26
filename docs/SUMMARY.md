@@ -58,6 +58,7 @@
 | [memory_system_design.md](./memory_system/design/memory_system_design.md) | 开发者 | 双重记忆架构、结构化记忆、记忆分发、遗忘机制 |
 | [memory_system_overview.md](./memory_system/design/memory_system_overview.md) | 开发者 | 记忆系统核心设计理念 |
 | [vector_search_and_embedding.md](./memory_system/design/vector_search_and_embedding.md) | 部署者/管理员 | Embedding 插件化、维度配置、前端图形化管理、检索策略、索引性能 |
+| [focus_and_memory_reach.md](./memory_system/design/focus_and_memory_reach.md) | 开发者 | 会话焦段与语义焦段、记忆适用范围、空集语义与合并规则 |
 
 #### 3.5 AI 模块化技能管理系统
 

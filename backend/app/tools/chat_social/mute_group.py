@@ -5,6 +5,7 @@ import logging
 from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.tools.base import ToolPlugin, ToolRegistry
+from app.utils.pure.timeutil import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,7 @@ class MuteGroup(ToolPlugin):
             return {"error": True, "message": f"你不是群 {target_group} 的成员"}
 
         # 设置屏蔽截止时间
-        member.muted_until = datetime.utcnow() + timedelta(minutes=duration)
+        member.muted_until = utc_now() + timedelta(minutes=duration)
         await db.commit()
 
         return {

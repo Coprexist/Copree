@@ -16,6 +16,7 @@ from app.database import AsyncSession as DBSession
 from app.models.system_log import SystemLog
 from app.repositories.audit_repo import AuditRepository, SQLAlchemyAuditRepository
 from . import AuditStorageBackend
+from app.utils.pure.timeutil import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +75,7 @@ class PostgresAuditBackend(AuditStorageBackend):
             )
         ).scalar_one_or_none()
 
-        now = datetime.utcnow()
+        now = utc_now()
         current_hash = _compute_hash(
             prev_hash=prev,
             created_at=now,

@@ -16,6 +16,7 @@ from app.utils.pure.presets import merge_preset_values
 from app.utils.pure.willingness import (
     WillingnessResult, calc_alarm_willingness, calc_reply_willingness, calc_proactive_willingness,
 )
+from app.utils.pure.timeutil import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -841,11 +842,11 @@ async def switch_agent_state(
         if duration_hours > 72:
             raise ValueError("blocked 状态最长 72 小时")
         from datetime import datetime, timedelta
-        agent.offline_until = datetime.utcnow() + timedelta(hours=duration_hours)
+        agent.offline_until = utc_now() + timedelta(hours=duration_hours)
     elif target_state == "inactive":
         if duration_hours:
             from datetime import datetime, timedelta
-            agent.offline_until = datetime.utcnow() + timedelta(hours=duration_hours)
+            agent.offline_until = utc_now() + timedelta(hours=duration_hours)
         else:
             agent.offline_until = None
     else:
@@ -1009,7 +1010,7 @@ async def calculate_willingness(
         # @ai/@all 由纯函数内部处理
 
     # 群活跃度（DB 查询）
-    one_hour_ago = datetime.utcnow() - timedelta(hours=1)
+    one_hour_ago = utc_now() - timedelta(hours=1)
     count_result = await db.execute(
         select(func.count(Message.id)).where(
             Message.group_id == group_id,
@@ -1047,7 +1048,7 @@ async def _calc_proactive_willingness(
     recent_count = None
     if group_id:
         from datetime import datetime, timedelta
-        one_hour_ago = datetime.utcnow() - timedelta(hours=1)
+        one_hour_ago = utc_now() - timedelta(hours=1)
         count_result = await db.execute(
             select(func.count(Message.id)).where(
                 Message.group_id == group_id,

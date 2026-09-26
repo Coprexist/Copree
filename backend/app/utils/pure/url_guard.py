@@ -5,7 +5,7 @@
 （200/401/404/302/连接拒绝/超时）就能画出内网服务地图，实测已确认可行。
 
 **为什么不能简单"一律只许公网"**：平台自己就在合法使用内网地址
-（preset 的 Ollama http://localhost:11434、本实例的 embedding http://172.18.0.1:11434），
+（preset 的 Ollama http://localhost:11434、容器部署时的 embedding http://host.docker.internal:11434），
 而用户也合法地指向自己的局域网 LLM。所以分界线不是"URL 长什么样"，
 而是"**这个地址是不是用户已经声明过要用的那一个**"——见 base_url_registry。
 """

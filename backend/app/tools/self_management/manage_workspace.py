@@ -5,6 +5,7 @@ import logging
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.tools.base import ToolPlugin, ToolRegistry
+from app.utils.pure.timeutil import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,7 @@ class ManageWorkspace(ToolPlugin):
                 if not content:
                     return {"error": True, "message": "写入内容不能为空"}
                 if file_type == "journal":
-                    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+                    now = utc_now().strftime("%Y-%m-%d %H:%M UTC")
                     existing = await get_workspace_file(db, agent_id, "journal")
                     if existing:
                         content = f"## {now}\n\n{content}\n\n---\n\n{existing}"

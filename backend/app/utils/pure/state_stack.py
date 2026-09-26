@@ -27,6 +27,8 @@ _FRAME_FIELDS = (
     "tail",
     # notes：投递进这段会话的跨状态便签副本（固化在前缀里，直到 compact/clear）
     "notes",
+    # semantic_focus：这段会话当前的语义焦段（焦段本体存在 agents.foci）
+    "semantic_focus",
 )
 
 
@@ -127,7 +129,8 @@ def format_handoff_tail(label: str, tail: list[str], reason: str = "") -> str:
     return "\n".join(lines)
 
 
-def format_state_stack_summary(stack: list[dict], max_chars: int = 500) -> str:
+def format_state_stack_summary(stack: list[dict], max_chars: int = 500,
+                               focus_line: str = "") -> str:
     """栈 → AI 可读摘要（交接驱动）。
 
     只渲染「当前帧 + 交接信息」，不逐层展开历史帧：
@@ -136,6 +139,7 @@ def format_state_stack_summary(stack: list[dict], max_chars: int = 500) -> str:
     - handoff：本次切换的交接（← 从[来源]来，为什么，回去继续）
     - completed_handoff：pop 回来后刚完成的交接（📝 刚完成）
     - 嵌套提示：栈深 > 1 时给"共 N 帧"计数
+    - focus_line：当前会话的焦段归属（由调用方按 agents.foci 算好，纯函数只负责渲染）
 
     长度控制（max_chars 默认 500）：超限按降级阶梯（_RENDER_*），
     最新帧的 TODO/PLAN 永不丢。
@@ -157,6 +161,8 @@ def format_state_stack_summary(stack: list[dict], max_chars: int = 500) -> str:
         marker = "▸▶" if status == "active" else "▸"
         context_str = f"({context})" if context else ""
         lines.append(f"{marker} [{type_name}] {context_str}: {doing or why}")
+        if focus_line:
+            lines.append(f"   焦段: {focus_line}")
         if todo:
             lines.append(f"   TODO: {todo.strip().replace(chr(10), '; ')}")
         if plan:

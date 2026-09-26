@@ -16,6 +16,7 @@ from sqlalchemy import (
 )
 
 from app.database import Base
+from app.utils.pure.timeutil import utc_now
 
 PENDING = "pending"
 APPROVED = "approved"
@@ -23,7 +24,7 @@ BLOCKED = "blocked"
 
 
 def _now() -> datetime:
-    return datetime.utcnow()
+    return utc_now()
 
 
 class ExternalIdentity(Base):

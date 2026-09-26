@@ -59,6 +59,7 @@ from app.chat.delivery import (
     mark_pending_read,
     check_unread,
 )
+from app.utils.pure.timeutil import utc_now
 
 
 class ChatApi(BaseChatApi):
@@ -233,7 +234,7 @@ class ChatApi(BaseChatApi):
         if until is None:
             await set_group_dnd(db, member_id, group_id, member_type=member_type)
         else:
-            duration = (until - datetime.utcnow()).total_seconds() / 60
+            duration = (until - utc_now()).total_seconds() / 60
             await set_group_dnd(db, member_id, group_id, duration_minutes=int(duration), member_type=member_type)
         return {"success": True}
 

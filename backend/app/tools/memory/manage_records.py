@@ -34,7 +34,14 @@ class ManageRecords(ToolPlugin):
         "- 改名: action='rename', category='project', new_name='设定', level='category'（或 level='sub_key'/'field' 加 sub_key/field 定位）\n"
         "- 移动: action='move', category='project', sub_key='图鉴页面', to_category='design'（整组移动；加 field 则只移单条）\n\n"
         "注意：**临时的、有时效的约定**（暗号、触发条件、等会儿到别的会话要做的事）不要写这里——"
-        "这里只把路径注入上下文，值要再 get 一次，很容易误事；这类东西用 cross_state_note。"
+        "这里只把路径注入上下文，值要再 get 一次，很容易误事；这类东西用 cross_state_note。\n\n"
+        "set 时还可给几个可选字段（与 store_memory 同一套口径）：\n"
+        "- mem_type：person 人物 / relationship 关系 / promise 约定 / event 共同经历 / "
+        "preference 偏好 / daily 流水；\n"
+        "- weight：设定权值 1-5，不填按类型默认；\n"
+        "- session_foci / semantic_foci：焦段 id 列表（用 list_focus 查），决定这条记录在哪些场景能被取到；"
+        "都不填就只算当前会话与当前话题。\n"
+        "value 只写要点（不要在 200 字以上堆原文）；超了照原样存下，但会提醒你，下次请压短。"
     )
     segment = "memory"
     parameters = {
@@ -72,6 +79,23 @@ class ManageRecords(ToolPlugin):
             "type": "string",
             "description": "目标目录（仅 move 时使用）",
         },
+        "mem_type": {
+            "type": "string",
+            "enum": ["person", "relationship", "promise", "event", "preference", "daily"],
+            "description": "记忆类型（仅 set 时使用，默认 daily）",
+        },
+        "weight": {
+            "type": "integer", "nullable": True,
+            "description": "设定权值 1-5（仅 set 时使用，不填按类型默认）",
+        },
+        "session_foci": {
+            "type": "array", "items": {"type": "string"}, "nullable": True,
+            "description": "会话焦段 id 列表（仅 set 时使用）",
+        },
+        "semantic_foci": {
+            "type": "array", "items": {"type": "string"}, "nullable": True,
+            "description": "语义焦段 id 列表（仅 set 时使用）",
+        },
     }
     required = ["action", "category"]
     states = ["active", "dnd", "inactive"]
@@ -101,13 +125,32 @@ class ManageRecords(ToolPlugin):
                 return {"error": True, "message": "set 操作需要 field（字段名）"}
             if not value:
                 return {"error": True, "message": "set 操作需要 value（字段值）"}
-            result = await sr_set(db, agent_id, category, sub_key, field, value)
+            from app.services.agent import focus_service
+            from app.utils.pure import focus as pure_focus
+            from app.utils.pure.memory_shape import MAX_CONTENT_CHARS, over_limit
+
+            session_foci, semantic_foci, problems = await focus_service.check_anchors(
+                db, agent_id, arguments.get("session_foci"), arguments.get("semantic_foci"))
+            result = await sr_set(
+                db, agent_id, category, sub_key, field, value,
+                mem_type=(arguments.get("mem_type") or "").strip() or None,
+                weight=arguments.get("weight"),
+                session_foci=session_foci, semantic_foci=semantic_foci,
+            )
             if result["ok"]:
-                return {
+                out = {
                     "success": True,
                     "action": result["action"],
                     "message": f"{category}/{sub_key}/{field} {'已更新' if result['action'] == 'updated' else '已创建'}",
                 }
+                notes = list(problems)
+                if warning := pure_focus.anchor_warning(session_foci, semantic_foci):
+                    notes.append(warning)
+                if warning := over_limit("内容", value, MAX_CONTENT_CHARS):
+                    notes.append(warning)
+                if notes:
+                    out["message"] += "；" + "；".join(notes)
+                return out
             return {"error": True, "message": result.get("error", "写入失败")}
 
         elif action == "get":

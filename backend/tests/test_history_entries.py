@@ -242,3 +242,24 @@ async def test_sync_window_counts_rendered_bytes(migrated_db):
         assert "短消息" in body, "长消息折完后应该还有余量带上前面那条短的"
         assert "中间省略" in body, "长消息确实被折了"
 
+
+def test_tool_ledger_note_keeps_what_the_tool_did():
+    """账本中的 tool 行不得只记工具名：状态变更类工具自报摘要，失败仍优先记原因
+
+    仅记 `silence_member(ok)` 时，后续轮次只能按名称推断当时的语义，
+    曾被理解为「对方在群里被禁言」。
+    """
+    from app.utils.pure.history import tool_ledger_note, tools_entry
+
+    result = {"success": True, "message": "已设置…", "__note": "只对 93 单向（永久）"}
+    note = tool_ledger_note(result)
+    assert note == "只对 93 单向（永久）"
+    assert "__note" not in result, "__note 仅供账本使用，不得随工具响应下发给模型"
+    assert f"silence_member({note})" in tools_entry(
+        [{"name": "silence_member", "note": note}])["content"]
+
+    assert tool_ledger_note({"success": True, "message": "好了"}) == "ok", "无自报摘要时记 ok"
+    assert tool_ledger_note(None) == "ok"
+    assert tool_ledger_note({"error": True, "message": "没有群聊上下文"}) == "失败：没有群聊上下文"
+    assert tool_ledger_note({"success": False, "message": "不行", "__note": "x"}) == "失败：不行", "失败优先于摘要"
+

@@ -40,6 +40,7 @@ from app.services.content.opencli_service import (
 from app.utils.auth import hash_password, require_admin, get_current_user
 from app.services.infrastructure.auth_service import register_user
 from app.repositories.content_repo import SQLAlchemyContentRepository
+from app.utils.pure.timeutil import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -1024,7 +1025,7 @@ async def cleanup_messages(
         return {"message": "消息保留天数设为 0（永久保留），未执行清理", "deleted": 0}
 
     from datetime import datetime, timedelta
-    cutoff = datetime.utcnow() - timedelta(days=days)
+    cutoff = utc_now() - timedelta(days=days)
     cutoff_str = cutoff.isoformat()
 
     from sqlalchemy import text

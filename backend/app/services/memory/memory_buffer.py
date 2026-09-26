@@ -20,7 +20,7 @@
 
 延迟归档：
   - 自动提取的偏好/简短信息标记 low_value=True，写入时 status='pending_archive'
-  - 对话结束后 archive_low_value_memories() 评估：同名被覆盖→丢弃，独特信息→提升为 active
+  - 归并由 services/memory/tidy_service.py 每日处理：同名只留一条，独特的转正为 active
 """
 import asyncio
 import time
@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 
 from app.repositories.memory_repo import MemoryRepository, SQLAlchemyMemoryRepository
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.utils.pure.memory_weight import default_weight
 logger = logging.getLogger(__name__)
 
 def _ensure_repo(db_or_repo):
@@ -54,6 +55,11 @@ class PendingMemory:
     api_base_url: str
     api_key: str | None
     trigger_user_id: int | None    # v0.1.3 per-user 隔离
+    # 类型、设定权值与焦段锚点（v1.1）：weight=0 表示用该类型的默认权值
+    mem_type: str = "daily"
+    weight: int = 0
+    session_foci: list = field(default_factory=list)
+    semantic_foci: list = field(default_factory=list)
     ai_type: str = "resonance"     # "resonance" | "general" | "semi_general"
     source: str = "tool"           # "tool" | "auto_extract"
     low_value: bool = False        # True=自动提取的简短偏好，待归档
@@ -89,6 +95,10 @@ async def enqueue_memory(
     ai_type: str = "resonance",
     source: str = "tool",
     low_value: bool = False,
+    mem_type: str = "daily",
+    weight: int = 0,
+    session_foci: list | None = None,
+    semantic_foci: list | None = None,
 ) -> None:
     """
     将记忆加入缓冲区，不立即写 DB。
@@ -108,6 +118,10 @@ async def enqueue_memory(
         ai_type=ai_type,
         source=source,
         low_value=low_value,
+        mem_type=mem_type,
+        weight=weight,
+        session_foci=list(session_foci or []),
+        semantic_foci=list(semantic_foci or []),
     )
     try:
         pending_memories.put_nowait(mem)
@@ -252,7 +266,11 @@ async def _batch_write_memories(db, batch: list[PendingMemory]):
             group_id=mem.group_id if mem.scope == "group" else None,
             user_id=memory_user_id,
             status="pending_archive" if mem.low_value else "active",
-            value_score=1 if mem.low_value else 5,
+            # 自动提取的流水一律最低档；其余按 AI 给的权值，没给就用该类型的默认
+            value_score=1 if mem.low_value else (mem.weight or default_weight(mem.mem_type)),
+            mem_type="daily" if mem.low_value else mem.mem_type,
+            session_foci=list(mem.session_foci or []),
+            semantic_foci=list(mem.semantic_foci or []),
         )
         db.add(rough)
         roughs.append(rough)
@@ -292,55 +310,3 @@ async def _get_embedding_safe(title: str, api_base_url: str, api_key: str | None
 # ══════════════════════════════════════════════════════════════
 # 延迟归档
 # ══════════════════════════════════════════════════════════════
-
-async def archive_low_value_memories(db, agent_id: int, group_id: int | None = None):
-    """
-    对话结束后调用：评估所有 pending_archive 记忆。
-
-    策略：
-    - 同名记忆若已被后来的正常记忆覆盖 → 丢弃（status='discarded'）
-    - 独特信息 → 提升为 active（status='active'）
-    """
-    db = _ensure_repo(db)
-    from sqlalchemy import select
-    from app.models.memory import RoughMemory
-
-    # 查找 pending_archive 条目
-    conditions = [
-        RoughMemory.owner_type == "ai",
-        RoughMemory.owner_id == agent_id,
-        RoughMemory.status == "pending_archive",
-    ]
-    if group_id is not None:
-        conditions.append(RoughMemory.group_id == group_id)
-
-    result = await db.execute(
-        select(RoughMemory).where(*conditions)
-    )
-    archivable = result.scalars().all()
-
-    if not archivable:
-        return
-
-    kept = 0
-    discarded = 0
-    for mem in archivable:
-        # 检查是否有相似标题的 active 记忆
-        similar = await db.execute(
-            select(RoughMemory).where(
-                RoughMemory.owner_id == agent_id,
-                RoughMemory.title.like(f"%{mem.title[:20]}%"),
-                RoughMemory.status == "active",
-                RoughMemory.id != mem.id,
-            )
-        )
-        if similar.scalar_one_or_none():
-            mem.status = "discarded"
-            discarded += 1
-        else:
-            mem.status = "active"
-            kept += 1
-
-    await db.flush()
-    if kept or discarded:
-        logger.info(f"📝 延迟归档: agent={agent_id}, group={group_id}, 保留={kept}, 丢弃={discarded}")

@@ -96,7 +96,7 @@ docker exec ai_group_backend curl -s -o /dev/null -w '%{http_code}\n' \
 （顺带记下它的**上限**：路径后缀固定，读不到内网任意页面；302 不跟；200 分支不回显 body；不附带我们的凭据。）
 
 **为什么不干脆"一律只许公网"**：平台自己就合法使用内网地址
-（preset 的 Ollama `http://localhost:11434`、本实例 embedding `http://172.18.0.1:11434`），
+（preset 的 Ollama `http://localhost:11434`、容器部署时的 embedding `http://host.docker.internal:11434`），
 用户也合法地指向自己的局域网 LLM。所以分界线不是"URL 长什么样"，而是
 **"这个地址是不是用户已经声明过要用的那一个"**。
 

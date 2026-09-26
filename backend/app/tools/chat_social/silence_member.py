@@ -11,10 +11,11 @@ logger = logging.getLogger(__name__)
 class SilenceMember(ToolPlugin):
     name = "silence_member"
     description = (
-        "把某个人静音一段时间：他在这群里说话（**哪怕 @ 你**）都不唤醒你，"
-        "消息照样进群、你之后能翻到，只是不打断你。"
+        "只让**你自己**不再被某个人的消息唤醒——**单向的**：他在这群里照常说话、"
+        "群里其他人照常收到，谁都没被禁言，他也看不到你设了这个。"
+        "消息照常进群、你之后能翻到，只是不打断你（**哪怕他 @ 你**）。"
         "可以只按时长（duration_minutes 分钟内）、只按条数（message_count 他再说几条内），"
-        "两个都给就谁先到算谁；都不给 = 永久静音。"
+        "两个都给就谁先到算谁；都不给 = 永久。"
         "取消用 cancel_dnd 带上同一个 target_user_id。"
         "整群安静用 set_dnd（@ 仍会穿透）或 mute_group（≤30 分钟、连 @ 也不穿透）。"
     )
@@ -22,7 +23,7 @@ class SilenceMember(ToolPlugin):
     parameters = {
         "target_user_id": {
             "type": "integer",
-            "description": "要静音的人（消息里说话人后面那个 id）",
+            "description": "不再接收谁的消息（消息里说话人后面那个 id）",
         },
         "group_id": {
             "type": "integer", "nullable": True,
@@ -30,18 +31,18 @@ class SilenceMember(ToolPlugin):
         },
         "duration_minutes": {
             "type": "integer", "nullable": True,
-            "description": "静音多少分钟（不给 = 时间这一维不限制）",
+            "description": "多少分钟内不接收他的消息（不给 = 时间这一维不限制）",
         },
         "message_count": {
             "type": "integer", "nullable": True,
-            "description": "他再说多少条内都别叫我（不给 = 条数这一维不限制）",
+            "description": "他再说多少条内都不唤醒你（不给 = 条数这一维不限制）",
         },
     }
     required = ["target_user_id"]
     states = ["active"]
     admin_description = (
-        "按人静音：对某个特定的人（连 @ 也不唤醒），可按分钟或按消息条数；"
-        "适用于「这人太吵，先别理他」的场景。"
+        "按人静音：只对某个人不再唤醒本人（连他的 @ 也不理），可按分钟或按消息条数；"
+        "单向生效——对方照常在群里说话，不是被禁言。适用于「这人太吵，先别理他」。"
     )
     trigger_condition = "AI 想忽略某个特定的人一段时间时"
 
@@ -68,9 +69,15 @@ class SilenceMember(ToolPlugin):
             parts.append(f"{int(duration)} 分钟")
         if count:
             parts.append(f"他再说 {int(count)} 条")
+        scope = "、".join(parts) if parts else "永久"
         return {
             "success": True,
-            "message": f"已静音 {target_user}：" + ("、".join(parts) if parts else "永久"),
+            "message": (
+                f"已设置：只对你自己不接收 {target_user} 的消息（{scope}）。"
+                "他照常在群里说话，群里没人被禁言。"
+            ),
+            # 账本仅记工具名时，后续轮次易按名称推断语义（该行曾被理解为「对方已被禁言」）
+            "__note": f"只对 {target_user} 单向（{scope}）",
         }
 
 

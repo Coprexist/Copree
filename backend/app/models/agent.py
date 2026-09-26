@@ -161,6 +161,10 @@ class Agent(Base):
     # 写下后 40 次 API 调用内有效（只决定能不能投递）；投进某会话后固化在它的上下文里
     cross_state_notes = Column(json_column(), default=list)
 
+    # 焦段（v1.1）：记忆的适用范围。两条轴（会话 / 语义）的定义都在这里；
+    # 预置的「所有聊天」由 utils/pure/focus.py 兜底注入，不占存量数据
+    foci = Column(json_column(), default=list)
+
     # 状态栈摘要长度上限（默认 500，AI 配置页可改；最新帧必保完整）
     state_stack_max_chars = Column(Integer, default=500)
 
