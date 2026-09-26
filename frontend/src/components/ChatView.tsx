@@ -11,7 +11,7 @@ import { BOTTOM_THRESHOLD } from '../hooks/useStickToBottom'
 import ActivityBar, { type ActivityUser } from './ActivityBar'
 import ProfileCard from './ProfileCard'
 import { EmptyState, MenuPanel, MenuItem } from './ui'
-import { Send, Loader2, AlertTriangle, X, ArrowDown, ArrowUp, Paperclip, FileIcon, Bot, User, MessageSquare, Inbox, Settings , Gamepad2 , Globe } from 'lucide-react'
+import { Loader2, AlertTriangle, X, ArrowDown, ArrowUp, Bot, User, MessageSquare, Settings, Gamepad2, Globe } from 'lucide-react'
 import { getStateDotColor, CHAT_REFRESH_EVENT } from '../constants'
 import { useT } from '../i18n/I18nContext'
 import { tryOpenWorldWindow } from '../utils/worldView'
@@ -21,7 +21,11 @@ import { useAttachmentUpload } from '../hooks/useAttachmentUpload'
 import { AttachmentChips, DropMask } from './AttachmentChips'
 
 // ── 虚拟列表：消息高度估算（纯函数，窗口化渲染用）──
-// 估算偏保守（偏大），配合 overscan 消化误差，避免滚动时窗口露出空白
+// 只估不量：渲染完不回写真实高度，滚动位置全靠它 + overscan 兜。
+// 已知误差来源：图片/附件（一律按 88px 一个算，实际随原图比例变）、长中文（按 28 字符一行，
+// 而中文一行只放得下 14~18 字 → 行数偏低）、Markdown 表格与代码块。
+// 所以这是像素近似、不是精确布局：误差由 VIRTUAL_OVERSCAN / OVERSCAN_PX 消化，
+// 短对话无感，上千条或图文混排时允许有轻微漂移。要做到精确得渲染后回填真实高度。
 const estimateMessageHeight = (msg: any): number => {
   const base = 44                        // 气泡 + 间距基础
   const text = msg.content || ''
@@ -34,6 +38,9 @@ const estimateMessageHeight = (msg: any): number => {
 
 const VIRTUAL_OVERSCAN = 40   // 窗口外预渲染条数（估算误差缓冲）
 const OVERSCAN_PX = 1200      // 视口上下各多渲染的像素
+
+// 撤回窗口（与后端一致：2 分钟内、只能撤自己的）；这里只是别让人点了必然失败
+const REVOKE_WINDOW_MS = 2 * 60 * 1000
 
 interface Message {
   id: number
@@ -77,6 +84,48 @@ function isMessageForThisConversation(
          (convType === 'dm' && (data as any).session_id === convId)
 }
 
+/**
+ * 上下哨兵：滚到边界就去加载下一页。
+ *
+ * 游标走 ref（oldestIdRef / newestIdRef）而不是 messages：observer 只在 hasMore / loadingState /
+ * 方向变化时重建，不必每来一条消息就重新订阅一次。
+ */
+function useSentinel({
+  containerRef, sentinelRef, cursorRef, hasMore, direction, loadingState, loadMessages,
+}: {
+  containerRef: React.RefObject<HTMLDivElement | null>
+  sentinelRef: React.RefObject<HTMLDivElement | null>
+  cursorRef: React.RefObject<number | null>
+  hasMore: boolean
+  direction: 'older' | 'newer'
+  loadingState: 'initial' | 'older' | 'newer' | null
+  loadMessages: (params: {
+    before_id?: number; after_id?: number; mode: 'initial' | 'older' | 'newer'
+  }) => Promise<void>
+}) {
+  useEffect(() => {
+    const sentinel = sentinelRef.current
+    if (!sentinel) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasMore && !loadingState) {
+          const cursorId = cursorRef.current
+          if (cursorId) {
+            loadMessages(
+              direction === 'older'
+                ? { before_id: cursorId, mode: 'older' }
+                : { after_id: cursorId, mode: 'newer' }
+            )
+          }
+        }
+      },
+      { root: containerRef.current, threshold: 0.1 }
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [hasMore, loadingState, direction, loadMessages, containerRef, sentinelRef, cursorRef])
+}
+
 /** 从 Map state setter 中移除指定 id */
 function removeFromMap<K, V>(
   setter: React.Dispatch<React.SetStateAction<Map<K, V>>>,
@@ -108,6 +157,7 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
   const [worldModalOpen, setWorldModalOpen] = useState(false)
   const t = useT()
   const { user } = useAuth()
+  const userId = user?.id
   const [messages, setMessages] = useState<Message[]>([])
   const [revokeNotice, setRevokeNotice] = useState<string | null>(null)
   const [input, setInput] = useState('')
@@ -148,8 +198,6 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
 
   // @提及 自动补全（仅群聊）
   const [groupMembers, setGroupMembers] = useState<Array<{ type: string; id: number; name: string; state?: string }>>([])
-  // 私信对方的类型（判断这场对话有没有 AI；群聊直接看成员表）
-  const [peerType, setPeerType] = useState<string | null>(null)
   const [mentionActive, setMentionActive] = useState(false)
   const [replyTo, setReplyTo] = useState<{ id: number; sender_name: string; content: string } | null>(null)
   const [mentionQuery, setMentionQuery] = useState('')
@@ -246,6 +294,24 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
     })
   }, [])
 
+  // 短延时任务是"这一屏的收尾动作"（滚到底、打字状态回退）：切对话时必须一起清掉，
+  // 否则 50ms 后那个滚动会把刚进去的新对话也拽到底部，本该停在首个未读处
+  const pendingTimers = useRef<Set<ReturnType<typeof setTimeout>>>(new Set())
+  const schedule = useCallback((fn: () => void, ms: number) => {
+    const id = setTimeout(() => {
+      pendingTimers.current.delete(id)
+      fn()
+    }, ms)
+    pendingTimers.current.add(id)
+  }, [])
+  useEffect(() => {
+    const timers = pendingTimers.current
+    return () => {
+      timers.forEach(clearTimeout)
+      timers.clear()
+    }
+  }, [conversationType, conversationId])
+
   const handleMessage = useCallback((msg: WebSocketMessage) => {
     if (msg.type === 'message') {
       const m = msg.data
@@ -259,7 +325,7 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
         return next
       })
       if (isAtBottomRef.current) {
-        setTimeout(() => scrollToBottom(true), 50)
+        schedule(() => scrollToBottom(true), 50)
       }
       // 新消息到达 → 通知侧栏刷新排序和未读
       window.dispatchEvent(new CustomEvent(CHAT_REFRESH_EVENT, { detail: {
@@ -290,7 +356,7 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
       const d = msg.data
       if (d.trigger === 'auto') return
       if (!isMessageForThisConversation(d, conversationType, conversationId)) return
-      setTimeout(() => removeFromMap(setThinkingAgents, d.user_id), 1500)
+      schedule(() => removeFromMap(setThinkingAgents, d.user_id), 1500)
       addToMap(setTypingAgents, d.user_id, { name: d.agent_name, avatarUrl: d.agent_avatar_url || null })
     } else if (msg.type === 'typing') {
       // 人类打字状态
@@ -347,7 +413,7 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
       // 全局广播：维护模式状态变化
       window.dispatchEvent(new CustomEvent('ws-maintenance-update', { detail: msg }))
     }
-  }, [conversationType, conversationId, t])
+  }, [conversationType, conversationId, t, schedule])
 
   const { connected, reconnecting, errors, sendMessage, sendTyping, clearErrors } = useWebSocket(
     conversationType, conversationId, { onMessage: handleMessage },
@@ -410,8 +476,13 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
   )
 
   // 撤回按钮只在窗口内出现（后端仍会二次校验——这里只是别让人点了必然失败）
-  const REVOKE_WINDOW_MS = 2 * 60 * 1000
   const isGroupAdmin = myRole === 'owner' || myRole === 'admin'
+  // 是不是我发的：必须是稳定引用——每渲染新建一个函数会让 messageElements 的 memo 每次都失效；
+  // 也必须跟着登录用户走，否则换账号后撤回判定还按旧 user.id
+  const isOwnMessage = useCallback(
+    (msg: Message) => msg.sender_type === 'human' && msg.sender_id === userId,
+    [userId],
+  )
   const canRevoke = useCallback(
     (msg: Message) =>
       !msg.revoked
@@ -419,7 +490,7 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
       // 必须按 UTC 解析：后端 DateTime 是 naive UTC，直接 new Date(...) 会当成本地时间
       //（UTC+8 下每条消息都被算成"过了 8 小时"，窗口判定永远不成立——2026-09-26 的教训）
       && Date.now() - parseServerDate(msg.created_at).getTime() < REVOKE_WINDOW_MS,
-    [isGroupAdmin],
+    [isGroupAdmin, isOwnMessage],
   )
 
   /** 撤回：服务端说了算（2 分钟内、只能撤自己的）；成功那条会经 WS 广播变成占位 */
@@ -440,11 +511,14 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
     }
   }, [conversationType, conversationId, t])
 
+  // 按 id 直取：窗口里每条都从头 find 一遍是 O(窗口 × 全量)，而每次滚动都会重算一遍
+  const messageById = useMemo(() => new Map(messages.map((m) => [m.id, m])), [messages])
+
   const messageElements = useMemo(() => {
     const { s, e } = windowRange
     const items = messages.slice(s, e).map((msg) => {
       const replyToData = msg.reply_to == null ? undefined : (() => {
-        const quoted = messages.find(m => m.id === msg.reply_to)
+        const quoted = messageById.get(msg.reply_to)
         if (!quoted) return { id: msg.reply_to, sender: '?', content: '' }
         return { id: quoted.id, sender: quoted.sender_name || `用户${quoted.sender_id}`, content: renderMentions(quoted.content.slice(0, 80), mentionNames) }
       })()
@@ -489,7 +563,7 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
       afterH: totalHeight - cumHeights[e],
       items,
     }
-  }, [windowRange, messages, cumHeights, totalHeight, firstUnreadId, hasMoreBefore, isOwnMessage, handleAvatarClick, mentionNames, canRevoke, handleRevoke, t])
+  }, [windowRange, messages, messageById, cumHeights, totalHeight, firstUnreadId, hasMoreBefore, isOwnMessage, handleAvatarClick, mentionNames, canRevoke, handleRevoke, t])
 
   // ============================================================
   // 消息加载器
@@ -647,11 +721,6 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
         .catch(() => {})
       const membersData = await api.get(`/groups/${conversationId}/members`)
       setGroupMembers(membersData)
-    } else {
-      // 只取会话元信息（summary=true，不拉消息）：只为知道对方是不是 AI
-      api.get<{ partner?: { type?: string } }>(`/dm/${conversationId}?summary=true`)
-        .then((d) => setPeerType(d?.partner?.type ?? null))
-        .catch(() => setPeerType(null))
     }
     await loadMessages({ mode: 'initial' })
     // DM 消息加载同时标记已读，触发 sidebar 刷新未读计数
@@ -768,40 +837,15 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
     }
   }, [loadingState, messages.length, firstUnreadId])
 
-  // ============================================================
-  // 共享哨兵 Hook：IntersectionObserver 用 ref 读取消息 ID，避免 messages 数组依赖
-  // ============================================================
-
-  function useSentinel(
-    sentinelRef: React.RefObject<HTMLDivElement | null>,
-    hasMore: boolean,
-    direction: 'older' | 'newer',
-  ) {
-    useEffect(() => {
-      const sentinel = sentinelRef.current
-      if (!sentinel) return
-      const observer = new IntersectionObserver(
-        (entries) => {
-          if (entries[0].isIntersecting && hasMore && !loadingState) {
-            const cursorId = direction === 'older' ? oldestIdRef.current : newestIdRef.current
-            if (cursorId) {
-              loadMessages(
-                direction === 'older'
-                  ? { before_id: cursorId, mode: 'older' }
-                  : { after_id: cursorId, mode: 'newer' }
-              )
-            }
-          }
-        },
-        { root: containerRef.current, threshold: 0.1 }
-      )
-      observer.observe(sentinel)
-      return () => observer.disconnect()
-    }, [hasMore, loadingState, direction])
-  }
-
-  useSentinel(topSentinelRef, hasMoreBefore, 'older')
-  useSentinel(bottomSentinelRef, hasMoreAfter, 'newer')
+  // 上下哨兵：加载更早/更新的分页（游标在 ref 里，见 useSentinel 的注释）
+  useSentinel({
+    containerRef, sentinelRef: topSentinelRef, cursorRef: oldestIdRef,
+    hasMore: hasMoreBefore, direction: 'older', loadingState, loadMessages,
+  })
+  useSentinel({
+    containerRef, sentinelRef: bottomSentinelRef, cursorRef: newestIdRef,
+    hasMore: hasMoreAfter, direction: 'newer', loadingState, loadMessages,
+  })
 
   // ============================================================
   // 滚动监听：isAtBottom + showJumpToUnread（使用 rAF 节流 DOM 查询）
@@ -934,6 +978,8 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
     setMentionActive(false)
     window.dispatchEvent(new CustomEvent(CHAT_REFRESH_EVENT, { detail: { type: 'message_sent' } }))
   }
+  // 故意在 render 里赋值（不放进 effect）：mermaid 错误事件可能在本轮 effect 跑完前就到，
+  // 走 effect 同步会在那之前拿到 null
   handleSendRef.current = handleSend
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -944,10 +990,6 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
       if (e.key === 'Escape') { e.preventDefault(); setMentionActive(false); return }
     }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); }
-  }
-
-  function isOwnMessage(msg: Message) {
-    return msg.sender_type === 'human' && msg.sender_id === user?.id
   }
 
   // ============================================================
