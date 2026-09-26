@@ -138,6 +138,9 @@ async def group_brief(db: AsyncSession, group_id: int) -> str:
     为什么由平台注入，而不是让 AI 自己猜：消息从 QQ 来这件事背后有一串接口约束
     （腾讯 2025-04-21 起下线了主动推送），不说清它就会答应"我待会儿在群里提醒你"，
     然后什么都发不出去。
+
+    「@其他成员」那条规矩**随群的实际模式变**（全量开着时正文是完整的）：模式由插件观测
+    事件类型得到，这里问活着的实例；问不到就两句话都讲，不猜——猜错了 AI 会当事实用。
     """
     from sqlalchemy import select
 
@@ -149,12 +152,17 @@ async def group_brief(db: AsyncSession, group_id: int) -> str:
         )
     )).all()
     found_channels: list[dict[str, Any]] = []
+    qq_modes: list[bool | None] = []
     for plugin_id, instance in rows:
         if agent_id_of(str(instance)) is None:
             continue                      # 不是"某个 AI 的通道"就不是这个群的出口
         found = catalog.channel_plugin(str(plugin_id))
+        if not found:
+            continue
+        if found["kind"] == "qq":
+            qq_modes.append(_live_full_mode(str(plugin_id), str(instance)))
         # 同一个插件有多个实例（多条通道）时，说明里只列一次
-        if found and found["plugin_id"] not in [c["plugin_id"] for c in found_channels]:
+        if found["plugin_id"] not in [c["plugin_id"] for c in found_channels]:
             found_channels.append(found)
     if not found_channels:
         return ""
@@ -175,10 +183,7 @@ async def group_brief(db: AsyncSession, group_id: int) -> str:
             "- 官方机器人私聊**可以**主动发消息，但每天每个用户最多 2 条：留给要紧的提醒，别用来说废话。"
         )
         lines.append("- 你写的 Markdown 会尽量按富文本发（机器人没开通 Markdown 权限时平台会自动降级成纯文本）。")
-        lines.append(
-            "- 官方接口**不转发「@其他成员」的内容**：对方一条消息里同时 @ 了别人和你时，你收到的正文会在那个 @ 处"
-            "断掉——这是通道限制，不是对方没说完整；需要就问一句「你刚才 @ 的是谁」。"
-        )
+        lines.append(_mention_rule_line(_brief_full_mode(qq_modes)))
         lines.append(
             "- **撤回不同步**：QQ 里别人撤回的消息我们收不到通知，你上下文里那条还在（就当它发生过）；"
             "反过来你在站内撤回（2 分钟内）我们会请 QQ 一起撤，超时就只有站内撤掉。"
@@ -189,6 +194,48 @@ async def group_brief(db: AsyncSession, group_id: int) -> str:
             "并且富文本能不能渲染取决于 QQ 客户端。"
         )
     return "\n".join(lines)
+
+
+def _live_full_mode(plugin_id: str, instance: str) -> bool | None:
+    """问活着的插件实例：这个群最近一次观测到的推送模式（拿不到就 None）
+
+    为什么不落库：这是运行期观测（事件类型），不是配置；重启后第一条群消息就能重新观测到。
+    给 AI 的**持久**记录在账本里（QQ 插件投的「通道变更」通知），不靠这里。
+    """
+    from app.services.infrastructure.plugin_registry import PluginRegistry, registry_key
+
+    plugin = PluginRegistry.get(registry_key(plugin_id, instance))
+    probe = getattr(plugin, "observed_full_mode", None)
+    return probe() if callable(probe) else None
+
+
+def _brief_full_mode(states: list[bool | None]) -> bool | None:
+    """这个群到底开没开全量：所有相关通道都观测到同一种才敢下结论，否则算"不知道"
+
+    混着说比说错强——说错了 AI 会拿它当事实去跟人对话。
+    """
+    known = [s for s in states if s is not None]
+    if not known or any(s != known[0] for s in known):
+        return None
+    return known[0]
+
+
+def _mention_rule_line(full: bool | None) -> str:
+    """「@其他成员」那条规矩：按群的实际模式给；不知道就两句都讲（这条不能猜）"""
+    if full is True:
+        return (
+            "- 这个群开着官方**全量消息**：群里每个人说的话都会进 Copree、你都能看到；"
+            "对方 @ 别人时会显示成 `<@!id>`，正文**不会**在 @ 处断掉。"
+        )
+    if full is False:
+        return (
+            "- 官方接口**不转发「@其他成员」的内容**：对方一条消息里同时 @ 了别人和你时，你收到的正文会在那个 @ 处"
+            "断掉——这是通道限制，不是对方没说完整；需要就问一句「你刚才 @ 的是谁」。"
+        )
+    return (
+        "- 「@其他成员」的内容：群里开着官方全量消息时正文是完整的、@ 会显示成 `<@!id>`；"
+        "没开时正文会在那个 @ 处断掉——分不清就问一句「你刚才 @ 的是谁」。"
+    )
 
 
 async def _plugin_enabled(db: AsyncSession, plugin_id: str) -> bool:

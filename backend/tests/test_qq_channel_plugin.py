@@ -123,6 +123,16 @@ async def _messages(group_id: int):
     return rows
 
 
+async def _ledger(agent_id: int) -> list[dict]:
+    """这个 AI 在测试群里的账本条目（seq 升序）"""
+    from app.database import async_session
+    from app.services.history import history_service as hs
+    from app.services.history.context_sync import context_ref
+
+    async with async_session() as db:
+        return await hs.read(db, agent_id, context_ref(group_id=GROUP_ID))
+
+
 GROUP_EVENT = {
     "id": "MSG-1",
     "group_openid": "QQGROUP-AAA",
@@ -457,17 +467,19 @@ async def test_self_test_sends_on_the_live_route(migrated_db):
 
 
 async def test_group_outbound_strips_reply_mention(migrated_db):
-    """转发给 QQ 的回复要去掉开头那个 @：QQ 的被动回复自己就会显示「@对方」。
+    """回复「@ 事件」送来的消息时，去掉开头那个 @：腾讯自己会补「@对方」。
 
     用户 2026-09-25 实测：QQ 侧显示「@书爱… @QQ用户6682BD 正文」两个 @。
     站内（Copree）不动 —— 界面要靠它显示 AI 在回复谁。
+    全量事件送进来的消息不走这条路（腾讯不补 @，摘了就没了），见下一条用例。
     """
     from app.database import async_session
 
     await _seed()
     plugin = await _make_plugin()
     plugin._copree_group_id = GROUP_ID
-    plugin._route[GROUP_ID] = {"qq": "QQGROUP-AAA", "msg_id": "MSG-1", "peer_name": "小明"}
+    plugin._route[GROUP_ID] = {"qq": "QQGROUP-AAA", "msg_id": "MSG-1", "peer_name": "小明",
+                               "at_event": True}
 
     class _FakeMsg:
         sender_type = "ai"
@@ -480,6 +492,78 @@ async def test_group_outbound_strips_reply_mention(migrated_db):
 
     assert plugin._client.sent, "AI 的回复应该发回 QQ"
     assert plugin._client.sent[0]["content"] == "今天天气不错，出去走走", plugin._client.sent[0]
+
+
+async def test_plain_text_reply_falls_back_to_the_name(migrated_db):
+    """纯文本模式发不出真 @：腾讯把内联 @ 原样显示成尖括号（2026-09-26 真机自测），
+
+    所以这条通道按纯文本发时退成 @名字——不提醒对方，但人看得懂。
+    走全量事件这条路（不摘开头 @）：@ 事件的回复腾讯会自己补 @，摘不摘与纯文本无关。
+    """
+    from app.database import async_session
+
+    await _seed()
+    plugin = await _make_plugin()
+    plugin._copree_group_id = GROUP_ID
+    plugin._msg_type = 0                      # 配置里选了「纯文本」
+    try:
+        await plugin._on_group_message({**GROUP_EVENT, "id": "PLAIN-1", "content": "你好",
+                                        "mentions": []})
+        async with async_session() as db:
+            uid = (await db.execute(text(
+                "SELECT id FROM users WHERE email = 'OPENID-XYZ@qq.bridge'"
+            ))).scalar()
+
+        class _FakeMsg:
+            sender_type = "ai"
+            content = f"<@!{uid}> 你好"
+
+        async with async_session() as db:
+            await plugin._outbound_sink(db, GROUP_ID, _FakeMsg(), "ai")
+        await _wait_sent(plugin)
+
+        sent = plugin._client.sent[-1]
+        assert sent["force_type"] == 0, sent
+        assert sent["content"] == "@小明 你好", sent      # 名字，不是尖括号原文
+        assert "OPENID" not in sent["content"], sent
+    finally:
+        _cleanup(plugin)
+
+
+async def test_full_mode_reply_sends_the_mention_itself(migrated_db):
+    """全量模式进来的消息被回复时，@ 得我们自己发：腾讯只对「@ 事件」的回复补 @对方。
+
+    2026-09-26 真机：全量事件送来的消息（哪怕正文 @ 了机器人）被回复，开头那个 @ 摘掉后
+    QQ 侧一个 @ 都没有；同一天的 @ 事件回复腾讯会自己补。所以摘不摘按**事件类型**分。
+    """
+    from app.database import async_session
+
+    await _seed()
+    plugin = await _make_plugin()
+    plugin._copree_group_id = GROUP_ID
+    try:
+        # 全量事件（没点名）→ 路由记 addressed=False
+        await plugin._on_group_message({**GROUP_EVENT, "id": "FULL-1", "content": "今天天气不错",
+                                        "mentions": []})
+        async with async_session() as db:
+            uid = (await db.execute(text(
+                "SELECT id FROM users WHERE email = 'OPENID-XYZ@qq.bridge'"
+            ))).scalar()
+        assert uid, "入站应该建出锚点账号"
+        assert plugin._route[GROUP_ID].get("at_event") is False, plugin._route[GROUP_ID]
+
+        class _FakeMsg:
+            sender_type = "ai"
+            content = f"<@!{uid}> 今天天气不错"
+
+        async with async_session() as db:
+            await plugin._outbound_sink(db, GROUP_ID, _FakeMsg(), "ai")
+        await _wait_sent(plugin)
+
+        sent = plugin._client.sent[-1]["content"]
+        assert sent == "<@!OPENID-XYZ> 今天天气不错", sent   # 没摘，翻成真 @ 发出去
+    finally:
+        _cleanup(plugin)
 
 
 async def test_outbound_mentions_become_real_qq_at(migrated_db):
@@ -702,6 +786,87 @@ async def test_full_mode_materializes_mentioned_members(migrated_db):
         assert uid, "被 @ 的人应该建出锚点账号"
         assert member == 1, "被 @ 的人应该进这个 Copree 群"
         assert f"<@!{uid}>" in rows[0][2], rows
+    finally:
+        _cleanup(plugin)
+
+
+async def test_push_mode_flip_reaches_the_ledger(migrated_db):
+    """推送模式翻转 → 给 AI 的账本投一条通知；同一种模式只投一次（重启后再观测到也不重复）。
+
+    判据是事件类型：GROUP_MESSAGE_CREATE = 腾讯在喂全量（2026-09-26 真机：开了之后连 @ 的
+    消息也只来这一条）。幂等以账本为准，所以"重启后不知道旧模式"也不会重复投。
+    """
+    await _seed()
+    plugin = await _make_plugin()
+    plugin._copree_group_id = GROUP_ID
+    try:
+        assert plugin.observed_full_mode() is None, "本次启动后还没收到群消息 → 不知道"
+
+        # 老规矩（只喂点名）不用通知：它本来就是这么以为的
+        await plugin._on_group_at({**GROUP_EVENT, "id": "MODE-AT-1"})
+        assert plugin.observed_full_mode() is False
+        assert await _ledger(7) == []
+
+        # 开了全量 → 投一条
+        await plugin._on_group_message({**GROUP_EVENT, "id": "MODE-FULL-1", "content": "今天天气不错",
+                                        "mentions": []})
+        assert plugin.observed_full_mode() is True
+        entries = await _ledger(7)
+        assert len(entries) == 1 and entries[0]["flags"]["channel_mode"] == "full", entries
+        assert "全量模式" in entries[0]["content"], entries[0]
+
+        # 同一种模式：再观测到不重复；"重启"（全新实例，内存里没有旧模式）也不重复
+        await plugin._on_group_message({**GROUP_EVENT, "id": "MODE-FULL-2", "content": "又一条",
+                                        "mentions": []})
+        restarted = await _make_plugin()
+        restarted._copree_group_id = GROUP_ID
+        try:
+            await restarted._on_group_message({**GROUP_EVENT, "id": "MODE-FULL-3", "content": "重启后",
+                                               "mentions": []})
+        finally:
+            _cleanup(restarted)
+        assert len(await _ledger(7)) == 1, "同一种模式只投一次"
+
+        # 关掉全量：@ 事件回来 → 再投一条"停止"
+        await plugin._on_group_at({**GROUP_EVENT, "id": "MODE-AT-2"})
+        entries = await _ledger(7)
+        assert len(entries) == 2 and entries[1]["flags"]["channel_mode"] == "at", entries
+        assert "停止" in entries[1]["content"], entries[1]
+    finally:
+        _cleanup(plugin)
+
+
+async def test_full_mode_raw_mentions_do_not_reach_the_ai(migrated_db):
+    """QQ 正文里的原始提及 `<@openid>`（没有那个 `!`）谁都不认识，一律摘掉。
+
+    2026-09-26 真机：@机器人 那条被存成 `"<@!40> <@5872…> 在？"`——AI 看到一串 openid，
+    回了一句「你 @ 的是谁，我这边看不到」，界面也跟着显示乱码。
+    机器人自己那条只摘不补（点名由唤醒令牌负责），别的成员摘掉后补平台的 <@!id>。
+    """
+    from sqlalchemy import text
+
+    from app.database import async_session
+
+    await _seed()
+    plugin = await _make_plugin()
+    plugin._copree_group_id = GROUP_ID
+    try:
+        await plugin._on_group_message({
+            **GROUP_EVENT, "id": "RAW-1",
+            "content": "<@BOT-OPENID> 你看这个 <@OPENID-NEW>",
+            "mentions": [{"id": "BOT-OPENID", "bot": True},
+                         {"id": "OPENID-NEW", "username": "小红"}],
+        })
+        rows = await _messages(GROUP_ID)
+        async with async_session() as db:
+            uid = (await db.execute(text(
+                "SELECT id FROM users WHERE email = 'OPENID-NEW@qq.bridge'"
+            ))).scalar()
+        stored = rows[0][2]
+        assert "BOT-OPENID" not in stored, stored          # 机器人自己那条不留下
+        assert "OPENID-NEW" not in stored, stored          # 生 openid 不留下
+        assert f"<@!{uid}>" in stored, stored              # 换成平台令牌
+        assert "你看这个" in stored, stored
     finally:
         _cleanup(plugin)
 

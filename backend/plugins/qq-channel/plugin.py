@@ -224,7 +224,9 @@ class QqClient:
             "type": "string", "title": "正文格式",
             "title_en": "Body format", "title_ja": "本文の形式",
             "description": "默认：先按 Markdown 发，机器人没权限时自动降级纯文本；"
-                           "也可以固定成纯文本（有些不渲染 Markdown 的客户端）或固定成 Markdown",
+                           "也可以固定成纯文本（有些不渲染 Markdown 的客户端）或固定成 Markdown。"
+                           "注意：腾讯的纯文本消息**渲染不了内联 @**（实测两种写法都显示成尖括号原文），"
+                           "所以纯文本模式下 @ 会退成 @名字（看得懂但不会提醒对方）",
             "description_en": "Default: try Markdown first and fall back to plain text; "
                               "or pin plain text / Markdown",
             "description_ja": "既定：まず Markdown、権限が無ければ自動でプレーンテキスト。"
@@ -289,6 +291,9 @@ class QqChannelPlugin(ServicePlugin):
         self._delivered_order: deque[str] = deque()
         # 最近见到过的 QQ 群（诊断用，内存态）：卡片上要能看见群 openid 才好填白名单
         self._seen_groups: dict[str, dict[str, Any]] = {}
+        # 这个群的推送模式（最近一次观测到的事件类型 + 时间）：True=全量、False=只喂点名。
+        # None = 本次启动后还没收到过群消息。通道说明据此选文案；给 AI 的持久记录在账本里
+        self._full_mode: tuple[bool, float] | None = None
         self._sent: dict[str, deque[float]] = {}
         self._bot_sent: deque[float] = deque()
         # 运行状态（只报事实）
@@ -606,8 +611,12 @@ class QqChannelPlugin(ServicePlugin):
         return False
 
     async def _on_group_at(self, d: dict) -> None:
-        """群 @ 机器人事件：这个事件本身就是"被点名"，不用再判一次。"""
-        await self._handle_group_message(d, addressed=True)
+        """群 @ 机器人事件：这个事件本身就是"被点名"，不用再判一次。
+
+        事件名也是模式判据：这个事件只在"没开全量"时来（2026-09-26 真机：开了之后连 @ 的消息
+        也只来 GROUP_MESSAGE_CREATE 一条）。
+        """
+        await self._handle_group_message(d, addressed=True, full=False)
 
     async def _on_group_message(self, d: dict) -> None:
         """全量模式（开了「接收所有消息」）：群里每条消息都推过来，**有消息就进 Copree**
@@ -616,7 +625,7 @@ class QqChannelPlugin(ServicePlugin):
         但"进 Copree"和"叫 AI"是两件事：只有点名到机器人才加唤醒令牌，否则 AI 会被迫
         围观全部闲聊。**开不开都兼容**：没开这个功能就收不到这个事件，@ 那条路照旧（用户 2026-09-26 定）。
         """
-        await self._handle_group_message(d, addressed=self._addressed_to_bot(d))
+        await self._handle_group_message(d, addressed=self._addressed_to_bot(d), full=True)
 
     def _addressed_to_bot(self, d: dict) -> bool:
         """这条消息点没点到机器人。
@@ -631,6 +640,63 @@ class QqChannelPlugin(ServicePlugin):
 
         return check_mention(self._readable_content(d), self._target_agent)
 
+    def observed_full_mode(self) -> bool | None:
+        """这个群最近一次观测到的推送模式（None = 本次启动后还没收到过群消息）
+
+        判据是**事件类型**，不是载荷里有没有 mentions：后者是"这条消息带不带成员名单"
+        （全量模式下普通消息也有这个键、值是 null），答的不是"这个群在喂全量吗"。
+        """
+        return self._full_mode[0] if self._full_mode else None
+
+    async def _note_group_mode(self, full: bool) -> None:
+        """记下这次观测；模式真的变了就给 AI 的账本投一条通知。
+
+        内存只用于"刚刚是不是这个模式"的快速判断（省掉每条消息都查一次账本），
+        真正的幂等以账本为准（见 _deliver_mode_notice）：重启后第一条群消息照样对得上。
+        """
+        prev = self._full_mode
+        self._full_mode = (bool(full), time.time())
+        if not self._copree_group_id:
+            return                      # 只做私聊的实例：没有群账本可投
+        if prev is not None and prev[0] == bool(full):
+            return
+        await self._deliver_mode_notice(bool(full))
+
+    async def _deliver_mode_notice(self, full: bool) -> None:
+        """模式翻转 → 给这个群的账本追加一条通知（AI 从此知道新规矩）。
+
+        为什么落账本而不是只改文案：通道说明在尾部、每轮重发，但**历史里的旧结论改不掉**
+        ——它之前说过"通道不转发别人的 @"这种话，一条通知才是"旧结论作废"的锚点。
+        幂等判据也走账本：它是"上次告诉过它什么"的唯一来源，重启不丢、也不会重复投。
+        """
+        from sqlalchemy import select
+
+        from app.database import async_session
+        from app.models.agent import Agent
+        from app.services.history import history_service as hs
+        from app.services.history.context_sync import append_events, context_ref
+        from app.utils.pure.history import make_entry
+
+        async with async_session() as db:
+            agent = (await db.execute(
+                select(Agent).where(Agent.user_id == self._target_user_id)
+            )).scalars().first()
+            if agent is None:
+                return
+            ref = context_ref(group_id=self._copree_group_id)
+            # 账本里一条都没说过 = 老规矩（只喂点名），全量模式出现之前本来就是这样
+            said = _last_channel_mode(await hs.read(db, agent.id, ref)) or _channel_mode(False)
+            if said == _channel_mode(full):
+                return
+            await append_events(db, agent, ref, [make_entry(
+                "notice", _channel_mode_notice(full),
+                flags={"channel_mode": _channel_mode(full)},
+            )])
+            await db.commit()
+            logger.info(
+                f"QQ 通道[{self.instance}] 群推送模式变化，已给 AI 账本投递通知（{_channel_mode(full)}）"
+            )
+
     async def _materialize_mentions(self, d: dict, content: str) -> str:
         """把这条消息 @ 到的人先建成 Copree 群成员，并在正文里补上他们的 id 令牌。
 
@@ -638,11 +704,12 @@ class QqChannelPlugin(ServicePlugin):
         而被 @ 的人可能还没说过话（还没账号）。QQ 有时还会把 @成员的提及从正文里摘掉
         （只在 mentions 里给）——那就在这里直接补 <@!id>，AI 和界面都认得。
         只有全量模式（官方给 mentions）才做得了；@模式载荷里没有这个字段（用户 2026-09-26 定）。
+
+        QQ 写在正文里的原始提及是 `<@openid>`（**没有那个 `!`**，那是它自己的 id）：谁都不认，
+        一律按 mentions 里的 origin 精确摘掉。机器人自己那条只摘不补——点名由唤醒令牌负责，
+        不摘就存成 `<@!40> <@5872…>` 这种"两个令牌、其中一个还是乱码"（2026-09-26 真机）。
         """
-        mentions = [
-            m for m in (d.get("mentions") or [])
-            if isinstance(m, dict) and not m.get("bot")
-        ]
+        mentions = [m for m in (d.get("mentions") or []) if isinstance(m, dict)]
         if not mentions or not self._copree_group_id:
             return content
 
@@ -656,6 +723,11 @@ class QqChannelPlugin(ServicePlugin):
                 origin = str(user.get("id") or user.get("member_openid") or "")
                 if not origin:
                     continue
+                # 原始提及先摘：留着它，AI 与界面看到的都是一串 openid
+                for marker in (f"<@!{origin}>", f"<@{origin}>"):
+                    content = content.replace(marker + " ", "").replace(marker, "")
+                if user.get("bot") or user.get("is_you"):
+                    continue                  # 机器人自己：唤醒令牌已经点名，不再补一个
                 ensured = await ensure_channel_user(
                     db, kind=self.channel_kind, owner_scope=self.instance, origin=origin,
                     display_name=str(user.get("username") or ""),
@@ -681,7 +753,7 @@ class QqChannelPlugin(ServicePlugin):
         prefix = mention_token(self._target_user_id) if self._target_user_id else f"@{self._target_agent}"
         return f"{prefix} {content}"
 
-    async def _handle_group_message(self, d: dict, *, addressed: bool) -> None:
+    async def _handle_group_message(self, d: dict, *, addressed: bool, full: bool) -> None:
         author = d.get("author") or {}
         if author.get("bot"):
             return
@@ -689,10 +761,16 @@ class QqChannelPlugin(ServicePlugin):
         qq_group = str(d.get("group_openid") or "")
         if not msg_id or not qq_group:
             return
+        # 模式观测的唯一落点：事件名就是权威判据（见 _note_group_mode）
+        await self._note_group_mode(full)
         if self._seen_before(msg_id):
             # 同一条消息的两种事件（@模式 + 全量模式）都会到：谁先到谁落库；
             # 后来那个更全就把库里的正文补上（@模式的正文会在"@其他成员"处断掉）
-            await self._upgrade_delivered_content(msg_id, self._with_mention_prefix(self._readable_content(d)))
+            # 补正文这一步也要走 @ 处理：全量事件后才补上的正文同样带原始提及
+            await self._upgrade_delivered_content(
+                msg_id,
+                self._with_mention_prefix(await self._materialize_mentions(d, self._readable_content(d))),
+            )
             return
         # 先记账再判白名单：白名单该怎么填，前提是界面能看见"机器人在哪些群里出现过"。
         # 被白名单挡下的群同样记下来（allowed=False），否则用户永远发现不了它。
@@ -751,6 +829,11 @@ class QqChannelPlugin(ServicePlugin):
                 "peer_openid": _openid,
                 # 摘正文开头那个 @ 要用平台 id（入口归一之后它是 <@!id>，名字摘不动）
                 "peer_user_id": peer_user_id,
+                # 这条是不是「@ 事件」（GROUP_AT_MESSAGE_CREATE）送来的：腾讯只在回复这种事件时
+                # 自己补一个 @对方。全量事件送来的消息哪怕正文 @ 了机器人它也不补——2026-09-26 实测：
+                # 09-25 与 08:28 两条 @ 事件的回复都自动出现 @；11:00 那条全量事件（正文 @ 了机器人）
+                # 发出去就没有 @。所以摘不摘看**事件类型**，不看"有没有点名"。
+                "at_event": not full,
             }
         except Exception as e:
             self.last_error = f"入站失败：{type(e).__name__}: {e}"
@@ -956,16 +1039,17 @@ class QqChannelPlugin(ServicePlugin):
         text = str(getattr(message, "content", "") or "").strip()
         if not route or not text:
             return
-        # QQ 的被动回复自己就会显示「@对方」，正文里再带一个 @名字 就成了两个 @
-        # （用户 2026-09-25 实测）。只摘掉开头对**这次回的那个人**的 @，站内内容不动。
-        # 正文里的 Markdown 不再在这里降级：能不能发 MD 由 QqClient._send_rich 按机器人权限决定
+        # 只有「@ 事件」的回复才有腾讯自带的 @对方（见路由里 at_event 的注释）。那种情况摘掉开头
+        # 对**这次回的那个人**的 @，免得两个 @；全量事件的回复腾讯不补，必须由我们自己把 @ 发出去。
+        # 站内内容两处都不动；Markdown 不在这里降级：能不能发 MD 由 QqClient._send_rich 按权限决定
         from app.utils.text import strip_leading_mention
 
-        text = strip_leading_mention(
-            text, str(route.get("peer_name") or ""), int(route.get("peer_user_id") or 0) or None
-        ).strip()
-        if not text:
-            return
+        if route.get("at_event"):
+            text = strip_leading_mention(
+                text, str(route.get("peer_name") or ""), int(route.get("peer_user_id") or 0) or None
+            ).strip()
+            if not text:
+                return
         # 正文里剩下的 <@!平台id> 翻成 QQ 的真 @（会 @ 到人、会提醒）
         asyncio.create_task(self._send_reply(
             route, text, kind="group", link_mentions=True, message_id=getattr(message, "id", None),
@@ -995,7 +1079,8 @@ class QqChannelPlugin(ServicePlugin):
         """
         if link_mentions:
             try:
-                text = await self._translate_mentions(text)
+                # 这条按纯文本发 → 内联 @ 渲染不了，退成 @名字（见 _translate_mentions）
+                text = await self._translate_mentions(text, plain=(self._msg_type == 0))
             except Exception as e:
                 # 翻不成真 @ 也要照发：这条回复本身比 @ 的成色重要
                 logger.warning(f"QQ 群 @ 映射失败，按原文发送：{type(e).__name__}: {e}")
@@ -1081,11 +1166,15 @@ class QqChannelPlugin(ServicePlugin):
             return {"channel": self.key, "ok": False, "reason": str(e)}
         return {"channel": self.key, "ok": True}
 
-    async def _translate_mentions(self, text: str) -> str:
-        """<@!平台id> → <@!openid>：只有走过这条通道的人，在 QQ 侧才有 id 可 @
+    async def _translate_mentions(self, text: str, *, plain: bool = False) -> str:
+        """<@!平台id> → 通道能渲染的写法：只有走过这条通道的人，在 QQ 侧才有 id 可 @
 
         认不出的（站内的人、别的通道的人）退回名字——令牌原样发到 QQ 只会是乱码。
         查库放在这一步（后台任务）做，sink 是在发消息的链路里被调的，不能拖慢它。
+
+        plain=True（这条按纯文本发）：腾讯的纯文本消息**渲染不了内联 @**——2026-09-26 真机，
+        两种写法（带 ! 与不带 !）都原样显示成尖括号。所以纯文本下只能退成 @名字：
+        不会真提醒对方，但至少人看得懂，比一串尖括号强。
         """
         from sqlalchemy import select
 
@@ -1099,20 +1188,23 @@ class QqChannelPlugin(ServicePlugin):
             return text
         async with async_session() as db:
             contacts = await channel_contacts(db, kind=self.channel_kind, owner_scope=self.instance)
-            unknown = [uid for uid in ids if uid not in contacts]
+            # 纯文本要所有人的名字（联系人也要），Markdown 只要认不出的那些
+            named = sorted(ids) if plain else [uid for uid in ids if uid not in contacts]
             names: dict[int, str] = {}
-            if unknown:
+            if named:
                 rows = (await db.execute(
-                    select(User.id, User.username).where(User.id.in_(unknown))
+                    select(User.id, User.username).where(User.id.in_(named))
                 )).all()
                 names = {int(uid): str(name or "") for uid, name in rows}
-        return render_mentions(
-            text,
-            lambda uid: (
-                f"<@!{contacts[uid]}>" if uid in contacts
-                else (f"@{names[uid]}" if names.get(uid) else "")
-            ),
-        )
+
+        def _render(uid: int) -> str:
+            if plain:
+                return f"@{names[uid]}" if names.get(uid) else ""
+            if uid in contacts:
+                return f"<@!{contacts[uid]}>"
+            return f"@{names[uid]}" if names.get(uid) else ""
+
+        return render_mentions(text, _render)
 
     async def _deliver(self, route: dict, kind: str, text: str, *, passive_only: bool = False,
                        reference_id: str = "", msg_type: int | None = None) -> dict:
@@ -1173,15 +1265,21 @@ class QqChannelPlugin(ServicePlugin):
         为什么只能在本进程里点：被动回复凭据（msg_id/seq）只活在内存的路由表里，
         换个进程就只剩一份过期的副本——这也是它不能走"插件配置"那条接口的原因。
 
-        探针一句话里并排两种写法，要问的就是腾讯那个问题：群消息的正文认不认内联 @ 标记。
-        内联 @ 后面出现蓝色的对方 = 认；显示成原文尖括号 = 不认（那就继续发纯文本的 @名字）。
+        探针一句话里并排**三种写法**，要问的是腾讯那个问题：纯文本 / Markdown 各认哪种内联 @。
+        内联 @ 后面出现蓝色的对方 = 认；显示成原文尖括号 = 不认（那就退成纯文本的 @名字）。
+        三种都要问的原因：腾讯**入站**用的写法是 `<@openid>`（没有那个 `!`，2026-09-26 真机原文），
+        而我们验过可点的是 Markdown 下的 `<@!openid>`——纯文本认哪种，只有真机知道。
         """
         route, kind = self._live_route()
         if route is None:
             return {"sent": False, "reason": "还没有收到过消息：先去那个 QQ 会话里说一句（群里 @ 一次机器人）"}
         openid = str(route.get("peer_openid") or "") if kind == "group" else str(route.get("qq") or "")
         name = str(route.get("peer_name") or "")
-        probes = [p for p in (f"内联@：<@!{openid}>" if openid else "", f"纯文本：@{name}" if name else "") if p]
+        probes = [p for p in (
+            f"内联@：<@!{openid}>" if openid else "",
+            f"无叹号@：<@{openid}>" if openid else "",
+            f"纯文本：@{name}" if name else "",
+        ) if p]
         text = "（通道自测，请忽略）" + " ／ ".join(probes)
         try:
             # 也按配置的消息类型发：点一次自测＝用当前配置的真实发一条
@@ -1208,6 +1306,38 @@ class QqChannelPlugin(ServicePlugin):
                 return True
             await asyncio.sleep(1)
         return False
+
+
+def _channel_mode(full: bool) -> str:
+    """账本 flag 里的模式取值（写和读都走它，两处各写一遍迟早漂）"""
+    return "full" if full else "at"
+
+
+def _last_channel_mode(entries: list[dict]) -> str | None:
+    """账本里最后一次"通道推送模式"通知说的是哪个模式（没说 → None）"""
+    for entry in reversed(entries or []):
+        mode = (entry.get("flags") or {}).get("channel_mode")
+        if mode:
+            return str(mode)
+    return None
+
+
+def _channel_mode_notice(full: bool) -> str:
+    """模式翻转通知的正文（唯一来源）。
+
+    只说"能收到什么"，不说"会不会叫醒你"：后者由平台的意愿模型决定，不归通道管
+    （说了就是给 AI 一个不成立的承诺，2026-09-26）。
+    """
+    if full:
+        return (
+            "【通道变更】这个 QQ 群开始推送群内全部消息（群主在 QQ 群设置里开了「获取群内全部消息」，"
+            "也就是全量模式）：群里每个人说的话都会进 Copree，你都能看到；"
+            "别人 @ 别人会在正文里显示成 `<@!id>`，正文不再在 @ 处断掉。"
+        )
+    return (
+        "【通道变更】这个 QQ 群停止推送全部消息（群主关掉了「获取群内全部消息」，回到只喂点名）："
+        "从此只有点名到你的消息会进 Copree，正文可能在 @ 别人处断掉。"
+    )
 
 
 def _msg_type_of(raw: Any) -> int | None:

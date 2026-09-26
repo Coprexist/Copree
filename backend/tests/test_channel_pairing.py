@@ -454,3 +454,53 @@ async def test_group_brief_tells_ai_the_channel_rules(migrated_db):
                 await skill_bridge._unload_plugin(plugin_id)
 
 
+async def test_group_brief_follows_the_observed_push_mode(migrated_db):
+    """「@其他成员」那条规矩跟着群的实际模式走：观测到就直说，观测不到两句都讲（不能猜）
+
+    2026-09-26 真机：全量模式开着时正文是完整的、@ 会显示成 <@!id>；插件靠事件类型判，
+    平台这边问活着的实例（不落库——它是运行期观测，不是配置；持久记录在账本里）。
+    """
+    from app.database import async_session
+    from app.services.infrastructure.plugin_registry import PluginRegistry, registry_key
+    from app.services.plugin import channel, config as plugin_config, skill_bridge
+
+    class _LiveChannel:
+        """顶替真插件实例：只要 key（注册表索引）、name（注册日志）和模式观测"""
+
+        def __init__(self, key: str, name: str, mode: bool | None) -> None:
+            self.key = key
+            self.name = name
+            self.mode = mode
+
+        def observed_full_mode(self) -> bool | None:
+            return self.mode
+
+    with _FakePluginDir():
+        async with async_session() as db:
+            _owner_id, _other, agent_id = await _seed(db)
+            skill_bridge.ensure_declared("qq-channel")
+            instance = channel.instance_of(agent_id)
+            await plugin_config.set_config(
+                "qq-channel",
+                {"app_id": "1", "client_secret": "2", "copree_group_id": "7"},
+                instance, db=db,
+            )
+            key = registry_key("qq-channel", instance)
+            for mode, must_have, must_not in (
+                (None, "全量消息时正文是完整的", None),
+                (True, "开着官方**全量消息**", "不转发「@其他成员」"),
+                (False, "不转发「@其他成员」", "开着官方**全量消息**"),
+            ):
+                PluginRegistry.register(_LiveChannel(key, "测试通道", mode))
+                try:
+                    brief = await channel.group_brief(db, 7)
+                finally:
+                    PluginRegistry.unregister(key)
+                assert must_have in brief, (mode, brief)
+                if must_not:
+                    assert must_not not in brief, (mode, brief)
+
+            for plugin_id in list(skill_bridge._loaded):
+                await skill_bridge._unload_plugin(plugin_id)
+
+
