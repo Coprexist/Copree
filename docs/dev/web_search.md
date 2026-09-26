@@ -25,8 +25,14 @@ web_search(queries=[...], exclude=[...], count=8, per_domain=3)
 - count：结果上限（<=10，默认 8）
 - per_domain：同一域名上限（<=5，默认 3）——不让一个站刷满整页
 
-返回 {success, queries, provider_used, count, results[], failed?[], hint?}；
-results[] 每项含 title/url/snippet/published_at/domain/provider/score/matched_query。
+返回 {success, queries, provider_used, count, results[], attempts[], failed?[], hint?}；
+results[] 每项含 title/url/snippet/published_at/domain/provider/score/matched_query/official。
+
+official=true 表示这是该实体的官方来源：域名主干与实体同名（自有官网），或长在已知平台上的自有页
+（GitHub / Gitee / GitCode / Product Hunt，按页面是否提到实体判断——Coprexist/Copree 这种路径不带实体名）。
+它存在的意义是让模型能执行
+「先回复、再核实」：先把搜到的东西回复给对方，再用 web_fetch 点进去核对版本号与发布时间这类会变的信息，
+核实后补充或更正。顺序不能反——等核实完再回复，对方就得干等着。
 
 ## 3. 回退阶梯
 

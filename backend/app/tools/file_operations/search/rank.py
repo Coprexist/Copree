@@ -14,13 +14,18 @@ import re
 from datetime import datetime, timezone
 from urllib.parse import urlsplit, urlunsplit
 
-from app.tools.file_operations.search.authority import authority, domain_of
+from app.tools.file_operations.search.authority import OFFICIAL_AUTHORITY, authority, domain_of
 from app.tools.file_operations.search.plan import entity_terms, latin_terms
 
 # 中文泛词：它们几乎出现在任何页面上，拿来判定相关性等于没判
 _GENERIC_BIGRAMS = frozenset({
     "发布", "平台", "发展", "类似", "最新", "消息", "相关", "什么", "哪些",
     "怎么", "如何", "介绍", "推荐", "关于", "以及", "一个", "我们", "他们",
+})
+
+# 平台上的自有页：官网之外，官方仓库/发布页也长在这些域名下
+PLATFORM_SOURCE_HOSTS = frozenset({
+    "github.com", "gitee.com", "gitcode.com", "gitlab.com", "producthunt.com",
 })
 
 _CJK = re.compile(r"[\u4e00-\u9fff]")
@@ -186,12 +191,29 @@ def score(item: dict, entity_terms=()) -> float:
     return 0.55 * entity_score + 0.30 * authority(domain, entity_terms) + 0.15 * _recency(item.get("published_at"))
 
 
+def is_official(item: dict, entity_terms=()) -> bool:
+    """是不是该实体的官方来源。
+
+    两种：域名主干与实体同名（自有官网），或长在已知平台上的自有页（GitHub 仓库、发布页）——
+    后者的路径未必带实体名（Coprexist/Copree 对 AIsChat 就是），所以按页面是否提到实体来判断。
+    """
+    domain = item.get("domain") or domain_of(item.get("url", ""))
+    if authority(domain, entity_terms) >= OFFICIAL_AUTHORITY:
+        return True
+    if not any(domain == h or domain.endswith("." + h) for h in PLATFORM_SOURCE_HOSTS):
+        return False
+    hay = " ".join(str(item.get(k, "")) for k in ("title", "snippet", "url")).lower()
+    return any(str(t).lower() in hay for t in entity_terms if str(t).strip())
+
+
 def rank(items: list[dict], *, entity_terms=(), per_domain: int = 3, limit: int = 8) -> list[dict]:
     """去重 -> 打分排序 -> 每域名限量 -> 截断。每域名限量是为了不让一个站刷满整页。"""
     unique = dedupe(list(items))
     for item in unique:
         item.setdefault("domain", domain_of(item.get("url", "")))
         item["score"] = round(score(item, entity_terms), 3)
+        # 标出官网/官方页：模型要拿它做「先回复、再点进去核实」的动作，靠分数猜不可靠
+        item["official"] = is_official(item, entity_terms)
     unique.sort(key=lambda x: x["score"], reverse=True)
     counts: dict[str, int] = {}
     out: list[dict] = []
