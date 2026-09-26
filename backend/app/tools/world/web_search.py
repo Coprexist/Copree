@@ -1,8 +1,9 @@
-"""web_search — 网页搜索
+"""web_search — 网页搜索（世界侧）
 
-搜索引擎：通过 Bing 搜索网络上的最新信息，返回标题、链接和摘要。使用场景：搜索新闻、查找资料、获取实时信息、验证事实。与 web_fetch 配合使用：先用 web_search 找链接，再用 web_fetch 
+文案与参数直接取主站工具（唯一来源），避免两侧各写一份、加参数时漏改一边。
 """
 
+from app.tools.file_operations.web_search import WebSearch
 from app.tools.world.base import WorldToolPlugin, WorldToolContext
 
 
@@ -11,20 +12,13 @@ class WebSearchTool(WorldToolPlugin):
     label = '网页搜索'
     segment = 'net'
 
-    description = (
-        '搜索引擎：通过 Bing 搜索网络上的最新信息，返回标题、链接和摘要。使用场景：搜索新闻、查找资料、获取实时信息、验证事实。与 web_fetch 配合使用：先用 web_search 找链接，'
-        '再用 web_fetch 看具体内容。'
-    )
-
-    parameters = {'query': {'type': 'string', 'description': '搜索关键词，支持中文'},
-     'count': {'type': 'integer', 'description': '返回结果数量（1-10，默认 5）'}}
-
-    required = ['query']
+    description = WebSearch.description
+    parameters = WebSearch.parameters
+    required = WebSearch.required
 
     async def execute(self, ctx: WorldToolContext) -> dict:
         # 复用主系统同一份实现（同一份代码，无 opencli 依赖）
         try:
-            from app.tools.file_operations.web_search import WebSearch
             from app.tools.world.shared import from_site_result
             result = await WebSearch().execute(ctx.world_repo.session, 0, None, ctx.args, {})
             return from_site_result(result)          # 主站错误形状 → 世界约定（唯一适配点）

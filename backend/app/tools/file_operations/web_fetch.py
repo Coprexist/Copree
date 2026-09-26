@@ -182,7 +182,7 @@ class WebFetch(ToolPlugin):
         "比 browser 命令更轻量快速，适合获取网页正文、API 响应、文档等。"
         "不支持需要 JavaScript 渲染的页面（如 SPA 应用）。"
         "页面加载慢/内容延迟出现时，可设置 delay_ms 先等待再抓取。"
-        "**要搜索就用 web_search**（Bing，国内可直连）；google / duckduckgo 这类站点在国内"
+        "**要搜索就用 web_search**（多后端：必应 / 360 / 搜狗，自动回退）；google / duckduckgo 这类站点在国内"
         "解析被污染、抓不到，别去抓它们的搜索页。"
         "GitHub 的文件（raw / release / 压缩包）直连失败时会自动改走国内镜像，"
         "此时结果里带 via 字段说明内容来自哪个镜像（第三方，留意校验）。"
