@@ -1,6 +1,7 @@
 # 写一个通道插件（把外部平台接到 Copree）
 
-> 状态：**外部身份层已实现**（迁移 f7c1a2b3d4e5）；消息 / 私信会话 / 群成员改为引用外部身份是下一阶段。
+> 状态：外部身份层、出站出口、**通道自测**、**@ 提及出站翻译**、**撤回联动**均已实现（最近更新 v0.4.10，2026-09-26）；
+> 消息 / 私信会话 / 群成员改为直接引用外部身份是下一阶段（见 §7）。
 > 参考实现：`backend/plugins/qq-channel/`（官方 QQ 机器人，生产在用）。
 > 相关代码：`app/models/external.py`、`app/services/plugin/pairing.py`、`app/services/plugin/channel.py`、
 > `app/services/plugin/catalog.py`、`app/chat/{gm,dm,group_delivery,dm_delivery,outbound}.py`
@@ -77,6 +78,10 @@ Copree 管三件事：**这个外部的人是谁**、**放不放行**、**消息
    `docker-compose.yml` 的 `napcat` profile）时，地址与 token 直接不露给用户；用户自带协议端时才显示这两个字段。
 3. `copree_group_id`（消息落到哪个 Copree 群）与 `dm_policy`（私聊策略）是平台约定字段，
    用这两个名字就自动获得"选群/新建群"和"四档策略"控件。
+4. **枚举字段**：加 `options: [{value, label, label_en?, label_ja?}]` 就渲染成下拉。
+   配置里写**意图**（`plain` / `markdown`），别把协议数字暴露给用户——QQ 通道就是这么做的。
+5. **开关字段**：`type: "boolean"` 渲染成勾选框，值按字符串 `"true"`/`"false"` 存取
+   （它是**独立维度**，与上面的枚举互不影响，例如"正文格式"与"引用回复"）。
 
 状态里可选报两个键给卡片用：`recent_groups`（`[{origin, last_at, count, allowed}]`，最近见到过的群）
 与 `recent_field`（这些 `origin` 该写进哪个配置字段名）；`last_error` 会在卡片上原样显示。
@@ -166,6 +171,73 @@ wake_dm_ai(session_id, payload, sender_id=发消息的人, sender_type="human")
 
 **状态上报**：实现 `get_status()`，返回 `running` 与 `detail`（卡片会渲染），
 出错时写 `self.last_error` —— 用户看到的「最后一条错误」就是它。
+
+## 4.1 出站出口：三条，按需注册
+
+`app/chat/outbound.py` 是出口注册表。注册名用 **`ServicePlugin.key`**（带实例），不要用插件 id ——
+两个实例同名会互相顶掉（2026-09 线上事故：第二个 QQ 通道把第一个的出口覆盖，群里 AI 的回复被静默丢弃）。
+`register_sink` 返回**句柄**，stop 时按句柄注销：
+
+```python
+self._sink_handle = register_sink(
+    self.key, group=self._outbound_sink, dm=self._dm_outbound_sink, revoke=self._revoke_sink
+)
+```
+
+| 出口 | 签名 | 什么时候被调 |
+| --- | --- | --- |
+| `group` | `async (db, group_id, message, source)` | 绑定群里产生了一条消息 |
+| `dm` | `async (db, session_id, msg)` | 该 AI 的私信产生了一条消息 |
+| `revoke` | `async (db, group_id, message) -> dict \| None` | 有人撤回了消息，请你一起撤 |
+
+三条约定的差别很关键：
+
+- `group` / `dm` 是**火并遗忘**：必须 `asyncio.create_task` 发出去，别等 HTTP 往返
+  （它们在 commit 之前被调，等一次往返会把"发消息"本身拖慢）；
+- `revoke` **相反**：注册表会 `await` 每个出口的回答——调用方要把"通道侧撤没撤掉"如实告诉用户。
+  返回 `{"channel": <你的名字>, "ok": bool, "reason": str?}`；**返回 `None` = 这条不归它管**（不进结果）；
+  抛异常会被记成 `ok: False`（写明原因）。
+
+## 4.2 @ 提及：出站翻译 + 入站点名
+
+平台内统一用 `<@!users.id>`（见 [@ 提及统一用 id](./mention_ids.md)）。插件要做两件事：
+
+1. **出站翻译**：把 `<@!id>` 换成通道侧的写法（QQ 官方 `<@!openid>`、NapCat `[CQ:at,qq=…]`）。
+   用 `services/plugin/channel_user.channel_contacts(db, kind=…, owner_scope=…)` 拿
+   "这条通道上认得的本地账号 → 通道标识"；**认不出的退成 `@名字`**（令牌原样发出去只会是乱码）。
+   查库放在后台发送任务里，别拖慢发消息。
+2. **入站点名**：外部平台里 @机器人 = Copree 里 @这个 AI。正文前拼上
+   `text.mention_token(self._target_user_id)`（拿不到 user_id 才退回 `@名字`），
+   让群自己的唤醒规则照常生效。
+
+锚点邮箱的拼法只有一处：`channel_user.anchor_email(kind, origin)`（建号与反查都走它）。
+
+## 4.3 通道自测（可选，但强烈建议）
+
+```python
+class MyChannelPlugin(ServicePlugin):
+    self_testable = True          # 卡片据此决定画不画「通道自测」按钮
+
+    async def self_test(self) -> dict:
+        # 在**真实出口**上发一条测试消息，把通道侧原始响应带回来
+        ...
+```
+
+- 默认实现返回 `None` = 这条通道没有可自测的出口，卡片不画按钮（NapCat 目前就是这样）；
+- 必须复用**真正发消息那条路**：另写一条"测试专用发送"等于测试了一条假链路；
+- 失败别把栈丢给用户：返回 `{"sent": False, "reason": "…"}` 更好（卡片会原样显示）；
+- 这个端点**在服务进程内**执行，所以能拿到内存里的路由与会话凭据（被动回复窗口、协议端连接）——
+  这也正是它不能在插件配置接口里实现的原因。
+
+## 4.4 接入"接收所有消息"这类全量事件（可选）
+
+有些平台支持"群里每条消息都推送"（QQ 官方是 `GROUP_MESSAGE_CREATE`，需群主在群设置里开启）。接它时注意三条：
+
+1. **只把点名到机器人的消息投进 Copree**：全量事件里官方给 `mentions`（带 `bot` 标记），优先用它，
+   拿不到再退回按名字判；否则群里每句话都灌进来；
+2. **按消息 id 去重**：同一条消息在 @模式与全量模式会各来一次，共用同一张去重表；
+3. **更完整的一方胜出**：后到的事件正文更长时，把库里的正文补上
+   （@模式的正文可能在 @其他成员处被截断；账本里已写下的条目不改——append-only）。
 
 ## 5. 信任边界（写清楚，别误会）
 
