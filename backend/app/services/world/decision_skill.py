@@ -85,7 +85,7 @@ def match_conditions(conditions, ctx: dict) -> bool:
 _MAX_RULES = 20          # 每实体技能上限
 _MAX_DO_SCRIPT = 4000    # run_script 脚本/回复文本上限（字符）
 
-_DO_ACTIONS = ("reply_template", "call_tool", "run_script")
+_DO_ACTIONS = ("reply_template", "call_tool", "run_script", "silent")
 
 # 预置情景：写错的 event 等于永远不触发，故当场拒绝并列出可选值（情景表见 docs/dev/decision_layer.md）
 SCENARIOS: dict[str, str] = {
@@ -107,8 +107,9 @@ def rule_schema_desc() -> str:
         "conditions 是递归条件树：{\"and\":[...]}/{\"or\":[...]}/{\"not\":{...}} 自由组装；"
         "叶子 {\"字段\":值}=等于，{\"字段_contains\":\"子串\"}、{\"字段_starts_with\":\"前缀\"}、"
         "{\"字段_matches\":\"正则\"}、{\"字段_gt/gte/lt/lte\":数值}。"
-        "do 三选一：reply_template（{action, reply} 固定回复，零成本）/ call_tool（{action, name, arguments} 调平台工具）/ "
-        "run_script（{action, code} 沙箱脚本：在你自己的文件空间里跑，不能联网；把要说的话 print 成 JSON {\"reply\":\"...\"}）。"
+        "do 四选一：reply_template（{action, reply} 固定回复，零成本）/ call_tool（{action, name, arguments} 调平台工具）/ "
+        "run_script（{action, code} 沙箱脚本：在你自己的文件空间里跑，不能联网；把要说的话 print 成 JSON {\"reply\":\"...\"}）/ "
+        "silent（{action} 静默：这条消息不回、也不唤醒你本体，用来声明「这种消息不值得理」）。"
         "notify=true = 命中后仍唤醒本体（执行结果会作为一条系统提示给你）；false = 程序处理完即止。"
         "同名覆盖更新，上限 20 条。示例：签到自动回复 = "
         "{\"name\":\"签到\",\"when\":{\"event\":\"group_message\",\"conditions\":{\"and\":[{\"content_contains\":\"签到\"},{\"not\":{\"is_mention\":true}}]}},"
@@ -136,6 +137,8 @@ def validate_rule(rule: dict) -> tuple[bool, str]:
     action = str(do.get("action") or "")
     if action not in _DO_ACTIONS:
         return False, f"do.action 必须是 {_DO_ACTIONS} 之一"
+    if action == "silent" and rule.get("notify"):
+        return False, "silent 与 notify=true 冲突：静默处理与唤醒本体只能选一个"
     if action == "reply_template":
         if not str(do.get("reply") or "").strip():
             return False, "reply_template 需要 reply 文本"
@@ -486,6 +489,9 @@ async def execute_do(db, world, do: dict, ctx: dict, *, kind: str = "", entity_i
     """
     action = str(do.get("action") or "")
     try:
+        if action == "silent":
+            # 空 reply 即不代发；handled=True 让调用方连唤醒一起跳过
+            return {"success": True, "reply": ""}
         if action == "reply_template":
             return {"success": True, "reply": str(do.get("reply") or "").strip()}
         if action == "call_tool":

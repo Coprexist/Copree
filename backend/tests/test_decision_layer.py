@@ -1,4 +1,4 @@
-"""决策层契约：不绑世界也能跑、do 三个动作各落到正确的执行者、notify 语义。
+"""决策层契约：不绑世界也能跑、do 各动作落到正确的执行者、notify 语义。
 
 情景表与分派规则见 docs/dev/decision_layer.md。
 """
@@ -178,3 +178,32 @@ async def test_scheduled_scenario_matches_the_alarm_context(migrated_db):
         dec = await run_decision_engine(db, "agent", 24, None, "scheduled",
                                         {"event": "scheduled", "trigger": "alarm", "task": "发早安", "alarm_id": 1})
         assert dec["hit"] and dec["handled"] and dec["reply"] == "早", dec
+
+
+async def test_silent_ends_the_message_without_replying_or_waking(migrated_db):
+    """silent：命中即到此为止——不代发（不回复）、也不唤醒本体"""
+    from app.database import async_session
+    from app.services.world.decision_skill import run_decision_engine
+
+    async with async_session() as db:
+        await _seed(db)
+        ok, err = await _save(db, {
+            "name": "不接茬", "when": {"event": "group_message", "conditions": {"content": "在？"}},
+            "do": {"action": "silent"}, "notify": False,
+        })
+        assert ok, err
+        dec = await run_decision_engine(db, "agent", 24, None, "group_message", _incoming(content="在？"))
+        assert dec["hit"] and dec["handled"] and dec["reply"] == "", dec
+
+
+async def test_silent_conflicts_with_notify(migrated_db):
+    """silent 与 notify=true 互斥：静默就是不唤醒本体，要它自己判断就别写这条规则"""
+    from app.database import async_session
+
+    async with async_session() as db:
+        await _seed(db)
+        ok, err = await _save(db, {
+            "name": "矛盾", "when": {"event": "group_message"},
+            "do": {"action": "silent"}, "notify": True,
+        })
+        assert not ok and "notify" in err, err

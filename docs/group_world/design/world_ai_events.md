@@ -46,7 +46,7 @@
 ## 3. 投递语义
 
 1. 事件到达 → 对该批收件人逐一过决策技能（情景 `world_event`，ctx = `name/title/world_id/group_id` + payload 展平）。
-2. 命中且 `notify=false` → 执行 do（`reply_template` 代发到 `group_id`；`call_tool`/`run_script` 同现有分派），**不唤醒**。
+2. 命中且 `notify=false` → 执行 do（`reply_template` 代发到 `group_id`；`silent` 什么都不发；`call_tool`/`run_script` 同现有分派），**不唤醒**。
 3. 命中且 `notify=true` → 执行 do，唤醒本体并把结果作为提示注入（同群消息链路的 `note`）。
 4. 未命中：**唤醒本体**（与好友申请、闹钟同一条独立唤醒链路），把事件标题、payload 与
    "要不要以后自动处理"的提示一起给它；它可以直接写一条 `world_event` 规则下次自动跑。

@@ -32,7 +32,9 @@ AI 不该被每条消息唤醒。事件先过一层决策：**AI 自己写的规
 ## 3. 校验
 
 - `when.event` 必须在 §2 表内 —— 写个不存在的事件名等于永远不触发，不如当场拒绝并列出可选值。
-- `do.action` 三选一，各自必填项校验（`reply` / `name` / `code`），文本与脚本上限 4000 字符。
+- `do.action` 四选一，各自必填项校验（`reply` / `name` / `code`；`silent` 无必填项），文本与脚本上限 4000 字符。
+- `silent` 是「不回应」的正式表达：命中即静默（不代发、不唤醒本体）。此前只能给 `reply_template`
+  塞一句空话，或让 `run_script` 打印空 JSON 绕过去。
 - 工具描述与 schema 说明只有**一处**（`decision_skill.rule_schema_desc()`），
   平台工具与世界链路共用同一份文案，避免加情景时漏改一处。
 
@@ -59,6 +61,7 @@ AI 不该被每条消息唤醒。事件先过一层决策：**AI 自己写的规
 | `reply_template` | 返回文本，由调用方代发（群消息/入群等群级情景发到群） | 同左 |
 | `call_tool` | `ToolRegistry.dispatch` —— 平台工具，**AI 自己的身份** | `run_world_tool` —— 世界工具，世界身份 |
 | `run_script` | `sandbox/agent_sandbox.run_agent_code` —— 在**自己的文件空间**里跑，禁网络/禁 fork | 世界沙箱（`skill_sandbox`，世界配额） |
+| `silent` | 到此为止：`reply` 为空，调用方不代发、不唤醒本体（与 `notify=true` 互斥，校验时拒绝） | 同左 |
 
 脚本的返回值即"要说什么"：`stdout` 最后一行是 JSON 时取 `{"reply": "..."}`，由宿主代发。
 脚本没有联网与平台句柄，能力边界停在"算"。
@@ -92,5 +95,6 @@ docker exec ai_group_backend bash -c 'export TEST_DATABASE_URL="${DATABASE_URL%/
   cd /app && python tests/run_without_pytest.py test_decision_layer'
 ```
 
-覆盖：不绑世界也命中、`call_tool` 走平台身份、`run_script` 由 stdout 决定回复、
-`notify=true` 带 note 继续唤醒、未知事件被拒、批量预取与逐个读同源、入群情景端到端代发、定时情景匹配。
+覆盖：不绑世界也命中、`call_tool` 走平台身份、`run_script` 由 stdout 决定回复、`silent` 静默不代发不唤醒、
+`silent`+`notify` 被拒、`notify=true` 带 note 继续唤醒、未知事件被拒、批量预取与逐个读同源、
+入群情景端到端代发、定时情景匹配。

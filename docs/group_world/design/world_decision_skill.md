@@ -111,7 +111,7 @@
     }
   },
   "do": {
-    "action": "run_script",         // run_script / call_tool / reply_template
+    "action": "run_script",         // run_script / call_tool / reply_template / silent
     "script": "auto_reply.py",      // 世界沙箱内脚本（sandbox_isolate）
     "reply": "已记录你的签到 ✅"
   },
@@ -130,7 +130,7 @@
     - 保留字段：`is_mention` / `is_at_all` / `sender_type` / `group_type` / `content` / `sender_id` 等
   - 例：`or: [{content_contains: "天气"}, {and: [{content_contains: "签到"}, {not: {is_mention: true}}]}]`
   - 进阶（后续）：表达式字符串模式（`(content contains '天气' or group_type == '冒险团') and not is_mention`），白名单解析器，供高级场景；初期以条件树为准。
-- `do`：三选一——`run_script`（沙箱 Python，能力最全）/ `call_tool`（平台工具，如 `world_data_put`）/ `reply_template`（固定回复，零成本）。
+- `do`：四选一——`run_script`（沙箱 Python，能力最全）/ `call_tool`（平台工具，如 `world_data_put`）/ `reply_template`（固定回复，零成本）/ `silent`（静默：不回也不唤醒本体）。
 - `notify`：关键语义——**"什么情景才触发我"**。`notify: true` 的情景命中后仍唤醒 LLM 本体（AI 声明"这种时候必须我来"）；`false` 则程序处理完即止。
 - AI 自写：提供 `write_decision_skill` / `update_decision_skills` 工具，AI 自己生成、迭代自己的决策技能（走 `capability_versioning` 版本化，前缀缓存稳定）。
 
@@ -161,9 +161,9 @@
 
 阶段二（决策技能）——核心闭环已落地（2026-08-13）：
 - [x] 预置情景列表（group_message 已接入；member_join/leave、friend_request、scheduled 引擎通用、事件钩子陆续接）
-- [x] 决策技能模型（type=decision：when 条件 DSL + do 三动作 + notify）——存 agent_skills / group_assistants.config
+- [x] 决策技能模型（type=decision：when 条件 DSL + do 四动作 + notify）——存 agent_skills / group_assistants.config
 - [x] 决策引擎（事件→技能匹配→程序化处理 or 唤醒 LLM；优先于 mention_only 触发模式）
 - [x] `write_decision_skill` / `list_decision_skills` / `delete_decision_skill` 工具（ToolRegistry 插件，AI 自配置；群助手独立入口）
-- [x] do 执行（reply_template 零成本 / call_tool 平台工具 / run_script 沙箱复用 skill_sandbox）
+- [x] do 执行（reply_template 零成本 / call_tool 平台工具 / run_script 沙箱复用 skill_sandbox / silent 静默不唤醒）
 - [ ] 决策执行限额/日志（目前依赖世界沙箱配额，独立限额与审计待补）
 - [ ] 其余情景事件钩子（member_join/leave、friend_request、scheduled）
