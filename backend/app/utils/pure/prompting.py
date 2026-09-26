@@ -162,18 +162,6 @@ def chronological(rows: list) -> list:
     return list(rows)
 
 
-def keep_newest_within(rows: list, max_chars: int) -> list:
-    """按字符上限从**最旧端**丢消息，保留最新的（正序进、正序出）"""
-    total = 0
-    kept: list = []
-    for m in reversed(rows):
-        total += len(m.content or "")
-        if total > max_chars:
-            break
-        kept.append(m)
-    return list(reversed(kept))
-
-
 def format_message(msg: dict, agent_name: str = "", max_content_len: int = 200) -> str:
     """
     纯函数：统一格式化单条消息。多会话上下文、当前对话、向量检索全部走这里。

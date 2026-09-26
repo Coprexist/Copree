@@ -3,8 +3,8 @@
 设计见 docs/dev/conversation_history.md：
 - 账本 = 模型看过的上下文的完整账本，段内只追加、只在解锁点重写；
 - 缺口事件**写在这批消息之前、同批写入**（事后再插 = 改中段 = 断缓存）；
-- 补看走 append 且带 [补] 抬头（顺序按写入位置，不按发生时间）；
-- 事件类（缺口/补看/便签/通知）压缩时原样搬运，不揉进摘要。
+- 缺口只报条数（读原文用 read_conversation；补看机制不做）；
+- 事件类（缺口/便签/通知）压缩时原样搬运，不揉进摘要。
 """
 import pytest
 
@@ -19,15 +19,6 @@ def test_gap_says_how_many_are_missing():
     assert e["kind"] == "gap" and e["actor"] == "system"
     assert "还有 10 条" in e["content"] and "view_unread" in e["content"]
     assert e["content"] == gap_text(10), "只留一个文字来源，两处各写一遍必漂"
-
-
-def test_backfill_header_says_these_are_older_messages():
-    from app.utils.pure.history import backfill_header
-
-    text = backfill_header(10, first_ref="1", last_ref="10", at="12:09")
-
-    assert "#1.." in text and "更早" in text and "12:09" in text
-    assert "不代表刚发生" in text, "补看排在末尾，必须说清先后"
 
 
 def test_entries_project_to_messages_by_actor():
@@ -49,7 +40,7 @@ def test_events_are_never_compressible():
     from app.utils.pure.history import is_compressible, make_entry
 
     assert is_compressible(make_entry("message", "普通消息")) is True
-    for kind in ("gap", "backfill", "note", "notice"):
+    for kind in ("gap", "note", "notice"):
         assert is_compressible(make_entry(kind, "事件")) is False
     assert is_compressible(make_entry("message", "显式不可压", flags={"compressible": False})) is False
     assert is_compressible(make_entry("gap", "显式可压", flags={"compressible": True})) is True
@@ -183,4 +174,71 @@ async def test_rewrite_keeps_summary_events_and_tail(migrated_db):
         assert [e["seq"] for e in out] == [1, 2, 3, 4, 5], "重写后 seq 从 1 重排"
         assert await hs.count(db, 1, "group:64") == 5
         assert await rewrite_context(db, agent, "group:none", summary="x", keep_last=2) == [], "账本空就不动"
+
+
+def test_window_budget_counts_the_rendered_bytes():
+    """字数预算按**渲染后**算：折过的长消息只占 2048 + 省略标记，不该按原文算"""
+    from app.utils.pure.history import FOLD_LIMIT, fold_text, make_entry, take_newest_within
+
+    folded = fold_text("字" * 30_000, limit=FOLD_LIMIT, expand_id=7)
+    assert len(folded) < 3_000, len(folded)
+
+    entries = [make_entry("message", f"短{i}", ref=str(i)) for i in (1, 2, 3)]
+    entries.append(make_entry("message", folded, ref="4"))
+    kept = take_newest_within(entries, max_chars=3_000)
+    assert [e["ref"] for e in kept] == ["1", "2", "3", "4"], "折过的长消息不该把前面的挤掉（按原文算会）"
+
+    huge = make_entry("message", "字" * 25_000, ref="9")
+    assert take_newest_within([huge], max_chars=1_000) == [huge], "单条就超预算也要带上，否则水位卡死"
+
+
+async def test_sync_window_counts_rendered_bytes(migrated_db):
+    """真库闭环：一条 3 万字的消息折完后，窗口还有余量把前面那条短消息一起带进来"""
+    from sqlalchemy import select, text
+
+    from app.database import async_session
+    from app.models.agent import Agent
+    from app.services.history import context_sync
+
+    async with async_session() as db:
+        from db_reset import clear
+
+        await clear(db, "agent_history_entries", "messages", "group_members", "groups", "agents", "users")
+        await db.execute(text(
+            "INSERT INTO users (id, username, password_hash, type) VALUES "
+            "(1, '群主', 'x', 'human'), (2, 'AI账号', 'x', 'ai')"
+        ))
+        await db.execute(text(
+            "INSERT INTO agents (id, owner_id, name, user_id, discoverable) "
+            "VALUES (24, 1, '测试AI', 2, true)"
+        ))
+        await db.execute(text(
+            "INSERT INTO groups (id, name, owner_type, owner_id, avatar_mode, include_ai_in_avatar) "
+            "VALUES (64, '群', 'human', 1, 'default', true)"
+        ))
+        await db.execute(text(
+            "INSERT INTO group_members (group_id, member_type, member_id, role) VALUES "
+            "(64, 'human', 1, 'owner'), (64, 'ai', 2, 'member')"
+        ))
+        await db.execute(text(
+            "INSERT INTO messages (group_id, sender_type, sender_id, content, created_at) VALUES "
+            "(64, 'human', 1, '短消息', '2026-09-26 10:00:00')"
+        ))
+        await db.execute(text(
+            "INSERT INTO messages (group_id, sender_type, sender_id, content, created_at) VALUES "
+            "(64, 'human', 1, :big, '2026-09-26 10:01:00')"
+        ), {"big": "字" * 30_000})
+        await db.commit()
+
+        agent = (await db.execute(select(Agent).where(Agent.id == 24))).scalar_one()
+        old = context_sync.BATCH_MAX_CHARS
+        context_sync.BATCH_MAX_CHARS = 3_000      # 旧口径下这条 3 万字的原文会把预算吃光
+        try:
+            entries = await context_sync.sync_group_history(db, agent, 64, cap=20, max_len=2048)
+        finally:
+            context_sync.BATCH_MAX_CHARS = old
+
+        body = "\n".join(e["content"] for e in entries)
+        assert "短消息" in body, "长消息折完后应该还有余量带上前面那条短的"
+        assert "中间省略" in body, "长消息确实被折了"
 

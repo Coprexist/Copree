@@ -18,7 +18,7 @@ from app.services.memory.memory_service import recall_relevant_memories, format_
 from app.utils.pure.prompting import (
     resolve_model, build_personality_segment, format_time_shanghai,
     format_message, format_context_for_ai, assemble_system_prompt,
-    chronological, keep_newest_within,
+    chronological,
 )
 from app.utils.multimodal import (
     build_content, image_attachments, image_note, injected_image_count,
@@ -1136,7 +1136,7 @@ async def build_messages(
                     "role": "system",
                     "content": (
                         f"（注意：这个群还有 {missing} 条更新的消息没有进入你的上下文。"
-                        "不要凭上面的历史猜着回答——可以调用 view_unread 查看未读，"
+                        "不要凭上面的历史猜着回答——可以用 read_conversation 翻原文，"
                         "或直接说明你只看到较早的消息。）"
                     ),
                 })

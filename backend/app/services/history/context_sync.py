@@ -16,13 +16,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.chat import gm
 from app.services.history import history_service
-from app.utils.pure.history import gap_entry, latest_message_ref
-from app.utils.pure.prompting import keep_newest_within
+from app.utils.pure.history import gap_entry, latest_message_ref, take_newest_within
 
 logger = logging.getLogger(__name__)
 
-# 一批最多带多少字符（与旧窗口同口径：40000 字）
-BATCH_MAX_CHARS = 40_000
+# 一次同步最多带多少字符（用户 2026-09-26 定：40000 → 20000）。
+# 和"最多 20 条"（max_unread_messages）**谁先到算谁**：都是"从最新往回"的预算，
+# 装不下的旧消息折成缺口条目（只报条数，读原文用 read_conversation）。
+BATCH_MAX_CHARS = 20_000
 
 
 def context_ref(*, group_id: int | None = None, session_id: str | None = None) -> str:
@@ -53,7 +54,7 @@ async def rewrite_context(db: AsyncSession, agent, context_ref: str, *,
     """**解锁点**重写整段账本：摘要 + 原样搬运的事件 + 最近 keep_last 条。
 
     全仓唯一允许动中段的地方（§0：compact / 超时压缩是唯一重写点）；其它路径只能 append。
-    事件类（缺口/补看/便签/通知）不揉进摘要，原样搬到摘要之后——它们是契约，不是内容。
+    事件类（缺口/便签/通知）不揉进摘要，原样搬到摘要之后——它们是契约，不是内容。
     账本空就什么都不做（不动 = 不误清）。
     """
     from app.utils.pure.history import is_compressible, make_entry
@@ -131,6 +132,9 @@ async def sync_group_history(db: AsyncSession, agent, group_id: int, *, cap: int
     """把水位之后的新群消息补进账本，返回**整段**历史条目（供渲染请求体）。
 
     cap = 一批最多几条（旧窗口的 max_unread），max_len = 单条展示上限（群设置的 max_msg_display_len）。
+
+    字数预算按**渲染后**的长度算：超长消息折成 2048 + 省略标记后，占的就是那么多，
+    不是原文那么多——按原文算会把本来装得下的消息白白挤成缺口。
     """
     ref = context_ref(group_id=group_id)
     entries = await history_service.read(db, agent.id, ref)
@@ -139,23 +143,28 @@ async def sync_group_history(db: AsyncSession, agent, group_id: int, *, cap: int
     rows = await gm.get_gm_messages(db, group_id, limit=cap, after_id=watermark or None)
     # 顺序按 **id** 归正：水位就是按 id 记的，而 get_gm_messages 在 after_id 有值时返回倒序
     # （chronological 靠时间戳判先后，同一秒插入的两条判不出来——实测踩过）
-    rows = keep_newest_within(sorted(rows, key=lambda m: m.id), BATCH_MAX_CHARS)
+    rows = sorted(rows, key=lambda m: m.id)
 
-    # 水位与本批第一条之间被窗口/字符上限吃掉的：折成缺口，排在这批最前面
+    agent_name = getattr(agent, "name", "") or ""
+    agent_user_id = getattr(agent, "user_id", None)
+    names = await gm.resolve_speaker_names(db, rows) if rows else {}
+    kept = take_newest_within([
+        gm.gm_message_entry(
+            m, agent_name=agent_name, agent_user_id=agent_user_id,
+            speaker_name=names.get((m.sender_type, m.sender_id)), max_len=max_len,
+        )
+        for m in rows
+    ], BATCH_MAX_CHARS)
+
+    # 水位与本批第一条之间被条数/字数预算吃掉的：折成缺口条目（只报条数，
+    # 读原文靠 read_conversation），排在这批最前面
+    first_id = int(kept[0]["ref"]) if kept else 0
     skipped = await gm.count_messages_between(
-        db, group_id, after_id=watermark, before_id=rows[0].id) if rows else 0
+        db, group_id, after_id=watermark, before_id=first_id) if first_id else 0
     batch: list[dict] = []
     if skipped:
-        batch.append(gap_entry(skipped, ref=str(rows[0].id)))
-    if rows:
-        names = await gm.resolve_speaker_names(db, rows)
-        agent_name = getattr(agent, "name", "") or ""
-        agent_user_id = getattr(agent, "user_id", None)
-        for m in rows:
-            batch.append(gm.gm_message_entry(
-                m, agent_name=agent_name, agent_user_id=agent_user_id,
-                speaker_name=names.get((m.sender_type, m.sender_id)), max_len=max_len,
-            ))
+        batch.append(gap_entry(skipped, ref=str(first_id)))
+    batch.extend(kept)
     if batch:
         entries = entries + await history_service.append(db, agent.id, ref, batch)
     return entries
