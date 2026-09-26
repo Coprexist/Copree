@@ -38,8 +38,8 @@ CONFIG_PROFILES = {
         "temperature": 0.7, "top_p": 0.9, "presence_penalty": 0.3, "frequency_penalty": 0.3,
         "thinking_enabled": False,
         # 工具调用
-        "max_tool_rounds": 2,
-        "alarm_max_tool_rounds": 5,
+        "max_tool_rounds": 6,
+        "alarm_max_tool_rounds": 8,
         # 闹钟 / 心跳
         "force_alarm_on_end": False,
         "max_alarms": 3,
@@ -60,8 +60,8 @@ CONFIG_PROFILES = {
         "temperature": 0.9, "top_p": 0.95, "presence_penalty": 0.5, "frequency_penalty": 0.5,
         "thinking_enabled": True,
         # 工具调用
-        "max_tool_rounds": 4,
-        "alarm_max_tool_rounds": 8,
+        "max_tool_rounds": 8,
+        "alarm_max_tool_rounds": 10,
         # 闹钟 / 心跳
         "force_alarm_on_end": False,
         "max_alarms": 5,

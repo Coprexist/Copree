@@ -942,7 +942,7 @@ async def list_config_presets():
         "presets": [
             {"key": k, "name": v["name"], "description": v["description"],
              "temperature": v["temperature"], "thinking_enabled": v["thinking_enabled"],
-             "max_tool_rounds": v.get("max_tool_rounds", 5),
+             "max_tool_rounds": v.get("max_tool_rounds", 6),
              "alarm_max_tool_rounds": v.get("alarm_max_tool_rounds", 10),
              "force_alarm_on_end": v.get("force_alarm_on_end", False),
              "max_alarms": v.get("max_alarms", 10),

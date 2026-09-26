@@ -19,7 +19,7 @@ class AgentCreateRequest(BaseModel):
     hide_ai_identity: bool = Field(default=False)
     config_profile: str | None = Field(default=None, description="预设档位: chat|immersive|digital_life")
     delay_reply_enabled: bool | None = Field(default=None, description="延迟回复开关，NULL=继承全局默认")
-    max_tool_rounds: int = Field(default=5, ge=1, le=20, description="单次回复最大工具调用轮次")
+    max_tool_rounds: int = Field(default=6, ge=1, le=20, description="单次回复最大工具调用轮次")
     alarm_max_tool_rounds: int = Field(default=10, ge=1, le=30, description="闹钟/心跳最大工具调用轮次")
     force_alarm_on_end: bool = Field(default=False, description="对话结束时强制要求 AI 设定闹钟")
     max_alarms: int = Field(default=10, ge=1, le=50, description="AI 最多可设活跃闹钟数")
@@ -151,7 +151,7 @@ class AgentResponse(BaseModel):
     thinking_enabled: bool
     config_profile: str | None = None
     delay_reply_enabled: bool | None = None
-    max_tool_rounds: int = 3
+    max_tool_rounds: int = 6
     alarm_max_tool_rounds: int = 10
     force_alarm_on_end: bool = False
     max_alarms: int = 10

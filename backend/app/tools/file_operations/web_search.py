@@ -84,7 +84,7 @@ class WebSearch(ToolPlugin):
     required: list = []
     states = ["active", "dnd"]
     # 「先回复、再核实」这条建议不常驻系统提示（不用搜索时上下文保持干净），
-    # 改由规则在本会话第一次搜完之后投一次；compact 后帧重建，会再投一次
+    # 改由规则在本会话第一次搜完之后投一次；解锁时帧上的计数被复位，会再投一次
     triggers = [{
         "id": "web_search.verify_after_reply",
         "when": {"event": "tool_result",
@@ -92,7 +92,9 @@ class WebSearch(ToolPlugin):
                                         {"field": "first_in_frame", "op": "eq", "value": True}]}},
         "do": {
             "action": "deliver",
-            "text": "搜到官网或官方发布时，建议先及时回复对方，再点进去（web_fetch）核实版本号、发布时间这类会变的信息。",
+            "text": "搜到官网或官方发布时：先把结论回复对方，同一轮别结束——接着 web_fetch 点进去核实。"
+                    "凡是会变、又要拿它当依据的信息都值得核（版本号、发布时间、价格、名额、政策、接口字段…）；"
+                    "有出入再补一条更正，然后才 end_turn。",
         },
         "scope": "frame",
     }]
