@@ -1097,7 +1097,8 @@ async def build_messages(
         events: list[dict] = await _deliver_frame_notes(db, agent, group_ref, ledger)
         cap_notice = await _build_capability_notice(db, agent)
         if cap_notice:
-            events.append(make_entry("notice", cap_notice))
+            events.append(make_entry("notice", cap_notice,
+                                 flags={"drop_on_unlock": True}))
         ledger = ledger + await append_events(db, agent, group_ref, events)
 
         last_user_idx = None
@@ -1483,7 +1484,8 @@ async def build_dm_messages(
     events: list[dict] = await _deliver_frame_notes(db, agent, dm_ref, ledger)
     cap_notice = await _build_capability_notice(db, agent)
     if cap_notice:
-        events.append(make_entry("notice", cap_notice))
+        events.append(make_entry("notice", cap_notice,
+                                 flags={"drop_on_unlock": True}))
     ledger = ledger + await append_events(db, agent, dm_ref, events)
 
     last_user_idx = None

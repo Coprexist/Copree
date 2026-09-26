@@ -103,8 +103,12 @@ def gap_text(count: int) -> str:
 
 
 def gap_entry(count: int, *, ref: str = "") -> dict:
-    """缺口事件：**必须排在这批消息前面**，与它们同一批 append。"""
-    return make_entry("gap", gap_text(count), actor="system", ref=ref)
+    """缺口事件：**必须排在这批消息前面**，与它们同一批 append。
+
+    只活到解锁：compact 之后那一段已经被摘要覆盖，"更早还有 N 条"的指路牌跟着上下文一起走。
+    """
+    return make_entry("gap", gap_text(count), actor="system", ref=ref,
+                      flags={"drop_on_unlock": True})
 
 
 def take_newest_within(entries: list[dict], max_chars: int) -> list[dict]:
@@ -173,8 +177,12 @@ def tools_entry(items: list[dict]) -> dict:
 
 
 def handoff_entry(note: str) -> dict:
-    """轮末交接（end_turn.key_note）：留给后面自己的关键信息——压缩时原样搬运，不揉进摘要。"""
-    return make_entry("handoff", f"[上一轮交接] {note.strip()}", actor="system")
+    """轮末交接（end_turn.key_note）：留给后面自己的关键信息。
+
+    只活到解锁：它讲的是"这一轮在干什么"，压缩后新上下文由摘要接手，不必再背着。
+    """
+    return make_entry("handoff", f"[上一轮交接] {note.strip()}", actor="system",
+                      flags={"drop_on_unlock": True})
 
 
 def thinking_entry(text: str) -> dict:

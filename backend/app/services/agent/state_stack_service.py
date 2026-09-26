@@ -77,6 +77,27 @@ async def save_trigger_state(db: AsyncSession, agent_id: int, state: dict) -> No
     await _set_stack(db, agent_id, stack)
 
 
+async def reset_frame_trigger_state(db: AsyncSession, agent_id: int) -> int:
+    """解锁（compact / clear）时清空本会话帧的触发规则状态：投递进度与调用计数随上下文重来。
+
+    为什么：解锁就是另一段上下文，scope=frame 的"本帧投一次"该从零开始；
+    只认对话帧（dm / group_chat），与 release_active_frame_notes 同口径。
+    """
+    db = _ensure_repo(db)
+    stack = await _get_stack(db, agent_id)
+    if not stack or stack[-1].get("type") not in ("dm", "group_chat"):
+        return 0
+    top = stack[-1]
+    cleared = len(top.get("tool_uses") or {}) + len(top.get("delivered") or {})
+    if not cleared:
+        return 0
+    top["tool_uses"] = {}
+    top["delivered"] = {}
+    await _set_stack(db, agent_id, stack)
+    logger.info(f"Agent({agent_id}) 解锁：复位触发规则状态（{cleared} 项）")
+    return cleared
+
+
 async def set_active_semantic_focus(db: AsyncSession, agent_id: int, focus_id: str) -> str:
     """把栈顶帧的当前语义焦段换成 focus_id（空串 = 清空）。
 

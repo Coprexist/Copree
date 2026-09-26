@@ -338,7 +338,7 @@ async def _leave_ledger_notice(db, agent_id: int, group_id: int, note: str) -> N
     if agent is None:
         return
     await append_events(db, agent, context_ref(group_id=group_id),
-                        [make_entry("notice", note, flags={"decision_skill": True})])
+                        [make_entry("notice", note, flags={"decision_skill": True, "drop_on_unlock": True})])
     await db.commit()
 
 

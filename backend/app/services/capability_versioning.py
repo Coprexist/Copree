@@ -214,6 +214,23 @@ async def get_effective_definitions(
     return fallback_definitions
 
 
+def keep_request_tools(effective_defs: list, allowed_names: set) -> list:
+    """请求里的 tools = 快照 ∩ 当前允许集，**但已经删掉的工具保留旧定义**。
+
+    为什么留着：锁定态把一个工具从请求里抠掉会改字节、整段前缀 miss；"这个能力没了"由变更
+    通知条目告知，解锁时 effective 对齐最新，它自然消失（apply_pending_changes）。
+    """
+    from app.tools.base import ToolRegistry
+
+    registered = {t["function"]["name"] for t in ToolRegistry.get_all_definitions()}
+    out = []
+    for d in effective_defs or []:
+        name = ((d or {}).get("function") or {}).get("name")
+        if name in allowed_names or name not in registered:
+            out.append(d)
+    return out
+
+
 async def build_change_notice(cap_repo: CapabilityRepository, agent, sources: list[str]) -> str | None:
     """增量变更通知：对比 known vs latest，落后则拼 changelog（只含新变化），并更新 known。
 

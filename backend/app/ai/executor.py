@@ -1209,6 +1209,7 @@ async def _save_conversation_log_safe(
 UNLOCK_STEPS = (
     "rewrite_history",        # 重写账本（摘要 + 事件 + 最近 N 条）
     "clear_note_copies",      # 便签副本（连同撤下通知）随上下文重建离场
+    "reset_trigger_state",    # 触发规则状态复位（scope=frame 在新上下文里从零开始）
     "apply_pending_config",   # 应用挂起的配置
     "apply_pending_changes",  # 能力版本对齐最新（工具定义 + 提示词）
 )
@@ -1263,20 +1264,38 @@ async def _unlock_context(db, agent, *, group_id, session_id, conversation_type,
         from app.services.agent.state_stack_service import release_active_frame_notes
         await release_active_frame_notes(db, agent.id)
 
+    async def _reset_trigger_state():
+        from app.services.agent.state_stack_service import reset_frame_trigger_state
+        await reset_frame_trigger_state(db, agent.id)
+
     async def _apply_pending_config():
         from app.services.agent.agent_service import apply_pending_config
         await apply_pending_config(db, agent)
 
     async def _apply_pending_changes():
-        # 前缀版本化：compact 解锁，effective 对齐最新（工具定义 + agent 提示词）
+        # 前缀版本化：compact 解锁，effective 对齐最新（工具定义 + agent 提示词 + 绑定的世界源）
         from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
         from app.services.capability_versioning import apply_pending_changes, SOURCE_PLATFORM
-        await apply_pending_changes(SQLAlchemyCapabilityRepository(db), agent,
-                                    [SOURCE_PLATFORM, f"agent-prompt-{agent.id}"])
+        sources = [SOURCE_PLATFORM, f"agent-prompt-{agent.id}"]
+        # 世界源也要对齐：不然世界删掉技能后，锁定态的工具数组会一直留着旧定义
+        try:
+            from app.services.world.world_service import find_worlds_by_entity
+            seen = set()
+            for entity_type, entity_id in (("group", group_id), ("agent", agent.user_id)):
+                if not entity_id:
+                    continue
+                for w in await find_worlds_by_entity(db, entity_type, entity_id):
+                    if w.id not in seen:
+                        seen.add(w.id)
+                        sources.append(f"world-{w.id}")
+        except Exception as e:
+            logger.warning(f"解锁时收集世界能力源失败（非致命）: {e}")
+        await apply_pending_changes(SQLAlchemyCapabilityRepository(db), agent, sources)
 
     runners = {
         "rewrite_history": _rewrite_history,
         "clear_note_copies": _clear_note_copies,
+        "reset_trigger_state": _reset_trigger_state,
         "apply_pending_config": _apply_pending_config,
         "apply_pending_changes": _apply_pending_changes,
     }

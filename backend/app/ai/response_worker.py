@@ -858,12 +858,14 @@ async def _maybe_trigger_ai_reply(
     # 7.5 获取工具（能力版本化：按 effective 版本取定义快照，前缀缓存稳定）
     from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
     from app.services.tool_registry import get_allowed_tools
-    from app.services.capability_versioning import get_effective_definitions, SOURCE_PLATFORM
+    from app.services.capability_versioning import (
+        get_effective_definitions, keep_request_tools, SOURCE_PLATFORM,
+    )
     delay_allowed = await _is_delay_reply_allowed(db, agent)
     current_tools = get_allowed_tools(agent.state, thinking_enabled=effective_cfg["thinking_enabled"], delay_reply_allowed=delay_allowed)
     allowed_names = {t["function"]["name"] for t in current_tools}
     effective_defs = await get_effective_definitions(SQLAlchemyCapabilityRepository(db), agent, SOURCE_PLATFORM, current_tools)
-    tools = [d for d in effective_defs if ((d or {}).get("function") or {}).get("name") in allowed_names]
+    tools = keep_request_tools(effective_defs, allowed_names)
 
     # + 绑定世界的世界侧 skills（居民能力；群绑定或 agent 直接绑定；effective 版本快照，版本化懒加载）
     # 同名冲突策略（2026-08-07）：同名 skill 只注入一个定义（当前群绑定世界优先），
@@ -1071,12 +1073,14 @@ async def _trigger_dm_ai_reply(
     # 获取工具（能力版本化：按 effective 版本取定义快照）
     from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
     from app.services.tool_registry import get_allowed_tools
-    from app.services.capability_versioning import get_effective_definitions, SOURCE_PLATFORM
+    from app.services.capability_versioning import (
+        get_effective_definitions, keep_request_tools, SOURCE_PLATFORM,
+    )
     delay_allowed = await _is_delay_reply_allowed(db, agent)
     current_tools = get_allowed_tools(agent_state, thinking_enabled=effective_cfg["thinking_enabled"], delay_reply_allowed=delay_allowed)
     allowed_names = {t["function"]["name"] for t in current_tools}
     effective_defs = await get_effective_definitions(SQLAlchemyCapabilityRepository(db), agent, SOURCE_PLATFORM, current_tools)
-    tools = [d for d in effective_defs if ((d or {}).get("function") or {}).get("name") in allowed_names]
+    tools = keep_request_tools(effective_defs, allowed_names)
     model = resolve_model(agent, global_default_model=provider_info.get("global_default_chat_model"))
 
     logger.info(f"🚀 AI {agent_name}: 开始 DM 回复 (session={session_id})")
