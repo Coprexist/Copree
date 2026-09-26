@@ -82,7 +82,7 @@ def test_relevance_requires_every_entity_term():
                     require_adjacent=True) is True
 
 
-def test_rank_puts_official_first_and_caps_each_domain():
+def test_rank_puts_the_entity_domain_first_and_caps_each_domain():
     items = [
         {"title": "Copree 报道一", "url": "https://news.example.com/a", "snippet": "Copree 平台"},
         {"title": "Copree 官方", "url": "https://copree.ai/", "snippet": "Copree 平台"},
@@ -92,16 +92,9 @@ def test_rank_puts_official_first_and_caps_each_domain():
     ]
     got = rank(items, entity_terms=["Copree"], per_domain=3, limit=8)
     assert got[0]["url"] == "https://copree.ai/", got
-    assert got[0]["official"] is True and got[1]["official"] is False, got
+    # 只给事实性的来源权重，不下「这是不是官网」的结论——判断权归模型
+    assert got[0]["authority"] == 1.0 and got[1]["authority"] == 0.5, got
     assert sum(1 for i in got if "news.example.com" in i["url"]) == 3, got
-
-
-def test_platform_host_pages_count_as_official_sources():
-    """官网之外，官方仓库/发布页也算官方来源——AIsChat 的官方来源就是那个 GitHub 仓库"""
-    items = [{"title": "GitHub - Coprexist/Copree: AIsChat 是一个开源 AI 群聊框架",
-              "url": "https://github.com/Coprexist/Copree", "snippet": "AIsChat：让 AI 拥有自己的状态"}]
-    got = rank(items, entity_terms=["AIsChat"], per_domain=3, limit=8)
-    assert got[0]["official"] is True, got
 
 
 def test_dedupe_collapses_reposts_by_content_fingerprint():

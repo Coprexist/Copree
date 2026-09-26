@@ -26,13 +26,14 @@ web_search(queries=[...], exclude=[...], count=8, per_domain=3)
 - per_domain：同一域名上限（<=5，默认 3）——不让一个站刷满整页
 
 返回 {success, queries, provider_used, count, results[], attempts[], failed?[], hint?}；
-results[] 每项含 title/url/snippet/published_at/domain/provider/score/matched_query/official。
+results[] 每项含 title/url/snippet/published_at/domain/provider/score/authority/matched_query。
 
-official=true 表示这是该实体的官方来源：域名主干与实体同名（自有官网），或长在已知平台上的自有页
-（GitHub / Gitee / GitCode / Product Hunt，按页面是否提到实体判断——Coprexist/Copree 这种路径不带实体名）。
-它存在的意义是让模型能执行
-「先回复、再核实」：先把搜到的东西回复给对方，再用 web_fetch 点进去核对版本号与发布时间这类会变的信息，
-核实后补充或更正。顺序不能反——等核实完再回复，对方就得干等着。
+authority 是域名先验权重（官网 1.0、官方发布页 0.9、GitHub 0.85、科技媒体 0.7、聚合导航 0.1）。
+**平台只给事实与先验，不下"这是不是官网"的结论**——同一个实体在不同平台上的官方页形态各异，
+硬编码判定必然出错，判断留给模型。
+
+建议的做法：先及时把搜到的回复对方，再用 web_fetch 点进去核对版本号与发布时间这类会变的信息，
+有出入再补充或更正。核实要花时间，别让对方干等；但这是建议不是死规矩，节奏由模型自己权衡。
 
 ## 3. 回退阶梯
 
