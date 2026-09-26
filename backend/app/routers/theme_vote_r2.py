@@ -7,19 +7,19 @@
 存储：data/theme_votes_r2.json（与第一轮 theme_votes.json 隔离，互不影响）。
 身份：同第一轮——前端负责（登录用户调 /auth/me 拿昵称头像，未登录输昵称）。
 """
-import json
 import os
-import threading
 from pathlib import Path
 
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
+from app.utils.pure.json_store import JsonStore
+
 router = APIRouter(tags=["主题选色投票二轮"])
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", "data"))
 VOTE_FILE = DATA_DIR / "theme_votes_r2.json"
-_lock = threading.Lock()
+_STORE = JsonStore(VOTE_FILE)
 
 
 class VoteSubmit(BaseModel):
@@ -28,39 +28,21 @@ class VoteSubmit(BaseModel):
     avatar_url: str | None = Field(None, description="头像 URL（登录用户）")
 
 
-def _read_votes() -> dict:
-    if not VOTE_FILE.exists():
-        return {}
-    try:
-        return json.loads(VOTE_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-
-
-def _write_votes(votes: dict) -> None:
-    VOTE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = VOTE_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(votes, ensure_ascii=False, indent=1), encoding="utf-8")
-    tmp.replace(VOTE_FILE)  # 原子替换
-
-
 @router.post("/theme-vote-r2")
 async def submit_vote(req: VoteSubmit):
     user_key = req.user_name.strip() or "匿名"
-    with _lock:
-        votes = _read_votes()
+    with _STORE.edit() as votes:
         votes[user_key] = {
             "user_key": user_key,
             "user_name": req.user_name.strip(),
             "avatar_url": req.avatar_url or None,
             "colors": req.colors,
         }
-        _write_votes(votes)
     return {"ok": True, "count": len(votes)}
 
 
 @router.get("/theme-vote-r2/stats")
 async def vote_stats():
-    votes = _read_votes()
+    votes = _STORE.read()
     items = sorted(votes.values(), key=lambda v: (v.get("user_name") or ""))
     return {"items": items, "count": len(items)}
