@@ -7,6 +7,7 @@
 import json
 import logging
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, update, func
 
@@ -77,29 +78,48 @@ def dm_message_entry(message, *, agent_name: str, agent_user_id: int | None,
     return make_entry("message", rendered, actor="self" if is_self else "user", ref=str(message.id))
 
 
-async def _require_friendship(db: AsyncSession, user_a_id: int, user_b_id: int,
-                              *, initiator_id: int | None = None):
+class DMIntent(str, Enum):
+    """这次发言的性质——决定要不要判"谁在发起"。"""
+
+    NEW = "new"      # 新开会话：谁先开口谁负责，必须互为好友
+    REPLY = "reply"  # 已有会话里回复：通道双方早就开了，不判发起方
+
+
+def _friend_request_hint() -> str:
+    """AI 被拒时指条路：工具名从工具自身取，改名不会漏（函数内导入避开层级冲突）"""
+    from app.tools.chat_social.send_friend_request import SendFriendRequest
+
+    return (f"你们还不是好友，不能主动私信生人。先用 {SendFriendRequest.name} 发好友申请，"
+            "或等对方先来找你。")
+
+
+async def ensure_dm_allowed(db: AsyncSession, user_a_id: int, user_b_id: int,
+                            *, intent: DMIntent, initiator_id: int | None = None):
     """校验这次私信是否放行。
 
     - system：永远放行（系统通知不拦）
     - 找 AI、AI 之间：放行（AI 公开可聊）
     - 人 → 人、AI → 人：必须互为好友。**"涉及 AI 一律放行"曾是漏洞**——AI 因此能给任意
-      生人开新私信——按骚扰拒绝（AI 与它的主人本来就是好友，不受影响）
-    - initiator_id 为空 = 在**已有会话**里发言：AI 参与即放行——会话是对方开的通道，
+      生人开新私信，现按骚扰拒绝（AI 与它的主人本来就是好友，不受影响）
+    - REPLY（已有会话里发言）：AI 参与即放行——会话是对方开的通道，
       QQ / 外部通道的被动回复靠这条活着
     """
+    if intent is DMIntent.NEW and initiator_id not in (user_a_id, user_b_id):
+        # 判不出"谁先开口"会退化成按 user_a 处理，正好放过"AI 主动私信生人"
+        raise ValueError(f"DMIntent.NEW 必须传发起方 id（收到 {initiator_id}）")
+
     result = await db.execute(
         select(User.id, User.type).where(User.id.in_([user_a_id, user_b_id]))
     )
     types = {row[0]: row[1] for row in result.all()}
     if "system" in types.values():
         return
-    if initiator_id is None and "ai" in types.values():
+    if intent is DMIntent.REPLY and "ai" in types.values():
         return
-    initiator = initiator_id if initiator_id is not None else user_a_id
-    other = user_b_id if initiator == user_a_id else user_a_id
-    if types.get(other) == "ai":
-        return
+    if intent is DMIntent.NEW:
+        other = user_b_id if initiator_id == user_a_id else user_a_id
+        if types.get(other) == "ai":
+            return
     friendship = await db.execute(
         select(Friendship).where(
             ((Friendship.user_id == user_a_id) & (Friendship.friend_id == user_b_id) & (Friendship.friend_type == "human")) |
@@ -108,8 +128,8 @@ async def _require_friendship(db: AsyncSession, user_a_id: int, user_b_id: int,
     )
     if friendship.first():
         return
-    if types.get(initiator) == "ai":
-        raise ValueError("你们还不是好友，不能主动私信生人。先用 send_friend_request 发好友申请，或等对方先来找你。")
+    if intent is DMIntent.NEW and types.get(initiator_id) == "ai":
+        raise ValueError(_friend_request_hint())
     raise ValueError("你们还不是好友，无法发送私信。请先添加好友后再试。")
 
 
@@ -145,8 +165,8 @@ async def get_or_create_dm_session(
     if session is None:
         if not skip_friendship_check:
             # 建新会话才判"谁在发起"：已有会话里的回复不受好友关系限制
-            await _require_friendship(db, current_user_id, target_user_id,
-                                      initiator_id=current_user_id)
+            await ensure_dm_allowed(db, current_user_id, target_user_id,
+                                    intent=DMIntent.NEW, initiator_id=current_user_id)
         is_new = True
         user_ids = sorted([current_user_id, target_user_id])
         session = DMSession(
@@ -343,7 +363,7 @@ async def send_dm_message(
 
     receiver_id = session.user2_id if session.user1_id == sender_id else session.user1_id
     if not skip_friendship_check:
-        await _require_friendship(db, sender_id, receiver_id)
+        await ensure_dm_allowed(db, sender_id, receiver_id, intent=DMIntent.REPLY)
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     msg = DMMessage(

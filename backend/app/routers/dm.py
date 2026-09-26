@@ -3,8 +3,6 @@
 """
 import logging
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-
-logger = logging.getLogger(__name__)
 from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +19,8 @@ from app.chat.dm import (
     set_dm_dnd,
     cancel_dm_dnd,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["私信"])
 

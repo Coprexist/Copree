@@ -293,7 +293,7 @@ async def send_dm_reply(db, sender_user_id: int, target_user_id: int, content: s
     """代发一条私信回复，返回 {sent, reason}。
 
     对方还不是好友时（AI 主动私信生人会被拒）不抛错，只回报原因——调用方要把它写进
-    给 AI 的提示里，别让它以为话说出口了。规则见 chat/dm._require_friendship。
+    给 AI 的提示里，别让它以为话说出口了。规则见 chat/dm.ensure_dm_allowed。
     """
     from app.chat.dm import get_or_create_dm_session, send_dm_message
     try:

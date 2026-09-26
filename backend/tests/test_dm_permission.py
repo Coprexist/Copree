@@ -1,6 +1,6 @@
 """私信权限：AI 主动私信生人必须被拒（提示加好友），系统通知与既有会话不受影响。
 
-规则与背景见 backend/app/chat/dm.py:_require_friendship 的 docstring。
+规则与背景见 backend/app/chat/dm.py:ensure_dm_allowed 的 docstring。
 """
 import pytest
 
@@ -106,3 +106,16 @@ async def test_human_to_human_still_requires_friendship(migrated_db):
         await _seed(db)
         msg = await _reject(lambda: get_or_create_dm_session(db, STRANGER, FRIEND))
         assert "请先添加好友" in msg, msg
+
+
+async def test_new_intent_requires_a_valid_initiator(migrated_db):
+    """NEW 必须给发起方 id：判不出"谁先开口"就会退化成按 user_a 判，正好放过骚扰"""
+    from app.chat.dm import DMIntent, ensure_dm_allowed
+    from app.database import async_session
+
+    async with async_session() as db:
+        await _seed(db)
+        for bad in (None, 999):
+            msg = await _reject(lambda: ensure_dm_allowed(
+                db, AI_USER, STRANGER, intent=DMIntent.NEW, initiator_id=bad))
+            assert "发起方" in msg, msg

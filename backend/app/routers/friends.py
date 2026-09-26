@@ -274,10 +274,13 @@ async def _inject_friend_greeting(
     prefix: str = "🤝 ",
 ):
     """好友通过后，将附言注入 DM 对话开头（使用申请时间戳）"""
+    from app.chat.dm import get_or_create_dm_session, send_dm_message
+
     try:
-        session_id = await friend_repo.get_or_create_dm_session(from_user_id, to_user_id)
-        await friend_repo.send_dm_message(
-            session_id, from_user_id, f"{prefix}{greeting}", created_at=created_at,
+        dm = await get_or_create_dm_session(friend_repo.session, from_user_id, to_user_id)
+        await send_dm_message(
+            friend_repo.session, dm["session_id"], from_user_id,
+            f"{prefix}{greeting}", created_at=created_at,
         )
     except Exception as e:
         logger.warning(f"注入好友附言到 DM 失败: {e}")
