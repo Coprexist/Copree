@@ -47,8 +47,8 @@ def register_action(name: str, fn, *, source: str = "plugin", ai_allowed: bool =
     结果只落在 _trigger 命名空间下：自定义动作覆盖不了工具自己的字段（success / url / 结果本体）。
     注意 _trigger 是**对模型可见**的（它就是工具结果的一部分）——别往里面塞机器内部状态。
 
-    ai_allowed=False（默认）时，AI 自写的规则不能引用这个动作：插件代码是随发布走的，
-    而 AI 只是在使用平台，能触发哪些重动作得由注册方点头。
+    ai_allowed（默认 False）是**逐项评审开关**，不是批量配置：开着它等于把"改 AI 所见"的轻量版
+    交给 AI 自己用。开之前逐个想清楚这个动作最坏能干什么，别为了省事给整类动作批量打开。
     """
     from app.utils.pure.conditions import _claim, _ns_name   # 与条件扩展共用命名与认领规则
 
@@ -233,23 +233,39 @@ def hits(rules, ctx: dict, *, event: str = "tool_result") -> list[dict]:
     return out
 
 
-def explain(rules, ctx: dict, *, event: str = "tool_result", delivered=None) -> list[dict]:
+def explain(rules, ctx: dict, *, event: str = "tool_result", delivered=None,
+            source: str = "plugin") -> list[dict]:
     """逐条给出判定结果与原因（dry-run / 排查用）。
 
-    原因取值：event_mismatch / conditions_false / already_delivered / matched
+    原因取值：
+    - 规则/写法有问题的：rule_invalid / action_not_allowed / conditions_too_large /
+      pattern_rejected / op_unknown（entry 里带 detail 原文）
+    - 规则没问题但没跑起来的：event_mismatch / conditions_false / already_delivered
+    - 命中：matched
+
+    边界：注册时就被丢掉的规则不在 rules 里，这里看不到——那类用 validate_trigger 审。
+    explain 管的是"已经登记进来的为什么不触发"。
     """
+    from app.utils.pure.conditions import explain_conditions, reason_for_error
+
     seen = set(delivered or ())
     out: list[dict] = []
     for rule in rules or []:
         rid = rule_id_of(rule)
+        ok, err = validate_trigger(rule, source=source)
+        if not ok:
+            out.append({"id": rid, "matched": False, "why": reason_for_error(err), "detail": err})
+            continue
         when = (rule or {}).get("when") or {}
         if str(when.get("event") or event) != event:
             out.append({"id": rid, "matched": False, "why": "event_mismatch"})
             continue
         conditions = when.get("conditions")
-        if conditions is not None and not match_conditions(conditions, ctx):
-            out.append({"id": rid, "matched": False, "why": "conditions_false"})
-            continue
+        if conditions is not None:
+            matched, reason = explain_conditions(conditions, ctx)
+            if not matched:
+                out.append({"id": rid, "matched": False, "why": reason})
+                continue
         if scope_of(rule) == "frame" and rid in seen:
             out.append({"id": rid, "matched": False, "why": "already_delivered"})
             continue

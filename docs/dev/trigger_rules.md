@@ -17,7 +17,7 @@
 
     {"field": "tool", "op": "in", "value": ["web_search", "web_fetch"]}
     {"field": "result_text", "op": "contains", "value": "0 条"}
-    {"op": "vendor.is_admin", "value": true}          # 判词不需要 field
+    {"op": "$vendor.is_admin", "value": true}         # 判词：$ 是引用标记，不需要 field
     {"and": [...]} / {"or": [...]} / {"not": {...}}    # 任意嵌套
 
 内置运算：eq / ne / contains / starts_with / matches / gt / gte / lt / lte / in。
@@ -31,6 +31,10 @@
 
 与字段叶子（`{"field": ..., "value": ...}`）读法一致——value 永远是"期望值"，不是"入参"。
 
+**`$` 只属于判词**：注册名不带 `$`（`register_predicate("vendor.level", ...)`），引用时带
+（`{"op": "$vendor.level"}`）；内置运算与自定义运算都不带 `$`。漏写 `$` 会被当成未知运算——
+校验期直接拒绝并提示"这是判词，引用要写成 $vendor.level"，不会静默不命中。
+
 ### 工具事件的 ctx 字段
 
 | 字段 | 含义 |
@@ -39,7 +43,7 @@
 | `ok` | 这次成功没有 |
 | `calls_in_frame` | **本帧内**第几次调用（含本次） |
 | `first_in_frame` | 是不是本帧内第一次 |
-| `result_text` | 本次结果的 JSON 文本，截断到 1000 字（按"这次搜出来什么"分支用） |
+| `result_text` | 本次结果的 JSON 文本（按"这次搜出来什么"分支用）。**所有基于它的运算——contains / starts_with / eq / matches——都跑在截断后的文本上**，截断上限 1000 字，靠后的内容看不到 |
 | `agent_id` | 哪个 AI |
 
 字段名带 `_in_frame` 是有意的：计数挂状态帧，compact/clear 后帧重建即归零——
@@ -53,7 +57,8 @@
   `result["_trigger"]["vendor.name"]`** 下——覆盖不了工具自己的字段（success / url / 结果本体）
 
 `_trigger` **对模型可见**（它就是工具结果的一部分），所以里面只放"给模型看的补充信息"，
-别塞机器内部状态。
+别塞机器内部状态。注册自定义动作时还有个 `ai_allowed`（默认 False）：这是**逐项评审开关**，
+不是批量配置——开着它等于把"改 AI 所见"的轻量版交给 AI 自己用，开之前逐个想清楚最坏能干什么。
 
 ## 作用域（scope，投几次）
 
@@ -98,9 +103,21 @@
 **不给自定义判词/运算加超时**：同步 Python 调用没法安全中断，硬做要上线程或信号，代价大于收益。
 改为：约定无副作用 + 传 ctx 快照（改不动调用方的 ctx）+ 异常只算不命中并记 debug。
 
-排查"规则怎么没生效"用 `trigger_service.explain_tool_result(db, agent_id, tool)`（dry-run，
-不写状态不改结果），每条规则给出 `matched` 与原因：`event_mismatch` / `conditions_false` /
-`already_delivered` / `matched`。
+排查"规则怎么没生效"用 `trigger_service.explain_tool_result(db, agent_id, tool, result)`
+（dry-run，不写状态不改结果）。每条规则给出 `matched` 与原因，**每个闸都有自己的原因码**：
+
+| 原因码 | 该去改什么 |
+|---|---|
+| `conditions_too_large` | 条件嵌套/节点超限 → 把规则拆小 |
+| `pattern_rejected` | 正则太长或命中灾难形状 → 换写法或用自定义运算 |
+| `op_unknown` | 运算/判词没注册，或判词漏了 `$` |
+| `action_not_allowed` | 动作没放行给 AI（`ai_allowed`） |
+| `rule_invalid` | 其余写法问题，entry 里的 `detail` 是原文 |
+| `event_mismatch` / `conditions_false` / `already_delivered` / `matched` | 规则没问题，分别是事件不符、条件不成立、本帧已投过、命中 |
+
+两个语义要记住：它**不读历史**（按"这次调用已经发生"算 `calls_in_frame` = 当前计数 + 1），
+`result` **由调用方决定**——传真结果就是验刚发生那次，传假想结果就是**测还没发生的场景**。
+注册时就被丢掉的规则不在 explain 里（那类用 `validate_trigger` 审）。
 
 ## 状态与热路径
 

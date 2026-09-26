@@ -105,6 +105,46 @@ def test_validate_rejects_bad_writes_and_limits_ai_privilege():
     assert validate_trigger(base, source="ai")[0] is True
 
 
+def test_missing_dollar_on_a_predicate_is_rejected_with_a_hint():
+    """判词漏写 $ 会变成"未知运算"——这种错必须当场说清，不能静默不命中"""
+    from app.utils.pure.conditions import register_predicate, validate_conditions
+
+    register_predicate("vendor.is_admin", lambda c: True)
+    ok, err = validate_conditions({"op": "vendor.is_admin", "value": True})
+    assert not ok and "$vendor.is_admin" in err, err
+    assert validate_conditions({"op": "$vendor.is_admin", "value": True})[0] is True
+
+
+def test_explain_reasons_cover_the_new_gates():
+    """explain 要把"该改哪儿"说清楚：超规模 / 正则被拒 / 越权 各自有原因码"""
+    from app.utils.pure import trigger_rules
+    from app.utils.pure.conditions import MAX_DEPTH
+
+    deep = {"not": {}}
+    node = deep
+    for _ in range(MAX_DEPTH + 2):
+        node["not"] = {"not": {}}
+        node = node["not"]
+    rules = [
+        {"id": "too_large", "when": {"event": "tool_result", "conditions": deep},
+         "do": {"action": "deliver", "text": "x"}},
+        {"id": "bad_pattern",
+         "when": {"event": "tool_result",
+                  "conditions": {"field": "result_text", "op": "matches", "value": "(a+)+b"}},
+         "do": {"action": "deliver", "text": "x"}},
+        {"id": "silent_ai",
+         "when": {"event": "tool_result", "conditions": {"field": "tool", "op": "eq", "value": "y"}},
+         "do": {"action": "silent"}},
+    ]
+    reasons = {r["id"]: r["why"] for r in trigger_rules.explain(rules, {"event": "tool_result"})}
+    assert reasons["too_large"] == "conditions_too_large", reasons
+    assert reasons["bad_pattern"] == "pattern_rejected", reasons
+    # 同一条规则，换个来源（AI 写的）就该是越权
+    ai = {r["id"]: r["why"] for r in trigger_rules.explain(rules, {"event": "tool_result"}, source="ai")}
+    assert ai["silent_ai"] == "action_not_allowed", ai
+    assert ai["too_large"] == "conditions_too_large", ai
+
+
 def test_action_registration_lifecycle_and_ai_gate():
     """动作按来源认领、按来源卸载；没放行给 AI 的动作，AI 的规则引用不了"""
     from app.utils.pure import trigger_rules
@@ -203,6 +243,12 @@ async def test_scope_frame_once_per_frame_and_custom_action_namespace(migrated_d
         empty_hit = await trigger_service.after_tool_result(
             db, 24, "fake_tool", {"success": True, "marker": "empty_marker"})
         assert "空结果要走回退" in empty_hit["notice"], empty_hit
+
+        # dry-run 的语义：不读历史、result 由调用方给——可以拿来测"还没发生的场景"
+        dry = await trigger_service.explain_tool_result(db, 24, "fake_tool", {"marker": "empty_marker"})
+        dry_reasons = {r["id"]: r["why"] for r in dry}
+        assert dry_reasons["test.on_empty_result"] == "matched", dry
+        assert dry_reasons["test.first_in_frame"] == "conditions_false", dry
 
         plain = await trigger_service.after_tool_result(db, 24, "no_rules_tool", {"success": True})
         assert plain == {"success": True}, plain

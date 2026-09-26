@@ -166,7 +166,10 @@ def apply_op(value, op: str | None, expect) -> bool:
             return _match(value, expect) if fn is None else bool(fn(value, expect))
         custom = _CUSTOM_OPS.get(op)
         if custom is None:
-            logger.debug("未注册的运算 %s，按不命中处理", op)
+            if op in _CUSTOM_PREDICATES:
+                logger.warning("「%s」是判词，引用要带 $ 前缀（被写成运算了），按不命中处理", op)
+            else:
+                logger.debug("未注册的运算 %s，按不命中处理", op)
             return False
         return bool(custom(value, expect))
     except (TypeError, ValueError):
@@ -226,6 +229,9 @@ def validate_conditions(conditions, *, check_refs: bool = True,
             if check_refs and op[1:] not in _CUSTOM_PREDICATES:
                 return False, f"判词 {op} 未注册（可用：{list(predicate_names()) or '无'}）"
             return True, ""
+        if op in _CUSTOM_PREDICATES:
+            ref = "$" + op
+            return False, f"「{op}」是判词，引用要写成 {ref}（$ 是判词引用标记，内置运算不带）"
         if check_refs and op not in BUILTIN_OPS and op not in _CUSTOM_OPS:
             return False, f"运算 {op} 未注册（可用：{list(op_names())}）"
         if op == "matches":
@@ -290,6 +296,33 @@ def _eval(conditions, ctx: dict, depth: int, count: list) -> bool:
     if "not" in conditions:
         return not _eval(conditions["not"], ctx, depth + 1, count)
     return all(_leaf(str(key), expect, ctx) for key, expect in conditions.items())
+
+
+def reason_for_error(err: str) -> str:
+    """校验错误 → 排查用的原因码。让 explain 说得清"该改哪儿"，而不是笼统的"条件不成立"。"""
+    text = str(err or "")
+    # 顺序有讲究：正则的错误信息里也带"嵌套"（嵌套量词），先判正则再判规模
+    if "回溯" in text or "正则" in text:
+        return "pattern_rejected"
+    if "条件嵌套超过" in text or "条件节点超过" in text:
+        return "conditions_too_large"
+    if "只能用" in text:
+        return "action_not_allowed"
+    if "未注册" in text or "判词" in text:
+        return "op_unknown"
+    return "rule_invalid"
+
+
+def explain_conditions(conditions, ctx: dict) -> tuple[bool, str]:
+    """条件为什么命中/不命中。返回 (是否命中, 原因码)；命中时原因码为空串。
+
+    先校验（形状、规模、正则、引用）再求值：校验不通过给出的原因比"条件不成立"有用得多——
+    看到 conditions_too_large 该去拆规则，看到 pattern_rejected 该去换写法。
+    """
+    ok, err = validate_conditions(conditions)
+    if not ok:
+        return False, reason_for_error(err)
+    return (True, "") if match_conditions(conditions, ctx) else (False, "conditions_false")
 
 
 def match_conditions(conditions, ctx: dict) -> bool:
