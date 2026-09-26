@@ -115,9 +115,25 @@
 | `rule_invalid` | 其余写法问题，entry 里的 `detail` 是原文 |
 | `event_mismatch` / `conditions_false` / `already_delivered` / `matched` | 规则没问题，分别是事件不符、条件不成立、本帧已投过、命中 |
 
-两个语义要记住：它**不读历史**（按"这次调用已经发生"算 `calls_in_frame` = 当前计数 + 1），
-`result` **由调用方决定**——传真结果就是验刚发生那次，传假想结果就是**测还没发生的场景**。
-注册时就被丢掉的规则不在 explain 里（那类用 `validate_trigger` 审）。
+三个语义要记住：
+
+1. 它**不读历史**：按"这次调用已经发生"算 `calls_in_frame` = 当前计数 + 1。
+2. `result` **由调用方决定**：传真结果就是验刚发生那次，传假想结果就是**测还没发生的场景**。
+3. **校验期与运行期的分工，看这张表**：
+
+| 阶段 | 谁在管 | 产出 |
+|---|---|---|
+| 注册期（`register_* / _extend`） | `validate_trigger(..., check_refs=False)` | 写法错的规则**直接被丢**（留 warning），所以它不会出现在 explain 里 |
+| 运行期（`after_tool_result`） | 条件求值 + 状态检查 | 命中/不命中，不写原因（省热路径开销） |
+| 排查期（`explain`） | 重新校验 + 求值 | 原因码 |
+
+所以：**已注册的规则不会给出 `rule_invalid` / `pattern_rejected`**（那类在注册期就被拒了）。
+要审一条**还没注册**的规则，把它放进 `explain_tool_result(..., candidates=[...])`，或者直接
+`validate_trigger(rule, source=...)`——这两个码就是为这条路准备的。
+
+**超规模在 `not` 下的传播**：`{"not": {超大树}}` 报 `conditions_too_large`，不是
+`conditions_false`。因为 explain **先校验整棵树、再求值**：规模问题在求值之前就被发现，
+根本不经过 `not`，也就不存在"被反转成命中"的路径。排查时看到它就该去拆规则，而不是改条件。
 
 ## 状态与热路径
 

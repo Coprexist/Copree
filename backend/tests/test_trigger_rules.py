@@ -144,6 +144,11 @@ def test_explain_reasons_cover_the_new_gates():
     assert ai["silent_ai"] == "action_not_allowed", ai
     assert ai["too_large"] == "conditions_too_large", ai
 
+    # 超规模套在 not 里也要穿透上抛：先校验整棵树再求值，规模问题不经过 not
+    wrapped = [{"id": "wrapped", "when": {"event": "tool_result", "conditions": {"not": deep}},
+                "do": {"action": "deliver", "text": "x"}}]
+    assert trigger_rules.explain(wrapped, {"event": "tool_result"})[0]["why"] == "conditions_too_large"
+
 
 def test_action_registration_lifecycle_and_ai_gate():
     """动作按来源认领、按来源卸载；没放行给 AI 的动作，AI 的规则引用不了"""
@@ -249,6 +254,21 @@ async def test_scope_frame_once_per_frame_and_custom_action_namespace(migrated_d
         dry_reasons = {r["id"]: r["why"] for r in dry}
         assert dry_reasons["test.on_empty_result"] == "matched", dry
         assert dry_reasons["test.first_in_frame"] == "conditions_false", dry
+
+        # 还没注册的规则可以拿 candidates 先审：这时才会出现 pattern_rejected / rule_invalid
+        drafts = [
+            {"id": "draft.bad_pattern",
+             "when": {"event": "tool_result",
+                      "conditions": {"field": "result_text", "op": "matches", "value": "(a+)+b"}},
+             "do": {"action": "deliver", "text": "x"}},
+            {"id": "draft.unknown_action",
+             "when": {"event": "tool_result", "conditions": tool_eq},
+             "do": {"action": "vendor.not_registered"}},
+        ]
+        draft_reasons = {r["id"]: r["why"] for r in await trigger_service.explain_tool_result(
+            db, 24, "fake_tool", {"success": True}, candidates=drafts)}
+        assert draft_reasons["draft.bad_pattern"] == "pattern_rejected", draft_reasons
+        assert draft_reasons["draft.unknown_action"] == "rule_invalid", draft_reasons
 
         plain = await trigger_service.after_tool_result(db, 24, "no_rules_tool", {"success": True})
         assert plain == {"success": True}, plain

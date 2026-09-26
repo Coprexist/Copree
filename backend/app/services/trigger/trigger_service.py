@@ -101,16 +101,22 @@ async def after_tool_result(db, agent_id: int, tool_name: str, result: dict) -> 
 
 
 async def explain_tool_result(db, agent_id: int, tool_name: str,
-                              result: dict | None = None, *, ai_rules=()) -> list[dict]:
+                              result: dict | None = None, *,
+                              ai_rules=(), candidates=()) -> list[dict]:
     """dry-run：会命中哪些规则、其余为什么没命中。不写状态、不改结果。
 
-    语义（排查的人需要知道的就这两句）：
+    语义（排查的人需要知道的就这三句）：
     - **不读历史**，按"这次调用已经发生"来算：calls_in_frame = 当前帧已有计数 + 1。
       所以同一个工具连调两次，第二次 explain 会给出 first_in_frame=False 的结果。
     - **result 由你决定**：传真结果就是"验刚发生的那次"；传一个假想结果就是"测还没发生的场景"
       （例如传 {"results": []} 看空结果分支会不会命中）。不传则只验与结果无关的条件。
+    - **candidates 是"还没注册的规则"**（草稿/待审）：传进来会照常校验并给出 rule_invalid /
+      pattern_rejected / action_not_allowed 这类原因码——想先审规则再注册就用它。
+
+    分工：**注册期**拒绝的规则进不了规则表，所以已注册的规则不会出现 rule_invalid /
+    pattern_rejected；要审一条新规则，用 candidates 或直接 validate_trigger。
     """
-    rules = [*trigger_rules.agent_rules(ai_rules), *rules_for(tool_name)]
+    rules = [*list(candidates), *trigger_rules.agent_rules(ai_rules), *rules_for(tool_name)]
     if not rules:
         return []
     from app.services.agent.state_stack_service import load_trigger_state
