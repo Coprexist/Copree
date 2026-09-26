@@ -44,6 +44,42 @@ def test_group_broadcast_uses_the_shared_decision():
     assert "store_pending_message(" not in ws_src  # 不许自己攒未读
 
 
+async def test_group_entry_normalizes_mentions_to_ids(migrated_db):
+    """入口归一：群里发的 @名字 落库就是 <@!id>（旧令牌不动、外人不动）。
+
+    为什么在真库上验：这一步是"之后全链路只认 id"的前提——唤醒、未读、AI 上下文、
+    通道出口都读库里的正文，入口漏一个写法，下游就得各自再比一遍名字。
+    """
+    from sqlalchemy import text
+
+    from app.chat.gm import send_gm_message
+    from app.database import async_session
+
+    async with async_session() as db:
+        from db_reset import clear
+        await clear(db, "pending_messages", "messages", "group_members", "groups", "agents", "users")
+        await db.execute(text(
+            "INSERT INTO users (id, username, password_hash, type) VALUES "
+            "(1, '群主', 'x', 'human'), (41, '浮生（人物志1）', 'x', 'ai'), (7, '小明', 'x', 'human')"
+        ))
+        await db.execute(text(
+            "INSERT INTO groups (id, name, owner_type, owner_id, avatar_mode, include_ai_in_avatar) "
+            "VALUES (59, 'CoExisten', 'human', 1, 'default', true)"
+        ))
+        await db.execute(text(
+            "INSERT INTO group_members (group_id, member_type, member_id, role) VALUES "
+            "(59, 'ai', 41, 'member'), (59, 'human', 1, 'owner'), (59, 'human', 7, 'member')"
+        ))
+        await db.commit()
+
+        message = await send_gm_message(
+            db, group_id=59, sender_type="human", sender_id=1,
+            content="@浮生（人物志1） 你看 <@!7> 这条，@路人甲 就别管了",
+        )
+        await db.commit()
+        assert message.content == "<@!41> 你看 <@!7> 这条，@路人甲 就别管了", message.content
+
+
 async def test_stored_message_shows_up_in_unread_summary(migrated_db):
     """真库闭环：给离线的 AI 暂存一条群消息 → check_unread 按群读得到它。"""
     from sqlalchemy import text

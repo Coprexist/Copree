@@ -24,10 +24,13 @@ logger = logging.getLogger(__name__)
 
 Sink = Callable[[AsyncSession, int, Any, str], Awaitable[None]]
 DmSink = Callable[[AsyncSession, str, dict], Awaitable[None]]
+# 撤回出口：站内撤回后请通道侧一起撤（QQ 是 DELETE）；返回 None = 这条不归它管
+RevokeSink = Callable[[AsyncSession, int, Any], Awaitable[dict | None]]
 
 # 句柄 → (名字, sink)：句柄是注册时发的令牌，注销认它 —— 同名不再互相顶掉
 _group_sinks: dict[str, tuple[str, Sink]] = {}
 _dm_sinks: dict[str, tuple[str, DmSink]] = {}
+_revoke_sinks: dict[str, tuple[str, RevokeSink]] = {}
 _seq = 0
 
 
@@ -44,24 +47,30 @@ def _next_handle(name: str) -> str:
     return f"{name}#{_seq}"
 
 
-def register_sink(name: str, group: Sink | None = None, dm: DmSink | None = None) -> str:
+def register_sink(name: str, group: Sink | None = None, dm: DmSink | None = None,
+                  revoke: RevokeSink | None = None) -> str:
     """注册一个通道出口，返回**句柄**（stop 时用它注销）。
 
-    同名不去重：两个实例注册两次就是两个出口。一个通道通常两头都要（group + dm），只传一侧也行。
+    同名不去重：两个实例注册两次就是两个出口。一个通道通常三头都要（group + dm + revoke），只传一侧也行。
     """
     handle = _next_handle(name)
     if group is not None:
         _group_sinks[handle] = (name, group)
     if dm is not None:
         _dm_sinks[handle] = (name, dm)
-    logger.info(f"消息出口已注册: {name}（handle={handle}，group={group is not None}，dm={dm is not None}）")
+    if revoke is not None:
+        _revoke_sinks[handle] = (name, revoke)
+    logger.info(
+        f"消息出口已注册: {name}（handle={handle}，group={group is not None}，"
+        f"dm={dm is not None}，revoke={revoke is not None}）"
+    )
     return handle
 
 
 def unregister_sink(handle_or_name: str) -> bool:
     """按**句柄**注销；传名字则注销该名字下所有出口（批量清理/兼容旧调用）。"""
     removed = False
-    for store in (_group_sinks, _dm_sinks):
+    for store in (_group_sinks, _dm_sinks, _revoke_sinks):
         if handle_or_name in store:
             store.pop(handle_or_name, None)
             removed = True
@@ -76,6 +85,7 @@ def registered_sinks() -> dict[str, list[str]]:
     return {
         "group": sorted({name for name, _ in _group_sinks.values()}),
         "dm": sorted({name for name, _ in _dm_sinks.values()}),
+        "revoke": sorted({name for name, _ in _revoke_sinks.values()}),
     }
 
 
@@ -100,6 +110,29 @@ async def dispatch_group_message(
 async def dispatch_dm_message(db: AsyncSession, session_id: str, msg: dict) -> None:
     """私信落库后分发（唯一调用点：send_dm_message）"""
     await _fan_out(list(_dm_sinks.values()), lambda sink: sink(db, session_id, msg))
+
+
+async def dispatch_revoke(db: AsyncSession, group_id: int, message: Any) -> list[dict]:
+    """撤回分发：把"这条撤了"告诉所有通道出口，并**等它们回答**。
+
+    与发消息相反，这里不 fire-and-forget：撤回路是用户主动动作、一次就完，调用方要把
+    "通道侧撤没撤掉"如实回给用户（QQ 只有 2 分钟窗口、还要求机器人有权限）。
+    没回话（None）的出口表示这条不归它管，不进结果。
+    """
+    sinks = list(_revoke_sinks.values())
+    if not sinks:
+        return []
+    results = await asyncio.gather(
+        *(sink(db, group_id, message) for _, sink in sinks), return_exceptions=True
+    )
+    out: list[dict] = []
+    for (name, _), result in zip(sinks, results):
+        if isinstance(result, Exception):
+            logger.warning(f"撤回出口「{name}」异常: {result}")
+            out.append({"channel": name, "ok": False, "reason": str(result)})
+        elif result:
+            out.append(result)
+    return out
 
 
 register_sink("world", group=_world_sink)

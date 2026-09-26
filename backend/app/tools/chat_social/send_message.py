@@ -12,12 +12,12 @@ logger = logging.getLogger(__name__)
 
 class SendGm(ToolPlugin):
     name = "send_gm"
-    description = "在群聊中发送消息（Group Message）。仅用于群聊！私信请用 send_dm。可以用 @名称 来提及群里的任何人（AI 或人类），被提及的 AI 一定会注意到你的消息。@all 或 @ai 可以通知所有 AI。"
+    description = "在群聊中发送消息（Group Message）。仅用于群聊！私信请用 send_dm。要 @ 谁就在正文里写 <@!对方的id>（id 见每条消息说话人后面的「（id=N）」，人和 AI 都能 @），被 @ 的 AI 一定会注意到你的消息。@all 或 @ai 可以通知所有 AI。"
     segment = "chat_social"
     parameters = {
         "group_id": {"type": "integer", "description": "目标群聊 ID"},
         "content": {"type": "string", "description": "消息内容（支持 Markdown + 彩色文字）。彩色文字：标签语法 [gold]金色[/gold] [red]红色[/red] [blue]蓝色[/blue] [green]绿色[/green] [purple]紫色[/purple] [orange]橙色[/orange] [pink]粉色[/pink] [gray]灰色[/gray]；HTML 语法 <span class=\"text-red\">红色</span> 兼容（两种任选）"},
-        "reply_to": {"type": "integer", "nullable": True, "description": "回复某条消息的 ID（可选）"},
+        "reply_to": {"type": "integer", "nullable": True, "description": "要引用回复的那条消息的 ID（可选）。注意：消息末尾的 [msg_id=…] 是给你读的标记，回复某条消息请用这个参数，不要把它抄进正文。"},
     }
     required = ["group_id", "content"]
     states = ["active"]

@@ -90,7 +90,7 @@ class ChatApi(BaseChatApi):
     async def resolve_speaker_names(self, db, messages):
         return await resolve_speaker_names(db, messages)
 
-    def gm_message_entry(self, message, *, agent_name, agent_user_id, speaker_name=None, max_len=256):
+    def gm_message_entry(self, message, *, agent_name, agent_user_id, speaker_name=None, max_len=None):
         return gm_message_entry(message, agent_name=agent_name, agent_user_id=agent_user_id,
                                 speaker_name=speaker_name, max_len=max_len)
 

@@ -19,7 +19,7 @@ class SendDM(ToolPlugin):
             "description": "对方的 users.id（统一 ID，人类和 AI 都在 users 表中）。可从群聊消息格式「名字(ID:数字)」中获取，或通过搜索找到。",
         },
         "content": {"type": "string", "description": "消息内容（支持 Markdown + 彩色文字）。彩色文字：标签语法 [gold]金色[/gold] [red]红色[/red] [blue]蓝色[/blue] [green]绿色[/green] [purple]紫色[/purple] [orange]橙色[/orange] [pink]粉色[/pink] [gray]灰色[/gray]；HTML 语法 <span class=\"text-red\">红色</span> 兼容（两种任选）"},
-        "reply_to": {"type": "integer", "description": "（可选）回复的消息 msg_id。引用回复时传入此参数。"},
+        "reply_to": {"type": "integer", "description": "（可选）要引用回复的那条消息的 msg_id。注意：消息末尾的 [msg_id=…] 是给你读的标记，回复某条消息请用这个参数，不要把它抄进正文。"},
     }
     required = ["target_user_id", "content"]
     states = ["active"]

@@ -1069,21 +1069,23 @@ async def build_messages(
         max_unread = msg_window["max_unread_messages"]
         min_unread = msg_window["min_unread_messages"]
         
-        max_len = getattr(group_obj, 'max_msg_display_len', 256) if group_obj else 256
+        from app.models.message import Message as MessageModel
+        from app.services.history.context_sync import append_events, context_ref, sync_group_history
+        from app.utils.pure.history import FOLD_LIMIT, ROLE_BY_ACTOR, latest_message_ref, make_entry
+
+        # 群设置优先；没设过就用折叠默认值。0 是"不折叠"，不能当假值兜掉
+        max_len = getattr(group_obj, "max_msg_display_len", None) if group_obj else None
+        if max_len is None:
+            max_len = FOLD_LIMIT
 
         # ── 历史消息：账本（只追加 + 缺口）──
         # 旧实现每轮按「最新 N 条」重建窗口，前缀每轮前移 → 整段 miss；
         # 现在渲染即落库（条目 content 就是发给模型的最终字节），新消息只往后追加。
-        from app.models.message import Message as MessageModel
-        from app.services.history.context_sync import append_events, context_ref, sync_group_history
-        from app.utils.pure.history import ROLE_BY_ACTOR, latest_message_ref
-
         ledger = await sync_group_history(db, agent, group_id, cap=max_unread, max_len=max_len)
         group_ref = context_ref(group_id=group_id)  # 会话键只在这里拼一次
 
         # 一次性事件（能力变更通知 / 便签撤下）**落成条目**：它们属于「外界带来了什么」，
         # 必须紧跟历史——落在尾部读数之前，否则下一轮它们会从末尾跑到中间（顺序变 = 断缓存）。
-        from app.utils.pure.history import make_entry
         # 便签投递（逐条条目、幂等）+ 撤下通知：投过没有以账本为准
         events: list[dict] = await _deliver_frame_notes(db, agent, group_ref, ledger)
         cap_notice = await _build_capability_notice(db, agent)

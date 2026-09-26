@@ -21,7 +21,8 @@ class Group(Base):
     speak_limit_per_minute = Column(Integer, default=0)  # 0 = 不限制
     speak_limit_window_seconds = Column(Integer, default=120)  # 时间窗口（秒）
     concurrent_ai_limit = Column(Integer, default=3)  # 同群同时 LLM 调用上限，NULL/0=默认3
-    max_msg_display_len = Column(Integer, default=256)  # 群聊消息截断长度，0=不截断
+    # 群聊单条消息展示上限（超长折成前 75% + 后 25%，见 utils/pure/history.fold_text）；0 = 不截断
+    max_msg_display_len = Column(Integer, default=2048)
     is_paused = Column(Boolean, default=False)  # 群管理暂停 AI 触发
     avatar_mode = Column(String(20), nullable=False, default="default")  # 'default' | 'members' | 'custom'
     avatar_url = Column(String(500), nullable=True)  # 自定义头像 URL

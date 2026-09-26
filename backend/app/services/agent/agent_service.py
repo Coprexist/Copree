@@ -11,7 +11,7 @@ from app.models.agent import Agent, AgentConfigHistory, AgentUserConfig, AgentCo
 from app.models.memory import RoughMemory, DetailMemory
 from app.config import settings
 from app.utils.result import Result
-from app.utils.text import extract_mentions
+from app.utils.text import extract_mentions, mentions_user
 from app.utils.pure.presets import merge_preset_values
 from app.utils.pure.willingness import (
     WillingnessResult, calc_alarm_willingness, calc_reply_willingness, calc_proactive_willingness,
@@ -1004,7 +1004,7 @@ async def calculate_willingness(
     mention_flag = is_mentioned
     if not mention_flag and message_content:
         mentioned_names = extract_mentions(message_content)
-        if agent.name in mentioned_names:
+        if agent.name in mentioned_names or mentions_user(message_content, agent.user_id):
             mention_flag = True
         # @ai/@all 由纯函数内部处理
 

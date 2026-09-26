@@ -463,6 +463,8 @@ async def _trigger_group_assistant(
 
             # 触发模式：世界配置 group_trigger_mode（默认 mention_only → 非 @ 不唤醒）
             mode = (world.config or {}).get("group_trigger_mode", "mention_only") if world else "mention_only"
+            # 群助手不是 users 行（无账号、不入群成员表），所以没有 id 可比：
+            # 入口也不会把它的名字归一成 <@!id>，这里按名字认就是唯一正确的那条路
             is_mentioned = _check_mention(content, ga.name)
             is_at_all = any(tag in content for tag in ("@all", "@everyone", "@全体"))
 
@@ -650,7 +652,8 @@ async def _maybe_trigger_ai_reply(
 
     logger.info(f"🔍 检查 AI {agent.name}(id={resolved_agent_id}, user_id={agent.user_id}), state={agent.state}")
 
-    is_mentioned = _check_mention(content, agent.name)
+    # 两种写法都认：正文里通常是入口归一后的 <@!id>，历史消息里还是 @名字
+    is_mentioned = _check_mention(content, agent.name, agent.user_id)
     logger.info(f"🔍 AI {agent.name}(id={resolved_agent_id}): is_mentioned={is_mentioned}, content_preview='{content[:80]}'")
 
     # v0.1.4: 使用统一决策（替代原有 Gate 1-5 的手动判断）

@@ -23,6 +23,23 @@ def normalize_attachments(attachments: list | str | None) -> list | None:
     return attachments
 
 
+async def mention_names(db, contents) -> dict[int, str]:
+    """把若干段正文里出现过的 <@!id> 一次查成名字。
+
+    只查真正出现过的 id（通常 0~2 个），不为此拉整张成员表；导出时一次查全，别一条一条查。
+    """
+    from sqlalchemy import select
+
+    from app.models.user import User
+    from app.utils.text import iter_mention_ids
+
+    ids = {uid for content in contents for uid in iter_mention_ids(content or "")}
+    if not ids:
+        return {}
+    rows = (await db.execute(select(User.id, User.username).where(User.id.in_(ids)))).all()
+    return {int(uid): str(name or "") for uid, name in rows}
+
+
 def make_preview(content: str | None, attachments: list | str | None = None, max_len: int = 50) -> str:
     """生成消息预览文本。
 
@@ -94,6 +111,9 @@ def serialize_message(message, *,
 
     conversation_value = getattr(message, conversation_key, None)
 
+    # 撤回：正文不再下发（原文只在库里），只把"撤回过"这个事实给前端
+    revoked = bool(getattr(message, "revoked_at", None))
+
     result = {
         "id": message.id,
         conversation_key: conversation_value,
@@ -101,7 +121,8 @@ def serialize_message(message, *,
         "sender_id": message.sender_id,
         "sender_name": effective_name,
         "sender_avatar_url": effective_avatar,
-        "content": message.content,
+        "content": "" if revoked else message.content,
+        "revoked": revoked,
         "reply_to": getattr(message, 'reply_to', None),
         "source_public_id": getattr(message, 'source_public_id', None),
         "via": getattr(message, 'via', None),
@@ -139,11 +160,14 @@ def serialize_message_with_sender(message, sender: Sender, *,
 
     conversation_value = getattr(message, conversation_key, None)
 
+    revoked = bool(getattr(message, "revoked_at", None))
+
     result = {
         "id": message.id,
         conversation_key: conversation_value,
         "sender": sender.to_dict(),
-        "content": message.content,
+        "content": "" if revoked else message.content,
+        "revoked": revoked,
         "reply_to": getattr(message, 'reply_to', None),
         "source_public_id": getattr(message, 'source_public_id', None),
         "via": getattr(message, 'via', None),

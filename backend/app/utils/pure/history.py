@@ -46,6 +46,57 @@ def make_entry(kind: str, content: str, *, actor: str = "system",
     }
 
 
+def revoked_text() -> str:
+    """被撤回的消息在账本里长什么样（唯一来源：条目渲染只认它）。
+
+    撤回前的原文只留在库里（审计/排障），**任何渲染都不再显示**——所以"撤回后才进历史"的那些
+    条目天然只会是这句占位，不需要另外判断。
+    """
+    return "（这条消息已被撤回）"
+
+
+def revoked_notice(speaker: str, message_id: int) -> dict:
+    """撤回通知：给**已经看过那条**的 AI 补一条账本条目。
+
+    为什么不重写原来那条：账本段内只追加（改中段就断前缀缓存，§0）。所以"撤回"的语义是
+    **再补一条作废通知**——AI 那句话还在它的上下文里，但下一轮它会知道那条不算数了。
+    通知里**不重复被撤内容**：撤回本来就是不想让那句话继续传播。
+    """
+    name = (speaker or "").strip() or "有人"
+    return make_entry(
+        "notice",
+        f"【撤回】「{name}」撤回了 1 条消息（msg_id={message_id}）：你之前看到的那条内容已作废，"
+        f"不要再引用、不要追问它。",
+        actor="system",
+        ref=f"revoked:{message_id}",
+    )
+
+
+# 长消息折叠：超过 limit 时留**前 75% + 后 25%**，中间写明省略了多少、要展开
+FOLD_LIMIT = 2048          # 群设置 max_msg_display_len 的默认值（0 = 不折叠）
+FOLD_HEAD_RATIO = 0.75
+
+
+def fold_text(content: str, *, limit: int = FOLD_LIMIT, expand_id: int | None = None) -> str:
+    """长消息折成「前 75% + 省略标记 + 后 25%」。
+
+    为什么两头都留：AI 常把结论/追问放在最后一段。2026-09-25 线上实测——它自己的回复被截在
+    256 字，"你 60 多分"落在 400 字之后，它**真的没看见**，于是反过来否认自己说过这话。
+    只留开头会让它对自己的话失忆，只留结尾会丢掉前因，所以两头都给。
+
+    limit<=0 = 不折叠（群设置里 0 就是这个意思）；expand_id 给了才写 [展开 id=N]
+    （那个标记由 expand_message 工具负责展开）。
+    """
+    if limit <= 0 or not content or len(content) <= limit:
+        return content
+    head_n = int(limit * FOLD_HEAD_RATIO)
+    tail_n = limit - head_n
+    marker = f"…（中间省略 {len(content) - limit} 字；引用或否认某句话之前，先用 expand_message 展开核对）"
+    if expand_id is not None:
+        marker += f"[展开 id={expand_id}]"
+    return content[:head_n] + "\n" + marker + "\n" + content[-tail_n:]
+
+
 def gap_text(count: int) -> str:
     """缺口事件文字（唯一来源：主站群聊截断提示也读这里，避免两处各写一遍）。"""
     return (f"（更早还有 {int(count)} 条未读消息没有列在上面；需要时用 view_unread 查看，"

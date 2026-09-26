@@ -122,11 +122,18 @@ async def list_user_groups(db: AsyncSession, user_id: int) -> list[dict]:
             unread_count = count_result.scalar() or 0
 
             if username and unread_count > 0:
+                from app.utils.text import mention_token
+
+                # 两种写法都算 @ 到我：新的是 <@!id>（入口归一之后正文里就是它），
+                # 旧的是 @名字（历史消息）
                 mention_result = await db.execute(
                     select(Message).where(
                         Message.group_id == group.id,
                         Message.created_at > read_baseline,
-                        Message.content.contains(f"@{username}"),
+                        (
+                            Message.content.contains(f"@{username}")
+                            | Message.content.contains(mention_token(user_id))
+                        ),
                     ).limit(1)
                 )
                 has_mention = mention_result.scalar_one_or_none() is not None
@@ -139,8 +146,14 @@ async def list_user_groups(db: AsyncSession, user_id: int) -> list[dict]:
         last_msg = last_msg_result.scalar_one_or_none()
         if last_msg:
             last_message_at = str(last_msg.created_at) if last_msg.created_at else None
-            from app.utils.message_serializer import make_preview
-            preview = make_preview(last_msg.content, last_msg.attachments, max_len=50)
+            from app.utils.message_serializer import make_preview, mention_names
+            from app.utils.text import render_mention_names
+
+            # 正文里存的是 <@!id>（聊天界面由前端渲染成名字）；这里是"顺手给人看"的地方，后端自己换
+            names = await mention_names(db, [last_msg.content])
+            preview = make_preview(
+                render_mention_names(last_msg.content or "", names), last_msg.attachments, max_len=50
+            )
             if last_msg.sender_type == "ai":
                 a_result = await db.execute(select(AgentModel).where(AgentModel.user_id == last_msg.sender_id))
                 a = a_result.scalar_one_or_none()
@@ -303,6 +316,19 @@ async def send_gm_message(
     """
     if not allow_non_member and not await is_group_member(db, group_id, sender_type, sender_id):
         raise ValueError("你不是该群成员，无法发送消息")
+    # 入口归一：@名字 → <@!id>。人的手打、QQ 入站、工具调用都经这里，
+    # 所以下游（唤醒判定、AI 上下文、通道出口）不必再各写一套名字比对
+    content = await link_group_mentions(db, group_id, content)
+    # 同上一条的道理：上下文里的 [msg_id=N] 标记被抄进正文时收掉，
+    # N 确实是本群的消息就当成本意——它本来就是要"回复那条"
+    from app.utils.text import take_trailing_msg_id
+
+    content, echoed = take_trailing_msg_id(content)
+    if echoed and reply_to is None:
+        exists = (await db.execute(
+            select(Message.id).where(Message.id == echoed, Message.group_id == group_id)
+        )).first()
+        reply_to = echoed if exists else None
     message = Message(
         group_id=group_id,
         sender_type=sender_type,
@@ -330,6 +356,20 @@ async def send_gm_message(
     await dispatch_group_message(db, group_id, message, source)
 
     return message
+
+
+async def is_group_admin(db: AsyncSession, group_id: int, user_id: int) -> bool:
+    """这个人是不是这个群的主人/管理员（撤回别人的消息、审批入群都认这一份）"""
+    from app.models.group import GroupMember
+
+    member = (await db.execute(
+        select(GroupMember).where(
+            GroupMember.group_id == group_id,
+            GroupMember.member_type == "human",
+            GroupMember.member_id == user_id,
+        )
+    )).scalar_one_or_none()
+    return bool(member and member.role in APPROVER_ROLES)
 
 
 async def is_group_member(db: AsyncSession, group_id: int, sender_type: str, sender_id: int) -> bool:
@@ -414,15 +454,52 @@ async def resolve_speaker_names(db, messages) -> dict[tuple[str, int], str]:
     return names
 
 
+async def resolve_member_ids(db, group_id: int) -> dict[str, int]:
+    """群成员的「名字 → users.id」——入口把 @名字 归一成 <@!id> 要用它。
+
+    和 resolve_speaker_names 是同一条口径的两面（那边 id→名字给 AI 看，这边名字→id 给入口用）；
+    放同一个文件是因为「群成员怎么取」只该有一处。
+    """
+    from app.models.group import GroupMember
+    from app.models.user import User
+
+    rows = (await db.execute(
+        select(User.id, User.username)
+        .join(GroupMember, GroupMember.member_id == User.id)
+        .where(GroupMember.group_id == group_id)
+    )).all()
+    return {str(name): int(uid) for uid, name in rows if name}
+
+
+async def link_group_mentions(db, group_id: int, content: str) -> str:
+    """群消息入口的 @ 归一：@名字 → <@!id>。
+
+    正文里连 @ 都没有就别查库了——绝大多数消息没有 @。
+    """
+    from app.utils.text import link_mentions
+
+    if not content or "@" not in content:
+        return content
+    return link_mentions(content, await resolve_member_ids(db, group_id))
+
+
 def gm_message_entry(message, *, agent_name: str, agent_user_id: int | None,
-                     speaker_name: str | None = None, max_len: int = 256) -> dict:
+                     speaker_name: str | None = None, max_len: int | None = None) -> dict:
     """一条群消息 → 账本条目（**渲染即落库**：content 就是发给模型的最终字节）。
 
     同一列消息每次渲染必须字节一致——差一个字符，从它开始的前缀全部 miss（§0）。
     """
-    content = message.content or ""
-    if max_len > 0 and len(content) > max_len:
-        content = content[:max_len] + '...[展开 id=' + str(message.id) + ']'
+    from app.utils.pure.history import FOLD_LIMIT, fold_text, revoked_text
+
+    if getattr(message, "revoked_at", None):
+        # 撤回的只渲染占位（原文留在库里、但不再进上下文）——
+        # "撤回后才进历史"的那些因此天然只有占位，不用另外判断
+        content = revoked_text()
+    else:
+        # 超长消息折成「前 75% + 省略标记 + 后 25%」：只截前半会让 AI 对自己的话失忆
+        content = fold_text(
+            message.content or "", limit=FOLD_LIMIT if max_len is None else max_len, expand_id=message.id
+        )
     is_self = message.sender_type == "ai" and message.sender_id == agent_user_id
     rendered = format_message({
         "time": format_time_shanghai(message.created_at),

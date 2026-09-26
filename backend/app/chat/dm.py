@@ -61,6 +61,10 @@ def dm_message_entry(message, *, agent_name: str, agent_user_id: int | None,
             content = f"{desc} {content}" if content else desc
         except (json.JSONDecodeError, TypeError):
             pass
+    if getattr(message, "revoked_at", None):
+        from app.utils.pure.history import revoked_text
+
+        content = revoked_text()      # 撤回的只留占位（附件也不提了）
     is_self = message.sender_id == agent_user_id
     rendered = format_message({
         "time": format_time_shanghai(message.created_at),
@@ -178,8 +182,13 @@ async def list_dm_sessions(db: AsyncSession, user_id: int) -> list[dict]:
             )
             msg = last_result.scalar_one_or_none()
             if msg:
-                from app.utils.message_serializer import make_preview
-                last_msg = make_preview(msg.content, msg.attachments, max_len=100)
+                from app.utils.message_serializer import make_preview, mention_names
+                from app.utils.text import render_mention_names
+
+                names = await mention_names(db, [msg.content])
+                last_msg = make_preview(
+                    render_mention_names(msg.content or "", names), msg.attachments, max_len=100
+                )
 
         fed_check = await db.execute(
             select(FederatedEntity).where(
@@ -291,6 +300,16 @@ async def send_dm_message(
     skip_friendship_check: bool = False,
 ) -> dict:
     """发送私信消息"""
+    # AI 抄回来的 [msg_id=N] 收掉（同上：标记是给它读的），N 确实是本会话的消息就当成本意。
+    # 不判断"是不是 AI 发的"：一个真人几乎不可能恰好写出一条指向本会话真实消息的标记
+    from app.utils.text import take_trailing_msg_id
+
+    content, echoed = take_trailing_msg_id(content)
+    if echoed and reply_to is None:
+        exists = (await db.execute(
+            select(DMMessage.id).where(DMMessage.id == echoed, DMMessage.session_id == session_id)
+        )).first()
+        reply_to = echoed if exists else None
     if not content.strip() and not attachments:
         raise ValueError("消息内容不能为空")
 

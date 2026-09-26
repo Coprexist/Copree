@@ -71,6 +71,47 @@ async def get_gm_message_list(
     ]
 
 
+@router.post("/gm/{group_id}/messages/{message_id}/revoke")
+async def revoke_gm_message(
+    group_id: int,
+    message_id: int,
+    current_user: dict = Depends(require_group_member),
+    db: AsyncSession = Depends(get_db),
+):
+    """撤回一条群消息（站内 2 分钟内；别人发的只有群主/管理员能撤）。
+
+    与发送对称：撤回同样是"动一条消息"，所以走同一个鉴权口径与同一条广播链路，
+    站内事实、AI 通知、通道侧联动都在 chat/revoke.py 一处完成。
+    """
+    from app.chat.gm import is_group_admin
+    from app.chat.revoke import RevokeDenied, RevokeExpired, revoke_group_message
+    from app.models.message import Message
+    from app.routers.ws import manager
+
+    message = await db.get(Message, message_id)
+    if message is None or int(message.group_id) != int(group_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="消息不存在")
+
+    user_id = int(current_user["user_id"])
+    try:
+        result = await revoke_group_message(
+            db, message, actor_id=user_id, is_admin=await is_group_admin(db, group_id, user_id)
+        )
+    except RevokeDenied as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except RevokeExpired as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    await db.commit()
+
+    # 所有在线客户端把这条变成「撤回了一条消息」
+    await manager.broadcast_to_group(group_id, {
+        "type": "message_revoked",
+        "conversation_type": "group",
+        "data": {"id": message_id, "group_id": group_id},
+    })
+    return result
+
+
 @router.post("/gm/{group_id}/messages", status_code=status.HTTP_201_CREATED)
 async def send_gm(
     group_id: int,

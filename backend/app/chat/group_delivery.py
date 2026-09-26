@@ -108,7 +108,7 @@ async def fanout_group_message(
             agent_by_user = {r[1]: r for r in agent_rows}
             dnd_by_user = {r[0]: r[1] for r in member_rows}
 
-            from app.utils.text import extract_mentions
+            from app.utils.text import extract_mentions, mentions_user
             mentioned_names = extract_mentions(content)
             is_all_call = "@all" in content.lower() or "@ai" in content.lower()
             now = datetime.utcnow()
@@ -122,7 +122,11 @@ async def fanout_group_message(
                     dnd_until is not None and dnd_until > now
                 )
                 is_mentioned = bool(
-                    agent_row and (agent_row[2] in mentioned_names or is_all_call)
+                    agent_row and (
+                        agent_row[2] in mentioned_names          # 旧写法：@名字
+                        or mentions_user(content, agent_row[1])  # 新写法：<@!id>
+                        or is_all_call
+                    )
                 )
 
                 if delivery_decision(

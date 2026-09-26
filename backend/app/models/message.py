@@ -24,6 +24,13 @@ class Message(Base):
     via = Column(String(16), nullable=True)  # 消息入口通道：NULL=站内；qq=QQ 通道（联邦来源另见 source_public_id）
     sender_avatar_url = Column(Text, nullable=True, default='')  # 联邦消息的发送者头像 URL（本地消息为 NULL）
     attachments = Column(json_column(), nullable=True)  # [{file_id, path, name, size, mime_type}, ...]
+    # 撤回：站内 2 分钟内可撤；原文留在库里但任何渲染都不显示（撤回通知见 utils/pure/history.revoked_notice）
+    revoked_at = Column(DateTime, nullable=True)
+    revoked_by = Column(Integer, nullable=True)  # 谁撤的（users.id），审计用
+    # 通道侧那条消息的 id（QQ 撤回要它）：NULL = 没经通道，或通道没回 id
+    channel_msg_id = Column(Text, nullable=True)
+    # 通道侧的**引用索引** REFIDX（QQ 的 msg_idx / ext_info.ref_idx）：精准引用某条时用它
+    channel_ref_idx = Column(Text, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 
     __table_args__ = (

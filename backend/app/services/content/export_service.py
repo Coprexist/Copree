@@ -74,14 +74,26 @@ async def query_all_messages(
         for aid, aname in r.all():
             ai_names[aid] = aname
 
-    # 批量查 reply_to 预览
-    reply_previews: dict[int, str] = {}
+    # 批量查 reply_to 原文（先留着：下面要把 <@!id> 换成名字再截断预览）
+    reply_raw: dict[int, str] = {}
     if reply_to_ids:
         r = await export_repo.execute(
             select(Message.id, Message.content).where(Message.id.in_(reply_to_ids))
         )
         for mid, content in r.all():
-            reply_previews[mid] = content[:80] + ("..." if len(content) > 80 else "")
+            reply_raw[mid] = content or ""
+
+    # 导出是**给人看**的：正文里的 <@!id> 换成名字（一次查全，别一条一条查）
+    from app.utils.message_serializer import mention_names
+    from app.utils.text import render_mention_names
+
+    mention_map = await mention_names(
+        export_repo, [m.content or "" for m in messages] + list(reply_raw.values())
+    )
+    reply_previews: dict[int, str] = {}
+    for mid, raw in reply_raw.items():
+        rendered = render_mention_names(raw, mention_map)
+        reply_previews[mid] = rendered[:80] + ("..." if len(rendered) > 80 else "")
 
     # 组装结果
     result_list = []
@@ -95,7 +107,7 @@ async def query_all_messages(
             "id": msg.id,
             "sender_name": sender_name,
             "sender_type": msg.sender_type,
-            "content": msg.content,
+            "content": render_mention_names(msg.content or "", mention_map),
             "reply_to": msg.reply_to,
             "reply_preview": reply_previews.get(msg.reply_to) if msg.reply_to else None,
             "created_at": str(msg.created_at) if msg.created_at else "",
@@ -322,13 +334,19 @@ async def query_all_dm_messages(
             sender_names[uid] = uname
             sender_types[uid] = utype or "human"
 
+    # 导出是给人看的：正文里的 <@!id> 换成名字（一次查全）
+    from app.utils.message_serializer import mention_names
+    from app.utils.text import render_mention_names
+
+    mention_map = await mention_names(export_repo, [m.content or "" for m in messages])
+
     result_list = []
     for msg in messages:
         result_list.append({
             "id": msg.id,
             "sender_name": sender_names.get(msg.sender_id, f"用户#{msg.sender_id}"),
             "sender_type": sender_types.get(msg.sender_id, "human"),
-            "content": msg.content,
+            "content": render_mention_names(msg.content or "", mention_map),
             "created_at": str(msg.created_at) if msg.created_at else "",
         })
 

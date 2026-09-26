@@ -53,4 +53,10 @@ class DMMessage(Base):
     # 联邦来源：NULL=本地消息，非空=来自对应 public_id 的远程实例
     source_public_id = Column(String(50), nullable=True)
 
+    # 撤回（与群消息同一套语义，见 app/chat/revoke.py）
+    revoked_at = Column(DateTime, nullable=True)
+    revoked_by = Column(Integer, nullable=True)
+    channel_msg_id = Column(Text, nullable=True)
+    channel_ref_idx = Column(Text, nullable=True)
+
     created_at = Column(DateTime, server_default=func.now())

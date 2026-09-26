@@ -188,6 +188,39 @@ async def send_dm(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/dm/{session_id}/messages/{message_id}/revoke")
+async def revoke_dm_message_route(
+    session_id: str,
+    message_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """撤回一条私信（2 分钟内、只能撤自己的；私信没有管理员这回事）。"""
+    from app.chat.revoke import RevokeDenied, RevokeExpired, revoke_dm_message
+    from app.models.dm import DMMessage
+    from app.routers.ws import manager
+
+    message = await db.get(DMMessage, message_id)
+    if message is None or str(message.session_id) != str(session_id):
+        raise HTTPException(status_code=404, detail="消息不存在")
+
+    user_id = int(current_user["user_id"])
+    try:
+        result = await revoke_dm_message(db, message, actor_id=user_id)
+    except RevokeDenied as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except RevokeExpired as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await db.commit()
+
+    await manager.broadcast_to_dm(session_id, {
+        "type": "message_revoked",
+        "conversation_type": "dm",
+        "data": {"id": message_id, "session_id": session_id},
+    }, exclude_user_id=user_id)
+    return result
+
+
 @router.get("/dm/{session_id}/my-token-usage")
 async def get_my_token_usage(
     session_id: str,
