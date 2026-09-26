@@ -2,3 +2,7 @@
 # 根 .gitignore 的 dist/ 会误伤本目录，这里显式豁免。
 !dist/
 !dist/**
+
+# source map 不进仓库：单个 7.5MB，仓库白背体积；要排查线上堆栈时按发布版本另行取用。
+# 必须写在豁免之后（gitignore 后匹配者胜）。
+dist/**/*.map
