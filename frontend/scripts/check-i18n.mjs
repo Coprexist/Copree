@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
  * i18n 静态检查：源码里用到的 key，三语字典里是否都有定义
+ * 覆盖两种来源：t('x.y') 调用点，以及常量表里的 nameKey/descKey/labelKey 字段
  *
  * 为什么需要它：getTranslation() 找不到 key 时**原样返回 key**，
  * 界面上就会直接出现 'admin.addProvider'、'adminConfig:sourceDb' 这种源码串。
@@ -107,6 +108,24 @@ function scanFile(file) {
       usages.push({ file, line, ...splitNs(raw), raw, kind: raw.includes('${') ? 'template' : 'static' })
       re.lastIndex = end
     }
+  }
+
+  // 数据里存的 key（nameKey / descKey / labelKey）：t() 调用点扫不到它们，单独兜一遍，
+  // 否则把文案 key 挪进常量表就等于给闸门开了个洞
+  const keyRe = /(?:nameKey|descKey|labelKey)\s*:\s*['"]([^'"]+)['"]/g
+  let k
+  while ((k = keyRe.exec(text))) {
+    const raw = k[1]
+    // 只认长得像 key 的（带点、无空格）：labelKey 这个名字在别处另有所指（如 'JSON' 格式标签）
+    if (!/^[A-Za-z_][\w]*\.[\w.]+$/.test(raw)) continue
+    const i = raw.indexOf(':')
+    usages.push({
+      file,
+      line: text.slice(0, k.index).split('\n').length,
+      ns: i > 0 ? raw.slice(0, i) : 'common',
+      key: i > 0 ? raw.slice(i + 1) : raw,
+      kind: 'key-field',
+    })
   }
 }
 

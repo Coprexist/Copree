@@ -57,6 +57,16 @@
   有出入补一条"本身就要 4 轮——聊天档原 2 轮、沉浸档原 4 轮，正好卡在核实与更正之间，且撞上限是静默退出，
   AI 不知道自己被截断。三档预设改为 6 / 8 / 10（闹钟同步 8 / 10 / 15），新建默认与 `/presets` 兜底一并抬高；
   上限只是天花板，模型不多跑就不多花。存量 AI 的库值不动，由用户自行调整。
+- **创建 AI 弹窗拆开、表单收成一份状态**：1376 行的 `CreateAgentModal` 拆成 types / presets / fields /
+  SubOptionModal / DetailSettingsModal + 主弹窗；51 个 `useState` 收成一个 reducer，setter 由字段名推导，
+  详细设置弹窗的 81 个 prop 收成 6 个。这只是把线束成一根——值的粒度与重渲染范围没变（setter 是运行期生成的，
+  改字段名要靠 grep，取舍写在 `buildFormApi` 注释里）。提交体改为从 `AgentForm` 派生，不再手抄 39 个字段；
+  建号成功但独立 API 配置保存失败时窗口不关，留在原地把原因说清。预设与子档文案改存 i18n key（删掉从没被读过的
+  label/description 死字段），`check-i18n` 增加对 `nameKey/descKey/labelKey` 的扫描（只认带点的值，避免把
+  'JSON' 这类格式标签当成 key）；AI 类型三选一与三态下拉各抽成一个组件共用，卡片浮动动画改用 ref（不再
+  querySelector 查全局 data 属性），数字输入区分「清空」与「0」。细档（SUB_OPTIONS）自带的轮次一并抬到 ≥6——
+  它会覆盖档位预设，不改等于把下限绕过去；`AgentSettingsModal` 里那份抄来的档位表删掉、改用同一份预设
+  （原先那套数字早就和创建弹窗对不上）。
 - **私信权限判定归一**：权限矩阵从"一个 initiator_id 兼职两种语义"改成显式 `DMIntent`（新开会话 / 已有会话回复），
   给不出发起方时直接报错而不是静默按 user_a 判；函数改名 `ensure_dm_allowed`，被拒提示里的工具名从工具自身取，不再手抄。
 - **好友仓库不再反向依赖服务层**：删除 `friend_repo` 里重抄的 DM 会话创建与发消息（仓储只存不判），

@@ -6,6 +6,8 @@ import { STATUS_COLORS } from '../utils/statusColor.tsx'
 import SkillBackpack from './SkillBackpack'
 import ChannelModal from './channels/ChannelModal'
 import Toggle from './Toggle'
+// 档位预设与创建弹窗共用一份，避免两处各维护一套数字
+import { PRESETS } from './agent-create/presets'
 
 interface AgentData {
   id: number
@@ -84,13 +86,6 @@ interface Props {
   isOpen: boolean
   onClose: () => void
   onSaved: () => void
-}
-
-// ── 预设参数（与 CreateAgentModal 保持一致） ──
-const PRESET_DEFAULTS: Record<string, Record<string, any>> = {
-  chat: { temperature: 0.8, thinking_enabled: false, max_tool_rounds: 3, alarm_max_tool_rounds: 3, force_alarm_on_end: false, max_alarms: 3, delay_reply_enabled: null, is_ai_editable: true, hide_ai_identity: false, reminder_grace: 'every_time', memory_load_mode: 'index_only', memory_recent_count: 0 },
-  immersive: { temperature: 0.85, thinking_enabled: false, max_tool_rounds: 5, alarm_max_tool_rounds: 8, force_alarm_on_end: false, max_alarms: 8, delay_reply_enabled: true, is_ai_editable: true, hide_ai_identity: false, reminder_grace: 'every_time', memory_load_mode: 'index_plus_recent', memory_recent_count: 3 },
-  digital_life: { temperature: 0.9, thinking_enabled: true, max_tool_rounds: 10, alarm_max_tool_rounds: 20, force_alarm_on_end: true, max_alarms: 30, delay_reply_enabled: true, is_ai_editable: true, hide_ai_identity: true, reminder_grace: 'off', memory_load_mode: 'index_plus_semantic', memory_recent_count: 10 },
 }
 
 const PROFILE_OPTIONS = [
@@ -211,7 +206,7 @@ export default function AgentSettingsModal({
   const applyPreset = (profile: string) => {
     setConfigProfile(profile)
     if (profile === 'custom') return
-    const p = PRESET_DEFAULTS[profile]
+    const p = PRESETS[profile]
     if (!p) return
     if (p.temperature !== undefined) setTemperature(p.temperature)
     if (p.thinking_enabled !== undefined) setThinkingEnabled(p.thinking_enabled)

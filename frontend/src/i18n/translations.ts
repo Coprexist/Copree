@@ -1788,6 +1788,7 @@ const zh: TranslationDict = {
   'modal.testFailed': '连接失败',
   'modal.testing': '测试中...',
   'modal.createAgentFailed': '创建失败',
+  'modal.createAgentApiConfigFailed': '独立 API 配置没保存成功，请在「详细设置」里重试',
 
   // ======================== 预设档位 / Presets ========================
   'preset.chatName': '聊天档',
@@ -3818,6 +3819,7 @@ const en: TranslationDict = {
   'modal.testFailed': 'Connection failed',
   'modal.testing': 'Testing...',
   'modal.createAgentFailed': 'Creation failed',
+  'modal.createAgentApiConfigFailed': 'Independent API settings were not saved — retry in Detailed Settings',
 
   // ======================== Presets ========================
   'preset.chatName': 'Chat Profile',
@@ -5735,6 +5737,7 @@ const ja: TranslationDict = {
   'modal.testFailed': '接続失敗',
   'modal.testing': 'テスト中...',
   'modal.createAgentFailed': '作成に失敗しました',
+  'modal.createAgentApiConfigFailed': '独立API設定を保存できませんでした。詳細設定で再試行してください',
 
   // ======================== プリセット / Presets ========================
   'preset.chatName': 'チャット向け',
