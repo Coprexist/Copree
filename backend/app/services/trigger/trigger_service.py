@@ -8,11 +8,15 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 
 from app.utils.pure import trigger_rules
 
 logger = logging.getLogger(__name__)
+
+# 结果文本进 ctx 要截断：规则要能读结果，但不能让一条超长结果把每条规则的条件求值拖慢
+RESULT_TEXT_LIMIT = 1000
 
 
 def rules_for(tool_name: str) -> list[dict]:
@@ -34,6 +38,8 @@ def _ctx(tool_name: str, agent_id: int, result: dict, uses: int) -> dict:
         "calls_in_frame": uses,
         "first_in_frame": uses == 1,
         "agent_id": agent_id,
+        # 结果文本（截断）：让规则能按"这次搜出来什么"决定动作（例如 0 条时换个提示）
+        "result_text": json.dumps(result, ensure_ascii=False)[:RESULT_TEXT_LIMIT],
     }
 
 

@@ -28,7 +28,9 @@ logger = logging.getLogger(__name__)
 
 TOOL_EVENTS = ("tool_call", "tool_result")
 ENGINE_ACTIONS = ("deliver", "silent")
-# AI 自写的规则只能用这些动作：deliver 只是多说一句，silent 会吞掉结果，不给
+# AI 自写的规则只能用这些内置动作。deliver 只是多说一句；silent 会**吞掉工具结果**，
+# 等于让规则改写"AI 看到的世界"——只有随发布走的代码（平台/插件）能这么干，
+# 否则 AI 可以把自己的工具结果藏起来逃避纠错。
 SAFE_ACTIONS = ("deliver",)
 SCOPES = ("frame", "always")
 DEFAULT_SCOPE = "frame"
@@ -36,12 +38,17 @@ DEFAULT_SCOPE = "frame"
 _BUILTIN: list[dict] = []
 _PLUGIN: list[dict] = []
 _ACTIONS: dict[str, object] = {}
+_AI_ALLOWED: set[str] = set()
 
 
-def register_action(name: str, fn, *, source: str = "plugin") -> None:
+def register_action(name: str, fn, *, source: str = "plugin", ai_allowed: bool = False) -> None:
     """登记一个动作。fn(ctx, do, result) 返回要放进 result["_trigger"][name] 的内容。
 
     结果只落在 _trigger 命名空间下：自定义动作覆盖不了工具自己的字段（success / url / 结果本体）。
+    注意 _trigger 是**对模型可见**的（它就是工具结果的一部分）——别往里面塞机器内部状态。
+
+    ai_allowed=False（默认）时，AI 自写的规则不能引用这个动作：插件代码是随发布走的，
+    而 AI 只是在使用平台，能触发哪些重动作得由注册方点头。
     """
     from app.utils.pure.conditions import _claim, _ns_name   # 与条件扩展共用命名与认领规则
 
@@ -50,6 +57,26 @@ def register_action(name: str, fn, *, source: str = "plugin") -> None:
         raise ValueError(f"动作名「{key}」是内置名，换个带命名空间的名字")
     if _claim(key, source, "动作"):
         _ACTIONS[key] = fn
+        if ai_allowed:
+            _AI_ALLOWED.add(key)
+
+
+def unregister_action(name: str, *, source: str = "plugin") -> bool:
+    """按来源卸载一个动作（热重载用）。现在后端没有热重载，这是给将来留的干净出口。"""
+    key = str(name or "").strip()
+    from app.utils.pure.conditions import _OWNER
+
+    if _OWNER.get(key) != source:
+        return False
+    _ACTIONS.pop(key, None)
+    _AI_ALLOWED.discard(key)
+    _OWNER.pop(key, None)
+    return True
+
+
+def ai_safe_actions() -> tuple[str, ...]:
+    """AI 自写规则能用的动作 = 内置安全动作 + 注册方显式放行的动作。"""
+    return SAFE_ACTIONS + tuple(sorted(_AI_ALLOWED))
 
 
 def action_names() -> tuple[str, ...]:
@@ -180,8 +207,9 @@ def validate_trigger(rule: dict, *, source: str = "plugin", check_refs: bool = T
         return False, "deliver 需要 text（要投给 AI 的那句话）"
     if action not in action_names():
         return False, f"do.action 只能是 {list(action_names())} 之一，或先用 register_action 注册"
-    if source == "ai" and action not in SAFE_ACTIONS:
-        return False, f"AI 写的规则只能用 {list(SAFE_ACTIONS)}（{action} 会影响工具结果）"
+    if source == "ai" and action not in ai_safe_actions():
+        return False, (f"AI 写的规则只能用 {list(ai_safe_actions())}——"
+                       f"{action} 要么会吞掉工具结果，要么没被注册方放行给 AI")
     scope = str(rule.get("scope") or DEFAULT_SCOPE)
     if scope not in SCOPES:
         return False, f"scope 只能是 {list(SCOPES)}（session / agent / version 待状态层实现）"

@@ -53,7 +53,22 @@ _LEGACY_SUFFIX = {
 MAX_DEPTH = 8
 MAX_NODES = 64
 MAX_PATTERN = 200          # _matches 的模式长度上限
-MAX_SUBJECT = 2000         # _matches 的被匹配文本上限（先截断再匹配）
+MAX_SUBJECT = 1000         # _matches 的被匹配文本上限（先截断再匹配）
+
+# 灾难性回溯的已知形状：嵌套量词 (a+)+ / (a*)* / (a+){2,}，以及反向引用。长度闸压不住它们，
+# 静态挡形状是这里能做到的最好——Python 的 re 没有超时，re2/regex 要引依赖（本机还装不了）。
+_NESTED_QUANT = re.compile(r"\([^)]*[+*}][^)]*\)\s*[+*{]")
+_BACKREF = re.compile(r"\\[1-9]")
+
+
+def risky_pattern(pattern: str) -> str:
+    """返回风险说明；空串 = 没发现已知的灾难形状（不是证明安全）。"""
+    text = str(pattern or "")
+    if _NESTED_QUANT.search(text):
+        return "嵌套量词（如 (a+)+）可能触发灾难性回溯"
+    if _BACKREF.search(text):
+        return "反向引用可能触发灾难性回溯"
+    return ""
 
 _CUSTOM_OPS: dict[str, object] = {}
 _CUSTOM_PREDICATES: dict[str, object] = {}
@@ -101,6 +116,25 @@ def register_predicate(name: str, fn, *, source: str = "plugin") -> None:
         _CUSTOM_PREDICATES[key] = fn
 
 
+def unregister_op(name: str, *, source: str = "plugin") -> bool:
+    """按来源卸载一个运算（热重载用；来源对不上就不动别人注册的东西）。"""
+    key = str(name or "").strip()
+    if _OWNER.get(key) != source:
+        return False
+    _CUSTOM_OPS.pop(key, None)
+    _OWNER.pop(key, None)
+    return True
+
+
+def unregister_predicate(name: str, *, source: str = "plugin") -> bool:
+    key = str(name or "").strip()
+    if _OWNER.get(key) != source:
+        return False
+    _CUSTOM_PREDICATES.pop(key, None)
+    _OWNER.pop(key, None)
+    return True
+
+
 def op_names() -> tuple[str, ...]:
     return tuple(BUILTIN_OPS) + tuple(_CUSTOM_OPS)
 
@@ -110,10 +144,14 @@ def predicate_names() -> tuple[str, ...]:
 
 
 def _match(value, expect) -> bool:
-    """正则匹配：模式与被匹配文本都设上限——_matches 是唯一能被人写出灾难性回溯的运算。"""
+    """正则匹配。_matches 是唯一能被人写出灾难性回溯的运算，所以：长度闸 + 灾难形状闸。"""
     pattern = str(expect)
     if len(pattern) > MAX_PATTERN:
         logger.debug("正则过长（%d > %d），按不命中处理", len(pattern), MAX_PATTERN)
+        return False
+    risk = risky_pattern(pattern)
+    if risk:
+        logger.debug("正则被拒绝（%s）", risk)
         return False
     return re.search(pattern, str(value)[:MAX_SUBJECT]) is not None
 
@@ -158,10 +196,13 @@ def _canonical_leaf(node: dict, ctx: dict) -> bool:
             logger.debug("未注册的判词 %s，按不命中处理", op)
             return False
         try:
-            return bool(fn(dict(ctx), node.get("value")))    # 传快照：判词改不动调用方的 ctx
+            # 判词是**取值器**：只拿 ctx 快照，返回一个值；value 是断言值，与字段叶子读法一致。
+            # 所以 {"op": "$vendor.is_admin", "value": false} 合法 = 断言"它不是管理员"。
+            got = fn(dict(ctx))          # 传快照：判词改不动调用方的 ctx
         except Exception as e:  # noqa: BLE001
             logger.debug("判词 %s 执行失败: %s", op, e)
             return False
+        return apply_op(got, "eq", node.get("value"))
     return apply_op(ctx.get(node.get("field")), op or "eq", node.get("value"))
 
 
@@ -187,8 +228,8 @@ def validate_conditions(conditions, *, check_refs: bool = True,
             return True, ""
         if check_refs and op not in BUILTIN_OPS and op not in _CUSTOM_OPS:
             return False, f"运算 {op} 未注册（可用：{list(op_names())}）"
-        if op == "matches" and len(str(conditions.get("value"))) > MAX_PATTERN:
-            return False, f"正则超过 {MAX_PATTERN} 字"
+        if op == "matches":
+            return _validate_pattern(conditions.get("value"))
         return True, ""
     for key, value in conditions.items():
         if key in ("and", "or"):
@@ -211,8 +252,20 @@ def validate_conditions(conditions, *, check_refs: bool = True,
             if str(key).endswith(suffix):
                 op = canonical
                 break
-        if op == "matches" and len(str(value)) > MAX_PATTERN:
-            return False, f"正则超过 {MAX_PATTERN} 字"
+        if op == "matches":
+            ok, err = _validate_pattern(value)
+            if not ok:
+                return False, err
+    return True, ""
+
+
+def _validate_pattern(value) -> tuple[bool, str]:
+    pattern = str(value)
+    if len(pattern) > MAX_PATTERN:
+        return False, f"正则超过 {MAX_PATTERN} 字"
+    risk = risky_pattern(pattern)
+    if risk:
+        return False, risk
     return True, ""
 
 

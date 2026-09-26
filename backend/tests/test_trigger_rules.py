@@ -42,6 +42,11 @@ def test_one_canonical_condition_shape_plus_legacy_shorthand():
     assert match_conditions({"tool_contains": "search"}, ctx)
     register_op("vendor.in_list", lambda value, expect: value in expect)
     assert match_conditions({"field": "tool", "op": "vendor.in_list", "value": ["web_search"]}, ctx)
+    # 判词是取值器：只拿 ctx 返回值，value 是断言值（所以 value: false 也合法）
+    from app.utils.pure.conditions import register_predicate
+    register_predicate("vendor.level", lambda c: 3)
+    assert match_conditions({"op": "$vendor.level", "value": 3}, ctx)
+    assert not match_conditions({"op": "$vendor.level", "value": 4}, ctx)
 
 
 def test_extension_names_are_namespaced_and_platform_wins():
@@ -53,8 +58,8 @@ def test_extension_names_are_namespaced_and_platform_wins():
     assert _raises(lambda: register_op("contains", lambda v, e: True))
     assert _raises(lambda: trigger_rules.register_action("nons", lambda *a: None))
 
-    register_predicate("platform.is_admin", lambda ctx, expect: True, source="platform")
-    register_predicate("platform.is_admin", lambda ctx, expect: False, source="vendor")
+    register_predicate("platform.is_admin", lambda c: True, source="platform")
+    register_predicate("platform.is_admin", lambda c: False, source="vendor")
     assert match_conditions({"op": "$platform.is_admin", "value": True}, {}) is True
 
 
@@ -72,9 +77,14 @@ def test_scale_guards_keep_the_evaluator_pure_and_cheap():
     assert match_conditions(deep, {}) is False
     assert validate_conditions({"field": "x", "op": "matches",
                                 "value": "a" * (MAX_PATTERN + 1)})[0] is False
+    # 长度闸压不住 (a+)+b，另加"已知灾难形状"静态闸
+    risky = {"field": "x", "op": "matches", "value": "(a+)+b"}
+    ok, err = validate_conditions(risky)
+    assert not ok and "回溯" in err, err
+    assert match_conditions(risky, {"x": "aaaaaaaaaaaaaaaaaaaaaaaa!"}) is False
     # 自定义实现抛异常只算不命中，不外溢
     from app.utils.pure.conditions import register_predicate
-    register_predicate("vendor.boom", lambda c, e: 1 / 0)
+    register_predicate("vendor.boom", lambda c: 1 / 0)
     assert match_conditions({"op": "$vendor.boom", "value": 1}, {}) is False
 
 
@@ -93,6 +103,24 @@ def test_validate_rejects_bad_writes_and_limits_ai_privilege():
     ok, err = validate_trigger({**base, "do": {"action": "silent"}}, source="ai")
     assert not ok and "silent" in err
     assert validate_trigger(base, source="ai")[0] is True
+
+
+def test_action_registration_lifecycle_and_ai_gate():
+    """动作按来源认领、按来源卸载；没放行给 AI 的动作，AI 的规则引用不了"""
+    from app.utils.pure import trigger_rules
+
+    base = {"when": {"event": "tool_result", "conditions": {"field": "tool", "op": "eq", "value": "x"}}}
+    trigger_rules.register_action("vendor.risky", lambda ctx, do, result: {}, source="vendor")
+    assert trigger_rules.validate_trigger(
+        {**base, "do": {"action": "vendor.risky"}}, source="ai")[0] is False
+    trigger_rules.register_action("vendor.safe", lambda ctx, do, result: {},
+                                  source="vendor", ai_allowed=True)
+    assert trigger_rules.validate_trigger(
+        {**base, "do": {"action": "vendor.safe"}}, source="ai")[0] is True
+    assert trigger_rules.unregister_action("vendor.safe", source="vendor") is True
+    assert trigger_rules.unregister_action("vendor.safe", source="vendor") is False
+    assert trigger_rules.validate_trigger(
+        {**base, "do": {"action": "vendor.safe"}}, source="ai")[0] is False
 
 
 def test_targets_of_and_explain_give_reasons_not_a_black_box():
@@ -127,6 +155,12 @@ async def test_scope_frame_once_per_frame_and_custom_action_namespace(migrated_d
         {"id": "test.every_time",
          "when": {"event": "tool_result", "conditions": tool_eq},
          "do": {"action": "deliver", "text": "每次都投"},
+         "scope": "always"},
+        # 规则能读结果文本（ctx.result_text），例如"这次啥也没搜到"就换一套说法
+        {"id": "test.on_empty_result",
+         "when": {"event": "tool_result",
+                  "conditions": {"field": "result_text", "op": "contains", "value": "empty_marker"}},
+         "do": {"action": "deliver", "text": "空结果要走回退"},
          "scope": "always"},
     ])
     # 自定义动作想覆盖 success，看它能不能得逞
@@ -165,6 +199,10 @@ async def test_scope_frame_once_per_frame_and_custom_action_namespace(migrated_d
         await db.commit()
         third = await trigger_service.after_tool_result(db, 24, "fake_tool", {"success": True})
         assert "先回复，再核实" in third["notice"], third            # 换了帧 → 再投一次
+
+        empty_hit = await trigger_service.after_tool_result(
+            db, 24, "fake_tool", {"success": True, "marker": "empty_marker"})
+        assert "空结果要走回退" in empty_hit["notice"], empty_hit
 
         plain = await trigger_service.after_tool_result(db, 24, "no_rules_tool", {"success": True})
         assert plain == {"success": True}, plain
