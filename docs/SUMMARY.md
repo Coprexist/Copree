@@ -101,8 +101,8 @@
 
 | 文档 | 适用人群 | 说明 |
 |------|---------|------|
-| [Copree 基于 Agent 的项目探索与架构探讨.md](./exploration/Copree 基于 Agent 的项目探索与架构探讨.md) | 研究者/开发者 | 项目探索与架构讨论（原始对话） |
-| [Copree 重构设计文档.md](./exploration/Copree 重构设计文档.md) | 开发者 | 重构设计总览（精简版） |
+| [AIsChat 基于 Agent 的项目探索与架构探讨.md](./exploration/AIsChat 基于 Agent 的项目探索与架构探讨.md) | 研究者/开发者 | 项目探索与架构讨论（原始对话） |
+| [AIsChat 重构设计文档.md](./exploration/AIsChat 重构设计文档.md) | 开发者 | 重构设计总览（精简版） |
 
 ### 六、技术参考
 
@@ -134,7 +134,7 @@
 | [自习室插件开发文档](./dev/STUDY_ROOM_DEVLOG.md) | 开发者 | study-room 插件开发记录 |
 | [开发待办](./dev/TODO.md) | 开发者 | 待办清单 |
 | [写一个通道插件](./dev/channel-plugins.md) | 插件开发者 | 外部身份怎么接：manifest 的 channel 块、出站三条（group/dm/revoke）、@ 翻译、通道自测、全量事件、信任边界 |
-| [@ 提及统一用 id](./dev/mention_ids.md) | 开发者 | 令牌写法（`<@!id>`）、入口归一、识别兼容、通道出站翻译、展示层与测试 |
+| [@ 提及统一用 id](./dev/mention_ids.md) | 开发者 | 令牌写法（`<@!id>`）、入口归一、识别兼容、通道出站翻译、群推送模式观测与通知、展示层与测试 |
 | [消息撤回](./dev/message_revoke.md) | 开发者/运维 | 撤回语义、唯一入口、数据模型、接口与前端、通道侧规则与限制 |
 | [会话历史与上下文纪律](./dev/conversation_history.md) | 开发者 | 账本分层、三段请求体、阈值三档、压缩与解锁、迁移方案 |
 | [前端界面统一规范](./dev/ui_system.md) | 前端开发者 | **单一来源**：尺度令牌 / 语义类 / 组件库 / 照抄模式 / 提交前自检——写界面前先读它 |
