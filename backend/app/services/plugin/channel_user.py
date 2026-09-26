@@ -13,42 +13,69 @@ from __future__ import annotations
 
 import logging
 import secrets
-from typing import Any
+from typing import Any, Iterable
 
 logger = logging.getLogger(__name__)
 
 
+def _anchor_suffix(kind: str) -> str:
+    return f"@{kind}.bridge"
+
+
 def anchor_email(kind: str, origin: str) -> str:
     """通道身份的锚点邮箱（users.email）：建号与反查都只认这一处拼法"""
-    return f"{origin}@{kind}.bridge"
+    return f"{origin}{_anchor_suffix(kind)}"
 
 
-async def channel_contacts(db: Any, *, kind: str, owner_scope: str) -> dict[int, str]:
-    """这个通道上认得的本地账号：users.id → 通道侧标识（QQ 是 openid）
+def origin_from_anchor(kind: str, email: str) -> str | None:
+    """锚点邮箱反解回通道侧标识 —— 正写与反解必须同一份拼法，所以摆在一起
+
+    认不出（不是这条通道的锚点）返回 None，而不是猜一个出来。
+    """
+    suffix = _anchor_suffix(kind)
+    text = str(email or "")
+    return text[: -len(suffix)] if text.endswith(suffix) else None
+
+
+async def channel_contacts(
+    db: Any, *, kind: str, owner_scope: str, user_ids: Iterable[int]
+) -> dict[int, str]:
+    """这批本地账号里哪些在这条通道上有号：users.id → 通道侧标识（QQ 是 openid）
 
     出站要把 <@!平台id> 翻成通道侧的真 @（QQ 官方的 <@!openid>、NapCat 的 [CQ:at,qq=…]），
     靠的就是这张表：只有走过这条通道的人，在那条通道上才有 id 可 @。
 
-    先按 (kind, owner_scope) 拿通道侧标识、自己拼锚点邮箱，再去 users 里认人——
-    不在 SQL 里重写一遍邮箱约定（那正是两份东西会漂移的地方）。
+    只查调用方点名的那几个 id：一次回复里 @ 的人通常 1-3 个，而通道身份会随配对人数一直涨，
+    按通道全表拉出来再在 Python 里筛是拿 O(通道历史) 换 O(@数)。
+    两步都只碰这几个 id：先按 id 认人（锚点由 origin_from_anchor 反解，不在这里重写拼法），
+    再拿解出来的标识确认它确实属于 (kind, owner_scope) —— 同一个 QQ 号接了两个实例时，
+    只有走过**这个实例**的那条身份才算数。
     """
+    ids = sorted({int(uid) for uid in user_ids})
+    if not ids:
+        return {}
     from sqlalchemy import select
 
     from app.models.external import ExternalIdentity
     from app.models.user import User
 
-    origins = (await db.execute(
-        select(ExternalIdentity.origin).where(
-            ExternalIdentity.kind == kind, ExternalIdentity.owner_scope == owner_scope
-        )
-    )).scalars().all()
-    anchors = {anchor_email(kind, str(origin)): str(origin) for origin in origins if origin}
-    if not anchors:
-        return {}
     rows = (await db.execute(
-        select(User.id, User.email).where(User.email.in_(list(anchors)))
+        select(User.id, User.email).where(User.id.in_(ids))
     )).all()
-    return {int(uid): anchors[str(email)] for uid, email in rows if str(email) in anchors}
+    decoded = {
+        int(uid): origin for uid, email in rows
+        if (origin := origin_from_anchor(kind, str(email)))
+    }
+    if not decoded:
+        return {}
+    known = set((await db.execute(
+        select(ExternalIdentity.origin).where(
+            ExternalIdentity.kind == kind,
+            ExternalIdentity.owner_scope == owner_scope,
+            ExternalIdentity.origin.in_(list(decoded.values())),
+        )
+    )).scalars().all())
+    return {uid: origin for uid, origin in decoded.items() if origin in known}
 
 
 async def _unique_username(db: Any, desired: str, fallback: str) -> str:

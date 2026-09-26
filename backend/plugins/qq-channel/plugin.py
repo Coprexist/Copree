@@ -26,12 +26,13 @@ import asyncio
 import json
 import logging
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from typing import Any
 
 import httpx
 
 from app.services.plugin.api import ServicePlugin, service
+from app.services.plugin.tasks import PluginTasks
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,8 @@ DM_WINDOW, DM_MAX = 3600, 4
 GROUP_PER_MINUTE = 20              # 单群频控 20/qpm（主动消息）
 BOT_PER_MINUTE = 60                # Bot 维度 60/qpm
 PAIR_NOTIFY_INTERVAL = 60           # 陌生人反复私聊时，配对码最多 60 秒提醒一次
+PAIR_NOTIFY_CACHE_MAX = 256         # 通知表涨到这么大才清一次过期条目
+DM_ROUTE_MAX = 500                  # 私信路由上限：按会话记，只随配对人数增长
 TEXT_LIMIT = 1000                  # 文本超长直接截断，否则整条会被拒
 DEDUP_SIZE = 500                   # 相同 msg_id 可能重复推送，按 id 去重
 BACKOFF_MAX = 60.0
@@ -283,7 +286,10 @@ class QqChannelPlugin(ServicePlugin):
         # 且同一个 msg_id 只能用一次（官方：相同 msg_id+msg_seq 重复发送会失败），
         # 所以这里存的是活字典，发送时原地递增 seq。
         self._route: dict[int, dict[str, Any]] = {}
-        self._dm_route: dict[str, dict[str, Any]] = {}
+        # OrderedDict：满了丢最早建立的那条（见 _remember_dm_route）
+        self._dm_route: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        # 后台回复任务：保引用 + 停止前 drain（见 services/plugin/tasks.py）
+        self._replies = PluginTasks()
         self._seen: deque[str] = deque(maxlen=DEDUP_SIZE)
         # 已落库的消息：msg_id → (站内消息 id, 落库时的正文)。
         # 同一条消息的另一种事件（@模式 ↔ 全量模式）更全时，用它把正文补上
@@ -389,12 +395,17 @@ class QqChannelPlugin(ServicePlugin):
         self._dm_route.clear()
         self._delivered.clear()
         self._delivered_order.clear()
+        # 先等在飞的回复发完：紧接着 aclose() 会把它们的 HTTP 客户端收走
+        await self._replies.drain()
         if self._task is not None:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):
-                pass
+            except asyncio.CancelledError:
+                pass                     # 我们自己取消的，就是正常收尾
+            except Exception as e:
+                # 崩过一次才退出的 supervise 要和"被取消"分开：不能静默
+                logger.warning(f"QQ 通道[{self.instance}] supervise 异常退出：{type(e).__name__}: {e}")
             self._task = None
         if self._client is not None:
             await self._client.aclose()
@@ -458,6 +469,8 @@ class QqChannelPlugin(ServicePlugin):
         assert self._client is not None
         url = await self._client.gateway()
         logger.info(f"QQ 通道[{self.instance}] 连接网关中…")
+        # WS 层心跳不需要：官方网关有自己的应用层心跳（op=HEARTBEAT，间隔由 HELLO 下发，
+        # 见 _heartbeat_loop），保活与断线判据都走它
         async with websockets.connect(url, ping_interval=None, max_size=2 ** 22, close_timeout=5) as ws:
             hello = json.loads(await asyncio.wait_for(ws.recv(), timeout=15))
             if hello.get("op") != OP_HELLO:
@@ -594,6 +607,12 @@ class QqChannelPlugin(ServicePlugin):
             code = row.code
 
         now = time.time()
+        # 陌生人没有上限，这张表只服务下面这 60 秒的判断：过期条目顺手清掉
+        if len(self._pair_notified) > PAIR_NOTIFY_CACHE_MAX:
+            self._pair_notified = {
+                key: at for key, at in self._pair_notified.items()
+                if now - at < PAIR_NOTIFY_INTERVAL
+            }
         if now - self._pair_notified.get(openid, 0) < PAIR_NOTIFY_INTERVAL:
             logger.debug(f"配对码已发过，未到重发间隔：openid …{openid[-6:]}")
             return False
@@ -861,12 +880,23 @@ class QqChannelPlugin(ServicePlugin):
         try:
             session_id = await self._deliver_to_dm(openid, author, content)
             if session_id:
-                self._dm_route[session_id] = {
+                self._remember_dm_route(session_id, {
                     "qq": openid, "msg_id": msg_id, "seq": 0, "ts": time.time(),
-                }
+                })
         except Exception as e:
             self.last_error = f"私信入站失败：{type(e).__name__}: {e}"
             logger.warning(f"QQ 私聊消息进 Copree 失败：{self.last_error}", exc_info=True)
+
+    def _remember_dm_route(self, session_id: str, route: dict[str, Any]) -> None:
+        """记下"这条私信回到哪个 openid"：出站要用，但只留最近建立的那批
+
+        按会话记 = 每个「QQ 用户 ↔ 这个 AI」一条，只随配对人数涨、不随时间落。
+        满了丢最早那条：那个人下次来消息会重新入表，代价只是这期间 AI 主动找他时回不到 QQ。
+        """
+        self._dm_route[session_id] = route
+        while len(self._dm_route) > DM_ROUTE_MAX:
+            self._dm_route.popitem(last=False)
+            logger.info(f"QQ 通道[{self.instance}] 私信路由已达上限 {DM_ROUTE_MAX}，丢弃最早的一条")
 
     def _remember_delivered(self, msg_id: str, message_id: int, content: str) -> None:
         """记住"这条消息我们落库了、正文是什么"——另一种事件带来更全的正文时要用它补"""
@@ -1051,10 +1081,10 @@ class QqChannelPlugin(ServicePlugin):
             if not text:
                 return
         # 正文里剩下的 <@!平台id> 翻成 QQ 的真 @（会 @ 到人、会提醒）
-        asyncio.create_task(self._send_reply(
+        self._replies.spawn(self._send_reply(
             route, text, kind="group", link_mentions=True, message_id=getattr(message, "id", None),
             reply_to=getattr(message, "reply_to", None),
-        ))
+        ), f"{self.key} 群回复")
 
     async def _dm_outbound_sink(self, db: Any, session_id: str, msg: dict) -> None:
         """私信出口：这条私信是我们经手的会话、且是 AI 发的，就发回 QQ"""
@@ -1068,7 +1098,9 @@ class QqChannelPlugin(ServicePlugin):
         text = str(msg.get("content") or "").strip()
         if not text:
             return
-        asyncio.create_task(self._send_reply(route, text, kind="dm", message_id=msg.get("id")))
+        self._replies.spawn(
+            self._send_reply(route, text, kind="dm", message_id=msg.get("id")), f"{self.key} 私信回复",
+        )
 
     async def _send_reply(self, route: dict, text: str, kind: str, *, link_mentions: bool = False,
                           message_id: int | None = None, reply_to: int | None = None) -> None:
@@ -1187,7 +1219,9 @@ class QqChannelPlugin(ServicePlugin):
         if not ids:
             return text
         async with async_session() as db:
-            contacts = await channel_contacts(db, kind=self.channel_kind, owner_scope=self.instance)
+            contacts = await channel_contacts(
+                db, kind=self.channel_kind, owner_scope=self.instance, user_ids=ids,
+            )
             # 纯文本要所有人的名字（联系人也要），Markdown 只要认不出的那些
             named = sorted(ids) if plain else [uid for uid in ids if uid not in contacts]
             names: dict[int, str] = {}

@@ -28,13 +28,14 @@ import logging
 import os
 import re
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from pathlib import Path
 from typing import Any
 
 import httpx
 
 from app.services.plugin.api import ServicePlugin, service
+from app.services.plugin.tasks import PluginTasks
 from app.utils.text import check_mention
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,10 @@ STABLE_SECONDS = 30.0
 DEDUP_SIZE = 500
 # 陌生人反复私聊时，配对码最多 60 秒提醒一次
 PAIR_NOTIFY_INTERVAL = 60
+# 配对码通知表涨到这么大才清一次过期条目（只在这张表上做，别每次私聊都重建）
+PAIR_NOTIFY_CACHE_MAX = 256
+# 私信路由上限：按会话记，只随配对人数增长
+DM_ROUTE_MAX = 500
 HTTP_TIMEOUT = 10.0
 
 # OneBot 段类型 → 占位文字：AI 要知道"有人发了东西"，而不是以为没人说话
@@ -278,7 +283,10 @@ class QqNapcatPlugin(ServicePlugin):
         self._pair_notified: dict[str, float] = {}
         # 回复路由：群 → 最近一次来消息的 QQ 群；私信会话 → 那条私聊
         self._route: dict[int, dict[str, Any]] = {}
-        self._dm_route: dict[str, dict[str, Any]] = {}
+        # OrderedDict：满了丢最早建立的那条（见 _remember_dm_route）
+        self._dm_route: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        # 后台回复任务：保引用 + 停止前 drain（见 services/plugin/tasks.py）
+        self._replies = PluginTasks()
         self._seen: deque[str] = deque(maxlen=DEDUP_SIZE)
         # 运行状态（只报事实）
         self.connected = False
@@ -379,12 +387,19 @@ class QqNapcatPlugin(ServicePlugin):
         unregister_sink(getattr(self, "_sink_handle", None) or self.key)
         self._route.clear()
         self._dm_route.clear()
+        # 先等在飞的回复发完：紧接着 aclose() 会把它们的 HTTP 客户端收走
+        await self._replies.drain()
         if self._task is not None:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):
-                pass
+            except asyncio.CancelledError:
+                pass                     # 我们自己取消的，就是正常收尾
+            except Exception as e:
+                # 崩过一次才退出的 supervise 要和"被取消"分开：不能静默
+                logger.warning(
+                    f"QQ 通道(NapCat)[{self.instance}] supervise 异常退出：{type(e).__name__}: {e}"
+                )
             self._task = None
         if self._client is not None:
             await self._client.aclose()
@@ -455,6 +470,9 @@ class QqNapcatPlugin(ServicePlugin):
         # 鉴权走请求头而不是 ?access_token=：URL 容易进日志，token 不该跟着走
         headers = {"Authorization": f"Bearer {self._access_token}"} if self._access_token else None
         logger.info(f"QQ 通道(NapCat)[{self.instance}] 连接 {self._ws_url} 中…")
+        # WS 层心跳关着：协议端自己按 heartbeat_interval 推 meta 事件，保活不靠我们。
+        # 代价是 NAT/代理静默断连时读循环会一直挂着、状态仍显示已连接 —— 开 ping_interval
+        # 能治它，但改之前得先实测协议端会不会回 pong（本机协议端 WS 未开启，测不了）。
         async with websockets.connect(
             self._ws_url, additional_headers=headers, ping_interval=None,
             max_size=2 ** 22, close_timeout=5,
@@ -539,10 +557,13 @@ class QqNapcatPlugin(ServicePlugin):
         # 唤醒规则（与官方通道同语义）：QQ 里 @机器人 = 在 Copree 里 @这个 AI。
         # 没被 @ 时不加前缀 —— 加了等于群里每句话都点名 AI；落库仍走完整投递链路，
         # Copree 群自己的触发设置照常生效。
-        wake = mentioned or check_mention(content, self._target_agent)
-        if wake:
+        # by_name：用户手打的 @机器人名（协议里没有 at 段，正文自己带着名字）
+        by_name = check_mention(content, self._target_agent)
+        wake = mentioned or by_name
+        if wake and not by_name:
             # 用 id 令牌点名（名字会改会重名，绑定出来的 user_id 才是身份）；
-            # 万一没绑到 user_id 才退回名字——旧写法仍被识别
+            # 万一没绑到 user_id 才退回名字——旧写法仍被识别。
+            # 正文里已经写着 @名字 就不补：补了 AI 会看到自己被点了两次名
             from app.utils.text import mention_token
 
             prefix = mention_token(self._target_user_id) if self._target_user_id else f"@{self._target_agent}"
@@ -573,7 +594,20 @@ class QqNapcatPlugin(ServicePlugin):
             return
         session_id = await self._deliver_to_dm(user_id, sender, content)
         if session_id:
-            self._dm_route[session_id] = {"qq": user_id}
+            self._remember_dm_route(session_id, {"qq": user_id})
+
+    def _remember_dm_route(self, session_id: str, route: dict[str, Any]) -> None:
+        """记下"这条私信回到哪个 QQ 用户"：出站要用，但只留最近建立的那批
+
+        按会话记 = 每个「QQ 用户 ↔ 这个 AI」一条，只随配对人数涨、不随时间落。
+        满了丢最早那条：那个人下次来消息会重新入表，代价只是这期间 AI 主动找他时回不到 QQ。
+        """
+        self._dm_route[session_id] = route
+        while len(self._dm_route) > DM_ROUTE_MAX:
+            self._dm_route.popitem(last=False)
+            logger.info(
+                f"QQ 通道(NapCat)[{self.instance}] 私信路由已达上限 {DM_ROUTE_MAX}，丢弃最早的一条"
+            )
 
     async def _dm_allowed(self, user_id: str, sender: dict) -> bool:
         """私聊放行判断 —— 默认 pairing：陌生人不进 AI，只领一个配对码。
@@ -603,6 +637,12 @@ class QqNapcatPlugin(ServicePlugin):
             code = row.code
 
         now = time.time()
+        # 陌生人没有上限，这张表只服务下面这 60 秒的判断：过期条目顺手清掉
+        if len(self._pair_notified) > PAIR_NOTIFY_CACHE_MAX:
+            self._pair_notified = {
+                key: at for key, at in self._pair_notified.items()
+                if now - at < PAIR_NOTIFY_INTERVAL
+            }
         if now - self._pair_notified.get(user_id, 0) < PAIR_NOTIFY_INTERVAL:
             logger.debug(f"配对码已发过，未到重发间隔：QQ {user_id}")
             return False
@@ -720,7 +760,9 @@ class QqNapcatPlugin(ServicePlugin):
             return
         # 不降级 Markdown：NapCat 侧的 QQ 客户端能渲染，这正是用协议端的价值
         # 正文里的 <@!平台id> 翻成 CQ 的真 @
-        asyncio.create_task(self._send_reply(route, text, kind="group", link_mentions=True))
+        self._replies.spawn(
+            self._send_reply(route, text, kind="group", link_mentions=True), f"{self.key} 群回复",
+        )
 
     async def _dm_outbound_sink(self, db: Any, session_id: str, msg: dict) -> None:
         """私信出口：这条私信是我们经手的会话、且是目标 AI 发的，就发回 QQ"""
@@ -732,7 +774,7 @@ class QqNapcatPlugin(ServicePlugin):
         text = str(msg.get("content") or "").strip()
         if not text:
             return
-        asyncio.create_task(self._send_reply(route, text, kind="dm"))
+        self._replies.spawn(self._send_reply(route, text, kind="dm"), f"{self.key} 私信回复")
 
     async def _translate_mentions(self, text: str) -> str:
         """<@!平台id> → [CQ:at,qq=<QQ号>]：只有走过这条通道的人，在 QQ 侧才有号可 @
@@ -751,7 +793,9 @@ class QqNapcatPlugin(ServicePlugin):
         if not ids:
             return text
         async with async_session() as db:
-            contacts = await channel_contacts(db, kind=self.channel_kind, owner_scope=self.instance)
+            contacts = await channel_contacts(
+                db, kind=self.channel_kind, owner_scope=self.instance, user_ids=ids,
+            )
             unknown = [uid for uid in ids if uid not in contacts]
             names: dict[int, str] = {}
             if unknown:

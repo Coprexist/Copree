@@ -33,6 +33,7 @@ class FakeClient:
 
     def __init__(self):
         self.sent = []
+        self.closed = False
 
     async def send_group(self, group_openid, content, msg_id=None, msg_seq=1, message_reference="",
                          force_type=None):
@@ -45,6 +46,10 @@ class FakeClient:
         self.sent.append({"kind": "dm", "target": user_openid, "content": content,
                           "msg_id": msg_id, "seq": msg_seq})
         return {"id": "fake"}
+
+    async def aclose(self):
+        # 停止流程会在在飞回复之后调它：顺序错了请求就打到已关闭的客户端上
+        self.closed = True
 
 
 async def _seed():
@@ -88,7 +93,9 @@ async def _make_plugin(instance: str = "bot-a"):
     plugin._target_agent = "浮生"
     plugin._target_user_id = AGENT_USER
     plugin._client = FakeClient()
-    register_sink(plugin.key, group=plugin._outbound_sink, dm=plugin._dm_outbound_sink)
+    plugin._sink_handle = register_sink(
+        plugin.key, group=plugin._outbound_sink, dm=plugin._dm_outbound_sink,
+    )
 
     async def _alive():
         await asyncio.sleep(3600)
@@ -98,10 +105,12 @@ async def _make_plugin(instance: str = "bot-a"):
 
 
 def _cleanup(plugin):
+    """按注册时拿到的句柄注销：按插件 id 注销会留下同名的其它实例（句柄才认得出是哪一个）"""
     from app.chat.outbound import unregister_sink
 
-    unregister_sink(plugin.id)
-    plugin._task.cancel()
+    unregister_sink(getattr(plugin, "_sink_handle", None) or plugin.key)
+    if plugin._task is not None:
+        plugin._task.cancel()
 
 
 async def _wait_sent(plugin, timeout=0.5):
@@ -957,4 +966,42 @@ async def test_markdown_first_with_plain_fallback():
     assert sent[0]["msg_id"] == "M-1" and sent[0]["msg_seq"] == 1, sent
     assert sent[1]["msg_type"] == 0, sent
     assert "**" not in sent[1]["content"] and "`代码`" not in sent[1]["content"], sent
+
+
+async def test_reply_task_drained_before_client_close(migrated_db):
+    """回复任务要有强引用，且 stop() 先等它跑完再关客户端
+
+    与 NapCat 通道共用同一份托管（services/plugin/tasks.py），这里验的是接线：
+    两个坑都不挑协议，官方通道同样会中。
+    """
+    from app.chat.gm import send_gm_message
+    from app.chat.outbound import unregister_sink
+    from app.database import async_session
+
+    await _seed()
+    plugin = await _make_plugin()
+    client = plugin._client
+    finished = []
+
+    async def _slow_reply(route, text, kind, **kwargs):
+        await asyncio.sleep(0.05)
+        finished.append(text)
+
+    plugin._send_reply = _slow_reply
+    try:
+        await plugin._on_group_at(dict(GROUP_EVENT))          # 先建好回哪个群的路由
+        async with async_session() as db:
+            await send_gm_message(db, group_id=GROUP_ID, sender_type="ai",
+                                  sender_id=AGENT_USER, content="慢回复")
+            await db.commit()
+        await asyncio.sleep(0.01)
+        assert len(plugin._replies) == 1, "回复任务没有被持有（随时可能被 GC 回收）"
+        assert finished == [] and client.closed is False
+
+        await plugin.stop()
+        assert finished == ["慢回复"], "stop() 没有等在飞的回复"
+        assert client.closed is True
+    finally:
+        unregister_sink(getattr(plugin, "_sink_handle", None) or plugin.key)
+
 

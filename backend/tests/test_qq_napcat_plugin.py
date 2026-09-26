@@ -6,7 +6,9 @@
 import asyncio
 import importlib.util
 import json
+import logging
 import os
+import time
 from pathlib import Path
 
 from sqlalchemy import text
@@ -40,6 +42,7 @@ class FakeClient:
 
     def __init__(self):
         self.sent = []
+        self.closed = False
 
     async def send_group_msg(self, group_id, message):
         self.sent.append({"kind": "group", "target": group_id, "message": message})
@@ -48,6 +51,10 @@ class FakeClient:
     async def send_private_msg(self, user_id, message):
         self.sent.append({"kind": "dm", "target": user_id, "message": message})
         return {"status": "ok", "retcode": 0}
+
+    async def aclose(self):
+        # 停止流程会在在飞回复之后调它：顺序错了请求就会打到已关闭的客户端上
+        self.closed = True
 
 
 async def _seed():
@@ -92,7 +99,9 @@ async def _make_plugin(instance: str = "bot-a"):
     plugin._target_user_id = AGENT_USER
     plugin._client = FakeClient()
     plugin.self_id = SELF_ID
-    register_sink(plugin.key, group=plugin._outbound_sink, dm=plugin._dm_outbound_sink)
+    plugin._sink_handle = register_sink(
+        plugin.key, group=plugin._outbound_sink, dm=plugin._dm_outbound_sink,
+    )
 
     async def _alive():
         await asyncio.sleep(3600)
@@ -102,10 +111,12 @@ async def _make_plugin(instance: str = "bot-a"):
 
 
 def _cleanup(plugin):
+    """按注册时拿到的句柄注销：按插件 id 注销会留下同名的其它实例（句柄才认得出是哪一个）"""
     from app.chat.outbound import unregister_sink
 
-    unregister_sink(plugin.id)
-    plugin._task.cancel()
+    unregister_sink(getattr(plugin, "_sink_handle", None) or plugin.key)
+    if plugin._task is not None:
+        plugin._task.cancel()
 
 
 async def _wait_sent(plugin, timeout=0.5):
@@ -430,4 +441,171 @@ async def test_multi_instance_one_channel_per_ai(migrated_db):
         assert b_cfg["ws_url"] == (hosted_ws or "ws://ai-b.invalid:3000"), b_cfg
         assert a_cfg["copree_group_id"] == "11" and b_cfg["copree_group_id"] == "12"
         assert PluginRegistry.keys_of("qq-napcat") == ["qq-napcat:agent-11", "qq-napcat:agent-12"]
+
+
+# ── 出站任务的托管：保引用、停止前 drain、异常留痕 ──────────────────
+
+async def test_reply_tasks_are_held_and_drained_before_client_close(migrated_db):
+    """回复任务必须有强引用，且 stop() 先等它跑完再关客户端
+
+    两个坑一起验：create_task 不保引用会被 GC 静默回收（回复没发出去、日志里什么都没有）；
+    stop() 里紧跟着的 aclose() 会把在飞请求的 HTTP 客户端收走。
+    """
+    from app.chat.gm import send_gm_message
+    from app.chat.outbound import unregister_sink
+    from app.database import async_session
+
+    await _seed()
+    plugin = await _make_plugin()
+    client = plugin._client
+    finished = []
+
+    async def _slow_reply(route, text, kind, **kwargs):
+        await asyncio.sleep(0.05)
+        finished.append(text)
+
+    plugin._send_reply = _slow_reply
+    plugin._route[GROUP_ID] = {"qq": str(QQ_GROUP)}
+    try:
+        async with async_session() as db:
+            await send_gm_message(db, group_id=GROUP_ID, sender_type="ai",
+                                  sender_id=AGENT_USER, content="慢回复")
+            await db.commit()
+        await asyncio.sleep(0.01)
+        assert len(plugin._replies) == 1, "回复任务没有被持有（随时可能被 GC 回收）"
+        assert finished == [] and client.closed is False
+
+        await plugin.stop()
+        assert finished == ["慢回复"], "stop() 没有等在飞的回复"
+        assert client.closed is True
+    finally:
+        unregister_sink(getattr(plugin, "_sink_handle", None) or plugin.key)
+
+
+async def test_reply_task_failure_is_logged(migrated_db):
+    """发送层自己没兜住的异常必须留痕：否则只剩 GC 时才打一行，还看不出是谁"""
+    from app.chat.gm import send_gm_message
+    from app.database import async_session
+
+    await _seed()
+    plugin = await _make_plugin()
+    lines = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record):          # noqa: D102 - 只收日志文本
+            lines.append(record.getMessage())
+
+    # 日志由任务托管模块打（它才知道这是谁的任务），不是插件模块
+    handler = _Capture()
+    logger = logging.getLogger("app.services.plugin.tasks")
+    logger.addHandler(handler)
+    logger.setLevel(logging.WARNING)
+
+    async def _boom(route, text, kind, **kwargs):
+        raise RuntimeError("发送层漏了")
+
+    plugin._send_reply = _boom
+    plugin._route[GROUP_ID] = {"qq": str(QQ_GROUP)}
+    try:
+        async with async_session() as db:
+            await send_gm_message(db, group_id=GROUP_ID, sender_type="ai",
+                                  sender_id=AGENT_USER, content="会炸的回复")
+            await db.commit()
+        # 等 done 回调跑完（在飞表清空即表示回调已执行），不猜它要多久
+        for _ in range(200):
+            if lines and len(plugin._replies) == 0:
+                break
+            await asyncio.sleep(0.02)
+        assert len(plugin._replies) == 0, "任务结束后没有被移出在飞表"
+        assert any("后台任务异常退出" in line for line in lines), lines
+    finally:
+        logger.removeHandler(handler)
+        _cleanup(plugin)
+
+
+def test_dm_route_is_capped():
+    """私信路由按会话记，只随配对人数涨：没有上限就是一个慢泄漏"""
+    module = _load_plugin_module()
+    plugin = module.QqNapcatPlugin()
+    total = module.DM_ROUTE_MAX + 10
+    for i in range(total):
+        plugin._remember_dm_route(f"session-{i}", {"qq": str(i)})
+    assert len(plugin._dm_route) == module.DM_ROUTE_MAX
+    assert "session-0" not in plugin._dm_route, "满员时丢的不是最早那条"
+    assert f"session-{total - 1}" in plugin._dm_route
+
+
+async def test_pair_notify_table_is_pruned(migrated_db):
+    """配对码通知表只服务 60 秒窗口，不能随着陌生人数一直涨"""
+    module = _load_plugin_module()
+
+    await _seed()
+    plugin = await _make_plugin()
+    try:
+        stale = time.time() - module.PAIR_NOTIFY_INTERVAL - 10
+        plugin._pair_notified = {
+            f"stranger-{i}": stale for i in range(module.PAIR_NOTIFY_CACHE_MAX + 5)
+        }
+        allowed = await plugin._dm_allowed(str(QQ_DM_USER), {"nickname": "小红"})
+        assert allowed is False, "陌生人应该只领配对码"
+        assert len(plugin._pair_notified) == 1, "过期条目没有被清掉"
+        assert str(QQ_DM_USER) in plugin._pair_notified
+    finally:
+        _cleanup(plugin)
+
+
+async def test_typed_name_is_not_mentioned_twice(migrated_db):
+    """手打 @名字 唤醒时不再补令牌：补了 AI 会看到自己被点了两次名
+
+    入口会把 @名字 归一成 <@!id>（见 test_group_message_with_at_lands_and_wakes），
+    所以"点了两次"落地就是正文里出现两个令牌。
+    """
+    from app.chat import group_delivery
+
+    await _seed()
+    plugin = await _make_plugin()
+    woken = []
+    original = group_delivery.wake_group_ai
+    group_delivery.wake_group_ai = lambda group_id, message, content: woken.append(content)
+    try:
+        await plugin._on_payload({
+            **GROUP_EVENT, "message_id": 9101,
+            "message": [{"type": "text", "data": {"text": "@浮生 在吗"}}],
+        })
+        rows = await _messages(GROUP_ID)
+        assert rows, "手打 @名字 的群消息没有落库"
+        content = rows[-1][1]
+        assert content == "<@!2> 在吗", content
+        assert content.count("<@!2>") == 1, content
+        # 不补令牌不等于不唤醒：名字命中同样要叫醒 AI（唤醒用的是插件侧原文，
+        # 落库正文在入口那一步才归一成令牌）
+        assert woken == ["@浮生 在吗"], woken
+    finally:
+        group_delivery.wake_group_ai = original
+        _cleanup(plugin)
+
+
+async def test_channel_contacts_only_looks_up_asked_ids(migrated_db):
+    """@ 映射只查被点名的 id，且仍只认走过**这个实例**的身份"""
+    from app.database import async_session
+    from app.services.plugin.channel_user import channel_contacts, ensure_channel_user
+
+    await _seed()
+    async with async_session() as db:
+        mine = await ensure_channel_user(
+            db, kind="qq-napcat", owner_scope="bot-a", origin="111",
+            display_name="甲", origin_channel="qq-napcat",
+        )
+        other = await ensure_channel_user(
+            db, kind="qq-napcat", owner_scope="bot-b", origin="222",
+            display_name="乙", origin_channel="qq-napcat",
+        )
+        await db.commit()
+    async with async_session() as db:
+        contacts = await channel_contacts(
+            db, kind="qq-napcat", owner_scope="bot-a",
+            user_ids=[mine[0], other[0], 999999],
+        )
+    assert contacts == {mine[0]: "111"}, contacts
+
 
