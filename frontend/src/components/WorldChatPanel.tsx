@@ -12,6 +12,7 @@ import { api } from '../api/client'
 import { useT } from '../i18n/I18nContext'
 import { useElementWidth } from '../hooks/useElementWidth'
 import ExpressionModeSwitch from './ExpressionModeSwitch'
+import { copyText } from '../utils/clipboard'
 
 // 运行模式三档（后端 world_ai_mode.MODES 是权威定义；这里只管展示与切换）
 // 顺序 = 菜单从上到下：计划 / 自动 / 审阅（2026-09-18 用户：计划模式提到第一位）
@@ -454,9 +455,7 @@ const WorldChatPanel = memo(forwardRef<WorldChatHandle, WorldChatPanelProps>(({ 
           // 键盘可达 + 无悬停设备（触屏）常显：光靠 group-hover 在触屏上永远点不到
           <div className="flex items-center gap-0.5 pl-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity">
             <button
-              onClick={() => {
-                try { navigator.clipboard.writeText(m.content || ''); } catch {}
-              }}
+              onClick={() => { void copyText(m.content || '') }}
               className="p-1 rounded text-textMuted hover:text-textSecondary hover:bg-elevated transition-colors"
               title="复制回复"
             ><Copy size={12} /></button>

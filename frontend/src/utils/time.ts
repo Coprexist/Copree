@@ -4,7 +4,7 @@ import { type Lang, getLangMeta } from '../i18n/languages'
  * 解析后端时间字符串（后端 DateTime 列无 timezone=True，Pydantic 序列化为 naive UTC）。
  * 对无时区标记的字符串追加 'Z'，避免 JavaScript 将其误判为本地时间。
  */
-function parseServerDate(dateStr: string): Date {
+export function parseServerDate(dateStr: string): Date {
   const hasTimezone = /[+\-Zz]\d{2}:\d{2}$/.test(dateStr) || /Z$/i.test(dateStr)
   return new Date(hasTimezone ? dateStr : dateStr + 'Z')
 }

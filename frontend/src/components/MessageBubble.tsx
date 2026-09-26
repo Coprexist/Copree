@@ -1,15 +1,17 @@
-import { memo, useState, useMemo } from 'react'
+import { memo, useState, useMemo, useEffect, useRef } from 'react'
 import { useAuth } from '../context/AuthContext'
-import { FileIcon, Download, Globe, ShieldAlert, Reply, MessageSquare } from 'lucide-react'
+import { FileIcon, Download, Globe, ShieldAlert, MessageSquare, MoreHorizontal } from 'lucide-react'
 import { formatMessageTime } from '../utils/time'
 import { formatFileSize } from '../utils/format'
 import { avatarGradient } from '../utils/avatar'
 import { getChatStyle, chatStyleClasses } from '../utils/providers.tsx'
 import { scrollToInContainer } from '../utils/scroll'
+import { copyText } from '../utils/clipboard'
 import { useLang, useT } from '../i18n/I18nContext'
 import { api } from '../api/client'
 import FilePreviewModal from './FilePreviewModal'
 import InvitationCard from './InvitationCard'
+import { MenuItem, MenuPanel } from './ui'
 import { useTimeTick } from '../hooks/useTimeTick'
 // CSS 变量：isMine 直接决定配色（不用 getComputedStyle，性能快）
 const DARK_VARS = [
@@ -66,6 +68,9 @@ interface MessageBubbleProps {
   replyTo?: { id: number; sender: string; content: string } | null
   onAvatarClick?: (type: string, id: number, name: string, state?: string) => void
   onReply?: (messageId: number, senderName: string, content: string) => void
+  /** 这条被撤回了：正文不再显示，只留一句占位 */
+  revoked?: boolean
+  onRevoke?: (messageId: number) => void
 }
 
 function fileIconColor(mimeType: string): string {
@@ -81,7 +86,7 @@ import MarkdownContent from './shared/MarkdownContent'
 
 const MessageBubble = memo(function MessageBubble({
   senderName, senderAvatarUrl, content, isMine, createdAt, state,
-  senderType, senderId, thinking, isTyping, sourcePublicId, via, attachments, messageType, onAvatarClick, messageId, replyTo, onReply,
+  senderType, senderId, thinking, isTyping, sourcePublicId, via, attachments, messageType, onAvatarClick, messageId, replyTo, onReply, revoked, onRevoke,
 }: MessageBubbleProps) {
   const { user } = useAuth()
   const lang = useLang()
@@ -90,6 +95,37 @@ const MessageBubble = memo(function MessageBubble({
 
   const [previewFile, setPreviewFile] = useState<{ file_id: number; name: string; size: number; mime_type: string } | null>(null)
   const [invStatus, setInvStatus] = useState<string | null>(null)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const menuRef = useRef<HTMLDivElement | null>(null)
+
+  /** 复制这条消息的正文（就是界面上看到的那份：@ 已经渲染成名字） */
+  const handleCopy = async () => {
+    if (!(await copyText(content))) return
+    setCopied(true)
+    // 让「已复制」在菜单里停留一下再收起，不然点完什么都没有只剩下安静
+    setTimeout(() => {
+      setCopied(false)
+      setMenuOpen(false)
+    }, 900)
+  }
+
+  // 操作菜单：点外面或按 Esc 就收（挂在消息上的浮层不该逼人再点一次）
+  useEffect(() => {
+    if (!menuOpen) return
+    const onDown = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [menuOpen])
 
   // 表格昼夜适配：将 DARK_VARS / LIGHT_VARS 转换为 inline style 挂到气泡上
   //（DARK_VARS/LIGHT_VARS 定义了但从未被使用，这里修复）
@@ -232,14 +268,18 @@ const MessageBubble = memo(function MessageBubble({
               </div>
             </div>
           )}
-          {isInvitation && invAtt ? (
+          {revoked ? (
+            <span className={`text-xs italic ${isMine ? 'text-white/60' : 'text-textMuted'}`}>
+              {t('chat.revokedMessage', { name: senderName })}
+            </span>
+          ) : isInvitation && invAtt ? (
             <InvitationCard invitationId={invAtt.invitation_id!} groupName={invAtt.group_name || ''} inviterName={invAtt.inviter_name || ''} message={undefined} status={currentStatus as 'pending' | 'accepted' | 'rejected'} onAccept={handleAcceptInvitation} onReject={handleRejectInvitation} isMine={isMine} />
           ) : isTyping ? (
             <BouncingDots className="text-primary-400 align-middle" />
           ) : (
             <MarkdownContent content={content} isMine={isMine} />
           )}
-          {fileAtts.length > 0 && (
+          {!revoked && fileAtts.length > 0 && (
             <div className={`${content ? 'mt-2 pt-2 border-t' : ''} flex flex-wrap gap-1.5 ${isMine ? 'border-white/20' : 'border-border'}`}>
               {fileAtts.map(att => {
                 const token = localStorage.getItem('access_token')
@@ -267,15 +307,37 @@ const MessageBubble = memo(function MessageBubble({
             </div>
           )}
 
-          {/* 回复按钮 */}
-          {messageId != null && onReply && (
-            <button
-              onClick={() => onReply(messageId, senderName, content)}
-              className={`absolute ${isMine ? '-left-[9px]' : '-right-[9px]'} top-0 md:opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-control bg-elevated border border-border shadow-lg hover:bg-surface text-textMuted hover:text-primary-400`}
-              title="回复"
+          {/* 操作菜单：触发按钮就在原来的回复按钮位置（自己发的靠左、别人的靠右） */}
+          {!revoked && messageId != null && (onReply || onRevoke || content) && (
+            <div
+              ref={menuRef}
+              className={`absolute ${isMine ? '-left-[9px]' : '-right-[9px]'} top-0 transition-opacity md:opacity-0 group-hover:opacity-100 ${menuOpen ? 'md:opacity-100' : ''}`}
             >
-              <Reply size={12} />
-            </button>
+              <button
+                onClick={() => setMenuOpen(v => !v)}
+                className="p-1 rounded-control bg-elevated border border-border shadow-lg hover:bg-surface text-textMuted hover:text-primary-400"
+                title={t('chat.actions')}
+              >
+                <MoreHorizontal size={12} />
+              </button>
+              {menuOpen && (
+                <MenuPanel className={`absolute top-full mt-1 w-24 z-modal ${isMine ? 'left-0' : 'right-0'}`}>
+                  {onReply && (
+                    <MenuItem onClick={() => { setMenuOpen(false); onReply(messageId, senderName, content) }}>
+                      {t('chat.reply')}
+                    </MenuItem>
+                  )}
+                  {!!content && (
+                    <MenuItem onClick={handleCopy}>{copied ? t('chat.copied') : t('chat.copy')}</MenuItem>
+                  )}
+                  {onRevoke && (
+                    <MenuItem onClick={() => { setMenuOpen(false); onRevoke(messageId) }}>
+                      {t('chat.revoke')}
+                    </MenuItem>
+                  )}
+                </MenuPanel>
+              )}
+            </div>
           )}
         </div>
         </div>

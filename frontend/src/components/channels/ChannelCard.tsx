@@ -24,6 +24,8 @@ interface FieldSpec {
   secret?: boolean
   required?: boolean
   managed?: boolean
+  /** 枚举字段：插件给选项，卡片统一渲染成下拉（不给就按普通文本框） */
+  options?: { value: string; label?: string; label_en?: string; label_ja?: string }[]
 }
 
 interface GuideStep {
@@ -53,6 +55,8 @@ interface ChannelView {
   values: Record<string, unknown>
   secrets: Record<string, boolean>
   running: boolean
+  /** 这条通道能不能自测（插件声明的能力，平台不猜） */
+  self_test: boolean
   detail: Record<string, any>
   missing_required: string[]
   configured: boolean
@@ -175,13 +179,16 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
     return () => clearInterval(timer)
   }, [hostedPending, load])
 
-  /** 所有动作共用一个出口：忙标记、提示、成功后重拉 */
-  const act = async (key: string, fn: () => Promise<any>, okText: string) => {
+  /** 所有动作共用一个出口：忙标记、提示、成功后重拉
+   *  okText 允许按响应生成：有些提示要等发出去才知道（自测走的是被动回复还是主动消息） */
+  const act = async (key: string, fn: () => Promise<any>, okText: string | ((res: any) => string)) => {
     setBusy(key)
     setMsg(null)
     try {
       const res: any = await fn()
-      setMsg(res?.warning ? { tone: 'err', text: res.warning } : { tone: 'ok', text: okText })
+      setMsg(res?.warning
+        ? { tone: 'err', text: res.warning }
+        : { tone: 'ok', text: typeof okText === 'function' ? okText(res) : okText })
       await load()
     } catch (e: any) {
       setMsg({ tone: 'err', text: e?.message || String(e) })
@@ -236,6 +243,15 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
     if (!view?.configured || mode === 'new') return
     return act('allow:' + origin, () => api.put(base, { values: { [recentField]: next } }), t('tool:channel.allowAdded'))
   }
+
+  /** 通道自测：让后端在这条通道的真实出口上发一条（"没发出去"是自测的答案，原样显示原因） */
+  const selfTest = () => act('self-test', async () => {
+    const res = await api.post<{ sent: boolean; mode?: string; reason?: string }>(base + '/self-test')
+    if (!res?.sent) throw new Error(res?.reason || t('tool:channel.selfTestFailed'))
+    return res
+  }, res => t('tool:channel.selfTestSent', {
+    mode: t(res.mode === 'active' ? 'tool:channel.selfTestModeActive' : 'tool:channel.selfTestModePassive'),
+  }))
 
   const start = () => act('start', () => api.post(base + '/start'), t('tool:channel.started'))
   const stop = () => act('stop', () => api.post(base + '/stop'), t('tool:channel.stopped'))
@@ -336,6 +352,41 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
         </Row>
       )
     }
+    // 布尔字段：勾选框。独立维度用它（比如"引用回复"），跟单选的下拉互不影响
+    if (spec.type === 'boolean') {
+      return (
+        <Row key={key} label={label} hint={hint}>
+          <label className="inline-flex items-center gap-2 text-xs text-textSecondary cursor-pointer select-none">
+            <input
+              type="checkbox"
+              className="w-3.5 h-3.5 rounded-control border border-border bg-canvas accent-primary-500"
+              checked={(draft[key] || 'true') === 'true'}
+              onChange={e => setField(key, e.target.checked ? 'true' : 'false')}
+              disabled={!view.enabled}
+            />
+            {t('tool:channel.switchOn')}
+          </label>
+        </Row>
+      )
+    }
+    // 插件声明了选项（enum）就用下拉：平台不认识这个字段，也不该猜它的取值
+    if (spec.options && spec.options.length > 0) {
+      return (
+        <Row key={key} label={label} hint={hint}>
+          <Select
+            value={draft[key] ?? ''}
+            onChange={e => setField(key, e.target.value)}
+            options={spec.options.map(o => ({
+              value: o.value,
+              label: pick(lang, o.label, o.label_en, o.label_ja) || o.value,
+            }))}
+            fieldSize="sm"
+            className="w-56"
+            disabled={!view.enabled}
+          />
+        </Row>
+      )
+    }
     if (spec.secret) {
       return (
         <Row key={key} label={label} hint={hint}>
@@ -400,10 +451,19 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
         <span className={'text-xs ' + TEXT[status.tone]}>{status.text}</span>
         {view.configured && <span className="chip chip-muted">{view.instance}</span>}
         <span className="flex-1" />
+        {view.self_test && view.running && (
+          <Button size="sm" variant="secondary" loading={busy === 'self-test'} onClick={selfTest}>
+            {t('tool:channel.selfTest')}
+          </Button>
+        )}
         {view.enabled && view.configured && (view.running
           ? <Button size="sm" variant="secondary" loading={busy === 'stop'} onClick={stop}>{t('tool:channel.stop')}</Button>
           : <Button size="sm" variant="primary" loading={busy === 'start'} onClick={start}>{t('tool:channel.start')}</Button>)}
       </div>
+
+      {view.self_test && view.running && (
+        <p className="text-3xs text-textMuted leading-relaxed px-1">{t('tool:channel.selfTestHint')}</p>
+      )}
 
       {!view.enabled && (
         <div className="flex items-start gap-2 text-xs rounded-card border border-border bg-canvas px-4 py-3 text-textMuted">

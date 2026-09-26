@@ -2,7 +2,9 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } fr
 import { useWebSocket, type WebSocketMessage } from '../hooks/useWebSocket'
 import { api } from '../api/client'
 import { useAuth } from '../context/AuthContext'
+import { parseServerDate } from '../utils/time'
 import MessageBubble from './MessageBubble'
+import { renderMentions, type MentionNames } from '../utils/mentions'
 import ChatInput from './ChatInput'
 // 阈值（距底多少算「在底部」）与群视界/DSH 对话同一份来源；本组件有自己的虚拟列表机器，不套整个 hook
 import { BOTTOM_THRESHOLD } from '../hooks/useStickToBottom'
@@ -49,12 +51,16 @@ interface Message {
   via?: string | null
   message_type?: string
   sender_state?: string | null
+  /** 被撤回了：正文不再显示（后端只回 revoked 标记，不给原文） */
+  revoked?: boolean
   created_at: string
 }
 
 interface ChatViewProps {
   conversationType: 'group' | 'dm'
   conversationId: number | string
+  /** 我在这个群里的角色（owner/admin 才能撤别人的消息；私信没有这个） */
+  myRole?: string
 }
 
 const PAGE_SIZE = 20
@@ -96,13 +102,14 @@ function addToMap<K, V>(
   })
 }
 
-export default function ChatView({ conversationType, conversationId }: ChatViewProps) {
+export default function ChatView({ conversationType, conversationId, myRole }: ChatViewProps) {
   // ── 群视界：群聊绑定的世界（全屏入口弹窗，先不加载消息） ──
   const [boundWorldId, setBoundWorldId] = useState<number | null>(null)
   const [worldModalOpen, setWorldModalOpen] = useState(false)
   const t = useT()
   const { user } = useAuth()
   const [messages, setMessages] = useState<Message[]>([])
+  const [revokeNotice, setRevokeNotice] = useState<string | null>(null)
   const [input, setInput] = useState('')
   const [loadingState, setLoadingState] = useState<'initial' | 'older' | 'newer' | null>(null)
   const [inputHeight, setInputHeight] = useState<number | null>(null)  // 输入框高度（null=自动）
@@ -264,6 +271,10 @@ export default function ChatView({ conversationType, conversationId }: ChatViewP
         removeFromMap(setThinkingAgents, m.sender_id)
         removeFromMap(setTypingAgents, m.sender_id)
       }
+    } else if (msg.type === 'message_revoked') {
+      const d = msg.data
+      if (!isMessageForThisConversation(d, conversationType, conversationId)) return
+      setMessages((prev) => prev.map((m) => (m.id === d.id ? { ...m, revoked: true, content: '' } : m)))
     } else if (msg.type === 'ai_thinking') {
       const d = msg.data
       if (d.trigger === 'auto') return
@@ -392,13 +403,50 @@ export default function ChatView({ conversationType, conversationId }: ChatViewP
     return { s, e }
   }, [scrollTop, viewportH, messages.length, cumHeights])
 
+  // @令牌 <@!id> 要显示成名字：群聊有成员表，私信没有（也就没有 @）
+  const mentionNames = useMemo(
+    () => Object.fromEntries(groupMembers.map((m) => [m.id, m.name])) as MentionNames,
+    [groupMembers]
+  )
+
+  // 撤回按钮只在窗口内出现（后端仍会二次校验——这里只是别让人点了必然失败）
+  const REVOKE_WINDOW_MS = 2 * 60 * 1000
+  const isGroupAdmin = myRole === 'owner' || myRole === 'admin'
+  const canRevoke = useCallback(
+    (msg: Message) =>
+      !msg.revoked
+      && (isOwnMessage(msg) || isGroupAdmin)   // 群主/管理员能撤别人的（口径与后端 is_group_admin 一致）
+      // 必须按 UTC 解析：后端 DateTime 是 naive UTC，直接 new Date(...) 会当成本地时间
+      //（UTC+8 下每条消息都被算成"过了 8 小时"，窗口判定永远不成立——2026-09-26 的教训）
+      && Date.now() - parseServerDate(msg.created_at).getTime() < REVOKE_WINDOW_MS,
+    [isGroupAdmin],
+  )
+
+  /** 撤回：服务端说了算（2 分钟内、只能撤自己的）；成功那条会经 WS 广播变成占位 */
+  const handleRevoke = useCallback(async (messageId: number) => {
+    const base = conversationType === 'dm' ? `/dm/${conversationId}` : `/gm/${conversationId}`
+    try {
+      const res: any = await api.post(`${base}/messages/${messageId}/revoke`)
+      const failed = (res?.channel || []).filter((c: any) => !c.ok)
+      if (failed.length) {
+        // 通道侧没撤掉要如实说：QQ 只有 2 分钟窗口、还要求机器人有权限（站内已撤，别让人以为全撤了）
+        setRevokeNotice(t('chat.revokedChannelFailed', {
+          reason: failed.map((c: any) => c.reason).join('；'),
+        }))
+      }
+      setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, revoked: true, content: '' } : m)))
+    } catch (e: any) {
+      setRevokeNotice(e?.message || String(e))
+    }
+  }, [conversationType, conversationId, t])
+
   const messageElements = useMemo(() => {
     const { s, e } = windowRange
     const items = messages.slice(s, e).map((msg) => {
       const replyToData = msg.reply_to == null ? undefined : (() => {
         const quoted = messages.find(m => m.id === msg.reply_to)
         if (!quoted) return { id: msg.reply_to, sender: '?', content: '' }
-        return { id: quoted.id, sender: quoted.sender_name || `用户${quoted.sender_id}`, content: quoted.content.slice(0, 80) }
+        return { id: quoted.id, sender: quoted.sender_name || `用户${quoted.sender_id}`, content: renderMentions(quoted.content.slice(0, 80), mentionNames) }
       })()
       return (
         <div
@@ -416,8 +464,10 @@ export default function ChatView({ conversationType, conversationId }: ChatViewP
           <MessageBubble
             senderName={msg.sender_name || `${msg.sender_type}:${msg.sender_id}`}
             senderAvatarUrl={msg.sender_avatar_url}
-            content={msg.content}
+            content={renderMentions(msg.content, mentionNames)}
             isMine={isOwnMessage(msg)}
+            revoked={msg.revoked}
+            onRevoke={canRevoke(msg) ? handleRevoke : undefined}
             createdAt={msg.created_at}
             senderType={msg.sender_type}
             senderId={msg.sender_id}
@@ -439,7 +489,7 @@ export default function ChatView({ conversationType, conversationId }: ChatViewP
       afterH: totalHeight - cumHeights[e],
       items,
     }
-  }, [windowRange, messages, cumHeights, totalHeight, firstUnreadId, hasMoreBefore, isOwnMessage, handleAvatarClick, t])
+  }, [windowRange, messages, cumHeights, totalHeight, firstUnreadId, hasMoreBefore, isOwnMessage, handleAvatarClick, mentionNames, canRevoke, handleRevoke, t])
 
   // ============================================================
   // 消息加载器
@@ -938,6 +988,19 @@ export default function ChatView({ conversationType, conversationId }: ChatViewP
               </button>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* 撤回提示：通道侧没撤掉这类"半成功"必须让人看见，不能假装全撤了 */}
+      {revokeNotice && (
+        <div className="absolute top-4 right-4 z-modal max-w-sm">
+          <div className="flex items-start gap-2 bg-amber-500/10 border border-amber-500/20 text-amber-500 rounded-card px-3 py-2 text-sm shadow-lg shadow-black/20">
+            <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+            <span className="flex-1">{revokeNotice}</span>
+            <button onClick={() => setRevokeNotice(null)} className="shrink-0 text-amber-500/60 hover:text-amber-500">
+              <X size={14} />
+            </button>
+          </div>
         </div>
       )}
 

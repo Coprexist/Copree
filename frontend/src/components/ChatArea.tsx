@@ -234,7 +234,7 @@ export default function ChatArea({ groupId, dmSessionId }: ChatAreaProps) {
               </button>
             )}
           </div>
-          <ChatView conversationType="group" conversationId={groupId} />
+          <ChatView conversationType="group" conversationId={groupId} myRole={currentGroup?.my_role} />
         </div>
       ) : (
         /* ── 私信 ── */
