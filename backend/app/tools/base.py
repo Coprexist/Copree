@@ -100,6 +100,9 @@ class ToolPlugin:
     states: list[str] = ["active"]  # 允许使用的 AI 状态
 
     # ── 可选 ──
+    # 触发组合规则：插件只声明「什么条件成立时做什么」，执行由平台统一做
+    # （形状与校验见 utils/pure/trigger_rules.py）
+    triggers: list[dict] = []
     nullable: list[str] = []    # 可空参数列表
     admin_description: str = ""     # 给管理员/用户看的工具说明
     trigger_condition: str = ""     # 触发条件（单个，用于技能背包卡片内的工具标签）
@@ -175,6 +178,10 @@ class ToolRegistry:
             logger.warning(f"工具 {instance.name} 重复注册（不同类），已覆盖")
         cls._plugins[instance.name] = instance
         cls._invalidate_cache()
+        if instance.triggers:
+            from app.utils.pure import trigger_rules
+            trigger_rules.register_plugin([{**r, "id": r.get("id") or f"{instance.name}.{i}"}
+                                           for i, r in enumerate(instance.triggers)])
         logger.debug(f"工具已注册: {instance.name} (segment={instance.segment})")
 
     @classmethod
@@ -352,6 +359,11 @@ class ToolRegistry:
             await metrics.record_tool_call(tool_name, elapsed, is_success)
         except Exception:
             pass
+        try:
+            from app.services.trigger.trigger_service import after_tool_result
+            result = await after_tool_result(db, agent_id, tool_name, result)
+        except Exception as e:  # noqa: BLE001 —— 触发规则故障不影响工具结果
+            logger.debug("触发组合规则执行失败 %s: %s", tool_name, e)
         return result
 
     # ── 管理面板 ──

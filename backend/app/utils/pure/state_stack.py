@@ -29,6 +29,10 @@ _FRAME_FIELDS = (
     "notes",
     # semantic_focus：这段会话当前的语义焦段（焦段本体存在 agents.foci）
     "semantic_focus",
+    # tool_uses / delivered：触发组合规则的本会话状态（哪个工具调过几次、哪条规则投过了）。
+    # 挂在帧上是有意的——compact/clear 后帧重建，「本会话第一次」自然归零，不必另建状态表
+    "tool_uses",
+    "delivered",
 )
 
 
@@ -56,6 +60,8 @@ def make_state_frame(type_: str, context_ref: str = "", **extras) -> dict:
         "tools": None,
         "skills": None,
         "call_count": 0,
+        "tool_uses": {},
+        "delivered": {},
         "handoff": {},
         "completed_handoff": {},
     }

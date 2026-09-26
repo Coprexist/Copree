@@ -50,6 +50,33 @@ async def _set_stack(db: AsyncSession, agent_id: int, stack: list[dict]) -> None
     )
 
 
+async def load_trigger_state(db: AsyncSession, agent_id: int) -> dict:
+    """读当前会话的触发规则状态（{tool_uses, delivered}）。
+
+    挂在栈顶帧上：没有帧就没有会话，"本会话第几次"无从谈起，返回空状态。
+    """
+    db = _ensure_repo(db)
+    stack = await _get_stack(db, agent_id)
+    if not stack:
+        return {"tool_uses": {}, "delivered": {}}
+    top = stack[-1]
+    return {
+        "tool_uses": dict(top.get("tool_uses") or {}),
+        "delivered": dict(top.get("delivered") or {}),
+    }
+
+
+async def save_trigger_state(db: AsyncSession, agent_id: int, state: dict) -> None:
+    """写回当前会话的触发规则状态（没有帧就丢弃：状态属于会话，不属于 AI）。"""
+    db = _ensure_repo(db)
+    stack = await _get_stack(db, agent_id)
+    if not stack:
+        return
+    stack[-1]["tool_uses"] = dict((state or {}).get("tool_uses") or {})
+    stack[-1]["delivered"] = dict((state or {}).get("delivered") or {})
+    await _set_stack(db, agent_id, stack)
+
+
 async def set_active_semantic_focus(db: AsyncSession, agent_id: int, focus_id: str) -> str:
     """把栈顶帧的当前语义焦段换成 focus_id（空串 = 清空）。
 

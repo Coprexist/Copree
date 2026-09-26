@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 
 from app.repositories.world_repo import SQLAlchemyWorldRepository
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,55 +26,9 @@ def _ensure_repo(db_or_repo):
 # 条件 DSL 解析（递归逻辑树 + 字段运算）
 # ═══════════════════════════════════════════════════════════
 
-_OPS = ("_starts_with", "_contains", "_matches", "_gte", "_gt", "_lte", "_lt")
-
-
-def _field_op(cond_key: str) -> tuple[str, str | None]:
-    """叶子条件键拆成 (字段, 运算)。无运算后缀 = 等于。"""
-    for op in _OPS:
-        if cond_key.endswith(op):
-            return cond_key[: -len(op)], op
-    return cond_key, None
-
-
-def _apply_op(value, op: str | None, expect) -> bool:
-    try:
-        if op is None:
-            return value == expect
-        if op == "_contains":
-            return str(expect) in str(value)
-        if op == "_starts_with":
-            return str(value).startswith(str(expect))
-        if op == "_matches":
-            return re.search(str(expect), str(value)) is not None
-        if op in ("_gt", "_gte", "_lt", "_lte"):
-            v, e = float(value), float(expect)
-            return {"_gt": v > e, "_gte": v >= e, "_lt": v < e, "_lte": v <= e}[op]
-    except (TypeError, ValueError):
-        return False
-    return False
-
-
-def match_conditions(conditions, ctx: dict) -> bool:
-    """递归条件树求值。conditions 结构：
-    - {"and": [cond...]} / {"or": [cond...]} 组合节点
-    - {"not": cond} 取反节点
-    - 叶子：{"字段": 值} 或 {"字段_运算": 值}（字段引用 ctx）
-    """
-    if not isinstance(conditions, dict) or not conditions:
-        return False
-    if "and" in conditions:
-        return all(match_conditions(c, ctx) for c in conditions["and"])
-    if "or" in conditions:
-        return any(match_conditions(c, ctx) for c in conditions["or"])
-    if "not" in conditions:
-        return not match_conditions(conditions["not"], ctx)
-    # 叶子：单键（多键叶子按 and 处理）
-    results = []
-    for key, expect in conditions.items():
-        field, op = _field_op(str(key))
-        results.append(_apply_op(ctx.get(field), op, expect))
-    return all(results)
+# 求值器只有一份（utils/pure/conditions.py）：触发组合规则与决策技能共用同一套条件语义。
+# 这里保留同名导入，决策层内外沿用 match_conditions 这个名字，不必知道它搬去了哪。
+from app.utils.pure.conditions import match_conditions  # noqa: E402
 
 
 # ═══════════════════════════════════════════════════════════
