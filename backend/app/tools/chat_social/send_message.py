@@ -78,14 +78,14 @@ class SendGm(ToolPlugin):
                 api_key=context.get("api_key"),
             )
         except Exception:
-            pass
+            logger.debug("自动提取关键信息失败（不影响发消息）", exc_info=True)
 
         # 记录消息吞吐量
         try:
             from app.services.infrastructure.metrics_collector import metrics
             await metrics.record_message(agent_id)
         except Exception:
-            pass
+            logger.debug("记录消息吞吐量失败（不影响发消息）", exc_info=True)
 
         return {"success": True, "message_id": message.id}
 

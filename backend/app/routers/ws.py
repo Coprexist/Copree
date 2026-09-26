@@ -72,7 +72,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
             if _u:
                 _user_avatar = _u
     except Exception:
-        pass
+        logger.debug("读取用户头像失败（不影响连接）", exc_info=True)
 
     # WebSocket 连接成功 → 标记为当前在线
     try:
@@ -82,7 +82,7 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(...)):
             )
             await _online_db.commit()
     except Exception:
-        pass
+        logger.debug("标记用户在线失败（不影响连接）", exc_info=True)
 
     # 启动心跳检测
     heartbeat_task = manager.start_heartbeat(ws, user_id)
