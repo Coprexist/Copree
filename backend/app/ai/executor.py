@@ -511,6 +511,22 @@ async def _tool_call_loop(
         except Exception as e:
             logger.warning(f"轮末封存失败（非致命，下一轮只少了这一笔）: {e}")
 
+    async def _seal_aborted(reason: str) -> None:
+        """取消/异常也是收尾出口：不在这里封存，这一轮就只剩用户那条消息。
+
+        平台重启会直接 cancel 在跑的轮次（bootstrap.cancel_all_tasks），异常也会把栈直接弹走；
+        两种都没走 end_turn，所以思考照收（判据在 _seal 里），并如实说明是怎么断的。
+        """
+        try:
+            await _seal("", cutoff=_cutoff_text(reason))
+            await _save_conversation_log_safe(
+                db, agent, messages, conversation_type,
+                group_id, session_id,
+                has_output=_has_sent_message, model=model,
+            )
+        except Exception as e:
+            logger.warning(f"中断收尾失败（非致命，下一轮只少了这一笔）: {e}")
+
     def _grant_closing_round() -> None:
         """轮次用尽却一句话没发 → 白送一轮收尾（只送一次）。
 
@@ -591,600 +607,608 @@ async def _tool_call_loop(
         logger.warning(f"调用前空闲压缩跳过（非致命）: {e}")
 
     loop_idx = 0
-    while loop_idx < max_loops + _reminder_extra + _closing_extra:
-        # 轮次读数：AI 不知道额度还剩几次，就会把每一轮都花在检索上、用尽后静默收尾
-        _free_round = _free_next
-        _free_next = False
-        set_round_budget(messages, round_no=loop_idx + 1, total=max_loops, free=_free_round)
-        # ── v0.1.5: 带分类重试的 LLM 调用 ──
-        from app.ai.llm import RateLimitError, ServerError, KeyFatalError
-        from app.services.infrastructure.api_key_concurrency import concurrency_mgr
+    try:
+        while loop_idx < max_loops + _reminder_extra + _closing_extra:
+            # 轮次读数：AI 不知道额度还剩几次，就会把每一轮都花在检索上、用尽后静默收尾
+            _free_round = _free_next
+            _free_next = False
+            set_round_budget(messages, round_no=loop_idx + 1, total=max_loops, free=_free_round)
+            # ── v0.1.5: 带分类重试的 LLM 调用 ──
+            from app.ai.llm import RateLimitError, ServerError, KeyFatalError
+            from app.services.infrastructure.api_key_concurrency import concurrency_mgr
 
-        MAX_SERVER_RETRIES = 2
-        excluded_sources: set[str] = set()  # 已尝试失败的来源（tier 级别）
-        _excluded_pool_key_id: int | None = None  # 429 限流时排除特定池 Key
-        last_error_type = None  # 追踪最后一个错误类型，用于系统通知
-        last_error_detail = ""
-        current_api_key = api_key
-        current_api_base = api_base_url
-        current_credit_source = credit_source
-        current_pool_key_id = pool_key_id
+            MAX_SERVER_RETRIES = 2
+            excluded_sources: set[str] = set()  # 已尝试失败的来源（tier 级别）
+            _excluded_pool_key_id: int | None = None  # 429 限流时排除特定池 Key
+            last_error_type = None  # 追踪最后一个错误类型，用于系统通知
+            last_error_detail = ""
+            current_api_key = api_key
+            current_api_base = api_base_url
+            current_credit_source = credit_source
+            current_pool_key_id = pool_key_id
 
-        response = None
-        # 降级重试循环：逐 tier 尝试，KeyFatal → 排除来源 → 下一级
-        for key_attempt in range(3):
-            # 切换 Key 或 tier 时重新获取配置
-            if key_attempt > 0:
-                _prev_source = current_credit_source
-                current_api_key, current_api_base, current_credit_source, current_pool_key_id, _ = \
-                    await _get_api_config(db, agent, excluded_sources=excluded_sources,
-                                          exclude_pool_key_id=_excluded_pool_key_id,
-                                          chatter_id=trigger_user_id)
-                # 没有新 tier 可用 → 跳出
-                if not current_api_key:
-                    break
-                # 同 tier 但没换到新 Key（非 pool_key 场景）→ 跳出
-                if current_credit_source == _prev_source and current_credit_source != "pool_key":
-                    break
+            response = None
+            # 降级重试循环：逐 tier 尝试，KeyFatal → 排除来源 → 下一级
+            for key_attempt in range(3):
+                # 切换 Key 或 tier 时重新获取配置
+                if key_attempt > 0:
+                    _prev_source = current_credit_source
+                    current_api_key, current_api_base, current_credit_source, current_pool_key_id, _ = \
+                        await _get_api_config(db, agent, excluded_sources=excluded_sources,
+                                              exclude_pool_key_id=_excluded_pool_key_id,
+                                              chatter_id=trigger_user_id)
+                    # 没有新 tier 可用 → 跳出
+                    if not current_api_key:
+                        break
+                    # 同 tier 但没换到新 Key（非 pool_key 场景）→ 跳出
+                    if current_credit_source == _prev_source and current_credit_source != "pool_key":
+                        break
 
-            # 获取并发槽位
-            acquired = False
-            if current_pool_key_id:
-                # 获取 Key 的 concurrent_limit 用于并发判断
-                from app.models.api_key_pool import ApiKeyPool as ApiKeyPoolModel
-                key_result = await db.execute(
-                    select(ApiKeyPoolModel).where(ApiKeyPoolModel.id == current_pool_key_id)
-                )
-                key_row = key_result.scalar_one_or_none()
-                db_limit = getattr(key_row, 'concurrent_limit', None) if key_row else None
-                if not await concurrency_mgr.acquire(current_pool_key_id, model, db_limit):
-                    continue  # Key 已满，换下一个
-                acquired = True
+                # 获取并发槽位
+                acquired = False
+                if current_pool_key_id:
+                    # 获取 Key 的 concurrent_limit 用于并发判断
+                    from app.models.api_key_pool import ApiKeyPool as ApiKeyPoolModel
+                    key_result = await db.execute(
+                        select(ApiKeyPoolModel).where(ApiKeyPoolModel.id == current_pool_key_id)
+                    )
+                    key_row = key_result.scalar_one_or_none()
+                    db_limit = getattr(key_row, 'concurrent_limit', None) if key_row else None
+                    if not await concurrency_mgr.acquire(current_pool_key_id, model, db_limit):
+                        continue  # Key 已满，换下一个
+                    acquired = True
 
-            # 流式逐工具分发：回调在 SSE 解析到完整 tool_call 时即刻执行
-            _pending_results: list[dict] = []  # {tc_id, result}
-            _end_turn = False
-            # 轮末结算（docs/dev/conversation_history.md §5）：思考留不留 + 留给后面自己的关键信息
-            _settlement: dict = {}
+                # 流式逐工具分发：回调在 SSE 解析到完整 tool_call 时即刻执行
+                _pending_results: list[dict] = []  # {tc_id, result}
+                _end_turn = False
+                # 轮末结算（docs/dev/conversation_history.md §5）：思考留不留 + 留给后面自己的关键信息
+                _settlement: dict = {}
 
-            def _repair_json(raw: str) -> dict | None:
-                """尝试修复 LLM 生成的内容字段引号嵌套问题"""
-                try:
-                    return json.loads(raw)
-                except json.JSONDecodeError:
-                    pass
-                # JSON 尾部可能因内容过长被截断或引号不闭合
-                # 尝试提取 path + content 两个字段
-                m_path = re.search(r'"path"\s*:\s*"([^"]+)"', raw)
-                if not m_path:
+                def _repair_json(raw: str) -> dict | None:
+                    """尝试修复 LLM 生成的内容字段引号嵌套问题"""
+                    try:
+                        return json.loads(raw)
+                    except json.JSONDecodeError:
+                        pass
+                    # JSON 尾部可能因内容过长被截断或引号不闭合
+                    # 尝试提取 path + content 两个字段
+                    m_path = re.search(r'"path"\s*:\s*"([^"]+)"', raw)
+                    if not m_path:
+                        return None
+                    path = m_path.group(1)
+                    m_content = re.search(r'"content"\s*:\s*"(.+)$', raw, re.DOTALL)
+                    if m_content:
+                        raw_content = m_content.group(1).rstrip()
+                        # 去掉末尾可能残留的 , 或 }
+                        raw_content = re.sub(r'"?\s*[,}]?\s*$', '', raw_content)
+                        # 反转义
+                        content = raw_content.replace('\\"', '"').replace('\\n', '\n').replace('\\\\', '\\')
+                        return {"path": path, "content": content}
                     return None
-                path = m_path.group(1)
-                m_content = re.search(r'"content"\s*:\s*"(.+)$', raw, re.DOTALL)
-                if m_content:
-                    raw_content = m_content.group(1).rstrip()
-                    # 去掉末尾可能残留的 , 或 }
-                    raw_content = re.sub(r'"?\s*[,}]?\s*$', '', raw_content)
-                    # 反转义
-                    content = raw_content.replace('\\"', '"').replace('\\n', '\n').replace('\\\\', '\\')
-                    return {"path": path, "content": content}
-                return None
 
-            async def _dispatch_one_tool(tc: dict):
-                nonlocal last_task, _end_turn, _settlement, _closing_active
-                if _end_turn:
-                    # 同一批里前一个工具已 end_turn → 后面的不执行，但**必须**留一条 tool 响应：
-                    # assistant(tool_calls) 里每个 id 都要有回应，少一条整次请求 400
-                    # （2026-09-14 修的同类线上问题，兜底见 app/utils/pure/tool_chain.py）
-                    _pending_results.append({"tc_id": tc.get("id", ""), "result": {
-                        "success": False,
-                        "error": "本轮已结束（前一个工具调用了 end_turn），该工具未执行",
-                    }})
-                    return
-                tc_id = tc.get("id", "")
-                func_info = tc.get("function", {})
-                tool_name = func_info.get("name", "")
-                if _closing_active and tool_name not in _CLOSING_TOOLS:
-                    # 收尾轮里开新检索 = 把最后一轮也烧掉，直接挡在这里
-                    _pending_results.append({"tc_id": tc_id, "result": {
-                        "success": False,
-                        "error": "收尾轮：工具轮次已用完，只能 send_gm/send_dm/end_turn。"
-                                 "请把已有结论发出去。",
-                    }})
-                    return
-                arguments_str = func_info.get("arguments", "{}")
-                try:
-                    arguments = json.loads(arguments_str)
-                except json.JSONDecodeError:
-                    arguments = _repair_json(arguments_str)
-                    if arguments is None:
-                        _pending_results.append({"tc_id": tc_id, "result": {
-                            "error": True, "message": f"工具 {tool_name} 参数 JSON 解析失败，且自动修复未能恢复。请尝试减少内容中引号的使用，或分多次 file_edit 写入。原始值前200字符: {arguments_str[:200]}"
+                async def _dispatch_one_tool(tc: dict):
+                    nonlocal last_task, _end_turn, _settlement, _closing_active
+                    if _end_turn:
+                        # 同一批里前一个工具已 end_turn → 后面的不执行，但**必须**留一条 tool 响应：
+                        # assistant(tool_calls) 里每个 id 都要有回应，少一条整次请求 400
+                        # （2026-09-14 修的同类线上问题，兜底见 app/utils/pure/tool_chain.py）
+                        _pending_results.append({"tc_id": tc.get("id", ""), "result": {
+                            "success": False,
+                            "error": "本轮已结束（前一个工具调用了 end_turn），该工具未执行",
                         }})
                         return
-                    logger.info(f"AI {agent.name}({agent.id}): 自动修复 {tool_name} 参数 JSON 成功")
-                from app.services.tool_registry import validate_tool_call
-                is_valid, validate_error = validate_tool_call(tool_name, arguments)
-                if not is_valid:
-                    logger.warning(f"工具格式校验失败: {validate_error}")
-                    _pending_results.append({"tc_id": tc_id, "result": {"error": True, "message": validate_error}})
-                    return
-                logger.info(f"AI {agent.name} 调用工具: {tool_name}({arguments})")
-                # 消息类工具推送"正在输入中…"状态
-                if tool_name in ("send_gm", "send_dm") and trigger == "user":
-                    _typing_data: dict = {"user_id": agent.user_id, "agent_name": agent.name, "agent_avatar_url": agent.avatar_url, "trigger": trigger}
-                    if conversation_type == "dm" and session_id:
-                        _typing_data["session_id"] = session_id
-                    elif group_id is not None:
-                        _typing_data["group_id"] = group_id
-                    _typing_event = {"type": "ai_typing", "conversation_type": conversation_type, "data": _typing_data}
+                    tc_id = tc.get("id", "")
+                    func_info = tc.get("function", {})
+                    tool_name = func_info.get("name", "")
+                    if _closing_active and tool_name not in _CLOSING_TOOLS:
+                        # 收尾轮里开新检索 = 把最后一轮也烧掉，直接挡在这里
+                        _pending_results.append({"tc_id": tc_id, "result": {
+                            "success": False,
+                            "error": "收尾轮：工具轮次已用完，只能 send_gm/send_dm/end_turn。"
+                                     "请把已有结论发出去。",
+                        }})
+                        return
+                    arguments_str = func_info.get("arguments", "{}")
                     try:
+                        arguments = json.loads(arguments_str)
+                    except json.JSONDecodeError:
+                        arguments = _repair_json(arguments_str)
+                        if arguments is None:
+                            _pending_results.append({"tc_id": tc_id, "result": {
+                                "error": True, "message": f"工具 {tool_name} 参数 JSON 解析失败，且自动修复未能恢复。请尝试减少内容中引号的使用，或分多次 file_edit 写入。原始值前200字符: {arguments_str[:200]}"
+                            }})
+                            return
+                        logger.info(f"AI {agent.name}({agent.id}): 自动修复 {tool_name} 参数 JSON 成功")
+                    from app.services.tool_registry import validate_tool_call
+                    is_valid, validate_error = validate_tool_call(tool_name, arguments)
+                    if not is_valid:
+                        logger.warning(f"工具格式校验失败: {validate_error}")
+                        _pending_results.append({"tc_id": tc_id, "result": {"error": True, "message": validate_error}})
+                        return
+                    logger.info(f"AI {agent.name} 调用工具: {tool_name}({arguments})")
+                    # 消息类工具推送"正在输入中…"状态
+                    if tool_name in ("send_gm", "send_dm") and trigger == "user":
+                        _typing_data: dict = {"user_id": agent.user_id, "agent_name": agent.name, "agent_avatar_url": agent.avatar_url, "trigger": trigger}
                         if conversation_type == "dm" and session_id:
-                            await chat_api.broadcast_to_dm(session_id, _typing_event)
+                            _typing_data["session_id"] = session_id
                         elif group_id is not None:
-                            await chat_api.broadcast_to_group(group_id, _typing_event)
-                    except Exception:
-                        pass
-                # 任务摘要追踪（通过 ToolRegistry 获取，找不到时回退到通用摘要）
-                task_summary = _get_tool_task_summary(tool_name, arguments)
-                if not task_summary:
-                    task_summary = f"调用工具 {tool_name}"
-                result = await dispatch_tool_call(db, agent.id, group_id, tool_name, arguments, context)
-                if task_summary:
-                    last_task = task_summary
-                    if isinstance(result, dict):
-                        result["__task"] = task_summary
-                _pending_results.append({"tc_id": tc_id, "result": result})
-                # 工具总账：工具名 + 失败原因或工具自报的摘要——轮末封存为一条 tool 条目
-                _tool_log.append({"name": tool_name, "note": tool_ledger_note(result)})
-                if isinstance(result, dict) and result.get("end_turn"):
-                    _end_turn = True
-                    # 收下结算决定（还没接账本：账本封存落地后在这里写条目）
-                    _settlement["keep_thinking"] = bool(result.get("keep_thinking"))
-                    _settlement["key_note"] = (result.get("key_note") or "").strip()
-                # 追踪 AI 是否已发消息
-                if tool_name in ("send_gm", "send_dm"):
-                    _has_sent_message = True
-                    # AI 刚发了消息→重置压缩标记，允许下一轮清理之前的操作链
-                    _auto_compressed = False
-
-            # ── 自动上下文压缩 ──
-            # 策略：AI 没发消息时不压缩（保全中间操作链），发过消息后用 LLM 总结重要事件再压缩。
-            # 另外 12 小时空闲时内联压缩（缓存已过期）——但要先过 T_idle 的体积门槛（§6）。
-            if not _auto_compressed:
-                from app.services.memory.context_compression_service import should_compress, inline_compress, compress_messages, get_compression_thresholds
-                from app.utils.pure.model_window import context_window_for
-                thresholds = await get_compression_thresholds(db)
-                window = context_window_for(model)
-                # 两条路各自的体积门槛（§6）：冷（久未活跃）用更低的 T_idle，
-                # 热（本轮已发过消息）用 T_hot；都不满足就不压——体积是必要条件，空闲只决定时机
-                stale = _is_conversation_idle(messages, hours=12) and should_compress(
-                    messages, context_window=window, threshold=thresholds.idle)
-                if stale or (_has_sent_message and should_compress(
-                        messages, context_window=window, threshold=thresholds.hot)):
-                    if stale:
-                        # 空闲压缩：直接内联截断（缓存已过期，不浪费 API）
-                        messages, compress_stats = inline_compress(messages)
-                        if compress_stats.get("compressed"):
-                            _auto_compressed = True
-                    else:
-                        # AI 刚发了消息：用 LLM 总结重要事件后再压缩，保留关键信息
-                        # 压缩必须成功才能清空操作链，否则卡住重试
-                        new_messages, compress_stats = await compress_messages(
-                            messages,
-                            api_base_url=current_api_base,
-                            api_key=current_api_key,
-                            model=model,
-                            user_id=str(agent.id),
-                        )
-                        if compress_stats.get("compressed"):
-                            messages = new_messages
-                            _auto_compressed = True
-                        else:
-                            logger.warning(
-                                f"AI {agent.name}({agent.id}) LLM 压缩失败"
-                                f"（{compress_stats.get('reason', '未知')}），降级为内联压缩兜底"
-                            )
-                            # 兜底：不依赖 LLM 的内联截断——避免 LLM 超时/Key 不可用时反复重试耗 API
-                            messages, inline_stats = inline_compress(messages)
-                            if inline_stats.get("compressed"):
-                                _auto_compressed = True
-                                compress_stats = inline_stats
-                    if _auto_compressed:
-                        logger.info(
-                            f"AI {agent.name}({agent.id}) 上下文压缩完成："
-                            f"{compress_stats['before_tokens']} → {compress_stats['after_tokens']} tokens"
-                        )
+                            _typing_data["group_id"] = group_id
+                        _typing_event = {"type": "ai_typing", "conversation_type": conversation_type, "data": _typing_data}
                         try:
-                            await _unlock_context(
-                                db, agent, group_id=group_id, session_id=session_id,
-                                conversation_type=conversation_type,
-                                summary=(compress_stats.get("summary") or ""),
-                            )
-                            await db.commit()
+                            if conversation_type == "dm" and session_id:
+                                await chat_api.broadcast_to_dm(session_id, _typing_event)
+                            elif group_id is not None:
+                                await chat_api.broadcast_to_group(group_id, _typing_event)
                         except Exception:
                             pass
+                    # 任务摘要追踪（通过 ToolRegistry 获取，找不到时回退到通用摘要）
+                    task_summary = _get_tool_task_summary(tool_name, arguments)
+                    if not task_summary:
+                        task_summary = f"调用工具 {tool_name}"
+                    result = await dispatch_tool_call(db, agent.id, group_id, tool_name, arguments, context)
+                    if task_summary:
+                        last_task = task_summary
+                        if isinstance(result, dict):
+                            result["__task"] = task_summary
+                    _pending_results.append({"tc_id": tc_id, "result": result})
+                    # 工具总账：工具名 + 失败原因或工具自报的摘要——轮末封存为一条 tool 条目
+                    _tool_log.append({"name": tool_name, "note": tool_ledger_note(result)})
+                    if isinstance(result, dict) and result.get("end_turn"):
+                        _end_turn = True
+                        # 收下结算决定（还没接账本：账本封存落地后在这里写条目）
+                        _settlement["keep_thinking"] = bool(result.get("keep_thinking"))
+                        _settlement["key_note"] = (result.get("key_note") or "").strip()
+                    # 追踪 AI 是否已发消息
+                    if tool_name in ("send_gm", "send_dm"):
+                        _has_sent_message = True
+                        # AI 刚发了消息→重置压缩标记，允许下一轮清理之前的操作链
+                        _auto_compressed = False
 
-            # ── 注入用户忙时消息（中断缓冲）──
-            pending_msgs = await drain_pending_interrupts(agent.id)
-            if pending_msgs:
-                try:
-                    for pm in pending_msgs:
-                        if pm.get("type") == "user_message":
-                            from zoneinfo import ZoneInfo
-                            tz = ZoneInfo(settings.display_timezone)
-                            now_str = datetime.now(tz).strftime(f"%Y-%m-%d %H:%M {tz.key}")
-                            sender_name = pm.get("sender_name", "用户")
-                            sender_id = pm.get("sender_id")
-                            msg_struct = {
-                                "time": now_str,
-                                "speaker_name": sender_name,
-                                "speaker_id": sender_id,
-                                "is_self": False,
-                                "content": pm.get("content", ""),
-                            }
-                            from app.utils.pure.prompting import format_message
-                            messages.append({
-                                "role": "user",
-                                "content": format_message(msg_struct, agent.name, max_content_len=-1),
-                            })
-                    logger.info(f"AI {agent.name}({agent.id}): 注入 {len(pending_msgs)} 条中断消息")
-                except Exception:
-                    # 注入失败：回写缓冲，避免消息永久丢失
-                    logger.warning(
-                        f"AI {agent.name}({agent.id}) 中断消息注入失败，回写 {len(pending_msgs)} 条",
-                        exc_info=True,
-                    )
-                    async with _state_lock:
-                        old = _pending_interrupts.get(agent.id) or []
-                        _pending_interrupts[agent.id] = pending_msgs + old
-
-            # 发请求前先补齐工具链（并行调用被跳过 / 任何中断路径都可能留悬空 tool_calls，
-            # 少一条响应整次请求就 400；纯函数校验，O(n)，代价可忽略）
-            if heal_tool_chain(messages):
-                logger.warning(f"🔧 AI {agent.name}({agent.id}) 补齐悬空 tool_calls（避免 400）")
-            try:
-                # 内层：同 Key 重试（500/503）
-                for server_retry in range(MAX_SERVER_RETRIES + 1):
-                    try:
-                        response = await chat_completion(
-                            messages=messages,
-                            model=model,
-                            api_base_url=current_api_base,
-                            api_key=current_api_key,
-                            tools=tools if tools else None,
-                            temperature=effective_cfg["temperature"] or 0.8,
-                            top_p=effective_cfg["top_p"] or 0.9,
-                            presence_penalty=effective_cfg["presence_penalty"] or 0.5,
-                            frequency_penalty=effective_cfg["frequency_penalty"] or 0.5,
-                            thinking_enabled=effective_cfg["thinking_enabled"],
-                            stream=True,
-                            pool_key_id=current_pool_key_id,
-                            provider_supports_thinking=provider_supports_thinking,
-                            on_tool_call=_dispatch_one_tool,
-                            agent_id=agent.id,
-                            db=db,
-                        )
-                        # 更新池 Key ID（可能已切换）
-                        pool_key_id = current_pool_key_id
-                        credit_source = current_credit_source
-                        api_key = current_api_key
-                        api_base_url = current_api_base
-                        break  # 成功
-                    except ServerError as e:
-                        if server_retry < MAX_SERVER_RETRIES:
-                            delay = 2 if e.status_code == 500 else 3
-                            logger.warning(
-                                f"AI {agent.name}({agent.id}) 服务器 {e.status_code}，"
-                                f"{delay}s 后同 Key 重试 ({server_retry + 1}/{MAX_SERVER_RETRIES})"
-                            )
-                            await asyncio.sleep(delay)
-                            continue
+                # ── 自动上下文压缩 ──
+                # 策略：AI 没发消息时不压缩（保全中间操作链），发过消息后用 LLM 总结重要事件再压缩。
+                # 另外 12 小时空闲时内联压缩（缓存已过期）——但要先过 T_idle 的体积门槛（§6）。
+                if not _auto_compressed:
+                    from app.services.memory.context_compression_service import should_compress, inline_compress, compress_messages, get_compression_thresholds
+                    from app.utils.pure.model_window import context_window_for
+                    thresholds = await get_compression_thresholds(db)
+                    window = context_window_for(model)
+                    # 两条路各自的体积门槛（§6）：冷（久未活跃）用更低的 T_idle，
+                    # 热（本轮已发过消息）用 T_hot；都不满足就不压——体积是必要条件，空闲只决定时机
+                    stale = _is_conversation_idle(messages, hours=12) and should_compress(
+                        messages, context_window=window, threshold=thresholds.idle)
+                    if stale or (_has_sent_message and should_compress(
+                            messages, context_window=window, threshold=thresholds.hot)):
+                        if stale:
+                            # 空闲压缩：直接内联截断（缓存已过期，不浪费 API）
+                            messages, compress_stats = inline_compress(messages)
+                            if compress_stats.get("compressed"):
+                                _auto_compressed = True
                         else:
-                            raise  # 同 Key 重试耗尽，抛出给外层
+                            # AI 刚发了消息：用 LLM 总结重要事件后再压缩，保留关键信息
+                            # 压缩必须成功才能清空操作链，否则卡住重试
+                            new_messages, compress_stats = await compress_messages(
+                                messages,
+                                api_base_url=current_api_base,
+                                api_key=current_api_key,
+                                model=model,
+                                user_id=str(agent.id),
+                            )
+                            if compress_stats.get("compressed"):
+                                messages = new_messages
+                                _auto_compressed = True
+                            else:
+                                logger.warning(
+                                    f"AI {agent.name}({agent.id}) LLM 压缩失败"
+                                    f"（{compress_stats.get('reason', '未知')}），降级为内联压缩兜底"
+                                )
+                                # 兜底：不依赖 LLM 的内联截断——避免 LLM 超时/Key 不可用时反复重试耗 API
+                                messages, inline_stats = inline_compress(messages)
+                                if inline_stats.get("compressed"):
+                                    _auto_compressed = True
+                                    compress_stats = inline_stats
+                        if _auto_compressed:
+                            logger.info(
+                                f"AI {agent.name}({agent.id}) 上下文压缩完成："
+                                f"{compress_stats['before_tokens']} → {compress_stats['after_tokens']} tokens"
+                            )
+                            try:
+                                await _unlock_context(
+                                    db, agent, group_id=group_id, session_id=session_id,
+                                    conversation_type=conversation_type,
+                                    summary=(compress_stats.get("summary") or ""),
+                                )
+                                await db.commit()
+                            except Exception:
+                                pass
 
-                break  # 成功，退出 Key 切换循环
+                # ── 注入用户忙时消息（中断缓冲）──
+                pending_msgs = await drain_pending_interrupts(agent.id)
+                if pending_msgs:
+                    try:
+                        for pm in pending_msgs:
+                            if pm.get("type") == "user_message":
+                                from zoneinfo import ZoneInfo
+                                tz = ZoneInfo(settings.display_timezone)
+                                now_str = datetime.now(tz).strftime(f"%Y-%m-%d %H:%M {tz.key}")
+                                sender_name = pm.get("sender_name", "用户")
+                                sender_id = pm.get("sender_id")
+                                msg_struct = {
+                                    "time": now_str,
+                                    "speaker_name": sender_name,
+                                    "speaker_id": sender_id,
+                                    "is_self": False,
+                                    "content": pm.get("content", ""),
+                                }
+                                from app.utils.pure.prompting import format_message
+                                messages.append({
+                                    "role": "user",
+                                    "content": format_message(msg_struct, agent.name, max_content_len=-1),
+                                })
+                        logger.info(f"AI {agent.name}({agent.id}): 注入 {len(pending_msgs)} 条中断消息")
+                    except Exception:
+                        # 注入失败：回写缓冲，避免消息永久丢失
+                        logger.warning(
+                            f"AI {agent.name}({agent.id}) 中断消息注入失败，回写 {len(pending_msgs)} 条",
+                            exc_info=True,
+                        )
+                        async with _state_lock:
+                            old = _pending_interrupts.get(agent.id) or []
+                            _pending_interrupts[agent.id] = pending_msgs + old
 
-            except RateLimitError as e:
-                last_error_type = "rate_limited"
-                last_error_detail = e.message
-                if current_pool_key_id:
-                    await concurrency_mgr.mark_rate_limited(current_pool_key_id)
-                    _excluded_pool_key_id = current_pool_key_id
-                logger.warning(
-                    f"AI {agent.name}({agent.id}) Key #{current_pool_key_id} 429，"
-                    f"冷却 60s，换池 Key ({key_attempt + 1}/3)"
+                # 发请求前先补齐工具链（并行调用被跳过 / 任何中断路径都可能留悬空 tool_calls，
+                # 少一条响应整次请求就 400；纯函数校验，O(n)，代价可忽略）
+                if heal_tool_chain(messages):
+                    logger.warning(f"🔧 AI {agent.name}({agent.id}) 补齐悬空 tool_calls（避免 400）")
+                try:
+                    # 内层：同 Key 重试（500/503）
+                    for server_retry in range(MAX_SERVER_RETRIES + 1):
+                        try:
+                            response = await chat_completion(
+                                messages=messages,
+                                model=model,
+                                api_base_url=current_api_base,
+                                api_key=current_api_key,
+                                tools=tools if tools else None,
+                                temperature=effective_cfg["temperature"] or 0.8,
+                                top_p=effective_cfg["top_p"] or 0.9,
+                                presence_penalty=effective_cfg["presence_penalty"] or 0.5,
+                                frequency_penalty=effective_cfg["frequency_penalty"] or 0.5,
+                                thinking_enabled=effective_cfg["thinking_enabled"],
+                                stream=True,
+                                pool_key_id=current_pool_key_id,
+                                provider_supports_thinking=provider_supports_thinking,
+                                on_tool_call=_dispatch_one_tool,
+                                agent_id=agent.id,
+                                db=db,
+                            )
+                            # 更新池 Key ID（可能已切换）
+                            pool_key_id = current_pool_key_id
+                            credit_source = current_credit_source
+                            api_key = current_api_key
+                            api_base_url = current_api_base
+                            break  # 成功
+                        except ServerError as e:
+                            if server_retry < MAX_SERVER_RETRIES:
+                                delay = 2 if e.status_code == 500 else 3
+                                logger.warning(
+                                    f"AI {agent.name}({agent.id}) 服务器 {e.status_code}，"
+                                    f"{delay}s 后同 Key 重试 ({server_retry + 1}/{MAX_SERVER_RETRIES})"
+                                )
+                                await asyncio.sleep(delay)
+                                continue
+                            else:
+                                raise  # 同 Key 重试耗尽，抛出给外层
+
+                    break  # 成功，退出 Key 切换循环
+
+                except RateLimitError as e:
+                    last_error_type = "rate_limited"
+                    last_error_detail = e.message
+                    if current_pool_key_id:
+                        await concurrency_mgr.mark_rate_limited(current_pool_key_id)
+                        _excluded_pool_key_id = current_pool_key_id
+                    logger.warning(
+                        f"AI {agent.name}({agent.id}) Key #{current_pool_key_id} 429，"
+                        f"冷却 60s，换池 Key ({key_attempt + 1}/3)"
+                    )
+                    continue
+
+                except KeyFatalError as e:
+                    fatal_type = "auth_error" if e.status_code == 401 else "insufficient_balance" if e.status_code == 402 else "key_fatal"
+                    last_error_type = fatal_type
+                    last_error_detail = e.message
+                    await _log_key_fatal(db, current_pool_key_id, e.status_code, e.message)
+                    excluded_sources.add(current_credit_source)
+
+                    # ── 降级通知：当前 tier 不可用，尝试下一级 ──
+                    tier_name = {
+                        "agent_key": "AI 自有",
+                        "user_key": "你的 API",
+                        "pool_key": "系统额度",
+                    }.get(current_credit_source, current_credit_source)
+
+                    # 检查是否还有下一级可尝试
+                    _next_check = await _get_api_config(
+                        db, agent, excluded_sources=excluded_sources,
+                        chatter_id=trigger_user_id
+                    )
+                    has_fallback = _next_check[0] is not None
+
+                    if has_fallback:
+                        msg_text = (
+                            f"⚠️ **{tier_name} Key 不可用**"
+                            f"（{'余额不足' if e.status_code == 402 else 'API Key 无效' if e.status_code == 401 else '未知错误'}）。\n"
+                            f"正在自动切换至下一优先级额度…"
+                        )
+                    elif current_credit_source == "pool_key":
+                        msg_text = (
+                            f"⚠️ **系统额度暂不可用**（{'余额不足' if e.status_code == 402 else 'API Key 无效' if e.status_code == 401 else '未知错误'}）。\n"
+                            f"此次不记入你的额度使用情况。请稍后重试或联系管理员。"
+                        )
+                    elif current_credit_source == "user_key":
+                        msg_text = (
+                            f"⚠️ **你的 API 余额不足**，且无可用系统额度。\n"
+                            f"请前往 [个人设置](/settings) 更新 API Key 或联系管理员补充额度。"
+                        )
+                    else:
+                        msg_text = (
+                            f"⚠️ AI「{agent.name}」的 API 调用失败"
+                            f"（{'余额不足' if e.status_code == 402 else 'API Key 无效' if e.status_code == 401 else '未知错误'}）。\n"
+                            f"请检查 API 配置。"
+                        )
+
+                    await _send_system_error_notification(db, agent, msg_text)
+                    logger.error(
+                        f"AI {agent.name}({agent.id}) {current_credit_source} "
+                        f"{e.status_code} 不可用，尝试降级 ({key_attempt + 1}/3)"
+                    )
+                    continue
+
+                except ServerError as e:
+                    last_error_type = "server_error"
+                    last_error_detail = f"{e.status_code}: {e.message}"
+                    logger.error(
+                        f"AI {agent.name}({agent.id}) Key #{current_pool_key_id} "
+                        f"{e.status_code} 重试耗尽，最终失败"
+                    )
+
+                finally:
+                    if acquired and current_pool_key_id:
+                        await concurrency_mgr.release(current_pool_key_id)
+
+            # ── 全部重试失败 ──
+            if response is None:
+                logger.error(f"AI {agent.name}({agent.id}) LLM 调用全部重试失败，last_error={last_error_type}")
+                await _save_conversation_log_safe(
+                    db, agent, messages, conversation_type,
+                    group_id, session_id, has_output=False, model=model,
                 )
+                # 发送分类系统通知
+                error_type = last_error_type or "all_failed"
+                await _send_system_error(db, agent, error_type, last_error_detail,
+                                         conversation_type, group_id, session_id)
+                return
+
+            if response.get("reasoning_content"):
+                _reasoning_log.append(response["reasoning_content"])
+
+            # ── end_turn 已在流式回调中触发 → 补 assistant_msg + tool results 后退出 ──
+            if _end_turn:
+                assistant_msg = {"role": "assistant", "content": response.get("content")}
+                if response.get("tool_calls"):
+                    assistant_msg["tool_calls"] = response["tool_calls"]
+                if response.get("reasoning_content"):
+                    assistant_msg["reasoning_content"] = response["reasoning_content"]
+                messages.append(assistant_msg)
+                for pr in _pending_results:
+                    messages.append({"role": "tool", "tool_call_id": pr["tc_id"],
+                                     "content": json.dumps(pr["result"], ensure_ascii=False)})
+                await _seal(response.get("reasoning_content") or "")
+                logger.info(
+                    f"AI {agent.name}({agent.id}) end_turn 流式触发，本轮结束"
+                    f"（结算：keep_thinking={bool(_settlement.get('keep_thinking'))}，"
+                    f"key_note={'有' if _settlement.get('key_note') else '无'}）"
+                )
+                await _save_conversation_log_safe(
+                    db, agent, messages, conversation_type,
+                    group_id, session_id, has_output=_has_sent_message, model=model,
+                    token_usage=total_usage,
+                )
+                return
+
+            content = response.get("content")
+            tool_calls = response.get("tool_calls")
+            finish_reason = response.get("finish_reason", "stop")
+
+            # 累积 token 消耗 + API 调用计数
+            total_usage["api_calls"] += 1
+            usage = response.get("usage", {})
+            if usage:
+                for k in ("prompt_tokens", "completion_tokens", "total_tokens", "reasoning_tokens", "cached_tokens"):
+                    total_usage[k] += usage.get(k, 0)
+
+            # ── 解析 JSON intent（轻量方案：提示词引导 + 后端解析，不用 response_format）──
+            parsed_intent = None
+            if content:
+                try:
+                    parsed = json.loads(content)
+                    if isinstance(parsed, dict) and "intent" in parsed:
+                        parsed_intent = parsed["intent"]
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            # ── end_turn / no_action：AI 明确表示本轮结束 ──
+            if parsed_intent in ("end_turn", "no_action") and not tool_calls and not _pending_results:
+                logger.info(
+                    f"AI {agent.name}({agent.id}) intent={parsed_intent}，本轮结束"
+                )
+                _self_ended = True
+                await _seal(response.get("reasoning_content") or "")
+                if last_task:
+                    try:
+                        from app.services.agent.workspace_service import save_current_task
+                        from app.services.agent.state_stack_service import persist_last_task_as_state
+                        await save_current_task(db, agent.id, last_task)
+                        await persist_last_task_as_state(
+                            db, agent.id, last_task, group_id,
+                            context_ref=f"group:{group_id}" if group_id else "",
+                        )
+                    except Exception:
+                        pass
+                await _save_conversation_log_safe(
+                    db, agent, messages, conversation_type,
+                    group_id, session_id,
+                    has_output=_has_sent_message, model=model,
+                    token_usage=total_usage,
+                )
+                return
+
+            # ── 提醒：有文字但没有工具调用（兜底机制）──
+            reminder_grace = getattr(agent, 'reminder_grace', 'every_time')
+            if reminder_grace == 'off':
+                reminder_max = 0
+            elif reminder_grace == 'once':
+                reminder_max = 1
+            else:  # 'every_time'
+                reminder_max = 10
+            if content and not tool_calls and not _pending_results and _reminder_extra < reminder_max:
+                logger.info(
+                    f"AI {agent.name}({agent.id}) 返回了文字但无工具调用"
+                    f"（intent={parsed_intent or '解析失败'}），"
+                    f"注入提醒: {content[:80]}"
+                )
+                reminder_assistant_msg = {
+                    "role": "assistant",
+                    "content": content,
+                    "tool_calls": [{
+                        "id": "system_reminder",
+                        "type": "function",
+                        "function": {
+                            "name": "system_reminder",
+                            "arguments": "{}",
+                        },
+                    }],
+                }
+                if response.get("reasoning_content"):
+                    reminder_assistant_msg["reasoning_content"] = response["reasoning_content"]
+                messages.append(reminder_assistant_msg)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": "system_reminder",
+                    "content": json.dumps({
+                        "reminder": True,
+                        "message": (
+                            "你刚才返回了文字但没有调用任何工具。"
+                            "文字不能自动发送——如果你想在群聊发言，请调用 send_gm 工具；私信请用 send_dm。"
+                            "括号表情可以写在 send_gm/send_dm 的 content 里发出去，"
+                            "但不能只返回括号文字而不调工具。"
+                            "请现在就调用 send_gm/send_dm 或你需要的其他工具。"
+                            "如果你决定不再继续回复，请调用 end_turn 工具来结束本轮。"
+                        ),
+                    }, ensure_ascii=False),
+                })
+                if reminder_grace != 'off':
+                    _reminder_extra += 1
+                    _free_next = True
+                logger.info(f"AI {agent.name}({agent.id}) system_reminder 注入"
+                            f"（grace={reminder_grace}, 额外={_reminder_extra}）")
+                await asyncio.sleep(0.3)
                 continue
 
-            except KeyFatalError as e:
-                fatal_type = "auth_error" if e.status_code == 401 else "insufficient_balance" if e.status_code == 402 else "key_fatal"
-                last_error_type = fatal_type
-                last_error_detail = e.message
-                await _log_key_fatal(db, current_pool_key_id, e.status_code, e.message)
-                excluded_sources.add(current_credit_source)
-
-                # ── 降级通知：当前 tier 不可用，尝试下一级 ──
-                tier_name = {
-                    "agent_key": "AI 自有",
-                    "user_key": "你的 API",
-                    "pool_key": "系统额度",
-                }.get(current_credit_source, current_credit_source)
-
-                # 检查是否还有下一级可尝试
-                _next_check = await _get_api_config(
-                    db, agent, excluded_sources=excluded_sources,
-                    chatter_id=trigger_user_id
+            # ── 无工具调用也没有文字 → 退出 ──
+            if not tool_calls:
+                if last_task and _has_sent_message:
+                    try:
+                        from app.services.agent.workspace_service import save_current_task
+                        from app.services.agent.state_stack_service import persist_last_task_as_state
+                        await save_current_task(db, agent.id, last_task)
+                        await persist_last_task_as_state(
+                            db, agent.id, last_task, group_id,
+                            context_ref=f"group:{group_id}" if group_id else "",
+                        )
+                    except Exception:
+                        pass
+                # 没走 end_turn 就被收尾：如实入账，别让下一轮以为这轮说过了
+                await _seal(response.get("reasoning_content") or "", cutoff=_cutoff_text(
+                    "模型只回了文字、没调用工具，本轮由平台结束，没走 end_turn。"
+                ))
+                await _save_conversation_log_safe(
+                    db, agent, messages, conversation_type,
+                    group_id, session_id,
+                    has_output=_has_sent_message, model=model,
+                    token_usage=total_usage,
                 )
-                has_fallback = _next_check[0] is not None
+                return
 
-                if has_fallback:
-                    msg_text = (
-                        f"⚠️ **{tier_name} Key 不可用**"
-                        f"（{'余额不足' if e.status_code == 402 else 'API Key 无效' if e.status_code == 401 else '未知错误'}）。\n"
-                        f"正在自动切换至下一优先级额度…"
-                    )
-                elif current_credit_source == "pool_key":
-                    msg_text = (
-                        f"⚠️ **系统额度暂不可用**（{'余额不足' if e.status_code == 402 else 'API Key 无效' if e.status_code == 401 else '未知错误'}）。\n"
-                        f"此次不记入你的额度使用情况。请稍后重试或联系管理员。"
-                    )
-                elif current_credit_source == "user_key":
-                    msg_text = (
-                        f"⚠️ **你的 API 余额不足**，且无可用系统额度。\n"
-                        f"请前往 [个人设置](/settings) 更新 API Key 或联系管理员补充额度。"
-                    )
-                else:
-                    msg_text = (
-                        f"⚠️ AI「{agent.name}」的 API 调用失败"
-                        f"（{'余额不足' if e.status_code == 402 else 'API Key 无效' if e.status_code == 401 else '未知错误'}）。\n"
-                        f"请检查 API 配置。"
-                    )
-
-                await _send_system_error_notification(db, agent, msg_text)
-                logger.error(
-                    f"AI {agent.name}({agent.id}) {current_credit_source} "
-                    f"{e.status_code} 不可用，尝试降级 ({key_attempt + 1}/3)"
-                )
-                continue
-
-            except ServerError as e:
-                last_error_type = "server_error"
-                last_error_detail = f"{e.status_code}: {e.message}"
-                logger.error(
-                    f"AI {agent.name}({agent.id}) Key #{current_pool_key_id} "
-                    f"{e.status_code} 重试耗尽，最终失败"
-                )
-
-            finally:
-                if acquired and current_pool_key_id:
-                    await concurrency_mgr.release(current_pool_key_id)
-
-        # ── 全部重试失败 ──
-        if response is None:
-            logger.error(f"AI {agent.name}({agent.id}) LLM 调用全部重试失败，last_error={last_error_type}")
-            await _save_conversation_log_safe(
-                db, agent, messages, conversation_type,
-                group_id, session_id, has_output=False, model=model,
-            )
-            # 发送分类系统通知
-            error_type = last_error_type or "all_failed"
-            await _send_system_error(db, agent, error_type, last_error_detail,
-                                     conversation_type, group_id, session_id)
-            return
-
-        if response.get("reasoning_content"):
-            _reasoning_log.append(response["reasoning_content"])
-
-        # ── end_turn 已在流式回调中触发 → 补 assistant_msg + tool results 后退出 ──
-        if _end_turn:
-            assistant_msg = {"role": "assistant", "content": response.get("content")}
-            if response.get("tool_calls"):
-                assistant_msg["tool_calls"] = response["tool_calls"]
+            # ── 有工具调用 → 执行 ──
+            assistant_msg: dict = {"role": "assistant", "content": content}
+            assistant_msg["tool_calls"] = tool_calls
             if response.get("reasoning_content"):
                 assistant_msg["reasoning_content"] = response["reasoning_content"]
             messages.append(assistant_msg)
+
             for pr in _pending_results:
-                messages.append({"role": "tool", "tool_call_id": pr["tc_id"],
-                                 "content": json.dumps(pr["result"], ensure_ascii=False)})
-            await _seal(response.get("reasoning_content") or "")
-            logger.info(
-                f"AI {agent.name}({agent.id}) end_turn 流式触发，本轮结束"
-                f"（结算：keep_thinking={bool(_settlement.get('keep_thinking'))}，"
-                f"key_note={'有' if _settlement.get('key_note') else '无'}）"
-            )
-            await _save_conversation_log_safe(
-                db, agent, messages, conversation_type,
-                group_id, session_id, has_output=_has_sent_message, model=model,
-                token_usage=total_usage,
-            )
-            return
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": pr["tc_id"],
+                    "content": json.dumps(pr["result"], ensure_ascii=False),
+                })
 
-        content = response.get("content")
-        tool_calls = response.get("tool_calls")
-        finish_reason = response.get("finish_reason", "stop")
-
-        # 累积 token 消耗 + API 调用计数
-        total_usage["api_calls"] += 1
-        usage = response.get("usage", {})
-        if usage:
-            for k in ("prompt_tokens", "completion_tokens", "total_tokens", "reasoning_tokens", "cached_tokens"):
-                total_usage[k] += usage.get(k, 0)
-
-        # ── 解析 JSON intent（轻量方案：提示词引导 + 后端解析，不用 response_format）──
-        parsed_intent = None
-        if content:
-            try:
-                parsed = json.loads(content)
-                if isinstance(parsed, dict) and "intent" in parsed:
-                    parsed_intent = parsed["intent"]
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-        # ── end_turn / no_action：AI 明确表示本轮结束 ──
-        if parsed_intent in ("end_turn", "no_action") and not tool_calls and not _pending_results:
-            logger.info(
-                f"AI {agent.name}({agent.id}) intent={parsed_intent}，本轮结束"
-            )
-            _self_ended = True
-            await _seal(response.get("reasoning_content") or "")
-            if last_task:
-                try:
-                    from app.services.agent.workspace_service import save_current_task
-                    from app.services.agent.state_stack_service import persist_last_task_as_state
-                    await save_current_task(db, agent.id, last_task)
-                    await persist_last_task_as_state(
-                        db, agent.id, last_task, group_id,
-                        context_ref=f"group:{group_id}" if group_id else "",
-                    )
-                except Exception:
-                    pass
-            await _save_conversation_log_safe(
-                db, agent, messages, conversation_type,
-                group_id, session_id,
-                has_output=_has_sent_message, model=model,
-                token_usage=total_usage,
-            )
-            return
-
-        # ── 提醒：有文字但没有工具调用（兜底机制）──
-        reminder_grace = getattr(agent, 'reminder_grace', 'every_time')
-        if reminder_grace == 'off':
-            reminder_max = 0
-        elif reminder_grace == 'once':
-            reminder_max = 1
-        else:  # 'every_time'
-            reminder_max = 10
-        if content and not tool_calls and not _pending_results and _reminder_extra < reminder_max:
-            logger.info(
-                f"AI {agent.name}({agent.id}) 返回了文字但无工具调用"
-                f"（intent={parsed_intent or '解析失败'}），"
-                f"注入提醒: {content[:80]}"
-            )
-            reminder_assistant_msg = {
-                "role": "assistant",
-                "content": content,
-                "tool_calls": [{
-                    "id": "system_reminder",
-                    "type": "function",
-                    "function": {
-                        "name": "system_reminder",
-                        "arguments": "{}",
-                    },
-                }],
-            }
-            if response.get("reasoning_content"):
-                reminder_assistant_msg["reasoning_content"] = response["reasoning_content"]
-            messages.append(reminder_assistant_msg)
-            messages.append({
-                "role": "tool",
-                "tool_call_id": "system_reminder",
-                "content": json.dumps({
-                    "reminder": True,
-                    "message": (
-                        "你刚才返回了文字但没有调用任何工具。"
-                        "文字不能自动发送——如果你想在群聊发言，请调用 send_gm 工具；私信请用 send_dm。"
-                        "括号表情可以写在 send_gm/send_dm 的 content 里发出去，"
-                        "但不能只返回括号文字而不调工具。"
-                        "请现在就调用 send_gm/send_dm 或你需要的其他工具。"
-                        "如果你决定不再继续回复，请调用 end_turn 工具来结束本轮。"
+            # ── 闹钟模式：第一轮工具执行完后注入收尾提醒 ──
+            if conversation_type == "alarm":
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "⏰ 闹钟任务已执行。\n"
+                        "- 如果任务已完成 → 停止，不要额外发言\n"
+                        "- 如果情况有变 → 根据实际情况调整行动\n"
+                        "- 如果有新的重要事项 → 可以接着规划执行"
                     ),
-                }, ensure_ascii=False),
-            })
-            if reminder_grace != 'off':
-                _reminder_extra += 1
-                _free_next = True
-            logger.info(f"AI {agent.name}({agent.id}) system_reminder 注入"
-                        f"（grace={reminder_grace}, 额外={_reminder_extra}）")
-            await asyncio.sleep(0.3)
-            continue
+                })
 
-        # ── 无工具调用也没有文字 → 退出 ──
-        if not tool_calls:
-            if last_task and _has_sent_message:
-                try:
-                    from app.services.agent.workspace_service import save_current_task
-                    from app.services.agent.state_stack_service import persist_last_task_as_state
-                    await save_current_task(db, agent.id, last_task)
-                    await persist_last_task_as_state(
-                        db, agent.id, last_task, group_id,
-                        context_ref=f"group:{group_id}" if group_id else "",
-                    )
-                except Exception:
-                    pass
-            # 没走 end_turn 就被收尾：如实入账，别让下一轮以为这轮说过了
-            await _seal(response.get("reasoning_content") or "", cutoff=_cutoff_text(
-                "模型只回了文字、没调用工具，本轮由平台结束，没走 end_turn。"
-            ))
-            await _save_conversation_log_safe(
-                db, agent, messages, conversation_type,
-                group_id, session_id,
-                has_output=_has_sent_message, model=model,
-                token_usage=total_usage,
-            )
-            return
+            # 有工具结果 → 继续循环让 LLM 看到
+            if _pending_results:
+                await asyncio.sleep(0.5)
+                loop_idx += 1
+                _grant_closing_round()
+                continue
 
-        # ── 有工具调用 → 执行 ──
-        assistant_msg: dict = {"role": "assistant", "content": content}
-        assistant_msg["tool_calls"] = tool_calls
-        if response.get("reasoning_content"):
-            assistant_msg["reasoning_content"] = response["reasoning_content"]
-        messages.append(assistant_msg)
+            # LLM 未请求 tool_calls → 已完成，保存并退出
+            if finish_reason != "tool_calls":
+                if last_task and _has_sent_message:
+                    try:
+                        from app.services.agent.workspace_service import save_current_task
+                        from app.services.agent.state_stack_service import persist_last_task_as_state
+                        await save_current_task(db, agent.id, last_task)
+                        await persist_last_task_as_state(
+                            db, agent.id, last_task, group_id,
+                            context_ref=f"group:{group_id}" if group_id else "",
+                        )
+                    except Exception:
+                        pass
+                await _seal(response.get("reasoning_content") or "", cutoff=_cutoff_text(
+                    "模型没请求工具就结束了本轮，没走 end_turn。"
+                ))
+                await _save_conversation_log_safe(
+                    db, agent, messages, conversation_type,
+                    group_id, session_id,
+                    has_output=_has_sent_message, model=model,
+                    token_usage=total_usage,
+                )
+                return
 
-        for pr in _pending_results:
-            messages.append({
-                "role": "tool",
-                "tool_call_id": pr["tc_id"],
-                "content": json.dumps(pr["result"], ensure_ascii=False),
-            })
-
-        # ── 闹钟模式：第一轮工具执行完后注入收尾提醒 ──
-        if conversation_type == "alarm":
-            messages.append({
-                "role": "user",
-                "content": (
-                    "⏰ 闹钟任务已执行。\n"
-                    "- 如果任务已完成 → 停止，不要额外发言\n"
-                    "- 如果情况有变 → 根据实际情况调整行动\n"
-                    "- 如果有新的重要事项 → 可以接着规划执行"
-                ),
-            })
-
-        # 有工具结果 → 继续循环让 LLM 看到
-        if _pending_results:
+            # 短暂延迟，避免过于频繁的 API 调用
             await asyncio.sleep(0.5)
             loop_idx += 1
             _grant_closing_round()
-            continue
 
-        # LLM 未请求 tool_calls → 已完成，保存并退出
-        if finish_reason != "tool_calls":
-            if last_task and _has_sent_message:
-                try:
-                    from app.services.agent.workspace_service import save_current_task
-                    from app.services.agent.state_stack_service import persist_last_task_as_state
-                    await save_current_task(db, agent.id, last_task)
-                    await persist_last_task_as_state(
-                        db, agent.id, last_task, group_id,
-                        context_ref=f"group:{group_id}" if group_id else "",
-                    )
-                except Exception:
-                    pass
-            await _seal(response.get("reasoning_content") or "", cutoff=_cutoff_text(
-                "模型没请求工具就结束了本轮，没走 end_turn。"
-            ))
-            await _save_conversation_log_safe(
-                db, agent, messages, conversation_type,
-                group_id, session_id,
-                has_output=_has_sent_message, model=model,
-                token_usage=total_usage,
-            )
-            return
-
-        # 短暂延迟，避免过于频繁的 API 调用
-        await asyncio.sleep(0.5)
-        loop_idx += 1
-        _grant_closing_round()
-
+    except asyncio.CancelledError:
+        # 重启/关闭会取消在跑的轮次：不在这里收尾，这一轮的检索与思考会连同账本条目一起消失
+        await _seal_aborted("本轮被平台取消（重启/关闭），没走 end_turn。")
+        raise
+    except Exception:
+        await _seal_aborted("本轮因异常中断，没走 end_turn。")
+        raise
 
     # 循环耗尽。没走 end_turn 就是被平台收的尾，得如实记进账本——
     # 少了这条，后面的自己只看到一串工具名，会以为那轮已经说过了

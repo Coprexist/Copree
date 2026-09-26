@@ -1,7 +1,8 @@
-"""轮次用尽时的收尾：读数、收尾轮、截断入账、has_output
+"""轮次用尽 / 被取消时的收尾：读数、收尾轮、截断入账、has_output
 
 线上实测的病：撞上 `max_tool_rounds` 后循环直接退出——不发言、不告警、日志标成有输出，
-用户侧只看到「AI 不回我了」。这里把整条链跑一遍（LLM 打桩，走真实的 on_tool_call 派发，不走网络）。
+用户侧只看到「AI 不回我了」；平台重启取消在跑的轮次时，这一轮连账本条目都不留。
+这里把两条链各跑一遍（LLM 打桩，走真实的 on_tool_call 派发，不走网络）。
 """
 import asyncio
 
@@ -129,6 +130,63 @@ async def test_exhausted_rounds_get_a_closing_round_and_an_honest_record(migrate
                 "SELECT has_output FROM ai_conversation_logs WHERE agent_id=1 ORDER BY id DESC LIMIT 1"
             ))).scalar_one()
             assert row is False
+
+            await hs.clear(db, 1, ref)
+            await db.commit()
+    finally:
+        llm.chat_completion = original
+
+
+async def test_a_cancelled_run_still_seals_what_it_did(migrated_db):
+    """平台重启会 cancel 在跑的轮次：工具总账、思考、断法都得留下
+
+    不留的话，这一轮对下一轮等于没发生过——用户看到的是「它明明查了却没回」。
+    """
+    from app.ai import executor, llm
+    from app.database import async_session
+    from app.models.agent import Agent
+    from app.services.history import history_service as hs
+
+    calls: list[int] = []
+
+    async def fake_chat_completion(**kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            resp = _tool_call("list_states")
+            await kwargs["on_tool_call"](resp["tool_calls"][0])
+            return resp
+        raise asyncio.CancelledError()
+
+    original = llm.chat_completion
+    llm.chat_completion = fake_chat_completion
+    try:
+        async with async_session() as db:
+            await _seed(db)
+            agent = await db.get(Agent, 1)
+            ref = "group:999004"
+            await hs.clear(db, 1, ref)
+            await db.commit()
+
+            # 这个仓库的测试跑器是自带的轻量版（没有 pytest.raises），手动接住
+            raised = False
+            try:
+                await executor._tool_call_loop(
+                    db=db, agent=agent, group_id=999004,
+                    messages=_tail(999004), tools=[],
+                    model="test-model", api_base_url="http://test", api_key="k",
+                    max_loops=2, conversation_type="group", effective_cfg=CFG,
+                )
+            except asyncio.CancelledError:
+                raised = True
+            assert raised, "取消要原样往上抛（关闭流程靠它等所有任务收工）"
+            await db.commit()
+
+            entries = await hs.read(db, 1, ref)
+            kinds = [e["kind"] for e in entries]
+            assert kinds == ["tool", "notice", "thinking"], kinds
+            assert entries[0]["content"].startswith("[本轮工具] list_states(ok)")
+            assert "被平台取消" in entries[1]["content"]
+            assert entries[2]["content"].startswith("[本轮思考]")
 
             await hs.clear(db, 1, ref)
             await db.commit()
