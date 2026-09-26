@@ -687,7 +687,7 @@ async def _tool_call_loop(
                     return None
 
                 async def _dispatch_one_tool(tc: dict):
-                    nonlocal last_task, _end_turn, _settlement, _closing_active
+                    nonlocal last_task, _end_turn, _settlement, _closing_active, _has_sent_message
                     if _end_turn:
                         # 同一批里前一个工具已 end_turn → 后面的不执行，但**必须**留一条 tool 响应：
                         # assistant(tool_calls) 里每个 id 都要有回应，少一条整次请求 400
@@ -758,8 +758,12 @@ async def _tool_call_loop(
                         # 收下结算决定（还没接账本：账本封存落地后在这里写条目）
                         _settlement["keep_thinking"] = bool(result.get("keep_thinking"))
                         _settlement["key_note"] = (result.get("key_note") or "").strip()
-                    # 追踪 AI 是否已发消息
-                    if tool_name in ("send_gm", "send_dm"):
+                    # 追踪 AI 是否已发消息：以「真发出去了」为准（失败只记「没做完」）。
+                    # 这一个标记同时管三件事：收尾轮要不要白送、has_output 怎么记、发完消息后能不能压缩
+                    if (tool_name in ("send_gm", "send_dm")
+                            and isinstance(result, dict)
+                            and not result.get("error")
+                            and result.get("success") is not False):
                         _has_sent_message = True
                         # AI 刚发了消息→重置压缩标记，允许下一轮清理之前的操作链
                         _auto_compressed = False

@@ -193,3 +193,58 @@ async def test_a_cancelled_run_still_seals_what_it_did(migrated_db):
     finally:
         llm.chat_completion = original
 
+
+async def test_only_a_spoken_run_counts_as_output(migrated_db):
+    """发过消息才算「有输出」——这个标记曾经永远是 False（赋值漏了 nonlocal，写成了局部变量）
+
+    顺带说明为什么它重要：收尾轮的判据也读它，读错了会给「已经回过话」的轮次再白送一轮。
+    """
+    from app.ai import executor, llm
+    from app.database import async_session
+    from app.models.agent import Agent
+    from app.services.history import history_service as hs
+
+    async def fake_chat_completion(**kwargs):
+        resp = {
+            "content": None,
+            "reasoning_content": "先把话说出去",
+            "tool_calls": [
+                {"id": "s1", "type": "function",
+                 "function": {"name": "send_gm",
+                              "arguments": '{"group_id": 999003, "content": "我在"}'}},
+                {"id": "e1", "type": "function",
+                 "function": {"name": "end_turn", "arguments": "{}"}},
+            ],
+            "finish_reason": "tool_calls",
+            "usage": {},
+        }
+        for tc in resp["tool_calls"]:
+            await kwargs["on_tool_call"](tc)
+        return resp
+
+    original = llm.chat_completion
+    llm.chat_completion = fake_chat_completion
+    try:
+        async with async_session() as db:
+            await _seed(db)
+            agent = await db.get(Agent, 1)
+            ref = "group:999003"
+            await hs.clear(db, 1, ref)
+            await db.commit()
+
+            await executor._tool_call_loop(
+                db=db, agent=agent, group_id=999003, messages=_tail(999003), tools=[],
+                model="test-model", api_base_url="http://test", api_key="k",
+                max_loops=6, conversation_type="group", effective_cfg=CFG,
+            )
+            await db.commit()
+
+            row = (await db.execute(text(
+                "SELECT has_output FROM ai_conversation_logs WHERE agent_id=1 ORDER BY id DESC LIMIT 1"
+            ))).scalar_one()
+            assert row is True, "send_gm 都跑成功了，还把这一轮记成没有输出"
+
+            await hs.clear(db, 1, ref)
+            await db.commit()
+    finally:
+        llm.chat_completion = original
