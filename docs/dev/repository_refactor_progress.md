@@ -10,7 +10,7 @@
 - **模式 B（大模块/调用面含 AI 运行时，≤30%）**：签名保持 `db: AsyncSession`，文件顶部加 `_ensure_repo` helper，每个用 db 的函数体首行 `db = _ensure_repo(db)`，之后 `db.xxx` 走 repo。
 - **关键洞察**：`AsyncSession` 与通用 repo 接口**鸭子类型兼容**（session 本身有 execute/get/add/flush/commit），旧调用方传 session 也能跑——Mode A 迁移有安全垫。
 - **需要真 session 的跨模块调用**（chat.message、ToolPlugin.execute 等）：repo 暴露 `.session` 属性桥接（`repo.session`）。
-- **验证**：无 PostgreSQL、venv 无依赖，只能用 `.venv\Scripts\python.exe -m py_compile <files>` 语法检查 + 人工 review。**勿装依赖**（用户环境差，此前装过一次被用户要求终止）。
+- **验证**：无 PostgreSQL、venv 无依赖，只能用 `.venv\Scripts\python.exe -m py_compile <files>` 语法检查 + 人工 review。**勿装依赖**（用户环境差，此前装过一次被终止）。
 
 ## 二、Repository 层（backend/app/repositories/）
 

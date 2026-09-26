@@ -110,6 +110,6 @@ def test_pending_list_carries_the_countdown():
 
 
 def test_timeout_window_is_longer_than_before():
-    """用户要求「稍微延长」：审阅/计划等确认的空闲窗口得比以前长，且总上限大于窗口。"""
+    """审阅/计划等确认的空闲窗口得比以前长，且总上限大于窗口。"""
     assert wam._APPROVAL_TIMEOUT >= 600
     assert wam._APPROVAL_MAX > wam._APPROVAL_TIMEOUT

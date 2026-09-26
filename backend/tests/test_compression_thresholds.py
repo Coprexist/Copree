@@ -32,7 +32,7 @@ def test_idle_tracks_the_hot_threshold():
         t = compression_thresholds(hot)
         assert t.hot == hot
         assert t.post < t.idle < t.hot, "插值系数在 (0,1) 内 → 区间约束自动成立"
-        assert t.hot - t.idle < t.hot - t.post, "ΔT_idle < T_hot − T_post（用户定的等价写法）"
+        assert t.hot - t.idle < t.hot - t.post, "ΔT_idle < T_hot − T_post（等价写法）"
 
 
 def test_should_compress_boundary_is_the_threshold_it_is_given():

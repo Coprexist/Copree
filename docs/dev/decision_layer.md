@@ -78,11 +78,11 @@ AI 不该被每条消息唤醒。事件先过一层决策：**AI 自己写的规
 
 | 情景 | 卡在哪 |
 |------|--------|
-| `command` | **不做**（用户 2026-09-26 定）：`world_chat_commands` 的 7 个命令（/new /sessions /use /pin /unpin /clear /compact）只服务群视界页面对话，群消息链路没有斜杠入口，没有可挂的事件 |
+| `command` | **不做**：`world_chat_commands` 的 7 个命令（/new /sessions /use /pin /unpin /clear /compact）只服务群视界页面对话，群消息链路没有斜杠入口，没有可挂的事件 |
 
 > `friend_request` 与 `world_event` 已落地（2026-09-26）。前者允许带话：`reply_template` 只写进
 > 日志或实际私信，取决于执行 do 之后两人是否已是好友（通过申请即成为好友，拒绝则发不出）。
-> 后者一律唤醒本体（用户定），唤醒链路见 `ai/alarm._process_world_event`。
+> 后者一律唤醒本体，唤醒链路见 `ai/alarm._process_world_event`。
 
 ## 8. 验证
 

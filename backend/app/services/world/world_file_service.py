@@ -32,7 +32,7 @@ ALLOWED_EXTENSIONS = {
     ".pdf", ".zip",
 }
 
-# 禁止：可执行文件 / 安装包 / 系统库 / 宿主脚本（2026-09-15 产品定）
+# 禁止：可执行文件 / 安装包 / 系统库 / 宿主脚本
 # 三层防护：① 提示词明写不得下载 ② 创建时 _check_ext 直接拒 ③ sweep_banned_files 兜底强删
 BANNED_EXTENSIONS = {
     # Windows 可执行 / 安装包
@@ -47,7 +47,7 @@ BANNED_EXTENSIONS = {
 }
 MAX_FILE_SIZE = 32 * 1024 * 1024  # 单文件 32MB（网页资源/下载文件用）
 
-# ── 产物路径（2026-09-18 定）─────────────────────────────────────
+# ── 产物路径 ─────────────────────────────────────
 # 构建产物/缓存对世界 AI 没有意义，列进上下文只是烧 token（世界只会更大）：
 # file_list 默认不列、file_grep 的目录递归默认不搜，需要时由调用方显式放开。
 ARTIFACT_DIRS = {
@@ -158,7 +158,7 @@ def read_file(world_id: int, rel_path: str, offset: int | None = None, limit: in
     """读文件（文本按 utf-8，二进制返回大小）。
 
     offset/limit：按行分页读（1-based 行号）——大文件不用全读，
-    先 file_grep 定位行号再读对应段落（2026-08-13 产品定，对齐 OpenClaw read 工具）。
+    先 file_grep 定位行号再读对应段落（对齐 OpenClaw read 工具）。
     """
     target = _safe_path(world_id, rel_path)
     if not target.is_file():

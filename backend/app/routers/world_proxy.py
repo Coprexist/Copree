@@ -350,7 +350,7 @@ async def world_api_event(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """页面 → 世界程序静默命令通道（产品 2026-08-13 定）。
+    """页面 → 世界程序静默命令通道。
 
     页面操作（移动/攻击/开宝箱等）直接触发世界程序 handle(event)，
     **不产生群消息、不进群聊**（解决页面操作刷屏群聊问题）。

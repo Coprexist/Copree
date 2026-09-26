@@ -112,7 +112,7 @@ async def list_notes(db: AsyncSession, agent_id: int) -> list[dict]:
 async def sync_frame_notes(db: AsyncSession, agent_id: int, context_ref: str) -> list[dict]:
     """构建提示词时调用：把该投给本会话的便签投进来；返回本会话已固化的那份。
 
-    投递是**一次性过户**（用户 2026-09-25 定）：投进来那一刻抄进状态帧，此后它归这段会话的
+    投递是**一次性过户**：投进来那一刻抄进状态帧，此后它归这段会话的
     上下文管（锁），记录侧对它没有任何权力——过期、清理、删除都不撤。所以这里只在"有新便签"
     时写一次帧；已投过的一律原样返回（不查记录、不回写，前缀字节天然稳定）。
     它唯一的退出点 = 这段对话 compact / clear。

@@ -623,7 +623,7 @@ async def _pending_friend_request_id(db, agent_user_id: int | None, requester_id
 
 
 async def _process_world_event(db, event: dict) -> None:
-    """世界事件唤醒：世界发来的事件没被规则处理掉时叫醒 AI 本体（用户 2026-09-26 定）"""
+    """世界事件唤醒：世界发来的事件没被规则处理掉时叫醒 AI 本体"""
     import json
 
     from app.models.agent import Agent as AgentModel

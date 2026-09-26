@@ -302,7 +302,7 @@ async def mark_known_latest(cap_repo: CapabilityRepository, agent, sources: list
 
 
 # ═══════════════════════════════════════════════════════════════
-# 前缀文本源版本化（2026-08-12 产品定：所有进前缀的内容必须保证缓存命中）
+# 前缀文本源版本化（所有进前缀的内容必须保证缓存命中）
 # ═══════════════════════════════════════════════════════════════
 # 用户 system_prompt / 强注入段 / 昵称等文本也走 capability_versions 版本链：
 # - 变更（用户改提示词 / 系统更新强注入）→ 写新版本 + 尾部 changelog 告知，不碰前缀
@@ -370,7 +370,7 @@ async def apply_pending_changes(cap_repo: CapabilityRepository, holder, sources:
 def guard_apply_change(sources: list[str]) -> None:
     """防御性守卫：非解锁上下文（对话进行中）尝试应用变更 → 拒绝 + 记录报错。
 
-    产品原话（2026-08-12）："只要有在解锁之前尝试应用变更的都拒绝并记录报错"。
+    设计口径："只要有在解锁之前尝试应用变更的都拒绝并记录报错"。
     目前代码都是动态读取拼接（不会强制修改），此守卫防止未来出现"强制修改"逻辑破坏不变式。
     """
     if not _unlock_ctx.get():

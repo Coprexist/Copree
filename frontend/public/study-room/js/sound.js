@@ -260,7 +260,7 @@ function makeLayerBuffer(ctx, key, def) {
             s = (foamHi.lp(w) - foamLo.lp(w)) * 1.1 * walkEnv(i);
         } else if (key === 'abyss') {
             // 深海低频水压底噪：棕色噪声 → 140Hz 极低通，恒定、无起伏（水下压力感）
-            // 用户要求背景音调大 3 倍：增益 ×3（×8→×24），峰值限幅在 1.0 内防削波
+            // 背景音调大 3 倍：增益 ×3（×8→×24），峰值限幅在 1.0 内防削波
             s = Math.max(-1, Math.min(1, abyssLo.lp(brown) * 24.0));
         } else if (key === 'bubble') {
             // 深海气泡（可重叠的咕噜串）：一串 1~8 个（偏大分布），串内密集触发，

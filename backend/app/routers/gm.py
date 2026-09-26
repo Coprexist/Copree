@@ -58,7 +58,7 @@ async def get_gm_message_list(
                     avatar_map[uid] = a[1] or uavatar or ''
                     state_map[uid] = a[2]
 
-        # 群助手（独立实体，sender_id 为负值 = -group_assistant.id，产品 2026-08-13 定）
+        # 群助手（独立实体，sender_id 为负值 = -group_assistant.id）
         ga_ids = {-sid for sid in all_ids if sid < 0}
         if ga_ids:
             from app.models.world import GroupAssistant

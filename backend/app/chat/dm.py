@@ -84,7 +84,7 @@ async def _require_friendship(db: AsyncSession, user_a_id: int, user_b_id: int,
     - system：永远放行（系统通知不拦）
     - 找 AI、AI 之间：放行（AI 公开可聊）
     - 人 → 人、AI → 人：必须互为好友。**"涉及 AI 一律放行"曾是漏洞**——AI 因此能给任意
-      生人开新私信，产品 2026-09-26 定为骚扰并拒绝（AI 与它的主人本来就是好友，不受影响）
+      生人开新私信——按骚扰拒绝（AI 与它的主人本来就是好友，不受影响）
     - initiator_id 为空 = 在**已有会话**里发言：AI 参与即放行——会话是对方开的通道，
       QQ / 外部通道的被动回复靠这条活着
     """
@@ -320,8 +320,7 @@ async def send_dm_message(
     skip_friendship_check: bool = False,
 ) -> dict:
     """发送私信消息"""
-    # AI 抄回来的 [msg_id=N] 收掉（同上：标记是给它读的），N 确实是本会话的消息就当成本意。
-    # 不判断"是不是 AI 发的"：一个真人几乎不可能恰好写出一条指向本会话真实消息的标记
+    # AI 抄回来的 [msg_id=N] 收掉：标记是给它读的，N 属本会话就当成本意。
     from app.utils.text import take_trailing_msg_id
 
     content, echoed = take_trailing_msg_id(content)

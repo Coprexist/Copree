@@ -3496,23 +3496,6 @@ async def update_world_block(
     return result
 
 
-@router.post("/blocks/{block_id}/update")
-async def update_world_block(
-    block_id: str,
-    admin: dict = Depends(require_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    """批量更新积木：所有已应用该积木的世界重新 apply（跳过 diy/ 用户定制），
-    并给每个世界写懒通知（下次对话注入世界 AI 上下文）。"""
-    from app.services.world.world_blocks import update_block_for_all_worlds
-    try:
-        result = await update_block_for_all_worlds(db, block_id)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    await db.commit()
-    return result
-
-
 @router.get("/api-doc-sections")
 async def list_api_doc_sections(
     admin: dict = Depends(require_admin),

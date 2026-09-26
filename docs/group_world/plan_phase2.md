@@ -21,7 +21,7 @@
 
 | # | 交付 | 说明 | 依赖 |
 |---|------|------|------|
-| 2.1 | **py 沙箱** | ✅ **MVP 已实现**（2026-08-05）：`world_sandbox.py` subprocess + rlimit + 超时 killpg 强杀 + env 白名单；`POST /worlds/{id}/run`（仅创建者）。**配额语义（产品定义）**：无人/后台 = `sleep_memory_mb`（默认 24MB）；**有人在线 = `runtime_memory_mb`（默认 128MB，2026-08-05 定）**；超时/CPU/文件大小/进程数恒生效；RLIMIT_AS 是虚拟内存口径（实际可用堆 = 配额 - 解释器开销） | 无（最先） |
+| 2.1 | **py 沙箱** | ✅ **MVP 已实现**（2026-08-05）：`world_sandbox.py` subprocess + rlimit + 超时 killpg 强杀 + env 白名单；`POST /worlds/{id}/run`（仅创建者）。**配额语义**：无人/后台 = `sleep_memory_mb`（默认 24MB）；**有人在线 = `runtime_memory_mb`（默认 128MB）**；超时/CPU/文件大小/进程数恒生效；RLIMIT_AS 是虚拟内存口径（实际可用堆 = 配额 - 解释器开销） | 无（最先） |
 | 2.2 | **触发文件** | ✅ **已实现**（2026-08-05）：世界入口 `main.py` 实现 `handle(event) -> dict`（可 async）；平台 harness 导入调用（世界代码零框架依赖，print 重定向不污染结果）；`POST /worlds/{id}/trigger` + 世界 AI 工具 `run_world_code`（code 脚本或 event 触发模式）；6 项测试全过（同步/async/异常/缺handle/缺文件/超时） | 2.1 |
 | 2.3 | **受控数据 API** | ✅ **已实现**（2026-08-05，与 2.4 一起）：`/world/{id}/api/*` 数据面（world/chat/memories/usage/groups）；每世界专属 token（懒生成存 worlds.config.api_token，沙箱 env 注入 WORLD_API_TOKEN/WORLD_API_BASE）；动态限流（基础+每人加成×活跃人数，4 个 config 字段可配）；复用 get_chat_history / app.tools.world.run_world_tool 同一份逻辑；12 项测试通过 | 2.1 |
 | 2.4 | **群聊写 API** | ✅ **已实现**（2026-08-05，与 2.3 一起）：`/world/{id}/api/group/*`（读消息/发消息/成员/改角色/踢人）；身份=世界自身（底层借世界主人权限+群角色检查）；作用域=仅绑定群；写操作独立限流 | 2.3 |
@@ -59,7 +59,7 @@
    - 方案 A：Docker 容器（每世界一个，镜像轻量）——隔离最强，启动慢，资源重
    - 方案 B：子进程 + seccomp/rlimit（Python subprocess + 资源限制）——轻量，隔离中等
    - 方案 C：受限解释器/wasm——最安全但能力受限
-   - 倾向：MVP 用 B（快），生产用 A（稳）；**待产品定**
+   - 倾向：MVP 用 B（快），生产用 A（稳）；**待定**
 2. **触发文件约定**：入口文件/函数签名（如 `handle(event: dict) -> dict`）、生命周期（启动/每事件/定时）
 3. **配额管理**：CPU 时间片、内存上限、网络白名单（只能访问主实例 API？）、执行超时
 4. **世界代码依赖**：允许 pip 装包吗？装哪？（离线镜像？）
@@ -110,7 +110,7 @@
 | 2.2-2.5 | 触发文件 / 受控数据 API / 群聊写 API / 后台常驻 | 5-8 天 | 待 |
 | 群消息钩子 | 群消息 → 世界 AI 感知/响应 | 1 天 | 待 |
 | 群聊 API 注入提示词 | 世界观/工具注入（design 已有 API 设计） | 1-2 天 | 待 |
-| 文件式 skill/tool | 写在后端文件夹由实例识别提供（**2026-08-05 产品确认方向**：world_command 等世界能力走此机制，不平台硬编码；明日开工） | 2-3 天 | **明日开工** |
+| 文件式 skill/tool | 写在后端文件夹由实例识别提供（**方向**：world_command 等世界能力走此机制，不平台硬编码；明日开工） | 2-3 天 | **明日开工** |
 | AI 绑定世界 | 跨入口一致环境（多空间模型接入，design §8.3） | 2-4 天 | 待（阶段 3） |
 | 世界线一致性 | 同代码多世界线（design §8） | 3-5 天 | 待 |
 | 商城 | 完整世界+组件块发布/搜索/一键添加+GitHub | 基础 2-3 天 / 社区 3-5 天+ | 待 |

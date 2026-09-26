@@ -80,7 +80,7 @@ class SkillDef:
 def _parse_types(raw) -> list[str] | None:
     """解析 manifest.types：省略/["*"]/空 = None（所有类型通用）；列表 = 仅这些类型可用。
 
-    产品原话（2026-08-12）："设计Skill的时候就可选这是给所有类型通用的skill还是只有哪些类型可用的skill"。
+    设计口径："设计Skill的时候就可选这是给所有类型通用的skill还是只有哪些类型可用的skill"。
     """
     if raw is None:
         return None
@@ -178,7 +178,7 @@ def build_world_tools(world_id: int) -> list[dict]:
 
 
 def build_world_tools_for_type(world_id: int, type_slug: str | None) -> list[dict]:
-    """按类型过滤的世界侧工具：skill.types 声明了该类型才注入（分层注入，2026-08-12 产品定）。
+    """按类型过滤的世界侧工具：skill.types 声明了该类型才注入（分层注入）。
 
     type_slug 为 None（未绑定类型）→ 只给通用 skill（types=None 的）；
     type_slug 有值 → 通用 skill + 声明了该类型的 skill。

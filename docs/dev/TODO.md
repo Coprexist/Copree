@@ -20,7 +20,7 @@
 - [x] **沉浸式内容修复**：WorldViewPage iframe 路径嵌入时走 `/copree-api`（否则被宿主 SPA fallback 接住显示 DSH 界面）；Host 代理重写 3xx Location 补前缀
 - [x] **世界页内嵌群聊/平台菜单前缀**：后端注入 `window.WORLD_API` / `WORLD_UI`（经代理头），`chat-panel.js` / `sidebar.js` / `adventure.js` / `identity.js` 读取——独立部署默认值不受影响
 - [x] **需求5：群视界世界嵌入 DSH 工作区**——每个自己创建的世界自动同步为工作区文件夹 `Copree群视界-世界名` + DSH 会话（官方 `workspaces.create` / `connectWorkspace`，幂等）；Host 注册 `world_*` 工具集（文件读写/世界 API/群聊/生命周期，按会话 cwd 路由）；token 仅内存；systemPrompt 泛化引导段
-- [x] **需求5 浏览器实测（文件夹 ✓ / 工具 ✗）**：用户确认 `Copree群视界-*` 文件夹出现在 DSH 工作区、会话 cwd 正确指向世界目录、`.copree-world.json` 可读（worldId 39 识别成功）；但 `world_list_files` 报"未连接登录态"
+- [x] **需求5 浏览器实测（文件夹 ✓ / 工具 ✗）**：`Copree群视界-*` 文件夹出现在 DSH 工作区、会话 cwd 正确指向世界目录、`.copree-world.json` 可读（worldId 39 识别成功）；但 `world_list_files` 报"未连接登录态"
 - [x] **token 上报 bug 修复**：client 同步里 `workspaces.create` 返回值主键是 **`workspaceId`**（不是 `id`），`ws.id` 恒 undefined → 跳过了 `connectWorkspace` + token 上报 → host 内存 `sessionTokenMap` 空（诊断端点 `/copree-worlds/status` 确认 tokenSessions=[]）。已改为 `ws.workspaceId || ws.id`
 - [x] **诊断端点**：`GET /copree-worlds/status` → `{tokenWorlds, worldDirs}`（token 明文不返回）；token 上报打 `ctx.logger` 日志
 - [x] **token 按世界路由**：改为 `{worldId, token}` 上报（sessionId 会被 DSH 新建会话流程更换，不稳定）；工具按 cwd 解析世界后取 token
@@ -35,7 +35,7 @@
 
 > 用户 2026-08 凌晨提出，因当晚会话转向"消息渲染/设置页/沉浸式"需求而未实施，方案调研已完整存档。
 
-### 需求（用户确认）
+### 需求
 
 侧边栏两大板块**平级**：
 
@@ -58,7 +58,7 @@
 - `@linxin666/dsh-client-ui-task-board`：DOM hack 插侧边栏入口（`document.querySelector("[data-pane=sidebar]")`）——**不优雅，排除**。
 - 官方 master 无侧边栏板块切换（tab/board）类槽，官方不打算做多板块。
 
-### 推荐方案（待用户确认两点后实施）
+### 推荐方案（待确认两点后实施）
 
 影子替换 `sidebar.workspaces`（priority -2），自绘"双板块容器"：
 
@@ -69,7 +69,7 @@
 ### 代价 / 风险
 
 - 替换后工作区浏览 = **自绘简版**：官方搜索、拖拽排序、右键菜单、新建工作区对话框等功能会丢失，除非额外复刻。
-- 若用户要求**完整保留官方工作区全部功能**，则需换设计（Copree 只做折叠展开入口 + 联系人列表，与官方工作区上下排列）——交互上不完全是"平级板块"。
+- 若**完整保留官方工作区全部功能**，则需换设计（Copree 只做折叠展开入口 + 联系人列表，与官方工作区上下排列）——交互上不完全是"平级板块"。
 
 ### 待用户决策
 

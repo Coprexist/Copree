@@ -75,7 +75,7 @@ async def test_note_is_delivered_once_then_retired_then_dropped_on_unlock(migrat
         assert [e["kind"] for e in left] == ["summary"], "解锁后便签与撤下通知都该走干净"
 
         # ⑤ 但**整套解锁**（重写账本 + 清帧副本）之后，只要记录还在有效期内，该会话会**重新拿到**它
-        #    ——用户 2026-09-25 确认：便签的本意就是"40 次调用内，每个会话各投一份"
+        #    ——便签的本意就是"40 次调用内，每个会话各投一份"
         from app.services.agent.state_stack_service import release_active_frame_notes
 
         await release_active_frame_notes(db, 1)

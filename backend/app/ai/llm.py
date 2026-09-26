@@ -822,7 +822,7 @@ async def _build_cross_conversation_context(
 
 
 async def _versioned_agent_prompt(db: AsyncSession, agent, system_prompt_override: str | None) -> str | None:
-    """前缀文本版本化：personality 源 = agent-prompt-{id}（2026-08-12 产品定）。
+    """前缀文本版本化：personality 源 = agent-prompt-{id}。
 
     用户/管理员改提示词 → 写新版本（ensure_text_source_version 哈希对比）；
     锁定态取 effective 快照（前缀缓存稳定，变更只尾部 changelog 告知）；
@@ -1205,7 +1205,7 @@ async def build_messages(
         try:
             from app.models.world import World, WorldBinding
             from app.services.world.world_service import find_worlds_by_entity
-            # v0.3.4: 世界绑定 AI 统一存 user_id（2026-08-12 产品定）
+            # v0.3.4: 世界绑定 AI 统一存 user_id
             bound = await find_worlds_by_entity(db, "agent", agent.user_id or 0)
             if group_id:
                 bound += await find_worlds_by_entity(db, "group", group_id)

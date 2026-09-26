@@ -130,7 +130,7 @@ class AgentStateRequest(BaseModel):
 class AgentResponse(BaseModel):
     """AI 代理响应"""
     id: int
-    user_id: int | None = Field(default=None, description="AI 统一对外标识（全平台一律用 user_id，2026-08-12 产品定）")
+    user_id: int | None = Field(default=None, description="AI 统一对外标识（全平台一律用 user_id）")
     owner_id: int
     name: str
     original_system_prompt: str | None

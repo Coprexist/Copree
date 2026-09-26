@@ -461,7 +461,7 @@ async def _tool_call_loop(
     # 之前放在工具循环内（调用成功后），key 失效等早期失败时根本执行不到——
     # 12 天没聊的对话带着全量历史硬跑，且 key 修复前永远不压缩。前移后即使本次失败，
     # 下次重试时上下文已瘦身。
-    # 优先级（2026-08-13 产品定）：API 通 → LLM 总结压缩（保留要点）；API 不通 → 内联截断兜底
+    # 优先级：API 通 → LLM 总结压缩（保留要点）；API 不通 → 内联截断兜底
     try:
         from app.services.memory.context_compression_service import (
             inline_compress, compress_messages, should_compress, get_compression_thresholds,

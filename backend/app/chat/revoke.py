@@ -16,7 +16,7 @@ from app.utils.pure.history import revoked_notice
 
 logger = logging.getLogger(__name__)
 
-# 站内撤回窗口：与 QQ 一致（用户 2026-09-26 定）
+# 站内撤回窗口：与 QQ 一致
 REVOKE_WINDOW_SECONDS = 120
 
 

@@ -269,7 +269,7 @@ async def test_dm_pairing_gate_then_approved(migrated_db):
         assert plugin._client.sent, "应该回一个配对码"
         code_msg = plugin._client.sent[0]["content"]
         assert plugin._client.sent[0]["kind"] == "dm" and "配对码" in code_msg
-        # 文案是两条通道共用的一份（用户 2026-09-26 定）：本 AI + 创建者提示 + 开源地址
+        # 文案是两条通道共用的一份：本 AI + 创建者提示 + 开源地址
         assert "此 AI" in code_msg and "如果你不是我的创建者" in code_msg
         assert "github.com/Coprexist/Copree" in code_msg
 

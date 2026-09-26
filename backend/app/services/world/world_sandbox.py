@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 def policy_for_world(world, background: bool = False) -> Policy:
     """世界配额（worlds.config 可配）：
     - 无人/后台（background=True）：内存 = sleep_memory_mb（默认 24MB）
-    - 有人/前台（background=False）：内存 = runtime_memory_mb（默认 128MB，产品 2026-08-05 定）
+    - 有人/前台（background=False）：内存 = runtime_memory_mb（默认 128MB）
     超时/CPU 恒生效（保护宿主不受死循环拖累）。
     """
     cfg = world.config or {}
@@ -103,10 +103,8 @@ def _sanitized_env(world, *, readonly: bool = False) -> dict:
 # ═══════════════════════════════════════════════════════════════
 # 跑完自检：脚本直接写文件会绕过 file_write/file_edit 的落盘校验
 # ═══════════════════════════════════════════════════════════════
-# 世界 AI 的批量替换脚本一次能改几百处，写坏了（少 }、吃掉 else、插值落进样式值）
-# 只能靠它自己事后回读发现——2026-09-18 它明确说这是"运气成分不小"。
-# 这里在脚本跑完后，把本次新增/改动的代码文件过一遍语法自检，当场把坏文件报回去。
-# 只报不拦（文件已经落盘），但足以让它当轮修掉。
+# 批量替换脚本一次能改几百处、写坏了只能靠事后回读发现，所以跑完后把本次改动的代码
+# 文件过一遍语法自检，当场把坏文件报回去（只报不拦，文件已落盘）。
 _LINT_SKIP_DIRS = {"__pycache__", "node_modules", "dist", "build", ".git", ".venv", ".mypy_cache"}
 _LINT_FILE_LIMIT = 3000     # 快照文件数上限（大世界不为了自检扫穿磁盘）
 _LINT_REPORT_LIMIT = 5      # 单次最多报几个坏文件
@@ -214,10 +212,8 @@ async def _run_world_code(
 
 
 # ── 2.2 触发文件约定 ──
-# 世界目录 main.py 实现 handle(event) -> dict（可 async），平台 harness 导入并调用。
-# 世界代码零框架依赖；print 重定向到 stdout 字段，不污染结果 JSON。
-# 隔离与 sys.path 由共用沙箱层施加（sandbox/runner 的 _RUNNER_TEMPLATE 用 runpy 执行本
-# 模板），所以 harness 里不再重复 apply_isolate：隔离只在一处施加，才不会两处走样。
+# 世界目录 main.py 实现 handle(event) -> dict（可 async），平台 harness 导入调用，
+# 世界代码零框架依赖。隔离与 sys.path 由共用沙箱层施加，harness 内不重复。
 _TRIGGER_HARNESS_TEMPLATE = r'''
 import asyncio, contextlib, importlib, io, json, sys
 

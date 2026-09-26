@@ -1,7 +1,7 @@
 """
 决策技能工具 — AI 自配置「什么情景程序处理、什么情景才唤醒我本体」
 
-产品 2026-08-13 定稿（world_decision_skill.md 阶段二）：
+见 world_decision_skill.md 阶段二：
 - 世界体系给 AI 提供配置自己决策技能的能力（list/write/delete_decision_skill）
 - 存储：agent_skills(skill_type='decision')，config 即技能对象 {name, when, do, notify}
 - 执行：决策引擎（decision_skill.run_decision_engine）在群触发链路优先匹配

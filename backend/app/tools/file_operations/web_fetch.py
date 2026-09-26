@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 # 唯一的放松是"不再因为一个不可拨的地址否决整次请求"，而真正指向内网的地址照旧一律拒绝。
 # "哪些地址算内网"只在 app/utils/pure/url_guard.py 定义一处（出站守卫共用同一份判定）。
 #
-# **官方失败自动轮播镜像**（2026-09-16 用户要求，表见 mirror_table.py）：官方永远第一优先，
+# **官方失败自动轮播镜像**（表见 mirror_table.py）：官方永远第一优先，
 # 只有官方失败才按表里的顺序试镜像；镜像走同一条取数管线（一样过 SSRF 复检），
 # 用了哪个镜像必须在结果里说清楚（Fetched.mirror → 工具结果的 via）。
 REDIRECT_LIMIT = 5

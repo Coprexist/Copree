@@ -17,7 +17,7 @@ from app.models.world import WorldBinding
 
 logger = logging.getLogger(__name__)
 
-DOWNLOAD_DIR = "downloads"                      # 下载固定落点（产品 2026-09-15 定）
+DOWNLOAD_DIR = "downloads"                      # 下载固定落点
 
 
 def parse_args(arguments: str) -> dict:
@@ -168,7 +168,7 @@ async def web_download(world, arguments: str, approved: bool = False) -> dict:
     审批归平台门禁（world_ai_mode.gate_tool_call）统一负责，工具自己不再问：
     - approved=True（自动模式，或用户已在弹窗里同意）→ 直接下载；
     - approved=False（决策技能 / 定时 / 斜杠命令等没走门禁的旁路）→ 下载完成后弹窗问是否保留，
-      没人应答按「不保留」删除（产品 2026-09-15 定）。
+      没人应答按「不保留」删除。
     """
     import httpx
     from app.tools.file_operations.web_fetch import BlockedFetch, safe_get
@@ -221,7 +221,7 @@ async def web_download(world, arguments: str, approved: bool = False) -> dict:
         return {"success": True, "path": path, "size": len(content), "url": url,
                 **fetched.as_result_extra()}     # 走了国内镜像要说清楚（内容来自第三方）
 
-    # 旁路下载：没经过平台门禁 → 按产品要求，下载完成后再问用户是否保留
+    # 旁路下载：没经过平台门禁 → 下载完成后再问用户是否保留
     # 事后确认同样不默认保留：没人应答就删掉（on_timeout=False，安全默认）
     keep = await request_approval(
         wid, "", kind="download",

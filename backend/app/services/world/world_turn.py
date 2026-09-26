@@ -77,7 +77,7 @@ class TurnBroadcast:
         self.turn_id = turn_id
         self.subscribers: set[asyncio.Queue] = set()
         self.ended = False
-        # 插入消息 turn 的代理：订阅/广播/结束转发到活跃 turn（2026-08-13 产品定，
+        # 插入消息 turn 的代理：订阅/广播/结束转发到活跃 turn（
         # 让前端订阅插入 turn 时能收到当前轮流事件——含 [INSERT] 回执和后续内容）
         self.proxy: "TurnBroadcast | None" = None
 
@@ -120,7 +120,7 @@ class WorldTurnWorker:
         self.msg_queue: asyncio.Queue = asyncio.Queue()
         self.turns: dict[str, TurnBroadcast] = {}
         # 普通消息插入通道：AI 工具轮进行中时，非命令消息直接注入下一轮 LLM 调用
-        # （产品定：只有命令（/compact 等）需要等当前轮次结束再发送）
+        # （只有命令（/compact 等）需要等当前轮次结束再发送）
         self._inserts: list[dict] = []
         self._inserts_lock = asyncio.Lock()
         self.task = asyncio.create_task(self._run(), name=f"world-turn-{world_id}")
@@ -227,7 +227,7 @@ class WorldTurnWorker:
     def enqueue(self, user_id: int, items: list[ChatItem]) -> str:
         """消息入队（支持批量：排队消息一起发给 AI），返回 turn_id（订阅直播用）。
 
-        产品定（2026-08-16 改）：非命令消息在 AI 工具轮进行中时**进插入队列**（
+        非命令消息在 AI 工具轮进行中时**进插入队列**（
         不立即绘制气泡）；等 AI 真正收到（_inject_pending_user_messages 注入上下文）时
         才落库 + 广播 [INSERTED]/[INSERT] 绘制气泡——用户看到"已发送" = AI 已看到。
         哪些消息必须等本轮结束，由命令声明决定（world_chat_commands.COMMAND_SPECS.mid_turn）；
@@ -247,7 +247,7 @@ class WorldTurnWorker:
             tb = TurnBroadcast(turn_id)
             tb.proxy = active_tb
             self.turns[turn_id] = tb
-            # 2026-08-16 产品定（改）：不再立即落库+广播——消息先进插入队列，
+            # 不再立即落库+广播——消息先进插入队列，
             # 等 _inject_pending_user_messages 真正注入 AI 上下文时再落库 + 广播绘制气泡。
             self._inserts.append({"user_id": user_id, "items": items, "msg_ids": [], "tb": tb})
             return turn_id

@@ -5,7 +5,7 @@
 - 真正需要跨状态传递的只有「临时且有时效」的留言（"群里有人问暗号就答 7788"）。
   长期该记住的东西归 AI 自己的提示词（update_self_config），不往便签里堆。
 
-**投递制**（2026-09-25 用户定，对齐 docs/dev/capability_lazy_loading.md 的锁）：
+**投递制**（对齐 docs/dev/capability_lazy_loading.md 的锁）：
 - 记录（agent 级）只管"还能不能投递"：写下后 NOTE_TTL_CALLS 次 API 调用内有效，
   过期就不再投给任何会话——这就是"清除过时便签"，比如 AI 一直在忙工作时不会再收到它；
 - 一旦投进某个会话，就是**一次性过户**：内容抄进那段会话的上下文，此后归它的锁管，
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import uuid
 
-# 便签寿命（API 调用条数）：用户 2026-09-25 定 40
+# 便签寿命（API 调用条数）：40
 NOTE_TTL_CALLS = 40
 # 单条便签长度上限：便签是"顺手记一句"，不是文档
 MAX_NOTE_CHARS = 300

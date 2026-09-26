@@ -15,7 +15,7 @@ import ExpressionModeSwitch from './ExpressionModeSwitch'
 import { copyText } from '../utils/clipboard'
 
 // 运行模式三档（后端 world_ai_mode.MODES 是权威定义；这里只管展示与切换）
-// 顺序 = 菜单从上到下：计划 / 自动 / 审阅（2026-09-18 用户：计划模式提到第一位）
+// 顺序 = 菜单从上到下：计划 / 自动 / 审阅
 const MODE_ITEMS = [
   { key: 'plan', labelKey: 'tool:world.mode.plan', hintKey: 'tool:world.mode.hint.plan' },
   { key: 'auto', labelKey: 'tool:world.mode.auto', hintKey: 'tool:world.mode.hint.auto' },
@@ -311,7 +311,7 @@ const WorldChatPanel = memo(forwardRef<WorldChatHandle, WorldChatPanelProps>(({ 
     }
   }, [chat, onMsg])
 
-  /** 建议卡不再"点一下就发"：先弹窗确认（2026-09-17 用户：飞机太容易误触），
+  /** 建议卡不再"点一下就发"：先弹窗确认（飞机图标太小，容易误触），
    *  弹窗里同时提醒"想改就点 ＋ 插入输入框"。行点击与飞机共用这一处判断。 */
   const confirmAndSendSuggestion = useCallback(async (q: string) => {
     const ok = await confirmAsync({

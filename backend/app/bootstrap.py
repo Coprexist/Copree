@@ -284,7 +284,7 @@ async def _startup_world() -> None:
     except Exception as e:
         logger.warning(f"[WARN] 常驻世界恢复异常: {e}")
 
-    # 禁用后缀兜底扫描：手动拷进目录/历史遗留/解压夹带的可执行文件一律强删（2026-09-15 产品定）
+    # 禁用后缀兜底扫描：手动拷进目录/历史遗留/解压夹带的可执行文件一律强删
     try:
         from sqlalchemy import select as sa_select
         from app.services.world.world_file_service import sweep_banned_files

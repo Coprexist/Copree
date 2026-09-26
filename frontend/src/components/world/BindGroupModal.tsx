@@ -44,7 +44,7 @@ export default function BindGroupModal({ worldId, initialTypeSlug, initialTab = 
   const [groups, setGroups] = useState<GroupItem[]>([])
   const [agents, setAgents] = useState<{ id: number; name: string; owner_id?: number; user_id?: number }[]>([])
   const [boundGroupIds, setBoundGroupIds] = useState<Set<number>>(new Set())
-  // AI 绑定统一用 user_id（2026-08-12 产品定：全平台 AI 对外标识一律 user_id，杜绝与 agent.id 撞车）
+  // AI 绑定统一用 user_id（全平台 AI 对外标识一律 user_id，杜绝与 agent.id 撞车）
   const [boundAgentIds, setBoundAgentIds] = useState<Set<number>>(new Set())
   const [agentUserIdByAgentId, setAgentUserIdByAgentId] = useState<Map<number, number>>(new Map())
   const [typeSlug, setTypeSlug] = useState<string>(initialTypeSlug || '')

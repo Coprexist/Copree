@@ -297,7 +297,7 @@ class ToolRegistry:
                 from app.services.world.world_skill_runtime import execute_skill
                 from app.services.world.world_service import find_worlds_by_entity
                 # 绑定世界集合：当前群绑定优先（同名 skill 默认执行当前群的世界版本），agent 直接绑定其次
-                # v0.3.4: 世界绑定 AI 统一存 user_id（2026-08-12 产品定，杜绝 agent.id 撞车）
+                # v0.3.4: 世界绑定 AI 统一存 user_id（杜绝 agent.id 撞车）
                 group_worlds = await find_worlds_by_entity(db, "group", group_id) if group_id is not None else []
                 agent_worlds = await find_worlds_by_entity(db, "agent", (agent.user_id if agent else 0)) if agent_id else []
                 worlds = [*group_worlds, *agent_worlds]

@@ -8,8 +8,6 @@
 
 ## [Unreleased]
 
-## [Unreleased]
-
 ### ✨ 新增功能
 - **世界可以给 AI 发事件**：世界程序用新工具 `emit_ai_event`（或受控 API
   `POST /world/{id}/api/ai_event`）主动通知 AI——补货、结算、剧情变化之类；收件人由世界决定
@@ -22,6 +20,10 @@
 - **AI 不能再主动私信生人**：此前"涉及 AI 免好友校验"让 AI 能给任何非好友开新私信
   （骚扰口子）。现在人→人、AI→人一律要求互为好友，AI 被拒时会被告知先发好友申请；
   系统通知与已有会话里的回复（含外部通道的被动回复）不受影响。
+
+### 🧹 清理
+- **注释与文档去掉「决策归属」写法**：清掉把设计结论挂到人/日期上的标注（「某日某人定」式），
+  含设计文档、提示词与契约守卫注释；并精简复述上下文的冗长注释——理由一行讲清，长说明归文档。
 
 ## [v0.4.12] - 2026-09-26
 
@@ -876,7 +878,7 @@
 - **新增第二轮快投页面** `frontend/public/color-picker-r2.html`：每类型只剩 A（当前应用版）/ B（第一轮代表）两个候选，点选实时预览，提交即投票
 - **新增第二轮投票接口** `/theme-vote-r2`（GET stats / POST 提交），数据存 `data/theme_votes_r2.json`，与第一轮隔离互不影响（自动发现注册，重启生效）
 
-### Added — 🎨 主题设计工具：选色页体验产品化（用户要求：不做二轮投票，直接做成工具）
+### Added — 🎨 主题设计工具：选色页体验产品化（不做二轮投票，直接做成工具）
 
 - **设置页「主题定制」升级为完整工具**（ThemeCustomizer 重写）：左侧手机壳**实时预览**（引用 CSS 变量，点选/输入即时变化），右侧每字段候选色板 + **原生取色器** + **自由 hex 输入**
 - **预设系统**：内置「平台默认（定稿版）」「极光青碧」两套 + 用户自存多套「我的预设」（存 `ui_prefs.theme_presets`，JSONB 后端零改动）；点击整卡应用，删除按钮随时清理
@@ -978,27 +980,27 @@
 
 ## [v0.3.5] - 2026-08-13
 
-### Added — 🎛️ 决策技能机制（阶段二核心闭环，产品定）
+### Added — 🎛️ 决策技能机制（阶段二核心闭环）
 
 - **AI 自配置决策技能**：入驻 AI（agent 居民）/ 群助手各自持有自己的决策技能——「遇到什么情景我干什么、什么情景才唤醒我本体」；世界体系提供 list/write/delete_decision_skill 工具（ToolRegistry 插件，所有 AI 可自配置）
 - **技能结构**：`{name, when:{event, conditions}, do, notify}`——条件 DSL 递归逻辑树（and/or/not 自由组装 + 字段运算 contains/starts_with/matches/数值比较）；do 三选一（reply_template 零成本 / call_tool 平台工具 / run_script 沙箱脚本）；notify=true=命中后仍唤醒本体，false=程序处理完即止
 - **决策引擎**：群触发链路优先匹配（AI 自写规则 > mention_only 平台默认兜底）——命中且 notify=false → 程序化处理（reply 代发群，不唤醒 LLM）；未命中才走触发模式；群助手 LLM 调用带决策工具（仅工具调用时静默不回复）
 - 情景：group_message 已接入；member_join/leave、friend_request、scheduled 引擎通用、事件钩子后续接
 
-### Added — 🎯 群助手独立实体（不走 agents 表，产品定）
+### Added — 🎯 群助手独立实体（不走 agents 表）
 
 - **群助手 ≠ agent**：新表 `group_assistants`（group_id/world_id/group_type_slug/name/system_prompt/model/api_key 加密/config）——每群每助手一行；绑定群时按类型模板直接建实体，不再 create_agent/入群成员表/WorldAgent 登记，与群视界 AI 同形态（无账号、无好友）
 - **触发链路改造**：`response_worker` 查 group_assistants → 独立 LLM 路径（system_prompt+群历史→chat_completion→发群消息 source=world 防循环→用量记账 agent_id=-2 虚拟聚合）；sender_id 用 -ga.id 负值避免与 user_id 冲突；群助手自己的消息不触发防自循环；群消息列表显示助手名
 - **历史数据迁移**：agent 41「冒险团团长」→ group_assistant 1（7 条历史消息 sender 69→-1；清理 friendships/group_members/agents/users，备份在 backend/backup/）
 - **群助手也可以是纯后端程序**：世界程序 main.py handle 直接接群消息处理（不依赖 LLM）
 
-### Added — 🖥️ 页面静默事件通道（页面 → 世界程序，产品定）
+### Added — 🖥️ 页面静默事件通道（页面 → 世界程序）
 
 - **`POST /world/{id}/api/event`**：页面操作（移动/攻击/开宝箱等）直接触发世界程序 handle(event)，**不产生群消息、不进群聊**（解决页面操作刷屏：30 步 = 30 条群消息）——用户登录鉴权 + 群绑定/成员校验 + 写限流；服务端注入 user_id/user_name（不信任页面自报）；常驻世界入队 / 临时触发同步返回 handle 结果
 - **接口文档 06 补 4.1 章节**（世界 AI/页面代码可直接用）；世界 39 改造补丁（main.py 支持 page_command + game.js sendCommand 改走事件通道，数据区 root 属主待应用）
 - 配套【消息同步纪律】强注入段：非必要消息不同步到群，前端能展示的一律不发群
 
-### Changed — ⚡ 插入消息立即落库显示（产品定改）
+### Changed — ⚡ 插入消息立即落库显示
 
 - 之前：工具轮进行中发的普通消息**等下一轮 LLM 调用前**才落库+画气泡 → 用户感觉"没插进去"
 - 现在：发消息**瞬间**立即落库 + 广播 [INSERTED]/[INSERT]（气泡马上画入、排队弹窗秒清）；`_inserts` 仅作上下文注入；轮次结束兜底补发未落库项（已落库跳过防重复）
@@ -1010,7 +1012,7 @@
 
 ---
 
-### Added — 🎯 群视界触发模式（mention_only）+ 决策技能设计（产品定）
+### Added — 🎯 群视界触发模式（mention_only）+ 决策技能设计
 
 - **群消息非 @ 不触发 AI**（所有绑定群视界的群，暂时统一）：AI 不可能一直触发——大量群事件应由决策程序/世界程序处理，只有关键时刻（＠AI / ＠all / 群公告）才唤醒 LLM 本体。实现：`response_worker` 触发群助手前查群绑定世界 + `worlds.config.group_trigger_mode`（默认 `mention_only`；`all` 恢复旧行为）；拦截不影响世界程序感知通道（`world_event_hook` 照常喂事件，即「决策程序代替 AI」的雏形）；未绑定群视界的普通群零开销
 - **配置 AI 可改、可随包分发**：世界 AI 工具集新增 `update_trigger_mode`（mention_only ↔ all，AI 自主决定本世界活跃度）；`export_zip` 附虚拟条目 `world_meta.json`（config 白名单快照，不落盘零污染）→ `import_zip` 读回合并——分享/发布世界时触发模式跟着走，导入只补缺失键、不覆盖宿主已有设置
@@ -1038,11 +1040,11 @@
   且判定只看"最后消息距今"（12 天没聊但今天刚发消息时历史堆积不压缩）
   **修复**：压缩前移到首次 LLM 调用前 + 增加"对话跨度"判定（首条→最后消息 > 12h 也压缩），
   效果：137→22 条（-83% token）；当天对话不误压缩
-- **12h 空闲压缩优先级**（产品定）：API 通 → LLM 总结压缩（保要点）；API 不通/总结失败 → 内联截断兜底
+- **12h 空闲压缩优先级**：API 通 → LLM 总结压缩（保要点）；API 不通/总结失败 → 内联截断兜底
 
 ### Added — 🛠️ 世界 AI 工具链升级（2026-08-13 下午，AI 工具调用体验 + 前端展示）
 
-- **普通消息插入工具轮**（产品定）：AI 工具轮进行中用户发普通消息→不打断，在下一轮 LLM 调用前自然注入（drain → 落库 → 发事件 → 拼上下文）；只有命令（/compact 等）等整轮结束。两段式协议：[INSERTED] 信号清排队弹窗 + [INSERT] 真实 id 画气泡（断联后 loadChat 位置正确）
+- **普通消息插入工具轮**：AI 工具轮进行中用户发普通消息→不打断，在下一轮 LLM 调用前自然注入（drain → 落库 → 发事件 → 拼上下文）；只有命令（/compact 等）等整轮结束。两段式协议：[INSERTED] 信号清排队弹窗 + [INSERT] 真实 id 画气泡（断联后 loadChat 位置正确）
 - **工具轮+收尾轮流式化**：正文/思考逐 chunk 显示（不再等整次调用结束一次性出）
 - **工具状态事件 [TOOL_UPDATE]**：同 tool_id 多状态气泡（running 正在执行 XX → update 进度 → done 完成原地更新）；run_world_code 分阶段（创建脚本→运行中→返回结果）；落库按 tool_id 去重只留最终态；WorldChatMessage 加 tool_id 列
 - **思考/正文独立气泡**：思考用思考 id、正文用正文 id（顺序递增）；无正文不占位（去「（…）」）；思考默认 2 行+渐变淡化+点击展开；工具长摘要折叠+展开/收起
@@ -1062,7 +1064,7 @@
 ### Added — ✨ 前缀内容版本化（锁）+ 群类型无限 + Skill 分层注入 + 世界直开
 
 - 🔒 **前缀内容版本化（所有进前缀的内容保证缓存命中）**：用户可改提示词（world-prompt-{id}）、强注入段（forced-prompt）、昵称（world-name-{id}）、主站 agent 提示词（agent-prompt-{id}）统一走 capability_versions 版本链（known 告知 / effective 生效）——用户改提示词、系统更新强注入、改名都是正常操作，**不再断前缀缓存**；变更只动态尾部注入 changelog 告知；compact / clear（= 新对话）解锁后正式生效；锁定态尝试应用变更 → 拒绝 + 后端报错记录（guard_apply_change 防御）
-- 🔒 **强注入段从用户可改中提出**（产品定）：平台强约束（工具约定/能力边界/接口文档/记忆约定/UI/群类型/侧边栏/路径/编号/运行规范）不再是散装拼接，独立为 FORCED_PROMPT_SEGMENTS + `forced_prompt` 字段返回前端只读展示；群类型约定强化（写世界类型 + AI 加入类型，关键剧本角色可用角色名/职位名做类型名）；新增【AI 侧 skill】（按类型分层注入）与【入口场景响应】（私信/群聊/直进不同 index 响应）强注入段；昵称正式注入对话（之前 AI 不知道自己叫什么）
+- 🔒 **强注入段从用户可改中提出**：平台强约束（工具约定/能力边界/接口文档/记忆约定/UI/群类型/侧边栏/路径/编号/运行规范）不再是散装拼接，独立为 FORCED_PROMPT_SEGMENTS + `forced_prompt` 字段返回前端只读展示；群类型约定强化（写世界类型 + AI 加入类型，关键剧本角色可用角色名/职位名做类型名）；新增【AI 侧 skill】（按类型分层注入）与【入口场景响应】（私信/群聊/直进不同 index 响应）强注入段；昵称正式注入对话（之前 AI 不知道自己叫什么）
 - 🗂️ **Skill 分层注入**：manifest 支持 `types` 字段（省略/["*"] = 所有类型通用；["blacksmith"] = 仅铁匠类型可用）；`build_world_tools_for_type` 按绑定类型过滤；群 AI 能力清单按 agent/群绑定类型取并集注入（world_chat_service / llm.py 双入口）
 - ∞ **群类型 bind_limit=-1 = 无限**（不是极大值凑）：默认类型群聊和 AI 数目都无限；前端显示 ∞、满员判断跳过 -1、新建类型输入支持 -1
 - 👁️ **世界列表「打开」按钮**：/world/{id}/preview 新窗口进沉浸界面——只绑定 AI（entity_type='agent'）的世界也能直接进去看，不依赖群聊
@@ -1072,7 +1074,7 @@
 - **设置页提示词 UI 重做**（WorldCreatorConfig）：群视界机器人名字默认收起 + 🖊 图标点击可改；系统提示词默认收起 + 🖊 点击展开输入框；新增「平台强注入提示词」深灰只读展示（🔒 不可修改）；对话生命周期区块移至模型与参数上方；删除重复的 LLM 缓存命中率块
 - **群视界定义更新**（docs）：从仅聊天，到可编程、可视化、AI 可入驻的世界——造物主（世界 AI + 用户）/ 原住民（用户 + 用户的 AI）；设计文档补 8.5 群类型系统 / 8.6 世界运行不强制绑定群 / 4.3 入口场景响应 / Skill 分层注入三·六
 - **强注入段瘦身 4129→3326 字符（-20% token）**：删【工具约定】段（工具描述已通过 function calling 传，重复）；记忆约定 607→129 只留结构化记忆核心；新增【注意事项】（含糊主动确认/不重复工具输出/建议要阐述/收尾实质内容）与【设计美学】（配色/层级/留白/移动端/动效/加载空状态/引导，占一部分控制 token）段；世界运行规范与接口文档导引保留
-- **强注入段新增【内容提炼与动态加载】原则**（产品 2026-08-12 定）：剧情/大量按钮列表/大量设定等**内容不准写死在渲染中**——能提炼为文档/列表/数据文件的提炼掉，页面动态加载（fetch/import）；不固定数目；资源同理；同构多实例（NPC/卡牌/角色）**每个实例一个文件**（如 npcs/lihua.json），改内容/新增实例都不碰渲染代码
+- **强注入段新增【内容提炼与动态加载】原则**：剧情/大量按钮列表/大量设定等**内容不准写死在渲染中**——能提炼为文档/列表/数据文件的提炼掉，页面动态加载（fetch/import）；不固定数目；资源同理；同构多实例（NPC/卡牌/角色）**每个实例一个文件**（如 npcs/lihua.json），改内容/新增实例都不碰渲染代码
 
 ### Added（续）
 
@@ -1090,7 +1092,7 @@
 ### Docs（2026-08-12 新增）
 
 - 7.6 触发与并发调度：群 AI 走红黑树（MAX_CONCURRENT=3）受排队影响；世界 AI 拉模式（HTTP 流式）不受；世界程序节流合并通道不受
-- Skill 设计准则（产品定）：可操作性 / 简便性 / 效果最大化——AI 用最少次调用完成用户意图 = 好 skill（含反面例子 add_item/remove_item 应合并为 give_weapon）
+- Skill 设计准则：可操作性 / 简便性 / 效果最大化——AI 用最少次调用完成用户意图 = 好 skill（含反面例子 add_item/remove_item 应合并为 give_weapon）
 - 适时拆分文件原则：文件大了/不利维护就拆成职责单一的小文件
 - 内容提炼与动态加载（6.2）、前缀版本化 mermaid（锁定/解锁）
 
@@ -1140,7 +1142,7 @@
 - 🎭 **情感状态栈（交接驱动）**：Plutchik 8 轴情感向量（独立轴，双高双低可表达）+ `update_emotion` 工具（增量/完整向量/概括词）；摘要只注入「当前帧+本次交接」（旧交接不重复注入）；pop 选择性回跳（target_frame_id + 跳过层归档汇报）；pop 回来交接（📝 刚完成）；分状态调用计数 + mood homeostasis 情感衰减；工具按状态隔离；摘要上限 500 可配（agents.state_stack_max_chars）；配置开关 emotion_vectorized
 - 🏪 **商城 GitHub 同步（机器人模式）**：仓库写权限只给机器人（系统 token），用户 token 只验证身份；目录所有权（worlds/{世界名}/ 只能写自己的）+ 查重 + **双签名**（作者 Ed25519 + 机器人背书）；GitHub 数字 id 身份锚（改名不变）；快照缓存；同步状态三态；token 全加密 + 管理员脱敏（前4后4）；用户 GitHub 绑定（我的页/商城页）
 - 📂 **群类型系统**：世界预设群类型（规则/绑定上限/助手模板），**配置在 group_types.json 随世界打包**、状态在 DB（slug 绑定）；群绑定类型时按模板自动创建群助手（agent 归属群、不占额度）；群主填 API/一键全局（加密）；群视界机器人 get/update_group_types 工具；群消息事件注入 group_type
-- 📥 **世界 AI web_download**：下载网页资源到世界文件夹（两阶段用户确认 + SSRF + 扩展名白名单）；世界文件上限 5→32MB
+- 📥 **世界 AI web_download**：下载网页资源到世界文件夹（两阶段确认 + SSRF + 扩展名白名单）；世界文件上限 5→32MB
 - ⚡ **性能**：向量记忆 HNSW 索引（rough/detail/world_ai_memories）；前端虚拟列表（ChatView 窗口化渲染）
 - 💌 **好友申请 AI 闭环**：AI 上下文注入待处理好友申请（📨 申请人+留言）；新增 handle_friend_request 工具（accept/reject，防越权校验）；auto_respond_friend_request 触发独立事件处理（不建 DM 会话，通过与否由 AI 自主判断）
 
@@ -1566,7 +1568,7 @@
 - 📍 **状态文本多位置显示**：好友列表、私信（DM）列表、`/me` 个人资料卡三处均展示个性状态文本（含自定义颜色）。后端 `dm_service._get_partner_info` 和 `friend_service.list_friends` 同步返回 `status_text` + `status_color`。
 - 🔐 **AI 对话权限控制系统**：`agents` 表新增 5 列——`allow_others_chat`（是否允许非主人触发对话）、`others_chat_mode`（允许时子模式：unlimited 始终允许 / quota 限额）、`others_chat_quota`（配额上限，默认 30 次）、`others_chat_used`（当前已使用次数，可重置）、`disallow_mode`（禁止时子模式：strict 严格禁止 / own_key 允许聊天者用自有 Key）。创建/编辑 AI 弹窗新增「对话权限」分区，所有参数始终可见可改。
 - 💰 **差异化额度扣减规则**：通用/半通用 AI 在 DM 中由**聊天者**付费（谁用谁付），群聊中由**创建者**付费，共鸣型 AI 始终由创建者付费。扣减优先消耗 `platform_gifted_credit`（平台赠送），再消耗 `api_credit`。1 万 Token = 1 额度。
-- ⚡ **DM 触发决策树**：非主人发 DM → 检查 `allow_others_chat` → 允许则检查配额（quota 模式超限自动 flip + 系统 DM 通知主人）→ 检查聊天者余额（不足则 WebSocket 弹窗）→ 禁止则检查 `disallow_mode`（strict 静默跳过 / own_key 用聊天者自有 Key）。全新端点 `POST /dm/continue-with-own-key` 处理用户确认使用自有 Key。
+- ⚡ **DM 触发决策树**：非主人发 DM → 检查 `allow_others_chat` → 允许则检查配额（quota 模式超限自动 flip + 系统 DM 通知主人）→ 检查聊天者余额（不足则 WebSocket 弹窗）→ 禁止则检查 `disallow_mode`（strict 静默跳过 / own_key 用聊天者自有 Key）。全新端点 `POST /dm/continue-with-own-key` 处理使用自有 Key。
 - 🪟 **余额不足弹窗 BalancePromptModal**：聊天者额度不足时，后端通过 WebSocket 推送 `balance_prompt` 消息 → 前端全局弹窗提示「余额不足，是否使用自有 API Key？」→ 同意后续用、不同意取消。`useWebSocket` Hook 通过 CustomEvent 分发。
 - 🔄 **配额自动翻转 + 系统通知**：限额模式下 `others_chat_used` 达上限时自动将 `allow_others_chat` 翻转为 False，系统通过 DM 通知 AI 主人配额已用完。新增 `POST /agents/{id}/reset-others-chat-used` 端点供主人重置计数器。
 - 📊 **前端对话权限 UI**：CreateAgentModal 和 AgentSettingsModal 新增「对话权限」Section，含 Toggle 开关、子模式单选、配额输入、使用计数 + 重置按钮。左边界颜色编码。17 个新增 i18n 翻译键（中英）。

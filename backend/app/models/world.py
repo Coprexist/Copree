@@ -59,7 +59,7 @@ class WorldBinding(Base):
 
 
 class GroupAssistant(Base):
-    """群助手 — 独立实体（不是 agents 表行，产品 2026-08-13 定）
+    """群助手 — 独立实体（不是 agents 表行）
 
     与群视界 AI 同形态：无账号、无好友、不入群成员表、不占 agent 体系；
     绑定群视界群时按群类型模板自动创建，每群每助手一行。

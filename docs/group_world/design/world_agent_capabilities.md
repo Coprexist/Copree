@@ -1,6 +1,6 @@
 # 世界能力注入：群 AI / 世界 AI 的能力边界与路径
 
-> 2026-08-06 产品定稿。补充 world_skill_design.md 的角色边界与注入机制。
+> 补充 world_skill_design.md 的角色边界与注入机制。
 
 ## 一、角色与能力作用域（造物主 ≠ 居民）
 
@@ -68,7 +68,7 @@ AI 调 `world_command("旅人移动到 2,3")` → 以 AI 身份发群消息 → 
 - 变更（绑定/skill 增删/平台发布）→ capability_versioning：known 增量告知 + compact 后 effective 切新
 - 未绑定世界的 AI：无世界能力工具；绑定后按版本化流程注入
 
-**Skill 分层注入（2026-08-12 产品定）**：居民工具集再按**绑定类型**过滤——
+**Skill 分层注入**：居民工具集再按**绑定类型**过滤——
 skill manifest 可声明 `types`（适用类型列表，省略或 `["*"]` = 所有类型通用），
 注入时只给匹配类型的居民发对应 skill（详见 world_skill_design.md 三·六）。
 

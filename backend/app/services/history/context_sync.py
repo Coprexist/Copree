@@ -20,7 +20,7 @@ from app.utils.pure.history import gap_entry, latest_message_ref, take_newest_wi
 
 logger = logging.getLogger(__name__)
 
-# 一次同步最多带多少字符（用户 2026-09-26 定：40000 → 20000）。
+# 一次同步最多带多少字符（40000 → 20000）。
 # 和"最多 20 条"（max_unread_messages）**谁先到算谁**：都是"从最新往回"的预算，
 # 装不下的旧消息折成缺口条目（只报条数，读原文用 read_conversation）。
 BATCH_MAX_CHARS = 20_000

@@ -1,7 +1,7 @@
 """
 群类型系统服务 — 配置在文件（随世界打包），状态在 DB
 
-设计（产品 2026-08-09 定稿）：
+设计：
 - 类型定义（规则/绑定上限/助手模板）存世界文件夹 `group_types.json`，
   随世界打包分发（发布商城/导入自动带上）；世界作者可在设置 UI 或
   通过群视界机器人对话修改（像改世界名/简介一样）
@@ -42,7 +42,7 @@ DEFAULT_ASSISTANT_SPEC = {"count": 1, "need_api": True, "default_name": "群助�
 
 # 默认群类型：世界还没配置 group_types.json 时兜底（开箱即用，群/AI 都可绑定；用户自定义后覆盖）
 # slug=稳定 id（绑定存 slug，改名只改 name 不影响存量绑定）
-# bind_limit=-1 = 无限（产品 2026-08-12 定：默认类型群聊和 AI 数目都是无限）
+# bind_limit=-1 = 无限
 DEFAULT_GROUP_TYPES = [
     {"slug": "default", "name": "默认类型", "description": "未配置群类型时的兜底类型",
      "rules": "", "bind_limit": -1, "assistant_spec": {"count": 1, "need_api": False, "default_name": "群助手"}},
@@ -86,7 +86,7 @@ def save_group_types(world_id: int, types: list[dict]) -> None:
 def _normalize_type(t: dict) -> dict:
     """清洗单个类型定义：slug 从 name 生成（稳定 id），字段齐全。
 
-    bind_limit：-1 = 无限（产品 2026-08-12 定：不是极大值，用 -1 表达无限）；
+    bind_limit：-1 = 无限；
     0/负数（除 -1）→ 归 1（至少允许一个）；正整数 = 上限。
     """
     name = str(t.get("name") or "").strip()[:50]
@@ -179,7 +179,7 @@ async def bind_entry_with_type(
 
     - group：按模板自动创建群助手（幂等）
     - agent：AI 直接绑定世界（个人专属能力），只绑定 + 类型标记，不建助手
-    - ⚠️ AI 一律按 user_id 存（2026-08-12 产品定：全平台 AI 对外标识统一 user_id，
+    - ⚠️ AI 一律按 user_id 存（全平台 AI 对外标识统一 user_id，
       杜绝 agent.id 与另一 agent 的 user_id 撞车）——传入 agent.id 自动转 user_id
     """
     from app.models.agent import Agent as AgentModel

@@ -40,7 +40,7 @@ def test_set_title_falls_back_to_default_session():
 
 
 def test_set_title_can_target_any_session_in_the_list():
-    """前端会话列表要能改"列表里的任意一场"，不只是当前会话（2026-09-16 用户要求）"""
+    """前端会话列表要能改"列表里的任意一场"，不只是当前会话"""
     w = _world("w1:m:aaa", {"w1:m:aaa": {}, "w1:m:bbb": {}})
     assert set_session_title(w, "旧的界面实验", "w1:m:bbb") == "旧的界面实验"
     assert w.config["sessions"]["w1:m:bbb"]["title"] == "旧的界面实验"

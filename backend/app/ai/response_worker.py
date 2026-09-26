@@ -431,9 +431,7 @@ async def _process_group_event(db, event: dict):
         },
     }))
 
-    # 群助手触发（独立实体，非 agent——与群视界 AI 同形态，产品 2026-08-13 定）：
-    # 群绑定的世界助手按类型模板自动创建，存 group_assistants 表，不入群成员表。
-    # 群助手自己的消息（sender_id < 0）不触发，防自触发循环。
+    # 群助手触发（独立实体，存 group_assistants 表）；它自己的消息不触发，防自触发。
     if not (sender_type == "ai" and (sender_id or 0) < 0):
         try:
             from app.models.world import GroupAssistant
@@ -482,7 +480,7 @@ async def _trigger_group_assistant(
             is_mentioned = _check_mention(content, ga.name)
             is_at_all = any(tag in content for tag in ("@all", "@everyone", "@全体"))
 
-            # 决策技能优先（AI 自写规则，产品 2026-08-13 定）：命中且 notify=false →
+            # 决策技能优先（AI 自写规则）：命中且 notify=false →
             # 程序化处理（reply 代发到群），不唤醒 LLM 本体
             try:
                 from app.services.world.decision_skill import run_decision_engine, build_group_message_ctx
@@ -672,7 +670,7 @@ async def _maybe_trigger_ai_reply(
     is_at_all = any(tag in content for tag in ("@all", "@everyone", "@全体"))
     is_announcement = message_type == "announcement"
 
-    # 决策技能优先于触发模式（AI 自写规则 > 平台默认兜底，产品 2026-08-13 定）。
+    # 决策技能优先于触发模式（AI 自写规则 > 平台默认兜底）。
     # 不要求绑定世界；命中的代发标 source="world" 防回灌。见 docs/dev/decision_layer.md。
     decision_note = ""
     try:

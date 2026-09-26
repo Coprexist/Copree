@@ -1,7 +1,7 @@
 /**
  * 用户主题色应用 — 把 ui_prefs.theme_colors 覆盖到 CSS 变量（:root）
  *
- * 设计（2026-08-13 产品定：为个性化铺路）：
+ * 设计（为个性化铺路）：
  * - 主题色存在 ui_prefs.theme_colors（JSONB，后端零改动，走 /user/settings）
  * - key 用 CSS 变量名（如 primary_500 → --tw-primary-500），值 hex
  * - 应用 = documentElement.style.setProperty，运行时覆盖默认主题，无需改 CSS
