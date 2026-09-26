@@ -541,7 +541,12 @@ class QqNapcatPlugin(ServicePlugin):
         # Copree 群自己的触发设置照常生效。
         wake = mentioned or check_mention(content, self._target_agent)
         if wake:
-            content = f"@{self._target_agent} {content}".strip()
+            # 用 id 令牌点名（名字会改会重名，绑定出来的 user_id 才是身份）；
+            # 万一没绑到 user_id 才退回名字——旧写法仍被识别
+            from app.utils.text import mention_token
+
+            prefix = mention_token(self._target_user_id) if self._target_user_id else f"@{self._target_agent}"
+            content = f"{prefix} {content}".strip()
         if not content:
             return
         logger.info(
@@ -606,7 +611,7 @@ class QqNapcatPlugin(ServicePlugin):
             if self._client is not None:
                 await self._client.send_private_msg(
                     int(user_id),
-                    f"配对码：{code}\n把它填到 Copree 里这个 AI 的「QQ 通道（NapCat）」卡片上，我才会回话。",
+                    pairing.pairing_reply(code, "QQ 通道（NapCat）"),
                 )
             logger.info(f"QQ 陌生人私聊 → 已下发配对码（QQ {user_id}，昵称 {row.display_name or '?'}）")
         except Exception as e:
@@ -714,7 +719,8 @@ class QqNapcatPlugin(ServicePlugin):
         if not route or not text:
             return
         # 不降级 Markdown：NapCat 侧的 QQ 客户端能渲染，这正是用协议端的价值
-        asyncio.create_task(self._send_reply(route, text, kind="group"))
+        # 正文里的 <@!平台id> 翻成 CQ 的真 @
+        asyncio.create_task(self._send_reply(route, text, kind="group", link_mentions=True))
 
     async def _dm_outbound_sink(self, db: Any, session_id: str, msg: dict) -> None:
         """私信出口：这条私信是我们经手的会话、且是目标 AI 发的，就发回 QQ"""
@@ -728,11 +734,51 @@ class QqNapcatPlugin(ServicePlugin):
             return
         asyncio.create_task(self._send_reply(route, text, kind="dm"))
 
-    async def _send_reply(self, route: dict, text: str, kind: str) -> None:
+    async def _translate_mentions(self, text: str) -> str:
+        """<@!平台id> → [CQ:at,qq=<QQ号>]：只有走过这条通道的人，在 QQ 侧才有号可 @
+
+        认不出的（站内的人、别的通道的人）退回名字——令牌原样发过去只会是乱码。
+        查库放在这一步（后台任务）做，sink 是在发消息的链路里被调的，不能拖慢它。
+        """
+        from sqlalchemy import select
+
+        from app.database import async_session
+        from app.models.user import User
+        from app.services.plugin.channel_user import channel_contacts
+        from app.utils.text import iter_mention_ids, render_mentions
+
+        ids = iter_mention_ids(text)
+        if not ids:
+            return text
+        async with async_session() as db:
+            contacts = await channel_contacts(db, kind=self.channel_kind, owner_scope=self.instance)
+            unknown = [uid for uid in ids if uid not in contacts]
+            names: dict[int, str] = {}
+            if unknown:
+                rows = (await db.execute(
+                    select(User.id, User.username).where(User.id.in_(unknown))
+                )).all()
+                names = {int(uid): str(name or "") for uid, name in rows}
+        return render_mentions(
+            text,
+            lambda uid: (
+                f"[CQ:at,qq={contacts[uid]}]" if uid in contacts
+                else (f"@{names[uid]}" if names.get(uid) else "")
+            ),
+        )
+
+    async def _send_reply(self, route: dict, text: str, kind: str, *, link_mentions: bool = False) -> None:
+        """link_mentions：群回复才翻真 @（要查一次库认人）；私聊没有 @ 这回事"""
         client = self._client
         target = str(route.get("qq") or "")
         if client is None or not target:
             return
+        if link_mentions:
+            try:
+                text = await self._translate_mentions(text)
+            except Exception as e:
+                # 翻不成真 @ 也要照发：这条回复本身比 @ 的成色重要
+                logger.warning(f"QQ 群 @ 映射失败，按原文发送：{type(e).__name__}: {e}")
         try:
             if kind == "group":
                 await client.send_group_msg(int(target), text)

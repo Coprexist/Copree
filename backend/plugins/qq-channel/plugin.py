@@ -120,16 +120,30 @@ class QqClient:
         return data
 
     async def _send_rich(
-        self, path: str, content: str, msg_id: str | None, msg_seq: int
+        self, path: str, content: str, msg_id: str | None, msg_seq: int,
+        message_reference: str = "", force_type: int | None = None,
     ) -> dict:
         """先按 Markdown 发，机器人没有 MD 权限时退回纯文本。
 
         MD 权限是**机器人账号维度**的（腾讯那边开通），同一个平台里有的号有、有的没有；
         所以在同一次发送里降级，而不是在平台配置里写死——不然每接一个号都要先问一遍。
+
+        force_type 非空 = 用户明确指定了消息类型（有的 QQ 客户端只显示特定类型）：
+        这时不做降级、发一次，把响应或错误原样带回去。
         """
         from app.utils.text import plainify_markdown
 
         extra: dict[str, Any] = {"msg_id": msg_id, "msg_seq": msg_seq} if msg_id else {}
+        if message_reference:
+            # 精准引用：填了它 QQ 里就以引用形式展示（官方 message_reference）
+            extra["message_reference"] = {"message_id": message_reference}
+        if force_type is not None:
+            body: dict[str, Any] = {"msg_type": int(force_type), **extra}
+            if int(force_type) == 2:
+                body["markdown"] = {"content": content[:TEXT_LIMIT]}
+            else:
+                body["content"] = plainify_markdown(content)[:TEXT_LIMIT]
+            return await self._post(path, body)
         try:
             return await self._post(path, {"msg_type": 2, "markdown": {"content": content[:TEXT_LIMIT]}, **extra})
         except RuntimeError as e:
@@ -140,16 +154,37 @@ class QqClient:
         return await self._post(path, {"msg_type": 0, "content": plainify_markdown(content)[:TEXT_LIMIT], **extra})
 
     async def send_group(
-        self, group_openid: str, content: str, msg_id: str | None = None, msg_seq: int = 1
+        self, group_openid: str, content: str, msg_id: str | None = None, msg_seq: int = 1,
+        message_reference: str = "", force_type: int | None = None,
     ) -> dict:
-        """发群消息；带 msg_id = 被动回复（5 分钟内、最多 5 次），不带 = 主动消息（有频控）"""
-        return await self._send_rich(f"/v2/groups/{group_openid}/messages", content, msg_id, msg_seq)
+        """发群消息；带 msg_id = 被动回复（5 分钟内、最多 5 次），不带 = 主动消息（有频控）。
+
+        message_reference = 要精准引用的那条消息的 REFIDX（见 message_reference 文档）。
+        """
+        return await self._send_rich(
+            f"/v2/groups/{group_openid}/messages", content, msg_id, msg_seq, message_reference, force_type
+        )
 
     async def send_c2c(
         self, user_openid: str, content: str, msg_id: str | None = None, msg_seq: int = 1
     ) -> dict:
         """发私聊消息（被动回复 60 分钟内、最多 4 次）"""
         return await self._send_rich(f"/v2/users/{user_openid}/messages", content, msg_id, msg_seq)
+
+    async def delete_group_message(self, group_openid: str, message_id: str) -> dict:
+        """撤回群消息（官方：发送超过 2 分钟不可撤回；机器人是群管理员时还能撤普通成员的消息）"""
+        http = await self._client()
+        res = await http.delete(
+            f"/v2/groups/{group_openid}/messages/{message_id}",
+            headers={"Authorization": f"QQBot {await self.token()}"},
+        )
+        try:
+            data = res.json()
+        except Exception:
+            data = {}
+        if res.status_code >= 400 or data.get("code"):
+            raise RuntimeError(f"撤回 QQ 消息失败（HTTP {res.status_code}）：{data}")
+        return data
 
 
 @service(
@@ -185,6 +220,35 @@ class QqClient:
             "description_en": "Group openids, comma separated; empty = no limit",
             "description_ja": "グループ openid をカンマ区切り。空欄＝制限なし",
         },
+        "body_format": {
+            "type": "string", "title": "正文格式",
+            "title_en": "Body format", "title_ja": "本文の形式",
+            "description": "默认：先按 Markdown 发，机器人没权限时自动降级纯文本；"
+                           "也可以固定成纯文本（有些不渲染 Markdown 的客户端）或固定成 Markdown",
+            "description_en": "Default: try Markdown first and fall back to plain text; "
+                              "or pin plain text / Markdown",
+            "description_ja": "既定：まず Markdown、権限が無ければ自動でプレーンテキスト。"
+                              "プレーン／Markdown に固定も可",
+            "options": [
+                {"value": "", "label": "默认（Markdown 优先，没权限自动降级）",
+                 "label_en": "Default (Markdown first, fall back to text)",
+                 "label_ja": "既定（まず Markdown、権限が無ければテキスト）"},
+                {"value": "plain", "label": "纯文本", "label_en": "Plain text",
+                 "label_ja": "プレーンテキスト"},
+                {"value": "markdown", "label": "Markdown", "label_en": "Markdown",
+                 "label_ja": "Markdown"},
+            ],
+        },
+        "quote_replies": {
+            "type": "boolean", "title": "引用回复",
+            "title_en": "Quote the replied message", "title_ja": "引用返信",
+            "description": "回复群里某条消息时以引用形式展示（官方 message_reference）。"
+                           "它是**独立维度**：跟上面选哪种正文格式都能叠",
+            "description_en": "Show the replied message as a quote (official message_reference). "
+                              "Independent from the body format above",
+            "description_ja": "返信時に対象メッセージを引用表示（公式 message_reference）。"
+                              "本文の形式とは独立して設定できます",
+        },
         "dm_policy": {
             "type": "string", "title": "私聊策略（pairing / owner / open / off）",
             "description": "默认 pairing：陌生人私聊只会收到一个配对码，批准之后才能跟 AI 说话；"
@@ -193,6 +257,9 @@ class QqClient:
     },
 )
 class QqChannelPlugin(ServicePlugin):
+    # 能发消息，所以有「通道自测」（管理卡片上的按钮据此显示）
+    self_testable = True
+
     def __init__(self) -> None:
         self._task: asyncio.Task | None = None
         self._client: QqClient | None = None
@@ -203,6 +270,10 @@ class QqChannelPlugin(ServicePlugin):
         self._target_user_id = 0
         self._allow: set[str] = set()
         self._dm_policy = "pairing"
+        # 正文格式：None = 默认（先 Markdown，没权限降级纯文本）；有值 = 固定成它
+        self._msg_type: int | None = None
+        # 引用回复（独立维度）：回复 QQ 来消息时带 message_reference
+        self._quote_replies = True
         # 配对码通知节流：同一个人反复私聊时别把码刷屏（60 秒最多提醒一次）
         self._pair_notified: dict[str, float] = {}
         # 回复路由：群 → 最近一次来消息的 QQ 群；私信会话 → 那条私聊（含被动回复凭据）
@@ -212,6 +283,10 @@ class QqChannelPlugin(ServicePlugin):
         self._route: dict[int, dict[str, Any]] = {}
         self._dm_route: dict[str, dict[str, Any]] = {}
         self._seen: deque[str] = deque(maxlen=DEDUP_SIZE)
+        # 已落库的消息：msg_id → (站内消息 id, 落库时的正文)。
+        # 同一条消息的另一种事件（@模式 ↔ 全量模式）更全时，用它把正文补上
+        self._delivered: dict[str, tuple[int, str]] = {}
+        self._delivered_order: deque[str] = deque()
         # 最近见到过的 QQ 群（诊断用，内存态）：卡片上要能看见群 openid 才好填白名单
         self._seen_groups: dict[str, dict[str, Any]] = {}
         self._sent: dict[str, deque[float]] = {}
@@ -280,6 +355,8 @@ class QqChannelPlugin(ServicePlugin):
 
         self._allow = _split_list(cfg.get("qq_group_allowlist"))
         self._dm_policy = (str(cfg.get("dm_policy") or "pairing").strip().lower() or "pairing")
+        self._msg_type = _msg_type_of(cfg.get("body_format"))
+        self._quote_replies = str(cfg.get("quote_replies", "true")).strip().lower() not in ("false", "0", "off")
         self._client = QqClient(app_id, secret)
         self.last_error = ""
         self.connected = False
@@ -289,7 +366,9 @@ class QqChannelPlugin(ServicePlugin):
 
         # 出口注册名用 **key（带实例）**：id 是插件类型，两个实例同名会互相顶掉——
         # 2026-09-25 线上实测：新绑的第二个 QQ 通道把第一个的出口覆盖，群 64 的 AI 回复被静默丢弃
-        self._sink_handle = register_sink(self.key, group=self._outbound_sink, dm=self._dm_outbound_sink)
+        self._sink_handle = register_sink(
+            self.key, group=self._outbound_sink, dm=self._dm_outbound_sink, revoke=self._revoke_sink
+        )
         self._task = asyncio.create_task(self._supervise())
         logger.info(
             f"QQ 通道[{self.instance}] 已启动：AI={self._target_agent}"
@@ -303,6 +382,8 @@ class QqChannelPlugin(ServicePlugin):
         unregister_sink(getattr(self, "_sink_handle", None) or self.key)
         self._route.clear()
         self._dm_route.clear()
+        self._delivered.clear()
+        self._delivered_order.clear()
         if self._task is not None:
             self._task.cancel()
             try:
@@ -430,6 +511,11 @@ class QqChannelPlugin(ServicePlugin):
             self.bot_name = str((data.get("user") or {}).get("username") or "")
             logger.info(f"QQ 机器人已就绪：{self.bot_name}（实例 {self.instance}）")
             return
+        if event == "GROUP_MESSAGE_CREATE":
+            # 全量模式：群主在 QQ 群设置里把「机器人可获取的群聊消息范围」设成「群内全部消息」后，
+            # 群里每条消息都推这个事件（同一个 Intent）。没开就根本收不到，@ 那条路照旧——开不开都兼容
+            await self._on_group_message(data)
+            return
         if event == "GROUP_AT_MESSAGE_CREATE":
             await self._on_group_at(data)
             return
@@ -510,7 +596,7 @@ class QqChannelPlugin(ServicePlugin):
         try:
             await self._client.send_c2c(
                 openid,
-                f"配对码：{code}\n把它填到 Copree 里这个 AI 的「QQ 通道」卡片上，我才会回话。",
+                pairing.pairing_reply(code, "QQ 通道"),
                 msg_id=msg_id,
             )
             logger.info(f"QQ 陌生人私聊 → 已下发配对码（openid …{openid[-6:]}，昵称 {row.display_name or '?'}）")
@@ -520,6 +606,82 @@ class QqChannelPlugin(ServicePlugin):
         return False
 
     async def _on_group_at(self, d: dict) -> None:
+        """群 @ 机器人事件：这个事件本身就是"被点名"，不用再判一次。"""
+        await self._handle_group_message(d, addressed=True)
+
+    async def _on_group_message(self, d: dict) -> None:
+        """全量模式（开了「接收所有消息」）：群里每条消息都推过来，**有消息就进 Copree**
+        （能拿到多少拿多少——镜像群本来就该是完整的对话）。
+
+        但"进 Copree"和"叫 AI"是两件事：只有点名到机器人才加唤醒令牌，否则 AI 会被迫
+        围观全部闲聊。**开不开都兼容**：没开这个功能就收不到这个事件，@ 那条路照旧（用户 2026-09-26 定）。
+        """
+        await self._handle_group_message(d, addressed=self._addressed_to_bot(d))
+
+    def _addressed_to_bot(self, d: dict) -> bool:
+        """这条消息点没点到机器人。
+
+        全量事件里官方给 mentions（带 bot 标记），优先用它；拿不到就退回按名字判
+        （@机器人 的前缀在两种事件里都被官方去掉了，所以名字判定是唯一兜底）。
+        """
+        for user in d.get("mentions") or []:
+            if isinstance(user, dict) and user.get("bot"):
+                return True
+        from app.utils.text import check_mention
+
+        return check_mention(self._readable_content(d), self._target_agent)
+
+    async def _materialize_mentions(self, d: dict, content: str) -> str:
+        """把这条消息 @ 到的人先建成 Copree 群成员，并在正文里补上他们的 id 令牌。
+
+        为什么：正文里的 @名字 要靠入口归一变成 <@!平台id>，前提是"这人已经是群成员"；
+        而被 @ 的人可能还没说过话（还没账号）。QQ 有时还会把 @成员的提及从正文里摘掉
+        （只在 mentions 里给）——那就在这里直接补 <@!id>，AI 和界面都认得。
+        只有全量模式（官方给 mentions）才做得了；@模式载荷里没有这个字段（用户 2026-09-26 定）。
+        """
+        mentions = [
+            m for m in (d.get("mentions") or [])
+            if isinstance(m, dict) and not m.get("bot")
+        ]
+        if not mentions or not self._copree_group_id:
+            return content
+
+        from app.database import async_session
+        from app.services.plugin.channel_user import ensure_channel_user
+        from app.utils.text import mention_token
+
+        tokens: list[str] = []
+        async with async_session() as db:
+            for user in mentions:
+                origin = str(user.get("id") or user.get("member_openid") or "")
+                if not origin:
+                    continue
+                ensured = await ensure_channel_user(
+                    db, kind=self.channel_kind, owner_scope=self.instance, origin=origin,
+                    display_name=str(user.get("username") or ""),
+                    origin_channel=self.channel_kind[:16], join_group=self._copree_group_id,
+                )
+                if ensured is None:
+                    continue
+                uid, name = ensured
+                if name and f"@{name}" in content:
+                    continue          # 正文里本来就写着，交给入口归一
+                tokens.append(mention_token(uid))
+            await db.commit()
+        return ("".join(tokens) + " " + content) if tokens else content
+
+    def _with_mention_prefix(self, content: str) -> str:
+        """两边语义对齐：QQ 里 @机器人 = 在 Copree 里 @这个 AI（群自己的唤醒规则仍然生效）。
+
+        用 id 令牌点名而不是名字：名字会改、会重名，绑定出来的 user_id 才是身份；
+        万一没绑到 user_id 才退回名字（旧写法仍被识别）。
+        """
+        from app.utils.text import mention_token
+
+        prefix = mention_token(self._target_user_id) if self._target_user_id else f"@{self._target_agent}"
+        return f"{prefix} {content}"
+
+    async def _handle_group_message(self, d: dict, *, addressed: bool) -> None:
         author = d.get("author") or {}
         if author.get("bot"):
             return
@@ -528,6 +690,9 @@ class QqChannelPlugin(ServicePlugin):
         if not msg_id or not qq_group:
             return
         if self._seen_before(msg_id):
+            # 同一条消息的两种事件（@模式 + 全量模式）都会到：谁先到谁落库；
+            # 后来那个更全就把库里的正文补上（@模式的正文会在"@其他成员"处断掉）
+            await self._upgrade_delivered_content(msg_id, self._with_mention_prefix(self._readable_content(d)))
             return
         # 先记账再判白名单：白名单该怎么填，前提是界面能看见"机器人在哪些群里出现过"。
         # 被白名单挡下的群同样记下来（allowed=False），否则用户永远发现不了它。
@@ -540,26 +705,52 @@ class QqChannelPlugin(ServicePlugin):
             return
 
         content = self._readable_content(d)
+        content = await self._materialize_mentions(d, content)
+        # 点名到机器人 → 加唤醒令牌（Copree 的唤醒规则认它）；没点名 → 只入库、不叫 AI
+        if addressed:
+            content = self._with_mention_prefix(content).strip()
         if not content:
             return
-        # 两边语义对齐：QQ 里 @机器人 = 在 Copree 里 @这个 AI（群自己的唤醒规则仍然生效）
-        content = f"@{self._target_agent} {content}"
 
         # 官方事件表里 author 有 username，但真机上我们只拿到过占位名 —— 打一行真实字段，
         # 一眼分清「腾讯没给昵称」还是「我们没读出来」（openid 只留尾号，标识不进日志）
         _openid = str(author.get("member_openid") or author.get("user_openid") or author.get("id") or "")
+        # message_scene.ext 里带 msg_idx（本条消息的 REFIDX，出站引用要用它）与 ref_msg_idx
+        # （对方引用的是哪条）。只打键名：ext 里还可能有 auth_token，值不进日志
+        scene = d.get("message_scene") or {}
+        raw_ext = scene.get("ext") if isinstance(scene.get("ext"), list) else []
+        ext: dict[str, str] = {}
+        for item in raw_ext:
+            key, _, value = str(item).partition("=")
+            if key:
+                ext[key] = value
+        elements = d.get("msg_elements") if isinstance(d.get("msg_elements"), list) else []
+        # 只报长度与类型，不报值：ext 里还有 auth_token（凭据），值一律不进日志。
+        # msg_idx 是本条消息的引用索引（出站精准引用要用它）、ref_msg_idx 是"对方引用了哪条"
         logger.info(
             f"QQ 群消息[{self.instance}]: openid …{_openid[-6:]} "
             f"昵称={author.get('username') or '(空)'} author字段={sorted(author.keys())} "
-            f"消息字段={sorted(d.keys())} mentions={json.dumps(d.get('mentions') or d.get('message_mentions'), ensure_ascii=False)[:200]}",
+            f"消息字段={sorted(d.keys())} message_type={d.get('message_type')} "
+            f"mentions={json.dumps(d.get('mentions') or d.get('message_mentions'), ensure_ascii=False)[:200]} "
+            f"场景={scene.get('source')} scene_ext键={sorted(ext)} "
+            f"msg_idx长度={len(ext.get('msg_idx') or '')} ref_msg_idx长度={len(ext.get('ref_msg_idx') or '')} "
+            f"元素类型={[e.get('message_type') for e in elements if isinstance(e, dict)]}",
         )
 
         try:
-            peer_name = await self._deliver_to_group(qq_group, author, content)
+            delivered = await self._deliver_to_group(
+                qq_group, author, content, msg_id, str(ext.get("msg_idx") or "")
+            )
+            peer_user_id, peer_name, copree_msg_id = delivered or (0, "", 0)
+            self._remember_delivered(msg_id, copree_msg_id, content)
             self._route[self._copree_group_id] = {
                 "qq": qq_group, "msg_id": msg_id, "seq": 0, "ts": time.time(),
                 # 出站摘 @ 要用它：QQ 的被动回复自己显示 @对方，正文里那个 @是谁要对得上
                 "peer_name": peer_name or "",
+                # 自测要在正文里 @ 回去：群消息里只有 member_openid 能当 @ 的目标
+                "peer_openid": _openid,
+                # 摘正文开头那个 @ 要用平台 id（入口归一之后它是 <@!id>，名字摘不动）
+                "peer_user_id": peer_user_id,
             }
         except Exception as e:
             self.last_error = f"入站失败：{type(e).__name__}: {e}"
@@ -594,6 +785,45 @@ class QqChannelPlugin(ServicePlugin):
             self.last_error = f"私信入站失败：{type(e).__name__}: {e}"
             logger.warning(f"QQ 私聊消息进 Copree 失败：{self.last_error}", exc_info=True)
 
+    def _remember_delivered(self, msg_id: str, message_id: int, content: str) -> None:
+        """记住"这条消息我们落库了、正文是什么"——另一种事件带来更全的正文时要用它补"""
+        if not msg_id or not message_id:
+            return
+        self._delivered[msg_id] = (int(message_id), content)
+        self._delivered_order.append(msg_id)
+        while len(self._delivered_order) > DEDUP_SIZE:
+            self._delivered.pop(self._delivered_order.popleft(), None)
+
+    async def _upgrade_delivered_content(self, msg_id: str, fuller: str) -> None:
+        """同一条消息的另一个事件更全 → 把库里的正文补上。
+
+        为什么需要：@模式事件的正文会在"@其他成员"处断掉（官方只给到那一截）。
+        开了全量模式后，同一个 msg_id 还会再来一条完整的；谁先到谁落库，后到的更全就补。
+        账本里那条若已经写下就改不动了（账本只追加），所以这条纠正主要给界面显示、
+        以及还没轮到 AI 看的时候——比"永远只有半截"强。
+        """
+        remembered = self._delivered.get(msg_id)
+        if not remembered or not fuller:
+            return
+        message_id, stored = remembered
+        if len(fuller) <= len(stored) or not fuller.startswith(stored):
+            return
+        from app.database import async_session
+        from app.models.message import Message
+
+        try:
+            async with async_session() as db:
+                row = await db.get(Message, message_id)
+                if row is not None and str(row.content or "") == stored:
+                    row.content = fuller
+                    await db.commit()
+            self._delivered[msg_id] = (message_id, fuller)
+            logger.info(
+                f"QQ 群消息正文已用更全的事件补上（站内 msg {message_id}：{len(stored)} → {len(fuller)} 字）"
+            )
+        except Exception as e:
+            logger.warning(f"补全正文失败（非致命）：{type(e).__name__}: {e}")
+
     @staticmethod
     def _readable_content(d: dict) -> str:
         """事件里的可用文本：正文优先，图片/语音/文件转成占位，别让 AI 以为没人说话"""
@@ -616,7 +846,10 @@ class QqChannelPlugin(ServicePlugin):
                 parts.append(f"[文件] {(att or {}).get('filename') or ''}".strip())
         return " ".join(parts).strip()
 
-    async def _deliver_to_group(self, qq_group: str, author: dict, content: str) -> str | None:
+    async def _deliver_to_group(
+        self, qq_group: str, author: dict, content: str, channel_msg_id: str = "",
+        channel_ref_idx: str = "",
+    ) -> tuple[int, str, int] | None:
         """把 QQ 群消息当作一次正常的群发言落库，并走与网页端完全相同的投递链路"""
         from app.chat.gm import send_gm_message
         from app.chat.group_delivery import (
@@ -642,6 +875,13 @@ class QqChannelPlugin(ServicePlugin):
                 content=content,
                 via="qq",          # 群里要能看出这条是从 QQ 来的
             )
+            if channel_msg_id:
+                # 记下通道侧的消息 id：站内撤回时要请 QQ 一起撤
+                # （机器人是群管理员时，还能撤回普通成员的消息）
+                message.channel_msg_id = channel_msg_id
+            if channel_ref_idx:
+                # 记下它的 REFIDX：AI 回复这条时要精准引用（message_reference 用它）
+                message.channel_ref_idx = channel_ref_idx
             await db.flush()
             # 序列化一次，两处共用：AI 成员（fanout）和群里的人（broadcast）
             msg_data = await message_view(db, message)
@@ -652,7 +892,9 @@ class QqChannelPlugin(ServicePlugin):
             wake_group_ai(self._copree_group_id, message, content)
             await maybe_vectorize_group_message(db, self._copree_group_id, message)
             logger.info(f"QQ 群 {qq_group} 的消息已进入 Copree 群 #{self._copree_group_id}（msg {message.id}）")
-            return peer_name
+            # 连 id 一起带回去：出站摘正文开头的 @ 要用它（入口归一之后是 <@!id>，名字摘不动）；
+            # 站内消息 id 给"另一种事件更全时补正文"用
+            return sender_id, str(peer_name or ""), int(message.id)
 
     async def _deliver_to_dm(self, openid: str, author: dict, content: str) -> str | None:
         """QQ 私聊 → 与该 AI 的私信会话（私信落库后同样走共用分发；涉及 AI 免好友校验）"""
@@ -719,10 +961,16 @@ class QqChannelPlugin(ServicePlugin):
         # 正文里的 Markdown 不再在这里降级：能不能发 MD 由 QqClient._send_rich 按机器人权限决定
         from app.utils.text import strip_leading_mention
 
-        text = strip_leading_mention(text, str(route.get("peer_name") or "")).strip()
+        text = strip_leading_mention(
+            text, str(route.get("peer_name") or ""), int(route.get("peer_user_id") or 0) or None
+        ).strip()
         if not text:
             return
-        asyncio.create_task(self._send_reply(route, text, kind="group"))
+        # 正文里剩下的 <@!平台id> 翻成 QQ 的真 @（会 @ 到人、会提醒）
+        asyncio.create_task(self._send_reply(
+            route, text, kind="group", link_mentions=True, message_id=getattr(message, "id", None),
+            reply_to=getattr(message, "reply_to", None),
+        ))
 
     async def _dm_outbound_sink(self, db: Any, session_id: str, msg: dict) -> None:
         """私信出口：这条私信是我们经手的会话、且是 AI 发的，就发回 QQ"""
@@ -736,37 +984,214 @@ class QqChannelPlugin(ServicePlugin):
         text = str(msg.get("content") or "").strip()
         if not text:
             return
-        asyncio.create_task(self._send_reply(route, text, kind="dm"))
+        asyncio.create_task(self._send_reply(route, text, kind="dm", message_id=msg.get("id")))
 
-    async def _send_reply(self, route: dict, text: str, kind: str) -> None:
+    async def _send_reply(self, route: dict, text: str, kind: str, *, link_mentions: bool = False,
+                          message_id: int | None = None, reply_to: int | None = None) -> None:
+        """后台发一条回复：这是 fire-and-forget 的尾巴，失败了没人接得住，只能记进状态
+
+        link_mentions：群回复才翻真 @（要查一次库认人）；私聊没有 @ 这回事，也就不查。
+        message_id：站内那条消息的 id——发成功后要把通道侧的 id 记回去，撤回才找得到它。
+        """
+        if link_mentions:
+            try:
+                text = await self._translate_mentions(text)
+            except Exception as e:
+                # 翻不成真 @ 也要照发：这条回复本身比 @ 的成色重要
+                logger.warning(f"QQ 群 @ 映射失败，按原文发送：{type(e).__name__}: {e}")
+        reference_id = await self._reply_reference(reply_to, kind)
+        try:
+            # 群回复按配置的消息类型发（留空 = 默认：先 Markdown、没权限降级纯文本）
+            result = await self._deliver(
+                route, kind, text, reference_id=reference_id,
+                msg_type=self._msg_type if kind == "group" else None,
+            )
+        except Exception as e:
+            self.last_error = f"发送失败：{type(e).__name__}: {e}"
+            logger.warning(
+                f"回复到 QQ {'群' if kind == 'group' else '用户'} "
+                f"{str(route.get('qq') or '')[-6:]} 失败：{self.last_error}"
+            )
+            return
+        # 记下通道侧那条消息的 id（撤回要用）与引用索引（引用要用）
+        response = result.get("response") or {}
+        await self._remember_channel_ids(
+            kind, message_id,
+            channel_id=str(response.get("id") or ""),
+            ref_idx=str((response.get("ext_info") or {}).get("ref_idx") or ""),
+        )
+
+    async def _reply_reference(self, reply_to: int | None, kind: str) -> str:
+        """AI 的回复若 reply_to 指向一条 QQ 来消息，就取出它的 REFIDX 做精准引用。
+
+        只对群消息做（官方 c2c 的引用字段没有实测过，宁可不发也不发错）。
+        """
+        if not reply_to or kind != "group" or not self._quote_replies:
+            return ""
+        from app.database import async_session
+        from app.models.message import Message
+
+        async with async_session() as db:
+            row = await db.get(Message, int(reply_to))
+        return str(getattr(row, "channel_ref_idx", "") or "") if row is not None else ""
+
+    async def _remember_channel_ids(self, kind: str, message_id: int | None, *,
+                                    channel_id: str = "", ref_idx: str = "") -> None:
+        """把通道侧那条消息的 id 记回库里。
+
+        为什么要另开 session：出站是 fire-and-forget 的后台任务，原请求那个 session 早就 commit 了。
+        """
+        if not message_id or not (channel_id or ref_idx):
+            return
+        from app.database import async_session
+        from app.models.dm import DMMessage
+        from app.models.message import Message
+
+        model = Message if kind == "group" else DMMessage
+        try:
+            async with async_session() as db:
+                row = await db.get(model, int(message_id))
+                if row is not None:
+                    if channel_id and not getattr(row, "channel_msg_id", None):
+                        row.channel_msg_id = channel_id
+                    if ref_idx and not getattr(row, "channel_ref_idx", None):
+                        row.channel_ref_idx = ref_idx
+                    await db.commit()
+        except Exception as e:
+            # 记不住不影响这条消息本身，只是撤回/引用会不可用
+            logger.warning(f"通道消息 id 未记住（该条将无法在 QQ 侧撤回/引用）：{type(e).__name__}: {e}")
+
+    async def _revoke_sink(self, db: Any, group_id: int, message: Any) -> dict | None:
+        """站内撤回 → 请 QQ 一起撤（2 分钟内；机器人是群管理员时还能撤普通成员的消息）。
+
+        撤不掉就**如实回报**：调用方要把"站内已撤、QQ 撤不掉"告诉用户，别假装成功。
+        """
+        if not self._copree_group_id or group_id != self._copree_group_id:
+            return None
+        channel_id = str(getattr(message, "channel_msg_id", "") or "")
+        route = self._route.get(group_id)
+        if not channel_id or not route:
+            return None                       # 这条没经通道，或我们没记住它的通道 id
         client = self._client
         if client is None or not self._task or self._task.done():
-            return
+            return {"channel": self.key, "ok": False, "reason": "通道没在运行"}
+        try:
+            await client.delete_group_message(str(route.get("qq") or ""), channel_id)
+        except Exception as e:
+            return {"channel": self.key, "ok": False, "reason": str(e)}
+        return {"channel": self.key, "ok": True}
+
+    async def _translate_mentions(self, text: str) -> str:
+        """<@!平台id> → <@!openid>：只有走过这条通道的人，在 QQ 侧才有 id 可 @
+
+        认不出的（站内的人、别的通道的人）退回名字——令牌原样发到 QQ 只会是乱码。
+        查库放在这一步（后台任务）做，sink 是在发消息的链路里被调的，不能拖慢它。
+        """
+        from sqlalchemy import select
+
+        from app.database import async_session
+        from app.models.user import User
+        from app.services.plugin.channel_user import channel_contacts
+        from app.utils.text import iter_mention_ids, render_mentions
+
+        ids = iter_mention_ids(text)
+        if not ids:
+            return text
+        async with async_session() as db:
+            contacts = await channel_contacts(db, kind=self.channel_kind, owner_scope=self.instance)
+            unknown = [uid for uid in ids if uid not in contacts]
+            names: dict[int, str] = {}
+            if unknown:
+                rows = (await db.execute(
+                    select(User.id, User.username).where(User.id.in_(unknown))
+                )).all()
+                names = {int(uid): str(name or "") for uid, name in rows}
+        return render_mentions(
+            text,
+            lambda uid: (
+                f"<@!{contacts[uid]}>" if uid in contacts
+                else (f"@{names[uid]}" if names.get(uid) else "")
+            ),
+        )
+
+    async def _deliver(self, route: dict, kind: str, text: str, *, passive_only: bool = False,
+                       reference_id: str = "", msg_type: int | None = None) -> dict:
+        """把一条消息发到 route 指向的会话（频控与被动回复窗口都在这里）
+
+        失败一律抛异常：调用方一个要记状态（后台回复）、一个要把原因给用户看（自测），
+        各写一份"为什么没发出去"迟早不一致。
+        passive_only：窗口过期时宁可失败也不退成主动消息——自测走这条路，
+        它不该靠一条有配额的主动消息来冒充"通"。
+        """
+        client = self._client
+        if client is None or not self._task or self._task.done():
+            raise RuntimeError("通道没在运行")
         target = str(route.get("qq") or "")
         if not target:
-            return
+            raise RuntimeError("这条路由里没有目标会话")
         if not await self._wait_for_slot(target):
-            logger.warning(f"QQ {'群' if kind == 'group' else '用户'} {target[-6:]} 触发频控，丢弃一条回复：{text[:40]}")
-            return
+            raise RuntimeError("触发频控（单会话 20/分钟、Bot 60/分钟），过一分钟再试")
         window, limit = (GROUP_WINDOW, GROUP_MAX) if kind == "group" else (DM_WINDOW, DM_MAX)
         msg_id = route.get("msg_id") or None
         seq = int(route.get("seq") or 0)
         fresh = (time.time() - float(route.get("ts") or 0)) < window
         if msg_id and fresh and seq < limit:
             route["seq"] = seq + 1
+            mode = "passive"
+        elif passive_only:
+            raise RuntimeError("被动回复窗口已过：先去那个会话里说一句（群里 @ 一次机器人）再自测")
         else:
             msg_id = None
+            mode = "active"
+        if kind == "group":
+            data = await client.send_group(
+                target, text, msg_id=msg_id, msg_seq=seq + 1, message_reference=reference_id,
+                force_type=msg_type,
+            )
+        else:
+            # 私聊的引用字段官方没给（也没实测过），宁可不发也不发错
+            data = await client.send_c2c(target, text, msg_id=msg_id, msg_seq=seq + 1)
+        if kind == "group":
+            self.replies += 1
+        else:
+            self.dm_replies += 1
+        self.last_error = ""
+        return {"mode": mode, "response": dict(data or {})}
+
+    def _live_route(self) -> tuple[dict[str, Any] | None, str]:
+        """最近一次来消息的那条路由（群或私聊）——自测要打在最可能通的那条路上"""
+        candidates = [(float(r.get("ts") or 0), "group", r) for r in self._route.values()]
+        candidates += [(float(r.get("ts") or 0), "dm", r) for r in self._dm_route.values()]
+        if not candidates:
+            return None, ""
+        _, kind, route = max(candidates, key=lambda c: c[0])
+        return route, kind
+
+    async def self_test(self) -> dict[str, Any] | None:
+        """通道自测：在最近那条路由上真发一条，把腾讯的原始响应带回来
+
+        为什么只能在本进程里点：被动回复凭据（msg_id/seq）只活在内存的路由表里，
+        换个进程就只剩一份过期的副本——这也是它不能走"插件配置"那条接口的原因。
+
+        探针一句话里并排两种写法，要问的就是腾讯那个问题：群消息的正文认不认内联 @ 标记。
+        内联 @ 后面出现蓝色的对方 = 认；显示成原文尖括号 = 不认（那就继续发纯文本的 @名字）。
+        """
+        route, kind = self._live_route()
+        if route is None:
+            return {"sent": False, "reason": "还没有收到过消息：先去那个 QQ 会话里说一句（群里 @ 一次机器人）"}
+        openid = str(route.get("peer_openid") or "") if kind == "group" else str(route.get("qq") or "")
+        name = str(route.get("peer_name") or "")
+        probes = [p for p in (f"内联@：<@!{openid}>" if openid else "", f"纯文本：@{name}" if name else "") if p]
+        text = "（通道自测，请忽略）" + " ／ ".join(probes)
         try:
-            if kind == "group":
-                await client.send_group(target, text, msg_id=msg_id, msg_seq=seq + 1)
-                self.replies += 1
-            else:
-                await client.send_c2c(target, text, msg_id=msg_id, msg_seq=seq + 1)
-                self.dm_replies += 1
-            self.last_error = ""
+            # 也按配置的消息类型发：点一次自测＝用当前配置的真实发一条
+            result = await self._deliver(
+                route, kind, text, passive_only=True,
+                msg_type=self._msg_type if kind == "group" else None,
+            )
         except Exception as e:
-            self.last_error = f"发送失败：{type(e).__name__}: {e}"
-            logger.warning(f"回复到 QQ {'群' if kind == 'group' else '用户'} {target[-6:]} 失败：{self.last_error}")
+            return {"sent": False, "target": kind, "reason": f"{type(e).__name__}: {e}"}
+        return {"sent": True, "target": kind, "text": text, **result}
 
     async def _wait_for_slot(self, key: str) -> bool:
         """频控：单关系 20/qpm、Bot 60/qpm。等不到就放弃（回复有时效，排队反而更糟）"""
@@ -783,6 +1208,21 @@ class QqChannelPlugin(ServicePlugin):
                 return True
             await asyncio.sleep(1)
         return False
+
+
+def _msg_type_of(raw: Any) -> int | None:
+    """配置里的"正文格式" → 协议里的 msg_type。
+
+    配置里写的是**意图**（plain / markdown），不是协议数字：官方发送侧只有 0=文本、2=Markdown、
+    7=富媒体（3 文档没写清），把数字暴露到界面上只会让人猜。留空 = 默认（先 Markdown，没权限降级）。
+    数字串照样认（老配置/手工填的值）。
+    """
+    text = str(raw or "").strip().lower()
+    if text in ("plain", "text", "0"):
+        return 0
+    if text in ("markdown", "md", "2"):
+        return 2
+    return None
 
 
 def _split_list(raw: Any) -> set[str]:

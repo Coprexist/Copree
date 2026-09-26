@@ -125,6 +125,21 @@ async def list_rows(
     return list((await db.execute(stmt.order_by(ExternalIdentity.id.desc()))).scalars().all())
 
 
+def pairing_reply(code: str, card: str) -> str:
+    """陌生人私聊收到的配对码回复（两条通道共用一份：改一次两条都改）。
+
+    card = 用户要去填码的那张卡片名（QQ 通道 / QQ 通道（NapCat））。
+    末尾两句是用户 2026-09-26 定的：别让人以为在跟"某个人的 AI"说话，
+    以及给出开源地址（陌生人看到机器人会想知道这是什么）。
+    """
+    return (
+        f"配对码：{code}\n"
+        f"把它填到 Copree 里此 AI 的「{card}」卡片上，我才会回话。\n"
+        f"如果你不是我的创建者，请联系我的创建者。\n"
+        f"Copree开源地址：github.com/Coprexist/Copree"
+    )
+
+
 async def approve(
     db: AsyncSession, *, kind: str, owner_scope: str, pairing_id: int | None = None,
     origin: str | None = None, code: str | None = None

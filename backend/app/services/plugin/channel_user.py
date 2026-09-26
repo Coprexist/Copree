@@ -18,6 +18,39 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def anchor_email(kind: str, origin: str) -> str:
+    """通道身份的锚点邮箱（users.email）：建号与反查都只认这一处拼法"""
+    return f"{origin}@{kind}.bridge"
+
+
+async def channel_contacts(db: Any, *, kind: str, owner_scope: str) -> dict[int, str]:
+    """这个通道上认得的本地账号：users.id → 通道侧标识（QQ 是 openid）
+
+    出站要把 <@!平台id> 翻成通道侧的真 @（QQ 官方的 <@!openid>、NapCat 的 [CQ:at,qq=…]），
+    靠的就是这张表：只有走过这条通道的人，在那条通道上才有 id 可 @。
+
+    先按 (kind, owner_scope) 拿通道侧标识、自己拼锚点邮箱，再去 users 里认人——
+    不在 SQL 里重写一遍邮箱约定（那正是两份东西会漂移的地方）。
+    """
+    from sqlalchemy import select
+
+    from app.models.external import ExternalIdentity
+    from app.models.user import User
+
+    origins = (await db.execute(
+        select(ExternalIdentity.origin).where(
+            ExternalIdentity.kind == kind, ExternalIdentity.owner_scope == owner_scope
+        )
+    )).scalars().all()
+    anchors = {anchor_email(kind, str(origin)): str(origin) for origin in origins if origin}
+    if not anchors:
+        return {}
+    rows = (await db.execute(
+        select(User.id, User.email).where(User.email.in_(list(anchors)))
+    )).all()
+    return {int(uid): anchors[str(email)] for uid, email in rows if str(email) in anchors}
+
+
 async def _unique_username(db: Any, desired: str, fallback: str) -> str:
     """撞名就加 #2、#3…（username 有唯一约束，通道侧昵称重名很常见）"""
     from sqlalchemy import select
@@ -65,7 +98,7 @@ async def ensure_channel_user(
     raw_name = str(display_name or "").strip()
     nickname = raw_name[:40]
 
-    anchor = f"{origin}@{kind}.bridge"
+    anchor = anchor_email(kind, origin)
     row = (await db.execute(select(User).where(User.email == anchor))).scalar_one_or_none()
     if row is None:
         row = User(

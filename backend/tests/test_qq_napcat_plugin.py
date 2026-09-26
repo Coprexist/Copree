@@ -180,9 +180,10 @@ async def test_group_message_with_at_lands_and_wakes(migrated_db):
         # 群里要能看出这条是从哪条通道来的
         assert via == "qq-napcat", rows
         assert sender_type == "human"
-        assert content == "@浮生 今天天气不错", content
+        # 点名前缀是桥接的一部分；入口把它归一成 id 令牌
+        assert content == "<@!2> 今天天气不错", content
         assert username == "小明"                       # 说话人是谁，AI 得看得出来
-        assert woken == [(GROUP_ID, "@浮生 今天天气不错")], woken
+        assert woken == [(GROUP_ID, "<@!2> 今天天气不错")], woken
     finally:
         group_delivery.wake_group_ai = original
         _cleanup(plugin)
@@ -243,6 +244,8 @@ async def test_private_pairing_gate_then_approved(migrated_db):
         code_msg = plugin._client.sent[0]
         assert code_msg["kind"] == "dm" and code_msg["target"] == QQ_DM_USER
         assert "配对码" in code_msg["message"]
+        assert "此 AI" in code_msg["message"] and "如果你不是我的创建者" in code_msg["message"]
+        assert "github.com/Coprexist/Copree" in code_msg["message"]
 
         async with async_session() as db:
             row = (await db.execute(text(
@@ -293,6 +296,38 @@ async def test_group_outbound_keeps_markdown(migrated_db):
         assert sent["kind"] == "group" and sent["target"] == QQ_GROUP, sent
         assert "**" in sent["message"] and "#" in sent["message"], sent
         assert sent["message"] == markdown, sent
+    finally:
+        _cleanup(plugin)
+
+
+async def test_outbound_mentions_become_cq_at(migrated_db):
+    """出站把 <@!平台id> 翻成 [CQ:at,qq=<QQ号>]：走过这条通道的人才有号可 @，认不出的退名字。"""
+    from app.chat.gm import send_gm_message
+    from app.database import async_session
+    from app.services.plugin.channel_user import ensure_channel_user
+
+    await _seed()
+    plugin = await _make_plugin()
+    plugin._route[GROUP_ID] = {"qq": str(QQ_GROUP)}
+    try:
+        async with async_session() as db:
+            ensured = await ensure_channel_user(
+                db, kind="qq-napcat", owner_scope="bot-a", origin="123456",
+                display_name="小明", origin_channel="qq-napcat",
+            )
+            await db.commit()
+        assert ensured is not None, "锚点账号没建出来"
+        uid = ensured[0]
+
+        async with async_session() as db:
+            await send_gm_message(db, group_id=GROUP_ID, sender_type="ai", sender_id=AGENT_USER,
+                                  content=f"好的 <@!{uid}>，还有 <@!999999>")
+            await db.commit()
+        await _wait_sent(plugin)
+
+        sent = plugin._client.sent[-1]["message"]
+        assert "[CQ:at,qq=123456]" in sent, sent
+        assert "999999" not in sent, sent       # 认不出的令牌不能原样发出去
     finally:
         _cleanup(plugin)
 

@@ -70,6 +70,18 @@ class ServicePlugin:
         """
         return None
 
+    # 能不能对外真发一条消息：能置 True 的插件才有「通道自测」按钮
+    # （没有出口的插件不该有个点了只会报错的按钮，所以能力要能提前问）
+    self_testable: bool = False
+
+    async def self_test(self) -> dict[str, Any] | None:
+        """通道自测：在真实出口上发一条测试消息，把通道侧的原始响应带回来
+
+        只有 self_testable 的插件才实现它——实现里该复用**真正发消息那条路**，
+        另写一条"测试专用发送"等于测了一条假链路。
+        """
+        return None
+
     async def start(self) -> bool:
         """启动服务"""
         raise NotImplementedError(f"{self.id} 未实现 start()")

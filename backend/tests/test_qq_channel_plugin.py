@@ -34,10 +34,12 @@ class FakeClient:
     def __init__(self):
         self.sent = []
 
-    async def send_group(self, group_openid, content, msg_id=None, msg_seq=1):
+    async def send_group(self, group_openid, content, msg_id=None, msg_seq=1, message_reference="",
+                         force_type=None):
         self.sent.append({"kind": "group", "target": group_openid, "content": content,
-                          "msg_id": msg_id, "seq": msg_seq})
-        return {"id": "fake"}
+                          "msg_id": msg_id, "seq": msg_seq, "reference": message_reference,
+                          "force_type": force_type})
+        return {"id": "fake", "ext_info": {"ref_idx": "REFIDX-OUT"}}
 
     async def send_c2c(self, user_openid, content, msg_id=None, msg_seq=1):
         self.sent.append({"kind": "dm", "target": user_openid, "content": content,
@@ -167,7 +169,8 @@ async def test_group_round_trip(migrated_db):
         # 群聊里要能看出这条是从 QQ 来的（界面画"来源"标识就靠它）
         assert via == "qq", rows
         assert sender_type == "human"
-        assert content == "@浮生 今天天气不错", content      # 两边都要求"点名"，前缀是桥接的一部分
+        # 两边都要求"点名"，前缀是桥接的一部分；入口把点名的写法归一成 id 令牌
+        assert content == "<@!2> 今天天气不错", content
         assert username == "小明"                            # 说话人是谁，AI 得看得出来
 
         # 重复推送同一条（官方明说可能重复）→ 不能回答两遍
@@ -254,7 +257,11 @@ async def test_dm_pairing_gate_then_approved(migrated_db):
             count = (await db.execute(text("SELECT count(*) FROM dm_messages"))).scalar()
         assert count == 0, "没配对的人不该进入 AI 的私信"
         assert plugin._client.sent, "应该回一个配对码"
-        assert plugin._client.sent[0]["kind"] == "dm" and "配对码" in plugin._client.sent[0]["content"]
+        code_msg = plugin._client.sent[0]["content"]
+        assert plugin._client.sent[0]["kind"] == "dm" and "配对码" in code_msg
+        # 文案是两条通道共用的一份（用户 2026-09-26 定）：本 AI + 创建者提示 + 开源地址
+        assert "此 AI" in code_msg and "如果你不是我的创建者" in code_msg
+        assert "github.com/Coprexist/Copree" in code_msg
 
         async with async_session() as db:
             row = (await db.execute(text(
@@ -415,6 +422,40 @@ async def test_group_nickname_backfills_username(migrated_db):
         _cleanup(plugin)
 
 
+async def test_self_test_sends_on_the_live_route(migrated_db):
+    """通道自测：在最近收到消息的那条路由上真发一条，把腾讯的原样回答带回来
+
+    它要回答的是一个具体问题：群消息的正文认不认 <@!openid> 这种内联 @。
+    所以探针必须两种写法并排；而且必须只走被动回复——窗口过期时宁可失败，
+    也不能拿一条有配额的主动消息冒充"通"。
+    """
+    import time
+
+    await _seed()
+    plugin = await _make_plugin()
+    try:
+        result = await plugin.self_test()
+        assert result["sent"] is False and "还没有收到过消息" in result["reason"], result
+
+        plugin._route[GROUP_ID] = {
+            "qq": "QQGROUP-AAA", "msg_id": "MSG-1", "seq": 0, "ts": time.time(),
+            "peer_name": "小明", "peer_openid": "OPENID-XYZ",
+        }
+        result = await plugin.self_test()
+        assert result["sent"] is True and result["mode"] == "passive", result
+        assert result["response"]["id"] == "fake", result
+        sent = plugin._client.sent[-1]
+        assert sent["kind"] == "group" and sent["msg_id"] == "MSG-1" and sent["seq"] == 1, sent
+        assert "<@!OPENID-XYZ>" in sent["content"] and "@小明" in sent["content"], sent
+
+        plugin._route[GROUP_ID]["ts"] = 0                      # 窗口早就过期
+        result = await plugin.self_test()
+        assert result["sent"] is False and "被动回复窗口已过" in result["reason"], result
+        assert len(plugin._client.sent) == 1, "窗口过期时不该偷偷发一条主动消息"
+    finally:
+        _cleanup(plugin)
+
+
 async def test_group_outbound_strips_reply_mention(migrated_db):
     """转发给 QQ 的回复要去掉开头那个 @：QQ 的被动回复自己就会显示「@对方」。
 
@@ -439,6 +480,251 @@ async def test_group_outbound_strips_reply_mention(migrated_db):
 
     assert plugin._client.sent, "AI 的回复应该发回 QQ"
     assert plugin._client.sent[0]["content"] == "今天天气不错，出去走走", plugin._client.sent[0]
+
+
+async def test_outbound_mentions_become_real_qq_at(migrated_db):
+    """出站把 <@!平台id> 翻成 QQ 的真 @：走过通道的人才有 openid 可 @，其余退名字/丢掉。
+
+    真机实测（2026-09-25）：正文里的 <@!openid> 在群里渲染成**可点**的 @对方。
+    开头对**这次回的那个人**的 @ 仍然先摘掉——QQ 的被动回复自己就显示 @对方，两个 @ 很蠢。
+    """
+    from app.database import async_session
+
+    await _seed()
+    plugin = await _make_plugin()
+    plugin._copree_group_id = GROUP_ID
+    try:
+        await plugin._on_group_at({**GROUP_EVENT, "id": "MSG-M1"})      # 让这个人从通道进来
+        async with async_session() as db:
+            uid = (await db.execute(text(
+                "SELECT id FROM users WHERE email = 'OPENID-XYZ@qq.bridge'"
+            ))).scalar()
+        assert uid, "入站应该建出锚点账号"
+
+        class _FakeMsg:
+            sender_type = "ai"
+            content = f"好的 <@!{uid}> 你看这条，还有 <@!999999>"
+
+        plugin._client.sent.clear()
+        async with async_session() as db:
+            await plugin._outbound_sink(db, GROUP_ID, _FakeMsg(), "ai")
+        await _wait_sent(plugin)
+
+        sent = plugin._client.sent[-1]["content"]
+        assert "<@!OPENID-XYZ>" in sent, sent                     # 真 @（不是名字文本）
+        assert "999999" not in sent, sent                         # 认不出的令牌不能原样发出去
+
+        # 回给「刚说话的那个人」时，开头的 @ 摘掉（否则 QQ 侧两个 @）
+        class _FakeReply:
+            sender_type = "ai"
+            content = f"<@!{uid}> 你好"
+
+        plugin._client.sent.clear()
+        async with async_session() as db:
+            await plugin._outbound_sink(db, GROUP_ID, _FakeReply(), "ai")
+        await _wait_sent(plugin)
+        assert plugin._client.sent[-1]["content"] == "你好", plugin._client.sent[-1]
+    finally:
+        _cleanup(plugin)
+
+
+async def test_full_mode_mirrors_everything_but_only_wakes_when_addressed(migrated_db):
+    """全量模式：有消息就进 Copree（能拿到多少拿多少），但只有点名到机器人才叫 AI。
+
+    没开这个功能的号根本收不到 GROUP_MESSAGE_CREATE，@ 那条路照旧——两条都要能用。
+    """
+    await _seed()
+    plugin = await _make_plugin()
+    plugin._copree_group_id = GROUP_ID
+    try:
+        await plugin._on_group_message({**GROUP_EVENT, "id": "FULL-1", "content": "今天天气不错", "mentions": []})
+        rows = await _messages(GROUP_ID)
+        assert len(rows) == 1 and rows[0][2] == "今天天气不错", rows    # 入库，但没有唤醒令牌
+
+        await plugin._on_group_message({**GROUP_EVENT, "id": "FULL-2", "content": "你看这个",
+                                        "mentions": [{"id": "BOT-OPENID", "bot": True}]})
+        rows = await _messages(GROUP_ID)
+        assert len(rows) == 2 and rows[1][2].startswith("<@!2>"), rows  # 点名 → 带唤醒令牌
+    finally:
+        _cleanup(plugin)
+
+
+async def test_quote_replies_can_be_turned_off(migrated_db):
+    """「引用回复」是独立维度：关掉就不带 message_reference，正文格式照旧不受影响。"""
+    import time
+
+    from app.chat.gm import send_gm_message
+    from app.database import async_session
+
+    await _seed()
+    plugin = await _make_plugin()
+    plugin._quote_replies = False
+    plugin._copree_group_id = GROUP_ID
+    plugin._route[GROUP_ID] = {"qq": "QQGROUP-AAA", "msg_id": "MSG-1", "seq": 0, "ts": time.time()}
+    try:
+        async with async_session() as db:
+            inbound = await send_gm_message(db, group_id=GROUP_ID, sender_type="human", sender_id=1,
+                                            content="问题")
+            inbound.channel_ref_idx = "REFIDX-IN"
+            await db.commit()
+            inbound_id = inbound.id
+
+        plugin._client.sent.clear()
+        async with async_session() as db:
+            await send_gm_message(db, group_id=GROUP_ID, sender_type="ai", sender_id=AGENT_USER,
+                                  content="回答", reply_to=inbound_id)
+            await db.commit()
+        await _wait_sent(plugin)
+        assert plugin._client.sent[-1]["reference"] == "", plugin._client.sent[-1]
+    finally:
+        _cleanup(plugin)
+
+
+async def test_configured_message_type_is_used(migrated_db):
+    """卡片里固定了消息类型（比如 1）就按它发，不再"先 Markdown 后降级"。
+
+    有的 QQ 客户端只显示特定类型，所以类型要能选（用户 2026-09-26 提）。
+    """
+    import time
+
+    from app.database import async_session
+    from app.models.plugin import PluginConfig  # noqa: F401  （只是提醒：值来自插件配置）
+
+    await _seed()
+    plugin = await _make_plugin()
+    plugin._msg_type = 0                      # 即配置里选了「纯文本」
+    plugin._copree_group_id = GROUP_ID
+    plugin._route[GROUP_ID] = {"qq": "QQGROUP-AAA", "msg_id": "MSG-1", "seq": 0, "ts": time.time()}
+    try:
+        class _FakeMsg:
+            sender_type = "ai"
+            content = "纯文本的测试"
+
+        async with async_session() as db:
+            await plugin._outbound_sink(db, GROUP_ID, _FakeMsg(), "ai")
+        await _wait_sent(plugin)
+        assert plugin._client.sent[-1]["force_type"] == 0, plugin._client.sent[-1]
+    finally:
+        _cleanup(plugin)
+
+
+def test_body_format_config_parsing():
+    """配置里写意图（plain/markdown），不是协议数字：官方发送侧只有 0/2/3/7，1 根本不存在。"""
+    module = _load_plugin_module()
+
+    assert module._msg_type_of("") is None            # 默认：先 Markdown，没权限降级纯文本
+    assert module._msg_type_of(None) is None
+    assert module._msg_type_of("abc") is None
+    assert module._msg_type_of("1") is None           # 不存在的取值
+    assert module._msg_type_of("plain") == 0
+    assert module._msg_type_of("markdown") == 2
+    assert module._msg_type_of(" 2 ") == 2            # 老配置/手填的数字照样认
+
+
+async def test_outbound_reply_quotes_the_qq_message(migrated_db):
+    """AI 回复 reply_to 指向一条 QQ 来消息 → 发 QQ 时带 message_reference（精准引用那条）。
+
+    入站事件的 msg_idx 就是那条消息的 REFIDX；出站响应里的 ext_info.ref_idx 也记下来，
+    这样"引用机器人自己说过的话"以后也有得用。
+    """
+    import asyncio
+
+    from sqlalchemy import text
+
+    from app.chat.gm import send_gm_message
+    from app.database import async_session
+
+    await _seed()
+    plugin = await _make_plugin()
+    plugin._copree_group_id = GROUP_ID
+    try:
+        await plugin._on_group_at({
+            **GROUP_EVENT, "id": "Q-1", "content": "问题",
+            "message_scene": {"source": "default", "ext": ["msg_idx=REFIDX-IN"]},
+        })
+        async with async_session() as db:
+            inbound = (await db.execute(text(
+                "SELECT id, channel_ref_idx FROM messages WHERE group_id = :g ORDER BY id DESC LIMIT 1"
+            ), {"g": GROUP_ID})).first()
+        assert inbound is not None and inbound[1] == "REFIDX-IN", inbound
+
+        plugin._client.sent.clear()
+        async with async_session() as db:
+            await send_gm_message(db, group_id=GROUP_ID, sender_type="ai", sender_id=AGENT_USER,
+                                  content="回答", reply_to=int(inbound[0]))
+            await db.commit()
+        await _wait_sent(plugin)
+        assert plugin._client.sent[-1]["reference"] == "REFIDX-IN", plugin._client.sent[-1]
+
+        # 出站那条也把通道给的 ref_idx 记下来（另开 session 回写，等它落库）
+        outbound = None
+        for _ in range(40):
+            async with async_session() as db:
+                outbound = (await db.execute(text(
+                    "SELECT channel_msg_id, channel_ref_idx FROM messages "
+                    "WHERE group_id = :g ORDER BY id DESC LIMIT 1"
+                ), {"g": GROUP_ID})).first()
+            if outbound == ("fake", "REFIDX-OUT"):
+                break
+            await asyncio.sleep(0.05)
+        assert outbound == ("fake", "REFIDX-OUT"), outbound
+    finally:
+        _cleanup(plugin)
+
+
+async def test_full_mode_materializes_mentioned_members(migrated_db):
+    """全量事件里 @ 到的人：先建成 Copree 群成员，正文缺提及就补 <@!id>。
+
+    被 @ 的人可能还没说过话（没账号）；QQ 也可能把 @成员的提及从正文摘掉——两条都在这补。
+    """
+    from sqlalchemy import text
+
+    from app.database import async_session
+
+    await _seed()
+    plugin = await _make_plugin()
+    plugin._copree_group_id = GROUP_ID
+    try:
+        await plugin._on_group_message({
+            **GROUP_EVENT, "id": "MENTION-1", "content": "你看这个",
+            "mentions": [{"id": "BOT-OPENID", "bot": True},
+                         {"id": "OPENID-NEW", "username": "小红"}],
+        })
+        rows = await _messages(GROUP_ID)
+        assert len(rows) == 1, rows
+        async with async_session() as db:
+            uid = (await db.execute(text(
+                "SELECT id FROM users WHERE email = 'OPENID-NEW@qq.bridge'"
+            ))).scalar()
+            member = (await db.execute(text(
+                "SELECT count(*) FROM group_members WHERE group_id = :g AND member_id = :m"
+            ), {"g": GROUP_ID, "m": uid})).scalar()
+        assert uid, "被 @ 的人应该建出锚点账号"
+        assert member == 1, "被 @ 的人应该进这个 Copree 群"
+        assert f"<@!{uid}>" in rows[0][2], rows
+    finally:
+        _cleanup(plugin)
+
+
+async def test_full_mode_event_completes_the_truncated_text(migrated_db):
+    """同一条消息的两个事件：@模式先到（正文在"@其他成员"处断了），全量事件后到就把正文补上。"""
+    await _seed()
+    plugin = await _make_plugin()
+    plugin._copree_group_id = GROUP_ID
+    try:
+        truncated = "今天天气"
+        full = "今天天气不错 @小明 你说是吧"
+        await plugin._on_group_at({**GROUP_EVENT, "id": "DUP-1", "content": truncated})
+        rows = await _messages(GROUP_ID)
+        assert len(rows) == 1 and truncated in rows[0][2], rows
+
+        await plugin._on_group_message({**GROUP_EVENT, "id": "DUP-1", "content": full,
+                                        "mentions": [{"id": "BOT-OPENID", "bot": True}]})
+        rows = await _messages(GROUP_ID)
+        assert len(rows) == 1, rows                      # 不新增一条
+        assert full in rows[0][2], rows                  # 正文补全了
+    finally:
+        _cleanup(plugin)
 
 
 async def test_group_message_broadcasts_to_humans(migrated_db):
@@ -471,7 +757,7 @@ async def test_group_message_broadcasts_to_humans(migrated_db):
     group_id, payload = calls[0]
     assert group_id == GROUP_ID
     assert payload["data"]["via"] == "qq"
-    assert payload["data"]["content"].startswith("@浮生")
+    assert payload["data"]["content"].startswith("<@!2>")
     assert payload["data"]["sender_name"] == "小明"
 
 

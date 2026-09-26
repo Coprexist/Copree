@@ -151,6 +151,28 @@ async def stop_channel(
         raise HTTPException(404, "通道还没配置")
 
 
+@router.post("/{agent_id}/channels/{plugin_id}/self-test")
+async def self_test_channel(
+    agent_id: int,
+    plugin_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """通道自测：在真实出口上发一条测试消息，把通道侧的原样回答带回来（排障用）
+
+    和启停同一套鉴权：测的是这个 AI 的这条通道，用的也是它的凭据与路由。
+    "没发出去"不是 500 —— 它是自测要回答的内容，所以原样放在 200 的响应里。
+    """
+    _declared(plugin_id)
+    await _owned(db, agent_id, user)
+    try:
+        return await channel.self_test(plugin_id=plugin_id, agent_id=agent_id)
+    except UnknownInstance:
+        raise HTTPException(404, "通道还没配置")
+    except channel.NoSelfTest as e:
+        raise HTTPException(400, str(e))
+
+
 @router.post("/{agent_id}/channels/{plugin_id}/pairings/approve")
 async def approve_pairing(
     agent_id: int,

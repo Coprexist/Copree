@@ -39,6 +39,10 @@ class NotOwned(PermissionError):
     """
 
 
+class NoSelfTest(NotImplementedError):
+    """这条通道没有可自测的出口（插件没实现 self_test）"""
+
+
 def instance_of(agent_id: int) -> str:
     return INSTANCE_PREFIX + str(agent_id)
 
@@ -171,6 +175,14 @@ async def group_brief(db: AsyncSession, group_id: int) -> str:
             "- 官方机器人私聊**可以**主动发消息，但每天每个用户最多 2 条：留给要紧的提醒，别用来说废话。"
         )
         lines.append("- 你写的 Markdown 会尽量按富文本发（机器人没开通 Markdown 权限时平台会自动降级成纯文本）。")
+        lines.append(
+            "- 官方接口**不转发「@其他成员」的内容**：对方一条消息里同时 @ 了别人和你时，你收到的正文会在那个 @ 处"
+            "断掉——这是通道限制，不是对方没说完整；需要就问一句「你刚才 @ 的是谁」。"
+        )
+        lines.append(
+            "- **撤回不同步**：QQ 里别人撤回的消息我们收不到通知，你上下文里那条还在（就当它发生过）；"
+            "反过来你在站内撤回（2 分钟内）我们会请 QQ 一起撤，超时就只有站内撤掉。"
+        )
     if "qq-napcat" in kinds:
         lines.append(
             "- NapCat 通道用的是真 QQ 号（协议端）：没有上面那些接口窗口限制，但同样别刷屏，"
@@ -260,6 +272,8 @@ async def _view_one(
         "values": masked["values"],
         "secrets": masked["secrets"],
         "running": running,
+        # 能不能自测由插件说了算：画不画那个按钮不猜，问插件
+        "self_test": bool(plugin is not None and plugin.self_testable),
         "detail": detail,
         "missing_required": missing,
         "configured": bool(masked["values"]) or any(masked["secrets"].values()),
@@ -351,6 +365,27 @@ async def stop(db: AsyncSession, *, plugin_id: str, agent_id: int) -> dict[str, 
 
     declared(plugin_id)
     return await runtime_control.stop_instance(db, registry_key(plugin_id, instance_of(agent_id)))
+
+
+async def self_test(*, plugin_id: str, agent_id: int) -> dict[str, Any]:
+    """通道自测：让插件在自己的真实出口上发一条，把通道侧的原始响应带回来。
+
+    刻意不走 runtime_control：自测要答的是"现在这条链路通不通"，
+    没起来就该说没起来，而不是顺手把它拉起来把问题盖过去。
+    """
+    from app.services.infrastructure.plugin_registry import PluginRegistry, registry_key
+
+    declared(plugin_id)
+    key = registry_key(plugin_id, instance_of(agent_id))
+    plugin = PluginRegistry.get(key)
+    if plugin is None:
+        raise UnknownInstance(key)
+    if not plugin.self_testable:
+        raise NoSelfTest(f"{plugin.display_name()} 没有可自测的出口")
+    result = await plugin.self_test()
+    if result is None:
+        raise NoSelfTest(f"{plugin.display_name()} 没有可自测的出口")
+    return result
 
 
 async def approve(db: AsyncSession, *, plugin_id: str, agent_id: int, pairing_id: int | None = None, code: str | None = None) -> dict:

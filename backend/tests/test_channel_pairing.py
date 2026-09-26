@@ -31,8 +31,14 @@ from app.services.plugin.api import ServicePlugin, service
     },
 )
 class FakeQq(ServicePlugin):
+    self_testable = True
+
     def __init__(self):
         self._running = False
+
+    async def self_test(self):
+        # 自测就是"真发一条"，所以假件把要发的内容原样回给调用方
+        return {"sent": True, "target": "group", "text": "（通道自测，请忽略）"}
 
     async def get_status(self):
         return {"installed": True, "running": self._running}
@@ -221,6 +227,36 @@ async def test_channel_ownership_and_save(migrated_db):
                 await skill_bridge._unload_plugin(plugin_id)
 
 
+async def test_channel_self_test_needs_a_live_instance(migrated_db):
+    """自测：画不画按钮由插件的声明说了算；通道没起来就没有可测的出口（404 的料，不是 500）"""
+    from app.database import async_session
+    from app.services.plugin import channel, skill_bridge
+
+    with _FakePluginDir():
+        async with async_session() as db:
+            owner_id, _other, agent_id = await _seed(db)
+
+            try:
+                await channel.self_test(plugin_id="qq-channel", agent_id=agent_id)
+                raise AssertionError("没配置的通道不该能自测")
+            except channel.UnknownInstance:
+                pass
+
+            await channel.save(
+                db, plugin_id="qq-channel", agent_id=agent_id, user_id=owner_id,
+                values={"app_id": "1", "client_secret": "2"},
+                actor="owner-a", target_agent_name="小明",
+            )
+            view = (await channel.views(db, agent_id, owner_id))[0]
+            assert view["self_test"] is True, "插件声明了自测，卡片就该知道"
+
+            result = await channel.self_test(plugin_id="qq-channel", agent_id=agent_id)
+            assert result["sent"] is True and "自测" in result["text"], result
+
+            for plugin_id in list(skill_bridge._loaded):
+                await skill_bridge._unload_plugin(plugin_id)
+
+
 async def test_admin_replace_keeps_owner_scoped(migrated_db):
     """管理台那份"列表即真相"不能把用户给自己 AI 建的通道删掉"""
     from app.database import async_session
@@ -357,6 +393,7 @@ async def test_channel_routes_registered():
         "/me/agents/{agent_id}/channels/{plugin_id}",
         "/me/agents/{agent_id}/channels/{plugin_id}/start",
         "/me/agents/{agent_id}/channels/{plugin_id}/stop",
+        "/me/agents/{agent_id}/channels/{plugin_id}/self-test",
         "/me/agents/{agent_id}/channels/{plugin_id}/landing-group",
         "/me/agents/{agent_id}/channels/{plugin_id}/pairings/approve",
         "/me/agents/{agent_id}/channels/{plugin_id}/pairings/block",
@@ -410,6 +447,8 @@ async def test_group_brief_tells_ai_the_channel_rules(migrated_db):
             brief = await channel.group_brief(db, 7)
             assert "被动回复" in brief, brief
             assert "2025-04-21" in brief and "2 条" in brief, brief
+            # 两条通道限制也要讲清：@其他成员的内容不转发；QQ 里别人撤回我们收不到
+            assert "@其他成员" in brief and "撤回" in brief, brief
 
             for plugin_id in list(skill_bridge._loaded):
                 await skill_bridge._unload_plugin(plugin_id)
