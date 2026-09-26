@@ -229,7 +229,7 @@ class SQLAlchemyFriendRepository:
         session = result.scalar_one_or_none()
         if session is None:
             if not skip_friendship_check:
-                await _require_friendship(self.session, user_id_a, user_id_b)
+                await _require_friendship(self.session, user_id_a, user_id_b, initiator_id=user_id_a)
             user_ids = sorted([user_id_a, user_id_b])
             session = DMSession(
                 session_id=session_id,

@@ -77,13 +77,28 @@ def dm_message_entry(message, *, agent_name: str, agent_user_id: int | None,
     return make_entry("message", rendered, actor="self" if is_self else "user", ref=str(message.id))
 
 
-async def _require_friendship(db: AsyncSession, user_a_id: int, user_b_id: int):
-    """校验两个用户是否可以私信。规则：human→human 必须互为好友，涉及 AI 则免校验。"""
+async def _require_friendship(db: AsyncSession, user_a_id: int, user_b_id: int,
+                              *, initiator_id: int | None = None):
+    """校验这次私信是否放行。
+
+    - system：永远放行（系统通知不拦）
+    - 找 AI、AI 之间：放行（AI 公开可聊）
+    - 人 → 人、AI → 人：必须互为好友。**"涉及 AI 一律放行"曾是漏洞**——AI 因此能给任意
+      生人开新私信，产品 2026-09-26 定为骚扰并拒绝（AI 与它的主人本来就是好友，不受影响）
+    - initiator_id 为空 = 在**已有会话**里发言：AI 参与即放行——会话是对方开的通道，
+      QQ / 外部通道的被动回复靠这条活着
+    """
     result = await db.execute(
-        select(User.type).where(User.id.in_([user_a_id, user_b_id]))
+        select(User.id, User.type).where(User.id.in_([user_a_id, user_b_id]))
     )
-    types = {row[0] for row in result.all()}
-    if "ai" in types or "system" in types:
+    types = {row[0]: row[1] for row in result.all()}
+    if "system" in types.values():
+        return
+    if initiator_id is None and "ai" in types.values():
+        return
+    initiator = initiator_id if initiator_id is not None else user_a_id
+    other = user_b_id if initiator == user_a_id else user_a_id
+    if types.get(other) == "ai":
         return
     friendship = await db.execute(
         select(Friendship).where(
@@ -91,8 +106,11 @@ async def _require_friendship(db: AsyncSession, user_a_id: int, user_b_id: int):
             ((Friendship.user_id == user_b_id) & (Friendship.friend_id == user_a_id) & (Friendship.friend_type == "human"))
         )
     )
-    if not friendship.first():
-        raise ValueError("你们还不是好友，无法发送私信。请先添加好友后再试。")
+    if friendship.first():
+        return
+    if types.get(initiator) == "ai":
+        raise ValueError("你们还不是好友，不能主动私信生人。先用 send_friend_request 发好友申请，或等对方先来找你。")
+    raise ValueError("你们还不是好友，无法发送私信。请先添加好友后再试。")
 
 
 def generate_dm_session_id(user_a_id: int, user_b_id: int) -> str:
@@ -126,7 +144,9 @@ async def get_or_create_dm_session(
     is_new = False
     if session is None:
         if not skip_friendship_check:
-            await _require_friendship(db, current_user_id, target_user_id)
+            # 建新会话才判"谁在发起"：已有会话里的回复不受好友关系限制
+            await _require_friendship(db, current_user_id, target_user_id,
+                                      initiator_id=current_user_id)
         is_new = True
         user_ids = sorted([current_user_id, target_user_id])
         session = DMSession(
