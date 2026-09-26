@@ -87,12 +87,14 @@ class WebSearch(ToolPlugin):
     # 改由规则在本会话第一次搜完之后投一次；compact 后帧重建，会再投一次
     triggers = [{
         "id": "web_search.verify_after_reply",
-        "when": {"event": "tool_result", "conditions": {"and": [{"tool": "web_search"}, {"first": True}]}},
+        "when": {"event": "tool_result",
+                 "conditions": {"and": [{"field": "tool", "op": "eq", "value": "web_search"},
+                                        {"field": "first_in_frame", "op": "eq", "value": True}]}},
         "do": {
             "action": "deliver",
             "text": "搜到官网或官方发布时，建议先及时回复对方，再点进去（web_fetch）核实版本号、发布时间这类会变的信息。",
         },
-        "once": "context",
+        "scope": "frame",
     }]
     admin_description = (
         "AI 多后端检索网络信息，无需 API Key。一次可发多条检索式，"
