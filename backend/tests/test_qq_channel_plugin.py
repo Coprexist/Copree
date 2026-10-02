@@ -1354,3 +1354,45 @@ async def test_recall_cycle_reopens_after_thirty_days(migrated_db):
         assert int(row[0]) == 0b1, "新周期应该只剩刚花掉的那一个名额"
     finally:
         _cleanup(plugin)
+
+async def test_merged_group_replies_only_through_the_owning_bot(migrated_db):
+    """群聊合并：一个 Copree 群被两个机器人接着时，回复只由"来消息那个机器人"发出
+
+    被动凭据只活在各自进程里，谁都不知道别人见过哪条消息。靠内存索引时，
+    没见过的那个实例会退回"本群最近来消息的那条"，把 B 群的消息回进 A 群。
+    会话标识记在消息行上之后，另一个实例认得出"这条不归我"。
+    """
+    import time
+
+    from app.chat.gm import send_gm_message
+    from app.database import async_session
+
+    await _seed()
+    bot_a = await _make_plugin("bot-a")
+    bot_b = await _make_plugin("bot-b")
+    try:
+        # 两个机器人都接同一个 Copree 群（这就是"合并"）；A 群里刚有人说过话
+        bot_a._routes["QQGROUP-A"] = {
+            "qq": "QQGROUP-A", "copree_group_id": GROUP_ID, "msg_id": "MSG-A", "seq": 0,
+            "ts": time.time(), "peer_name": "小明", "peer_openid": "OPENID-A",
+        }
+        assert bot_a._route_for_outbound(GROUP_ID, "") is not None,             "A 有可用凭据：这正是旧逻辑会拿来代发的那条"
+        await bot_b._on_group_at(dict(GROUP_EVENT, id="MSG-B", group_openid="QQGROUP-B"))
+
+        async with async_session() as db:
+            inbound = (await db.execute(text(
+                "SELECT id FROM messages WHERE group_id = :g ORDER BY id DESC LIMIT 1"
+            ), {"g": GROUP_ID})).scalar()
+            assert inbound, "QQ 消息没有落库"
+            assert (await db.execute(text(
+                "SELECT channel_origin FROM messages WHERE id = :i"
+            ), {"i": inbound})).scalar() == "qq:bot-b:QQGROUP-B", "落库没带上会话标识"
+            await send_gm_message(db, GROUP_ID, "ai", AGENT_USER, "收到", reply_to=inbound)
+            await db.commit()
+        await _wait_sent(bot_b)
+
+        assert [s["target"] for s in bot_b._client.sent] == ["QQGROUP-B"], bot_b._client.sent
+        assert bot_a._client.sent == [], f"不该由另一个机器人代发：{bot_a._client.sent}"
+    finally:
+        _cleanup(bot_a)
+        _cleanup(bot_b)

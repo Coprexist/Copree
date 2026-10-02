@@ -31,6 +31,10 @@ class Message(Base):
     channel_msg_id = Column(Text, nullable=True)
     # 通道侧的**引用索引** REFIDX（QQ 的 msg_idx / ext_info.ref_idx）：精准引用某条时用它
     channel_ref_idx = Column(Text, nullable=True)
+    # 通道侧的**会话标识**（QQ 是群 openid / 用户 openid）：出站据此回到同一个会话。
+    # 写在消息行上而不是进程内存里——同一个 Copree 群可能被多个通道实例接着，
+    # 别的实例靠它认出"这条不归我回"（见 plugins/qq-channel）。
+    channel_origin = Column(String(200), nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 
     __table_args__ = (

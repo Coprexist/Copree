@@ -253,6 +253,23 @@ def _parse_group_map(raw: Any) -> dict[str, int]:
     return out
 
 
+def format_channel_origin(kind: str, instance: str, conversation: str) -> str:
+    """消息来自哪个通道会话：`<通道>:<实例>:<通道侧会话>`（QQ 的会话 = 群/用户 openid）
+
+    为什么记在消息行上：同一个 Copree 群可能被多个通道实例接着，出站要认得出
+    "这条是哪个实例的通道消息"——只活在本进程内存里的索引，别的实例看不见。
+    """
+    return f"{kind}:{instance}:{conversation}"
+
+
+def parse_channel_origin(kind: str, raw: Any) -> tuple[str, str] | None:
+    """上面的反向解析 → (实例, 会话)；不是本通道的写法就返回 None（别的通道的消息不归我们管）"""
+    parts = str(raw or "").split(":", 2)
+    if len(parts) != 3 or parts[0] != kind:
+        return None
+    return parts[1], parts[2]
+
+
 def recall_period(elapsed_days: float) -> int | None:
     """距对方最近一次主动对话过了多久 → 命中第几个召回周期；超出 30 天返回 None。
 
@@ -370,9 +387,6 @@ class QqChannelPlugin(ServicePlugin):
         # 且同一个 msg_id 只能用一次（官方：相同 msg_id+msg_seq 重复发送会失败），
         # 所以这里存的是活字典，发送时原地递增 seq。
         self._routes: dict[str, dict[str, Any]] = {}
-        # 站内消息 id → 它来自哪个 QQ 群：AI 回某条消息时据此选路由（查不到才退回最近一条）
-        self._site_route: dict[int, str] = {}
-        self._site_route_order: deque[int] = deque()
         # QQ 群 → Copree 群 的映射（配置键 group_map）；没映射的群落到默认落点群
         self._group_map: dict[str, int] = {}
         # OrderedDict：满了丢最早建立的那条（见 _remember_dm_route）
@@ -496,8 +510,6 @@ class QqChannelPlugin(ServicePlugin):
 
         unregister_sink(getattr(self, "_sink_handle", None) or self.key)
         self._routes.clear()
-        self._site_route.clear()
-        self._site_route_order.clear()
         self._dm_route.clear()
         self._fail_notice.clear()
         self._delivered.clear()
@@ -948,9 +960,10 @@ class QqChannelPlugin(ServicePlugin):
             )
             peer_user_id, peer_name, copree_msg_id = delivered or (0, "", 0)
             self._remember_delivered(msg_id, copree_msg_id, content)
-            self._remember_site_route(copree_msg_id, qq_group)
             self._routes[qq_group] = {
                 "qq": qq_group, "copree_group_id": landing, "msg_id": msg_id, "seq": 0, "ts": time.time(),
+                # 会话标识：AI 的回复发出去之后要写回它那一行（线程里的下一条还认得出这个群）
+                "origin": format_channel_origin(self.channel_kind, self.instance, qq_group),
                 # 出站摘 @ 要用它：QQ 的被动回复自己显示 @对方，正文里那个 @是谁要对得上
                 "peer_name": peer_name or "",
                 # 自测要在正文里 @ 回去：群消息里只有 member_openid 能当 @ 的目标
@@ -1166,6 +1179,8 @@ class QqChannelPlugin(ServicePlugin):
             if channel_ref_idx:
                 # 记下它的 REFIDX：AI 回复这条时要精准引用（message_reference 用它）
                 message.channel_ref_idx = channel_ref_idx
+            # 这条来自哪个 QQ 群：出站（含别的实例）靠它把回复送回同一个群
+            message.channel_origin = format_channel_origin(self.channel_kind, self.instance, qq_group)
             await db.flush()
             # 序列化一次，两处共用：AI 成员（fanout）和群里的人（broadcast）
             msg_data = await message_view(db, message)
@@ -1231,24 +1246,36 @@ class QqChannelPlugin(ServicePlugin):
         """这个 QQ 群落到哪个 Copree 群：先查映射表，没有就落到实例的默认落点群"""
         return int(self._group_map.get(qq_group) or self._copree_group_id or 0)
 
-    def _remember_site_route(self, message_id: int, qq_group: str) -> None:
-        """记下"这条站内消息来自哪个 QQ 群"，AI 回它时才知道该回哪个群（有界，满了丢最早的）"""
-        if not message_id or not qq_group:
-            return
-        self._site_route[int(message_id)] = qq_group
-        self._site_route_order.append(int(message_id))
-        while len(self._site_route_order) > DEDUP_SIZE * 4:
-            stale = self._site_route_order.popleft()
-            if self._site_route.get(stale) is not None:
-                self._site_route.pop(stale, None)
+    async def _message_origin(self, db: Any, message: Any) -> tuple[str, str] | None:
+        """这条消息来自哪个通道会话 → (实例, 会话)。
 
-    def _route_for_outbound(self, group_id: int, reply_to: int | None) -> dict[str, Any] | None:
-        """AI 的这条消息该发到哪个 QQ 群：优先"它回的那条消息"来自的群，其次该群里最近来消息的那个"""
-        if reply_to:
-            openid = self._site_route.get(int(reply_to))
-            route = self._routes.get(openid) if openid else None
-            if route is not None and int(route.get("copree_group_id") or 0) == int(group_id):
-                return route
+        先看它自己那一行（AI 的回复发出去之后会带回同一个标识，线程就延续下来了），
+        再看它回的那条——引用/回复都要能把上下文接上。返回 None = 不是本通道的消息。
+        """
+        origin = parse_channel_origin(self.channel_kind, getattr(message, "channel_origin", None))
+        if origin is not None:
+            return origin
+        reply_to = getattr(message, "reply_to", None)
+        if not reply_to:
+            return None
+        from sqlalchemy import select
+
+        from app.models.message import Message
+
+        row = (await db.execute(
+            select(Message.channel_origin).where(Message.id == int(reply_to))
+        )).first()
+        return parse_channel_origin(self.channel_kind, row[0] if row else None)
+
+    def _route_for_outbound(self, group_id: int, openid: str) -> dict[str, Any] | None:
+        """AI 的这条消息该发到哪个 QQ 群：优先它回的那个会话，其次该群里最近来消息的那个。
+
+        凭据只活在内存里（msg_id/seq 是腾讯按"那条来消息"发的），所以查不到就是发不出去，
+        不能另挑一个群顶上——那正是"A 群的消息被回进 B 群"的来源。
+        """
+        route = self._routes.get(openid) if openid else None
+        if route is not None and int(route.get("copree_group_id") or 0) == int(group_id):
+            return route
         candidates = [
             r for r in self._routes.values() if int(r.get("copree_group_id") or 0) == int(group_id)
         ]
@@ -1275,7 +1302,12 @@ class QqChannelPlugin(ServicePlugin):
         text = str(getattr(message, "content", "") or "").strip()
         if not text:
             return
-        route = self._route_for_outbound(group_id, getattr(message, "reply_to", None))
+        origin = await self._message_origin(db, message)
+        if origin is not None and origin[0] != self.instance:
+            # 这条来自别的实例的通道会话（同一个 Copree 群被两个机器人接着）：归它回。
+            # 我们插一手只会把它发进自己那个群——被动凭据也只在它那边
+            return
+        route = self._route_for_outbound(group_id, origin[1] if origin else "")
         if not route:
             # 有落点却没有被动凭据：本进程内还没收到过来自该群的入站消息（刚重启、
             # 或这条 AI 消息不是回给 QQ 来消息的）。群里发不出去，留痕别静默丢——
@@ -1352,6 +1384,8 @@ class QqChannelPlugin(ServicePlugin):
             kind, message_id,
             channel_id=str(response.get("id") or ""),
             ref_idx=str((response.get("ext_info") or {}).get("ref_idx") or ""),
+            # 会话标识也写回这条 AI 消息：线程里的下一条（回复它）还认得出该回哪个群
+            origin=str(route.get("origin") or "") if kind == "group" else "",
         )
 
     async def _report_unreachable(self, kind: str, route: dict, reason: str) -> None:
@@ -1451,12 +1485,13 @@ class QqChannelPlugin(ServicePlugin):
         return str(getattr(row, "channel_ref_idx", "") or "") if row is not None else ""
 
     async def _remember_channel_ids(self, kind: str, message_id: int | None, *,
-                                    channel_id: str = "", ref_idx: str = "") -> None:
+                                    channel_id: str = "", ref_idx: str = "",
+                                    origin: str = "") -> None:
         """把通道侧那条消息的 id 记回库里。
 
         为什么要另开 session：出站是 fire-and-forget 的后台任务，原请求那个 session 早就 commit 了。
         """
-        if not message_id or not (channel_id or ref_idx):
+        if not message_id or not (channel_id or ref_idx or origin):
             return
         from app.database import async_session
         from app.models.dm import DMMessage
@@ -1471,6 +1506,8 @@ class QqChannelPlugin(ServicePlugin):
                         row.channel_msg_id = channel_id
                     if ref_idx and not getattr(row, "channel_ref_idx", None):
                         row.channel_ref_idx = ref_idx
+                    if origin and hasattr(row, "channel_origin") and not row.channel_origin:
+                        row.channel_origin = origin
                     await db.commit()
         except Exception as e:
             # 记不住不影响这条消息本身，只是撤回/引用会不可用
@@ -1482,7 +1519,10 @@ class QqChannelPlugin(ServicePlugin):
         撤不掉就**如实回报**：调用方要把"站内已撤、QQ 撤不掉"告诉用户，别假装成功。
         """
         channel_id = str(getattr(message, "channel_msg_id", "") or "")
-        route = self._route_for_outbound(group_id, getattr(message, "reply_to", None))
+        origin = await self._message_origin(db, message)
+        if origin is not None and origin[0] != self.instance:
+            return None                   # 这条不是我们发出去的，撤回也不归我们
+        route = self._route_for_outbound(group_id, origin[1] if origin else "")
         if not channel_id or not route:
             return None                       # 这条没经通道，或我们没记住它的通道 id
         client = self._client
