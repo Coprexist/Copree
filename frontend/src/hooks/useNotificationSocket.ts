@@ -217,8 +217,13 @@ export function useNotificationSocket(): NotificationFeed {
     const enabled = () => localStorage.getItem(STORAGE_KEY) !== 'false'
     const currentPath = () => pathRef.current
 
-    /** 当前正在看的会话不再弹（人已经在里面了） */
-    const isViewing = (item: NotificationItem) => !!item.to && currentPath().startsWith(item.to.split('?')[0])
+    /** 当前正在看的会话不再弹（人已经在里面了）。按整段路径比：/chat/gm/39 不该被 /chat/gm/3 命中 */
+    const isViewing = (item: NotificationItem) => {
+      if (!item.to) return false
+      const base = item.to.split('?')[0]
+      const path = currentPath()
+      return path === base || path.startsWith(base + '/')
+    }
 
     const push = (item: NotificationItem) => {
       if (!enabled() || isViewing(item)) return

@@ -7,15 +7,16 @@
  * - localStorage "notifications_enabled" 控制开关（默认开启）
  * - 免打扰（DND）群/私信不计入未读
  *
- * ⚠️ document.title 在 setInterval 中交替修改；
- *    组件卸载或窗口聚焦时必须 clearInterval，否则内存泄漏。
+ * 标题的写入口只有 utils/docTitle 一处：useWebSocket 收到消息时也要闪烁，
+ * 两边各自 setInterval 会以 800ms/1000ms 互相覆盖（详见该模块注释）。
  */
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { api } from '../api/client'
 import { CHAT_REFRESH_EVENT } from '../constants'
+import { useT } from '../i18n/I18nContext'
+import { setCountVisible, setUnreadCount, startTitleFlash, stopTitleFlash } from '../utils/docTitle'
 
 const STORAGE_KEY = 'notifications_enabled'
-const BASE_TITLE = 'Copree'
 
 /** 从 groups + dm_sessions API 计算总未读数：免打扰只挡常规消息，被点名到个人的那条照算 */
 async function fetchTotalUnread(): Promise<number> {
@@ -57,75 +58,48 @@ export function useDesktopNotification() {
     // 默认开启
     return stored === null ? true : stored === 'true'
   })
+  const t = useT()
   const unreadRef = useRef(0)
-  const flashTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const originalTitleRef = useRef(BASE_TITLE)
 
   const setEnabled = useCallback((value: boolean) => {
     setEnabledState(value)
     localStorage.setItem(STORAGE_KEY, value ? 'true' : 'false')
     if (!value) {
       // 关闭通知时立即恢复标题
-      document.title = BASE_TITLE
-      stopFlash()
+      setUnreadCount(0)
+      stopTitleFlash()
     }
-  }, [])
-
-  const stopFlash = useCallback(() => {
-    if (flashTimerRef.current) {
-      clearInterval(flashTimerRef.current)
-      flashTimerRef.current = null
-    }
-    document.title = originalTitleRef.current
   }, [])
 
   const updateUnread = useCallback(async () => {
     const count = await fetchTotalUnread()
     const prev = unreadRef.current
     unreadRef.current = count
+    // 关掉桌面通知时计数不进标题（unread 归零即回到原标题）
+    setUnreadCount(enabled ? count : 0)
 
-    // 有新未读消息 + 标签页失焦 = 启动闪烁
+    // 有新未读消息 + 标签页失焦 = 启动闪烁；计数那一面由 docTitle 按当前 unread 画
     if (count > 0 && count > prev && document.hidden && enabled) {
-      startFlash()
+      startTitleFlash(t('chat.newMessages'))
+    } else if (count === 0) {
+      stopTitleFlash()
     }
-
-    // 标签页失焦且未读 > 0：显示计数
-    if (document.hidden && count > 0 && enabled) {
-      document.title = `(${count}) ${BASE_TITLE}`
-    } else if (document.hidden && count === 0) {
-      document.title = BASE_TITLE
-      stopFlash()
-    }
-  }, [enabled, stopFlash])
-
-  const startFlash = useCallback(() => {
-    // 先停下之前的
-    stopFlash()
-    // 交替两个标题触发任务栏闪烁
-    let toggle = false
-    flashTimerRef.current = setInterval(() => {
-      toggle = !toggle
-      document.title = toggle
-        ? `🔔 新消息!`
-        : `(${unreadRef.current}) ${BASE_TITLE}`
-    }, 1000)
-  }, [stopFlash])
+  }, [enabled, t])
 
   // 窗口聚焦时清除闪烁和未读标记
   useEffect(() => {
     const onFocus = () => {
-      stopFlash()
-      document.title = BASE_TITLE
+      setCountVisible(false)
+      stopTitleFlash()
       // 聚焦后刷新一次未读计数
       fetchTotalUnread().then((count) => { unreadRef.current = count })
     }
     const onBlur = () => {
-      // 失焦时立即刷新
+      // 失焦时立即刷新：窗口不在前台就把计数亮出来
+      setCountVisible(true)
       fetchTotalUnread().then((count) => {
         unreadRef.current = count
-        if (count > 0 && enabled) {
-          document.title = `(${count}) ${BASE_TITLE}`
-        }
+        setUnreadCount(enabled ? count : 0)
       })
     }
 
@@ -135,9 +109,10 @@ export function useDesktopNotification() {
     return () => {
       window.removeEventListener('focus', onFocus)
       window.removeEventListener('blur', onBlur)
-      stopFlash()
+      setCountVisible(false)
+      stopTitleFlash()
     }
-  }, [enabled, stopFlash])
+  }, [enabled])
 
   // 监听 chat-refresh 事件更新未读
   useEffect(() => {
@@ -155,10 +130,10 @@ export function useDesktopNotification() {
   // enabled 变化时刷新标题
   useEffect(() => {
     if (!enabled) {
-      document.title = BASE_TITLE
-      stopFlash()
+      setUnreadCount(0)
+      stopTitleFlash()
     }
-  }, [enabled, stopFlash])
+  }, [enabled])
 
   return { enabled, setEnabled }
 }

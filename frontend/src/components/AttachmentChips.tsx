@@ -1,5 +1,6 @@
 import { File as FileIcon, Loader2, X } from 'lucide-react'
 import type { PendingAttachment } from '../hooks/useAttachmentUpload'
+import { formatFileSize } from '../utils/format'
 
 /**
  * 待发送附件预览条（主站聊天与群视界世界对话共用）。
@@ -28,7 +29,7 @@ export function AttachmentChips({ items, onRemove, errorText = '上传失败' }:
           </span>
           {att.uploading && <Loader2 size={12} className="animate-spin text-textMuted shrink-0" />}
           {att.error && <span className="text-rose-400 text-3xs shrink-0" title={att.error}>{errorText}</span>}
-          <span className="text-textMuted text-3xs shrink-0">{(att.size / 1024).toFixed(0)}KB</span>
+          <span className="text-textMuted text-3xs shrink-0">{formatFileSize(att.size)}</span>
           <button
             onClick={() => onRemove(att.id)}
             className="shrink-0 p-0.5 rounded text-textMuted hover:text-rose-400 hover:bg-rose-500/10 transition-colors"

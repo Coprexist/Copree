@@ -11,6 +11,9 @@ import rehypeRaw from 'rehype-raw'
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import { visit } from 'unist-util-visit'
 import CodeRenderer from './CodeRenderer'
+import { useEmojiPacks } from '../../hooks/useEmojiPacks'
+import { renderEmojiMarkers } from '../../utils/emojiPacks'
+import { useBubbleDark } from '../../hooks/useBubbleDark'
 
 // 将行内代码重定向到独立组件，避免和代码块共用同一个 code 组件
 function remarkInlineCode() {
@@ -30,9 +33,9 @@ const COLOR_VARS: Record<string, [string, string]> = {
   gray: ['180 180 180', '100 100 100'],
 }
 
-/** 彩色文字标签（<span class="text-red"> / [red]...[/red]）→ 行内颜色；深/浅色底两套 */
-function colorize(content: string, isMine: boolean) {
-  const rgb = (k: string) => `rgb(${COLOR_VARS[k][isMine ? 0 : 1]})`
+/** 彩色文字标签（<span class="text-red"> / [red]...[/red]）→ 行内颜色；深/浅色底两套，判定见 useBubbleDark */
+function colorize(content: string, darkBubble: boolean) {
+  const rgb = (k: string) => `rgb(${COLOR_VARS[k][darkBubble ? 0 : 1]})`
   let out = content
   for (const k of Object.keys(COLOR_VARS)) {
     out = out
@@ -45,9 +48,12 @@ function colorize(content: string, isMine: boolean) {
 }
 
 export default function MarkdownContent({ content, isMine = false }: { content: string; isMine?: boolean }) {
+  // 表情渲染收口于此：正文是字符或 :id: 短码，装了插件才把短码画成图
+  const packs = useEmojiPacks()
+  const darkBubble = useBubbleDark(isMine)
   return (
     <Markdown
-      children={colorize(content, isMine)}
+      children={colorize(renderEmojiMarkers(content, packs), darkBubble)}
       remarkPlugins={[[remarkGfm, { singleTilde: false }], remarkMath, remarkBreaks, remarkInlineCode]}
       rehypePlugins={[rehypeRaw, [rehypeSanitize, {
         ...defaultSchema,

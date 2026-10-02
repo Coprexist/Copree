@@ -5,7 +5,8 @@ import { useAuth } from '../context/AuthContext'
 import { parseServerDate } from '../utils/time'
 import MessageBubble from './MessageBubble'
 import { renderMentions, type MentionNames } from '../utils/mentions'
-import ChatInput from './ChatInput'
+import ChatInput, { CHAT_INPUT_MIN_H } from './ChatInput'
+import EmojiText from './shared/EmojiText'
 // 阈值（距底多少算「在底部」）与群视界/DSH 对话同一份来源；本组件有自己的虚拟列表机器，不套整个 hook
 import { BOTTOM_THRESHOLD } from '../hooks/useStickToBottom'
 import ActivityBar, { type ActivityUser } from './ActivityBar'
@@ -304,6 +305,13 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
     }, ms)
     pendingTimers.current.add(id)
   }, [])
+
+  // 程序化滚动期间滚动监听要闭嘴（否则会被当成"用户滚走了"）
+  const markAutoScrolling = useCallback((ms = 500) => {
+    isAutoScrolling.current = true
+    schedule(() => { isAutoScrolling.current = false }, ms)
+  }, [schedule])
+
   useEffect(() => {
     const timers = pendingTimers.current
     return () => {
@@ -675,10 +683,9 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
   const scrollToBottom = useCallback((smooth = true) => {
     const el = containerRef.current
     if (!el) return
-    isAutoScrolling.current = true
+    markAutoScrolling()
     el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'instant' })
-    setTimeout(() => { isAutoScrolling.current = false }, 500)
-  }, [])
+  }, [markAutoScrolling])
 
   const scrollToMessage = useCallback((messageId: number) => {
     const el = containerRef.current
@@ -691,21 +698,21 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
     requestAnimationFrame(() => {
       const msgEl = el.querySelector(`[data-message-id="${messageId}"]`)
       if (msgEl) {
-        isAutoScrolling.current = true
+        markAutoScrolling()
         // 只滚动消息容器本身（scrollIntoView 会连带滚动外层 main/Layout，把标题栏滚出视口）
         scrollToInContainer(el, msgEl as HTMLElement, { smooth: true })
-        setTimeout(() => { isAutoScrolling.current = false }, 500)
       }
     })
-  }, [messages, cumHeights])
+  }, [messages, cumHeights, markAutoScrolling])
 
   const handleJumpToUnread = useCallback(async () => {
     if (!firstUnreadId) return
     // 加载 firstUnreadId 之前的一页消息
     await loadMessages({ before_id: firstUnreadId, mode: 'older' })
-    // 滚动到原来的 firstUnreadId 位置
-    setTimeout(() => scrollToMessage(firstUnreadId), 200)
-  }, [firstUnreadId, loadMessages, scrollToMessage])
+    // 滚动到原来的 firstUnreadId 位置。走 schedule：200ms 内切了对话，这次定位
+    // 拿的是旧对话的 id 与高度表，作用到新对话上就是把人家滚到随机位置
+    schedule(() => scrollToMessage(firstUnreadId), 200)
+  }, [firstUnreadId, loadMessages, scrollToMessage, schedule])
 
   // ============================================================
   // 初始加载
@@ -729,8 +736,12 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
     }
   }, [conversationId, conversationType, loadMessages])
 
+  // Tauri 那条"3 秒窗口没开成 → 整页兜底跳转"的待定标记：用户改选标准界面、切走对话后作废
+  const immersivePending = useRef(false)
+
   // 全屏弹窗：选择「在此标准界面打开」→ 关弹窗 + 加载消息
   const closeWorldModal = useCallback(() => {
+    immersivePending.current = false
     setWorldModalOpen(false)
     loadInitialMessages()
   }, [loadInitialMessages])
@@ -748,9 +759,14 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
           const existing = await WebviewWindow.getByLabel(label)
           if (existing) { existing.setFocus(); return }
           const win = new WebviewWindow(label, { url })
-          const failTimer = setTimeout(() => { window.location.href = url }, 3000)
-          win.once('tauri://created', () => clearTimeout(failTimer))
-          win.once('tauri://error', () => { clearTimeout(failTimer); window.location.href = url })
+          immersivePending.current = true
+          // 兜底跳转同样算"这一屏的收尾动作"：3 秒内切了对话，或用户改点「在此标准界面打开」，
+          // 这次整页跳转已经不是用户要的了；created 事件也会把待定标记作废
+          schedule(() => {
+            if (immersivePending.current) window.location.href = url
+          }, 3000)
+          win.once('tauri://created', () => { immersivePending.current = false })
+          win.once('tauri://error', () => { immersivePending.current = false; window.location.href = url })
         } catch {
           window.location.href = url  // 无权限/失败 → 回退应用内
         }
@@ -759,7 +775,7 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
     }
     // 网页端：命名窗口（同名复用+聚焦）；WebView/被弹窗拦截（返回 null）→ 回退应用内
     if (!tryOpenWorldWindow(boundWorldId, typeof conversationId === 'number' ? conversationId : undefined)) window.location.href = url
-  }, [boundWorldId, conversationId])
+  }, [boundWorldId, conversationId, schedule])
 
   useEffect(() => {
     if (!conversationId) return
@@ -772,6 +788,11 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
     setShowJumpToUnread(false)
     setIsAtBottom(true)
     prevMessageCount.current = 0
+    // 上一屏没走完的收尾动作不能带进新对话：pendingTimers 清了定时器，但"正在自动滚动"这个
+    // 布尔标记得在这里归零——滚动监听看到它为真就整段 return，留着会让新对话的底部状态不再更新
+    isAutoScrolling.current = false
+    prevScrollHeight.current = 0
+    immersivePending.current = false
     setLoadingState('initial')
     // 进入对话时查询当前 AI 思考/输入中状态（组件重建后恢复活动指示器）
     const activityUrl = conversationType === 'group'
@@ -825,17 +846,16 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
         // 有更早的未读消息 → 将首个未读定位到视口顶部（paint 之前，无闪烁）
         const msgEl = container.querySelector(`[data-message-id="${firstUnreadId}"]`)
         if (msgEl) {
-          isAutoScrolling.current = true
+          markAutoScrolling()
           // 只滚动消息容器本身，避免 scrollIntoView 连带滚动外层 main/Layout
           scrollToInContainer(container, msgEl as HTMLElement)
-          setTimeout(() => { isAutoScrolling.current = false }, 500)
         }
       } else if (container.scrollHeight > container.clientHeight) {
         // 无旧消息但内容溢出 → 滚到底部
         container.scrollTop = container.scrollHeight
       }
     }
-  }, [loadingState, messages.length, firstUnreadId])
+  }, [loadingState, messages.length, firstUnreadId, markAutoScrolling])
 
   // 上下哨兵：加载更早/更新的分页（游标在 ref 里，见 useSentinel 的注释）
   useSentinel({
@@ -1154,16 +1174,12 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
         onMouseDown={(e) => {
           inputResizeRef.current = true
           const startY = e.clientY
-          const ta = textareaRef.current
-          const autoH = parseInt(ta?.dataset.autoHeight || '0', 10)
-          const startInputH = inputHeight || 0
-          const startTotalH = Math.max(44, startInputH + autoH)
+          // 从当前视觉高度起拖：inputHeight 存的就是总高的下限，自动增长那部分已经在里面
+          const startTotalH = Math.max(CHAT_INPUT_MIN_H, textareaRef.current?.offsetHeight || 0)
           const onMove = (ev: MouseEvent) => {
             if (!inputResizeRef.current) return
             const deltaY = startY - ev.clientY  // 向上拖=正值=扩大
-            const newTotalH = Math.max(44, startTotalH + deltaY)
-            const newInputH = newTotalH - autoH
-            setInputHeight(newInputH)
+            setInputHeight(Math.max(CHAT_INPUT_MIN_H, startTotalH + deltaY))
           }
           const onUp = () => {
             inputResizeRef.current = false
@@ -1206,7 +1222,7 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
             <div className="w-0.5 h-8 bg-primary-400 rounded-full shrink-0" />
             <div className="flex-1 min-w-0">
               <div className="text-primary-400 font-medium truncate">回复 @{replyTo.sender_name}</div>
-              <div className="text-textMuted truncate">{replyTo.content}</div>
+              <div className="text-textMuted truncate"><EmojiText content={replyTo.content} /></div>
             </div>
             <button onClick={() => setReplyTo(null)} className="shrink-0 p-1 rounded-control hover:bg-elevated text-textMuted hover:text-textPrimary transition-colors">
               <X size={14} />
@@ -1224,12 +1240,6 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
           hasAttachments={attachments.items.length > 0}
           groupMembers={groupMembers}
           inputHeight={inputHeight}
-          onAutoHeight={(ah) => {
-            setInputHeight(prev => {
-              const cur = prev || 0
-              return cur + ah < 44 ? 44 - ah : cur
-            })
-          }}
         />
       </div>
 

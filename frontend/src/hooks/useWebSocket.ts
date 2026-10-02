@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { getWsUrl } from '../utils/platform'
 import { safeParse } from '../utils/result'
+import { useT } from '../i18n/I18nContext'
+import { BASE_TITLE, startTitleFlash, stopTitleFlash } from '../utils/docTitle'
 
 export interface WebSocketMessage {
   type: string
@@ -41,7 +43,10 @@ export function useWebSocket(
   const [connected, setConnected] = useState(false)
   const [reconnecting, setReconnecting] = useState(false)
   const [errors, setErrors] = useState<WsError[]>([])
+  const t = useT()
   const wsRef = useRef<WebSocket | null>(null)
+  // 错误 toast 的自动消失定时器：卸载时统一清掉，别把 setState 落在已卸载的组件上
+  const errorTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set())
 
   // 消息回调 ref — 由消费者设置，WebSocket onmessage 时调用
   // 用 ref 而非直接依赖，避免 connect useCallback 随回调变化而重建
@@ -69,7 +74,8 @@ export function useWebSocket(
     setReconnecting(true)
     retryCountRef.current += 1
 
-    const delay = calcReconnectDelay(retryCountRef.current)
+    // retryCount 上面刚自增过：减 1 才对应「第 1 次重连等 1s」，否则首次就是 2s
+    const delay = calcReconnectDelay(retryCountRef.current - 1)
     console.log(
       `🔌 WebSocket 将在 ${(delay / 1000).toFixed(1)}s 后重连（第 ${retryCountRef.current} 次）`,
     )
@@ -127,95 +133,92 @@ export function useWebSocket(
       }
       const msg = result.value
 
-        // 错误事件：自动消失的 toast
-        if (msg.type === 'error') {
-          const wsError: WsError = {
-            code: msg.code || 'UNKNOWN',
-            message: msg.message || 'Unknown error',
-            tool_call_id: msg.tool_call_id,
-            timestamp: Date.now(),
-          }
-          setErrors((prev) => [...prev.slice(-9), wsError])
-          setTimeout(() => {
-            setErrors((prev) => prev.filter((e) => e.timestamp !== wsError.timestamp))
-          }, 5000)
+      // 错误事件：自动消失的 toast
+      if (msg.type === 'error') {
+        const wsError: WsError = {
+          code: msg.code || 'UNKNOWN',
+          message: msg.message || 'Unknown error',
+          tool_call_id: msg.tool_call_id,
+          timestamp: Date.now(),
         }
+        setErrors((prev) => [...prev.slice(-9), wsError])
+        const timer = setTimeout(() => {
+          errorTimersRef.current.delete(timer)
+          setErrors((prev) => prev.filter((e) => e.timestamp !== wsError.timestamp))
+        }, 5000)
+        errorTimersRef.current.add(timer)
+      }
 
-        // v0.1.8: 余额弹窗 → 全局自定义事件（BalancePromptModal 监听）
-        if (msg.type === 'balance_prompt' && msg.data) {
-          window.dispatchEvent(new CustomEvent('balance-prompt', { detail: msg.data }))
-        }
+      // v0.1.8: 余额弹窗 → 全局自定义事件（BalancePromptModal 监听）
+      if (msg.type === 'balance_prompt' && msg.data) {
+        window.dispatchEvent(new CustomEvent('balance-prompt', { detail: msg.data }))
+      }
 
-        // 插件变更广播（管理员开关/重扫）→ 全局事件（AuthContext 监听，皮肤即时回退）
-        if (msg.type === 'plugins_changed') {
-          window.dispatchEvent(new CustomEvent('plugins-changed'))
-        }
+      // 插件变更广播（管理员开关/重扫）→ 全局事件（AuthContext 监听，皮肤即时回退）
+      if (msg.type === 'plugins_changed') {
+        window.dispatchEvent(new CustomEvent('plugins-changed'))
+      }
 
-        // 心跳 ping → 立即回复 pong
-        if (msg.type === 'ping') {
-          ws.send(JSON.stringify({ type: 'pong' }))
-          return
-        }
+      // 心跳 ping → 立即回复 pong
+      if (msg.type === 'ping') {
+        ws.send(JSON.stringify({ type: 'pong' }))
+        return
+      }
 
-        // 只对真正的用户消息触发闪烁/通知，忽略静默系统消息
-        const isUserMsg = msg.type === 'message' || msg.type === 'ai_response'
-        if (!isUserMsg) {
-          // 静默消息仍要分发给消费者（ChatView 处理订阅确认等）
-          onMessageRef.current?.(msg)
-          return
-        }
-
-        // 窗口闪烁：页面未聚焦时收到消息
-        if (document.hidden && !flashLockRef.current && localStorage.getItem('notifications_enabled') !== 'false') {
-          flashLockRef.current = true
-          const origTitle = document.title
-          const origFavicon = ((document.querySelector('link[rel*="icon"]') || document.querySelector('link[rel="shortcut icon"]')) as HTMLLinkElement | null)?.href
-
-          // 标题闪烁（带发送者昵称）
-          const sender = msg.data?.sender_name || ''
-          const flashTitle = sender ? `💬 ${sender}` : '💬 新消息'
-          document.title = flashTitle
-          const iv = setInterval(() => {
-            document.title = document.title === flashTitle ? origTitle : flashTitle
-          }, 800)
-
-          // Favicon 红点
-          try {
-            const link = document.querySelector<HTMLLinkElement>('link[rel*="icon"]') || document.querySelector<HTMLLinkElement>('link[rel="shortcut icon"]')
-            if (link && origFavicon) badgeFavicon(origFavicon).then((url) => {
-              // 用户已切回来则跳过（Promise 可能比 stop 慢）
-              if (flashLockRef.current) link!.href = url
-            })
-          } catch {}
-
-          // 桌面通知
-          if ('Notification' in window && Notification.permission === 'granted') {
-            try {
-              new Notification('💬 Copree', { body: '收到新消息', tag: 'copree_msg' })
-            } catch {}
-          } else if ('Notification' in window && Notification.permission !== 'denied') {
-            Notification.requestPermission()
-          }
-
-          const stop = () => {
-            clearInterval(iv)
-            document.title = origTitle
-            if (origFavicon) {
-              const link = document.querySelector<HTMLLinkElement>('link[rel*="icon"]') || document.querySelector<HTMLLinkElement>('link[rel="shortcut icon"]')
-              if (link) link.href = origFavicon
-            }
-            flashLockRef.current = false
-            window.removeEventListener('focus', stop)
-            document.removeEventListener('visibilitychange', stop)
-          }
-          window.addEventListener('focus', stop, { once: true })
-          document.addEventListener('visibilitychange', stop, { once: true })
-        }
-
-        // 分发给消费者回调（ChatView 注册）
-        // 无需 flushSync：消费者内部全部使用函数式 setState(prev => ...),
-        // 即使 React 18 批处理合并多次调用，prev 链式叠加也不会丢失消息。
+      // 只对真正的用户消息触发闪烁/通知，忽略静默系统消息
+      const isUserMsg = msg.type === 'message' || msg.type === 'ai_response'
+      if (!isUserMsg) {
+        // 静默消息仍要分发给消费者（ChatView 处理订阅确认等）
         onMessageRef.current?.(msg)
+        return
+      }
+
+      // 窗口闪烁：页面未聚焦时收到消息。标题只由 utils/docTitle 写——
+      // 这里只报「有新消息、闪烁文案是什么」，自己开 interval 会和未读计数互相覆盖
+      if (document.hidden && !flashLockRef.current && localStorage.getItem('notifications_enabled') !== 'false') {
+        flashLockRef.current = true
+        const origFavicon = ((document.querySelector('link[rel*="icon"]') || document.querySelector('link[rel="shortcut icon"]')) as HTMLLinkElement | null)?.href
+
+        // 闪烁文案（带发送者昵称）：标题格式由 docTitle 统一拼
+        const sender = msg.data?.sender_name || ''
+        startTitleFlash(sender ? `${sender} · ${t('chat.newMessages')}` : t('chat.newMessages'))
+
+        // Favicon 红点
+        try {
+          const link = document.querySelector<HTMLLinkElement>('link[rel*="icon"]') || document.querySelector<HTMLLinkElement>('link[rel="shortcut icon"]')
+          if (link && origFavicon) badgeFavicon(origFavicon).then((url) => {
+            // 用户已切回来则跳过（Promise 可能比 stop 慢）
+            if (flashLockRef.current) link!.href = url
+          })
+        } catch {}
+
+        // 桌面通知
+        if ('Notification' in window && Notification.permission === 'granted') {
+          try {
+            new Notification(BASE_TITLE, { body: t('chat.newMessages'), tag: 'copree_msg' })
+          } catch {}
+        } else if ('Notification' in window && Notification.permission !== 'denied') {
+          Notification.requestPermission()
+        }
+
+        const stop = () => {
+          stopTitleFlash()
+          if (origFavicon) {
+            const link = document.querySelector<HTMLLinkElement>('link[rel*="icon"]') || document.querySelector<HTMLLinkElement>('link[rel="shortcut icon"]')
+            if (link) link.href = origFavicon
+          }
+          flashLockRef.current = false
+          window.removeEventListener('focus', stop)
+          document.removeEventListener('visibilitychange', stop)
+        }
+        window.addEventListener('focus', stop, { once: true })
+        document.addEventListener('visibilitychange', stop, { once: true })
+      }
+
+      // 分发给消费者回调（ChatView 注册）
+      // 无需 flushSync：消费者内部全部使用函数式 setState(prev => ...),
+      // 即使 React 18 批处理合并多次调用，prev 链式叠加也不会丢失消息。
+      onMessageRef.current?.(msg)
     }
 
     ws.onclose = (event) => {
@@ -256,20 +259,25 @@ export function useWebSocket(
     setConnected(false)
     setReconnecting(false)
 
-    if (!conversationId) {
-      return () => { mountedRef.current = false }
+    /** 切对话/卸载的收尾：定时器、闪烁、连接都要停 */
+    const teardown = () => {
+      mountedRef.current = false
+      clearRetryTimer()
+      errorTimersRef.current.forEach(clearTimeout)
+      errorTimersRef.current.clear()
+      // 闪烁不停会一直在后台改标题（原先那条 interval 就是这么漏的）
+      stopTitleFlash()
     }
 
+    if (!conversationId) return teardown
+
     const token = localStorage.getItem('access_token')
-    if (!token) {
-      return () => { mountedRef.current = false }
-    }
+    if (!token) return teardown
 
     const cleanup = connect()
 
     return () => {
-      mountedRef.current = false
-      clearRetryTimer()
+      teardown()
       if (cleanup) cleanup()
     }
   }, [conversationType, conversationId, connect])

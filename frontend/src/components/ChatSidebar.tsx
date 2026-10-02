@@ -8,6 +8,7 @@ import { formatRelativeTime } from '../utils/time'
 import { GroupAvatarGroup, thumbUrl } from './GroupAvatar'
 import { getStatusTextStyle, BG_SURFACE_LIGHT, BG_SURFACE_DARK } from '../utils/statusColor'
 import { useTheme } from '../context/ThemeContext'
+import EmojiText from './shared/EmojiText'
 import { useLang, useT } from '../i18n/I18nContext'
 
 /** URL 正则（匹配 http/https 链接） */
@@ -22,7 +23,7 @@ function PreviewText({ text, placeholder }: { text: string | null; placeholder: 
   URL_RE.lastIndex = 0
   while ((match = URL_RE.exec(text)) !== null) {
     if (match.index > lastIndex) {
-      parts.push(text.slice(lastIndex, match.index))
+      parts.push(<EmojiText key={`t${match.index}`} content={text.slice(lastIndex, match.index)} />)
     }
     parts.push(
       <span key={match.index} className="text-primary-500 dark:text-primary-400">{match[0]}</span>
@@ -30,9 +31,79 @@ function PreviewText({ text, placeholder }: { text: string | null; placeholder: 
     lastIndex = match.index + match[0].length
   }
   if (lastIndex < text.length) {
-    parts.push(text.slice(lastIndex))
+    parts.push(<EmojiText key="t-tail" content={text.slice(lastIndex)} />)
   }
   return <span className="truncate block">{parts}</span>
+}
+
+// 排序：last_message_at 降序（最新在前），没有时间戳的排末尾。
+// 放模块级而不是组件里——useMemo 的依赖里写不进一个每次渲染都重建的函数，
+// 提出来才没有"它要不要进依赖数组"的疑问
+function sortByTime(a: any, b: any) {
+  const ta = a.last_message_at ? new Date(a.last_message_at).getTime() : 0
+  const tb = b.last_message_at ? new Date(b.last_message_at).getTime() : 0
+  return tb - ta
+}
+
+// DM 头像：图片头像带底衬、无头像时用首字母/盾牌，右下角挂状态点。
+// 放模块级而不是组件里——定义在组件内时每次渲染都是新组件类型，列表里每个头像都会被卸载重挂
+function DmAvatar({ session }: { session: DMSession }) {
+  const p = session.partner
+  return (
+    <div className="w-9 h-9 rounded-full relative shrink-0">
+      {p.avatar_url ? (
+        <>
+          <div className={`absolute inset-px rounded-full bg-gradient-to-bl ${
+            p.type === 'system' ? 'from-rose-400 to-rose-600' : 'from-teal-400 to-teal-600'
+          }`} />
+          <img src={thumbUrl(p.avatar_url) || p.avatar_url} alt="" className="relative w-full h-full rounded-full object-cover" loading="lazy" decoding="async" />
+        </>
+      ) : (
+        <div className={`w-full h-full rounded-full bg-gradient-to-bl flex items-center justify-center ${
+          p.type === 'system' ? 'from-rose-400 to-rose-600' : 'from-teal-400 to-teal-600'
+        }`}>
+          {p.type === 'system' ? (
+            <ShieldAlert size={16} className="text-white" />
+          ) : (
+            <span className="text-xs font-bold text-white">{p.name?.charAt(0)?.toUpperCase() || '?'}</span>
+          )}
+        </div>
+      )}
+      {p.type !== 'system' && (
+        <span data-mv-force className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-surface ${getStateDotColor(p.state)}`} />
+      )}
+    </div>
+  )
+}
+
+// 折叠区域的标题（置顶/群聊/私信三处共用）
+function CollapsibleHeader({
+  label,
+  collapsed,
+  onToggle,
+  unreadCount,
+}: {
+  label: string
+  collapsed: boolean
+  onToggle: () => void
+  unreadCount?: number
+}) {
+  return (
+    <div className="flex items-center px-3 py-1 group">
+      <button
+        onClick={onToggle}
+        className="flex items-center gap-1 text-3xs font-semibold uppercase tracking-wider text-textMuted hover:text-textSecondary transition-colors"
+      >
+        {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+        {label}
+        {unreadCount !== undefined && unreadCount > 0 && (
+          <span className="ml-1 min-w-[14px] h-[14px] rounded-full bg-primary-500/70 text-white flex items-center justify-center text-[9px] font-bold">
+            {unreadCount > 99 ? '99+' : unreadCount}
+          </span>
+        )}
+      </button>
+    </div>
+  )
 }
 
 interface Group {
@@ -197,13 +268,6 @@ const ChatSidebar = memo(function ChatSidebar({
   useEffect(() => { setCollapsed('groups', groupsCollapsed) }, [groupsCollapsed])
   useEffect(() => { setCollapsed('dm', dmCollapsed) }, [dmCollapsed])
 
-  // 排序函数：按 last_message_at 降序（最新在前），无时间戳的排末尾
-  const sortByTime = (a: any, b: any) => {
-    const ta = a.last_message_at ? new Date(a.last_message_at).getTime() : 0
-    const tb = b.last_message_at ? new Date(b.last_message_at).getTime() : 0
-    return tb - ta
-  }
-
   // ── 分组数据 ──
 
   const regularGroups = useMemo(() => groups
@@ -241,36 +305,6 @@ const ChatSidebar = memo(function ChatSidebar({
   const lang = useLang()
   const t = useT()
   const { theme } = useTheme()
-
-  /** DM 头像组件 */
-  const DmAvatar = ({ session }: { session: DMSession }) => {
-    const p = session.partner
-    return (
-      <div className="w-9 h-9 rounded-full relative shrink-0">
-        {p.avatar_url ? (
-          <>
-            <div className={`absolute inset-px rounded-full bg-gradient-to-bl ${
-              p.type === 'system' ? 'from-rose-400 to-rose-600' : 'from-teal-400 to-teal-600'
-            }`} />
-            <img src={thumbUrl(p.avatar_url) || p.avatar_url} alt="" className="relative w-full h-full rounded-full object-cover" loading="lazy" decoding="async" />
-          </>
-        ) : (
-          <div className={`w-full h-full rounded-full bg-gradient-to-bl flex items-center justify-center ${
-            p.type === 'system' ? 'from-rose-400 to-rose-600' : 'from-teal-400 to-teal-600'
-          }`}>
-            {p.type === 'system' ? (
-              <ShieldAlert size={16} className="text-white" />
-            ) : (
-              <span className="text-xs font-bold text-white">{p.name?.charAt(0)?.toUpperCase() || '?'}</span>
-            )}
-          </div>
-        )}
-        {p.type !== 'system' && (
-          <span data-mv-force className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-surface ${getStateDotColor(p.state)}`} />
-        )}
-      </div>
-    )
-  }
 
   const nothingSelected = !activeGroupId && !activeSessionId
 
@@ -380,34 +414,6 @@ const ChatSidebar = memo(function ChatSidebar({
         </div>
       </div>
     </button>
-  )
-
-  // ── 折叠区域标题组件 ──
-  const CollapsibleHeader = ({
-    label,
-    collapsed,
-    onToggle,
-    unreadCount,
-  }: {
-    label: string
-    collapsed: boolean
-    onToggle: () => void
-    unreadCount?: number
-  }) => (
-    <div className="flex items-center px-3 py-1 group">
-      <button
-        onClick={onToggle}
-        className="flex items-center gap-1 text-3xs font-semibold uppercase tracking-wider text-textMuted hover:text-textSecondary transition-colors"
-      >
-        {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-        {label}
-        {unreadCount !== undefined && unreadCount > 0 && (
-          <span className="ml-1 min-w-[14px] h-[14px] rounded-full bg-primary-500/70 text-white flex items-center justify-center text-[9px] font-bold">
-            {unreadCount > 99 ? '99+' : unreadCount}
-          </span>
-        )}
-      </button>
-    </div>
   )
 
   return (

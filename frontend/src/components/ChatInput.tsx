@@ -1,6 +1,8 @@
 import { useState, useCallback, useEffect, useRef, useMemo, forwardRef, useImperativeHandle } from 'react'
-import { Send, Paperclip } from 'lucide-react'
+import { Send, Paperclip, Smile } from 'lucide-react'
 import { MenuPanel, MenuItem } from './ui'
+import { useEmojiPacks } from '../hooks/useEmojiPacks'
+import { faceAssetUrl, faceMarkup } from '../utils/emojiPacks'
 
 /** @提及 的终止字符：与后端 app/utils/text.py 的 _MENTION_STOP 同一套口径
  *  （两处必须一致，否则前端提醒的名字和后端认的名字会对不上） */
@@ -22,6 +24,12 @@ function findMentionTokens(text: string): string[] {
   return tokens
 }
 
+// 输入框高度：MIN_H = 单行（与 textarea 的 min-h-[40px] 一致），自动增长最多再给 3 行。
+// 导出给拖拽手柄用——两处的最小高度必须是同一个数，否则拖到底会和自动高度差几像素
+export const CHAT_INPUT_MIN_H = 40
+const LINE_H = 23
+const MAX_H = CHAT_INPUT_MIN_H + 3 * LINE_H
+
 interface ChatInputProps {
   conversationType: string
   conversationId: number | string
@@ -31,21 +39,22 @@ interface ChatInputProps {
   connected: boolean
   hasAttachments?: boolean
   groupMembers?: Array<{ type: string; id: number; name: string; state?: string }>
+  /** 用户拖出来的最低高度（总高）；null = 只按内容自动长 */
   inputHeight?: number | null
-  /** 自动高度变化时通知父组件（用于补偿拖拽高度） */
-  onAutoHeight?: (ah: number) => void
 }
 
 /**
  * 独立输入框。管理自身 value 和 @mention 状态，打字不触发父组件重渲染。
  */
-const ChatInputFunc = ({ conversationType, conversationId, t, onSend, onSendFile, connected, hasAttachments, groupMembers, inputHeight, onAutoHeight }: ChatInputProps, ref: React.ForwardedRef<HTMLTextAreaElement>) => {
+const ChatInputFunc = ({ conversationType, conversationId, t, onSend, onSendFile, connected, hasAttachments, groupMembers, inputHeight }: ChatInputProps, ref: React.ForwardedRef<HTMLTextAreaElement>) => {
   const [value, setValue] = useState('')
-  const [autoHeight, setAutoHeight] = useState(0)
+  // 内容自然高度（已按单行下限与 3 行上限裁剪）：输入框高度 = max(它, 用户拖出来的高度)
+  const [contentH, setContentH] = useState(CHAT_INPUT_MIN_H)
+  const [emojiOpen, setEmojiOpen] = useState(false)
+  const emojiPacks = useEmojiPacks()
   const valueRef = useRef('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   useImperativeHandle(ref, () => textareaRef.current!, [])
-  const LINE_H = 23
 
   // @mention 检测
   const [mentionQuery, setMentionQuery] = useState('')
@@ -57,12 +66,12 @@ const ChatInputFunc = ({ conversationType, conversationId, t, onSend, onSendFile
 
   useEffect(() => { valueRef.current = value }, [value])
 
-  // 拖拽高度或自动高度变化时同步到 textarea DOM
+  // 拖拽高度或内容高度变化时同步到 textarea DOM
   useEffect(() => {
     const ta = textareaRef.current
     if (!ta) return
-    ta.style.height = Math.max(40, (inputHeight || 0) + autoHeight) + 'px'
-  }, [inputHeight, autoHeight])
+    ta.style.height = Math.max(CHAT_INPUT_MIN_H, inputHeight || 0, contentH) + 'px'
+  }, [inputHeight, contentH])
 
   // 草稿恢复 & 离开保存
   useEffect(() => {
@@ -112,6 +121,21 @@ const ChatInputFunc = ({ conversationType, conversationId, t, onSend, onSendFile
     })
   }, [value])
 
+  // 有字符的表情插入字符（输入框即为所见），仅图片的插入 :id: 短码
+  const insertEmoji = useCallback((markup: string) => {
+    const ta = textareaRef.current
+    if (!ta) return
+    const cursorPos = ta.selectionStart
+    const before = value.slice(0, cursorPos)
+    const token = markup
+    setValue(before + token + value.slice(cursorPos))
+    requestAnimationFrame(() => {
+      ta.focus()
+      const next = before.length + token.length
+      ta.setSelectionRange(next, next)
+    })
+  }, [value])
+
   // 手打 @短名（漏了括号后缀）时提醒一句：@ 是全字匹配，少一个字都喊不醒对方
   const mentionFix = useMemo(() => {
     if (mentionActive || !groupMembers?.length) return null
@@ -150,16 +174,14 @@ const ChatInputFunc = ({ conversationType, conversationId, t, onSend, onSendFile
     const ta = e.target
     setValue(ta.value)
     detectMention(ta.value, ta.selectionStart)
-    // 自动缩放：超出基础高度的部分最多 3 行
+    // 自动缩放：量内容高度再夹到 [单行, 3 行上限]。
+    // textarea 的 auto 高度只认 rows，不认折行后的内容，所以必须读 scrollHeight；
+    // 而 scrollHeight 不含上下边框，不补这 2px 就会永远差一点——多行时底部挂着一条细滚动条
+    const borderY = ta.offsetHeight - ta.clientHeight
     ta.style.height = 'auto'
-    const scrollH = ta.scrollHeight
-    const base = inputHeight || 40
-    const maxAuto = 3 * LINE_H
-    const ah = Math.max(0, Math.min(scrollH - base, maxAuto))
-    setAutoHeight(ah)
-    ta.dataset.autoHeight = String(ah)
-    onAutoHeight?.(ah)
-    ta.style.height = Math.max(40, (inputHeight || 0) + ah) + 'px'
+    const next = Math.min(Math.max(ta.scrollHeight + borderY, CHAT_INPUT_MIN_H), MAX_H)
+    setContentH(next)
+    ta.style.height = Math.max(CHAT_INPUT_MIN_H, inputHeight || 0, next) + 'px'
   }, [detectMention, inputHeight])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -216,6 +238,48 @@ const ChatInputFunc = ({ conversationType, conversationId, t, onSend, onSendFile
       >
         <Paperclip size={18} />
       </button>
+
+      {/* 装表情包插件才有这个入口：没装就不显示，输入框保持原样 */}
+      {emojiPacks.length > 0 && (
+        <div className="relative shrink-0">
+          <button
+            onClick={() => setEmojiOpen((open) => !open)}
+            className={`p-2.5 rounded-card border transition-colors ${
+              emojiOpen
+                ? 'border-primary-500/30 bg-elevated text-primary-500'
+                : 'border-border bg-canvas text-textMuted hover:text-textPrimary hover:border-primary-500/30 hover:bg-elevated'
+            }`}
+            title={t('chat.addEmoji')}
+          >
+            <Smile size={18} />
+          </button>
+          {emojiOpen && (
+            <MenuPanel className="absolute bottom-full left-0 mb-1 w-72 max-h-64 overflow-y-auto p-2 z-modal">
+              <div className="text-3xs text-textMuted px-1 pb-1">{t('chat.emojiPacks')}</div>
+              {emojiPacks.map((pack) => (
+                <div key={pack.id} className="mb-2 last:mb-0">
+                  <div className="text-3xs text-textMuted px-1 mb-1" title={pack.usage}>{pack.name}</div>
+                  <div className="flex flex-wrap gap-0.5">
+                    {pack.faces.map((face) => (
+                      <button
+                        key={face.id}
+                        type="button"
+                        title={face.name}
+                        onMouseDown={(e) => { e.preventDefault(); insertEmoji(faceMarkup(face)) }}
+                        className="w-8 h-8 flex items-center justify-center rounded-control text-base hover:bg-elevated transition-colors"
+                      >
+                        {face.emoji || (face.file
+                          ? <img src={faceAssetUrl(pack, face)} alt={face.name} className="w-5 h-5" loading="lazy" />
+                          : face.name.slice(0, 1))}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </MenuPanel>
+          )}
+        </div>
+      )}
 
       <textarea
         ref={textareaRef}
