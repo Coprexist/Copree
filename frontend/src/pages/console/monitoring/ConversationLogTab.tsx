@@ -5,6 +5,7 @@ import { FileText, Settings, Bot, Eye, ChevronDown, ChevronUp, Loader2, Save, Sl
 import Toggle from '../../../components/Toggle'
 import { Dialog } from '../../../components/ui'
 import RequestBodyViewer from '../../../components/shared/RequestBodyViewer'
+import { RunStatusChip, groupByStatus } from '../../../components/shared/RunStatus'
 
 interface GlobalConfig {
   max_conversation_logs: number
@@ -33,6 +34,7 @@ interface LogSummary {
   message_count: number
   token_usage: any
   has_output: boolean
+  status?: string
   model: string | null
   thinking_enabled: boolean
   preview: any[]
@@ -414,7 +416,14 @@ export default function ConversationLogTab() {
           {logs.length > 0 && (
             <div className="bg-elevated border border-border rounded-card overflow-hidden">
               <div className="divide-y divide-border">
-                {logs.map(log => (
+                {groupByStatus(logs, log => log.status).map(group => (
+                  <div key={group.status}>
+                    <div className="px-4 py-1.5 bg-canvas flex items-center gap-2">
+                      <RunStatusChip status={group.status} />
+                      <span className="text-2xs text-textMuted">{group.items.length}</span>
+                    </div>
+                    <div className="divide-y divide-border">
+                {group.items.map(log => (
                   <div
                     key={log.id}
                     className="px-4 py-3 hover:bg-canvas cursor-pointer transition-colors"
@@ -454,6 +463,9 @@ export default function ConversationLogTab() {
                     )}
                   </div>
                 ))}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           )}
@@ -466,7 +478,10 @@ export default function ConversationLogTab() {
                 onClick={e => e.stopPropagation()}
               >
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-sm font-semibold text-textPrimary">{t('admin.conversationLog').replace('{id}', String(selectedLog))}</h3>
+                  <h3 className="flex items-center gap-2 text-sm font-semibold text-textPrimary">
+                    <RunStatusChip status={logDetail?.status} />
+                    {t('admin.conversationLog').replace('{id}', String(selectedLog))}
+                  </h3>
                   <button onClick={() => { setSelectedLog(null); setLogDetail(null) }} className="text-textMuted hover:text-textSecondary"><X size={16} /></button>
                 </div>
                 {detailLoading ? (

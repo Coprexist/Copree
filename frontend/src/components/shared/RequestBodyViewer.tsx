@@ -14,15 +14,15 @@ type Kind = 'system' | 'injected' | 'user' | 'assistant' | 'roundTools' | 'toolC
 
 /** 分块配色：左竖条定色、底色调淡；工具那两类再叠虚线框 + 等宽字体，同色系也不会混 */
 const STYLES: Record<Kind, { bar: string; box: string; key: string }> = {
-  system:     { bar: 'bg-textMuted/40',   box: 'bg-canvas border-border',                          key: 'reqBody.kindSystem' },
-  injected:   { bar: 'bg-accent-500',     box: 'bg-accent-500/10 border-accent-500/30 border-dashed', key: 'reqBody.kindInjected' },
-  user:       { bar: 'bg-primary-500',    box: 'bg-primary-500/10 border-primary-500/30',           key: 'reqBody.kindUser' },
-  assistant:  { bar: 'bg-mint-500',       box: 'bg-mint-500/10 border-mint-500/30',                 key: 'reqBody.kindAssistant' },
-  roundTools: { bar: 'bg-primary-400',    box: 'bg-primary-500/5 border-primary-500/30 border-dashed', key: 'reqBody.kindRoundTools' },
-  toolCall:   { bar: 'bg-primary-500',    box: 'bg-primary-500/10 border-primary-500/40 border-dashed', key: 'reqBody.kindToolCall' },
-  toolResult: { bar: 'bg-accent-500',     box: 'bg-accent-500/10 border-accent-500/40 border-dashed', key: 'reqBody.kindToolResult' },
-  reasoning:  { bar: 'bg-primary-400/60', box: 'bg-elevated border-border',                        key: 'reqBody.kindReasoning' },
-  error:      { bar: 'bg-rose-500',       box: 'bg-rose-500/10 border-rose-500/30',                 key: 'reqBody.kindError' },
+  system:     { bar: 'bg-textMuted/40',   box: 'bg-canvas border-border',                          key: 'logs:kindSystem' },
+  injected:   { bar: 'bg-accent-500',     box: 'bg-accent-500/10 border-accent-500/30 border-dashed', key: 'logs:kindInjected' },
+  user:       { bar: 'bg-primary-500',    box: 'bg-primary-500/10 border-primary-500/30',           key: 'logs:kindUser' },
+  assistant:  { bar: 'bg-mint-500',       box: 'bg-mint-500/10 border-mint-500/30',                 key: 'logs:kindAssistant' },
+  roundTools: { bar: 'bg-primary-400',    box: 'bg-primary-500/5 border-primary-500/30 border-dashed', key: 'logs:kindRoundTools' },
+  toolCall:   { bar: 'bg-primary-500',    box: 'bg-primary-500/10 border-primary-500/40 border-dashed', key: 'logs:kindToolCall' },
+  toolResult: { bar: 'bg-accent-500',     box: 'bg-accent-500/10 border-accent-500/40 border-dashed', key: 'logs:kindToolResult' },
+  reasoning:  { bar: 'bg-primary-400/60', box: 'bg-elevated border-border',                        key: 'logs:kindReasoning' },
+  error:      { bar: 'bg-rose-500',       box: 'bg-rose-500/10 border-rose-500/30',                 key: 'logs:kindError' },
 }
 
 /** 等宽渲染的种类：工具入参/返回与「本轮工具」汇总行都是机器文本，等宽才看得出结构 */
@@ -161,7 +161,7 @@ export default function RequestBodyViewer({ messages, className = '' }: { messag
   }, [list])
 
   if (list.length === 0) {
-    return <p className={`text-xs text-textMuted ${className}`}>{t('reqBody.empty')}</p>
+    return <p className={`text-xs text-textMuted ${className}`}>{t('logs:empty')}</p>
   }
 
   return (
@@ -178,7 +178,7 @@ export default function RequestBodyViewer({ messages, className = '' }: { messag
           onClick={() => setRaw(v => !v)}
           className="ml-auto text-3xs px-1.5 py-0.5 rounded border border-border text-textMuted hover:text-textSecondary transition-colors"
         >
-          {raw ? t('reqBody.viewSegments') : t('reqBody.viewRaw')}
+          {raw ? t('logs:viewSegments') : t('logs:viewRaw')}
         </button>
       </div>
       {raw ? (

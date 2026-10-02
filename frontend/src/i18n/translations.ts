@@ -7,6 +7,7 @@
 import type { Lang } from './languages'
 import { toolZh, toolEn, toolJa } from './tool'
 import { adminConfigZh, adminConfigEn, adminConfigJa } from './admin_config'
+import { logsZh, logsEn, logsJa } from './logs'
 
 export type TranslationDict = Record<string, string | Record<string, unknown>>
 
@@ -946,19 +947,6 @@ const zh: TranslationDict = {
   'agentDetail.logDetailTitle': '对话日志',
   'agentDetail.logReasoning': '推理过程',
   'agentDetail.logToolCalls': '工具调用:',
-  'agentDetail.latestRequestBody': '最新一次请求体',
-  'reqBody.empty': '这条日志没有正文。',
-  'reqBody.viewRaw': '原始 JSON',
-  'reqBody.viewSegments': '分段视图',
-  'reqBody.kindSystem': '系统提示',
-  'reqBody.kindInjected': '插入的消息',
-  'reqBody.kindUser': '收到的话',
-  'reqBody.kindAssistant': 'AI 说的话',
-  'reqBody.kindRoundTools': '本轮工具',
-  'reqBody.kindToolCall': '工具调用',
-  'reqBody.kindToolResult': '工具返回',
-  'reqBody.kindReasoning': '思考',
-  'reqBody.kindError': '收尾/报错',
   'agentDetail.memoryTitlePrefix': '记忆（共',
   'agentDetail.memoryTitleSuffix': '条）',
   'agentDetail.noMemories': '暂无记忆',
@@ -3000,19 +2988,6 @@ const en: TranslationDict = {
   'agentDetail.logDetailTitle': 'Chat Log',
   'agentDetail.logReasoning': 'Reasoning Process',
   'agentDetail.logToolCalls': 'Tool calls:',
-  'agentDetail.latestRequestBody': 'Latest request body',
-  'reqBody.empty': 'This log has no content.',
-  'reqBody.viewRaw': 'Raw JSON',
-  'reqBody.viewSegments': 'Segmented view',
-  'reqBody.kindSystem': 'System prompt',
-  'reqBody.kindInjected': 'Injected message',
-  'reqBody.kindUser': 'Incoming message',
-  'reqBody.kindAssistant': 'AI reply',
-  'reqBody.kindRoundTools': 'This round tools',
-  'reqBody.kindToolCall': 'Tool call',
-  'reqBody.kindToolResult': 'Tool result',
-  'reqBody.kindReasoning': 'Reasoning',
-  'reqBody.kindError': 'Wrap-up / error',
   'agentDetail.memoryTitlePrefix': 'Memories (total ',
   'agentDetail.memoryTitleSuffix': ')',
   'agentDetail.noMemories': 'No memories',
@@ -5052,19 +5027,6 @@ const ja: TranslationDict = {
   'agentDetail.logDetailTitle': '会話ログ',
   'agentDetail.logReasoning': '推論過程',
   'agentDetail.logToolCalls': 'ツール呼び出し:',
-  'agentDetail.latestRequestBody': '最新のリクエストボディ',
-  'reqBody.empty': 'このログには本文がありません。',
-  'reqBody.viewRaw': '生の JSON',
-  'reqBody.viewSegments': 'セグメント表示',
-  'reqBody.kindSystem': 'システムプロンプト',
-  'reqBody.kindInjected': '挿入されたメッセージ',
-  'reqBody.kindUser': '受信した発言',
-  'reqBody.kindAssistant': 'AI の発言',
-  'reqBody.kindRoundTools': '今回のツール',
-  'reqBody.kindToolCall': 'ツール呼び出し',
-  'reqBody.kindToolResult': 'ツール応答',
-  'reqBody.kindReasoning': '思考',
-  'reqBody.kindError': '終了・エラー',
   'agentDetail.memoryTitlePrefix': '記憶（全',
   'agentDetail.memoryTitleSuffix': '件）',
   'agentDetail.noMemories': '記憶がありません',
@@ -6167,9 +6129,9 @@ const ja: TranslationDict = {
 };
 
 export const translations: Record<Lang, NamespacedDict> = {
-  zh: { common: zh, tool: toolZh, adminConfig: adminConfigZh },
-  en: { common: en, tool: toolEn, adminConfig: adminConfigEn },
-  ja: { common: ja, tool: toolJa, adminConfig: adminConfigJa },
+  zh: { common: zh, tool: toolZh, adminConfig: adminConfigZh, logs: logsZh },
+  en: { common: en, tool: toolEn, adminConfig: adminConfigEn, logs: logsEn },
+  ja: { common: ja, tool: toolJa, adminConfig: adminConfigJa, logs: logsJa },
 }
 
 /** 插值：'正在{name}…' + { name: '读取文件' } → '正在读取文件…' */

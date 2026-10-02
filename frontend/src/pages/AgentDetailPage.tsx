@@ -17,6 +17,7 @@ import { Dialog, EmptyState } from '../components/ui'
 import FilePreviewModal from '../components/FilePreviewModal'
 import ChannelCard from '../components/channels/ChannelCard'
 import RequestBodyViewer from '../components/shared/RequestBodyViewer'
+import { RunStatusChip, groupByStatus } from '../components/shared/RunStatus'
 
 /** 扩展名→MIME 类型映射（后端未返回 mime_type 时 fallback） */
 const EXT_MIME_MAP: Record<string, string> = {
@@ -108,6 +109,7 @@ interface LogSummary {
   message_count: number
   token_usage: any
   has_output: boolean
+  status?: string
   model: string | null
   thinking_enabled: boolean
   preview: any[]
@@ -1214,7 +1216,8 @@ export default function AgentDetailPage() {
             {latestLog && (
               <div className="mb-3 rounded-control border border-border bg-canvas p-3">
                 <div className="flex items-center gap-2 mb-2">
-                  <h4 className="text-xs font-medium text-textPrimary">{t('agentDetail.latestRequestBody')}</h4>
+                  <h4 className="text-xs font-medium text-textPrimary">{t('logs:latestRequest')}</h4>
+                  <RunStatusChip status={latestLog.status} />
                   <span className="text-3xs text-textMuted">
                     #{latestLog.id}
                     {latestLog.created_at ? ` · ${new Date(latestLog.created_at).toLocaleString('zh-CN')}` : ''}
@@ -1241,8 +1244,16 @@ export default function AgentDetailPage() {
                 )}
               </p>
             ) : (
-              <div className="space-y-2 max-h-96 overflow-y-auto">
-                {logs.map((log) => (
+              <div className="space-y-3 max-h-96 overflow-y-auto">
+                {groupByStatus(logs, (log) => log.status).map((group) => (
+                  <div key={group.status} className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <RunStatusChip status={group.status} />
+                      <span className="text-3xs text-textMuted">
+                        {group.items.length} {t('agentDetail.logCountSuffix')}
+                      </span>
+                    </div>
+                    {group.items.map((log) => (
                   <div key={log.id} className="p-3 rounded-control bg-canvas border border-border">
                     <div className="flex items-center justify-between mb-1">
                       <div className="flex items-center gap-2">
@@ -1290,6 +1301,8 @@ export default function AgentDetailPage() {
                       </button>
                     </div>
                   </div>
+                    ))}
+                  </div>
                 ))}
               </div>
             )}
@@ -1302,7 +1315,8 @@ export default function AgentDetailPage() {
                   onClick={e => e.stopPropagation()}
                 >
                   <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-                    <h4 className="font-medium text-sm text-textPrimary">
+                    <h4 className="flex items-center gap-2 font-medium text-sm text-textPrimary">
+                      <RunStatusChip status={selectedLog.status} />
                       {t('agentDetail.logDetailTitle')} #{selectedLog.id}
                       <span className="text-textMuted ml-2 text-xs">
                         {selectedLog.created_at ? new Date(selectedLog.created_at).toLocaleString('zh-CN') : ''}

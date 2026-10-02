@@ -688,6 +688,27 @@ async def update_agent_log_settings(
 
 # ── 内部工具 ──
 
+# 一轮对话的结局：报错 / 被收尾（工具轮次用尽、超时收尾）/ 无输出 / 正常。
+# 列表按它分开显示——截断、空转、没说话的轮次跟正常回复长得一样，混在一起就没法挑出来修。
+_STATUS_MARKS = (
+    ("error", ("异常中断", "Traceback", "执行失败", "模型调用失败")),
+    ("wrapup", ("[本轮收尾]",)),
+)
+
+
+def _run_status(messages: list[dict], has_output: bool) -> str:
+    """判一轮的结局：只看 AI 侧留下的字（工具返回也算），命中标记就按标记算"""
+    text = "\n".join(
+        str(msg.get("content") or "")
+        for msg in messages or []
+        if isinstance(msg, dict) and msg.get("role") in ("assistant", "tool")
+    )
+    for status, marks in _STATUS_MARKS:
+        if any(mark in text for mark in marks):
+            return status
+    return "ok" if has_output else "no_output"
+
+
 def _log_to_summary(log: ConversationLog) -> dict:
     """转为摘要（不含完整 messages，前端列表用）"""
     # 取前两条和后一条消息作为预览
@@ -710,6 +731,7 @@ def _log_to_summary(log: ConversationLog) -> dict:
         "message_count": log.message_count,
         "token_usage": log.token_usage,
         "has_output": log.has_output,
+        "status": _run_status(msgs, bool(log.has_output)),
         "model": log.model,
         "thinking_enabled": log.thinking_enabled,
         "preview": preview,
@@ -729,6 +751,7 @@ def _log_to_detail(log: ConversationLog) -> dict:
         "message_count": log.message_count,
         "token_usage": log.token_usage,
         "has_output": log.has_output,
+        "status": _run_status(log.messages or [], bool(log.has_output)),
         "model": log.model,
         "thinking_enabled": log.thinking_enabled,
         "created_at": str(log.created_at) if log.created_at else None,
