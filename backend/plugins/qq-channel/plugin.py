@@ -66,18 +66,15 @@ UNION_TTL_SECONDS = 86400          # 补拉到的 union 缓存一天（没有也
 UNION_CACHE_MAX = 2000             # 缓存条目上限：按群成员数增长，满了丢最早的
 MIRROR_WINDOW_SECONDS = 3          # 同一句 QQ 消息被两台机器人分别送进来的认亲窗口
 MIRROR_MIN_CHARS = 2               # 太短的正文（"嗯"、"?"）撞车概率太高，不认
-# 单条正文先按多长发：官方只给了 40054007「消息长度超限」这个错误码、没给数字，
-# 所以不猜死一个常量——整条发，被平台拒了就拆条并把学到的上限记住（见 _deliver）。
+# 单条正文先整条发：官方只给了 40054007「消息长度超限」这个错误码、没给数字，
+# 所以不猜上限——被平台拒了就在"认过的长度"和"刚被拒的长度"之间二分（见 _deliver）。
 LENGTH_ERROR_HINTS = ("40054007", "长度超限")
-TEXT_CHUNK = 1000                  # 拆条粒度：1000 是实测被平台接受的长度
-TEXT_CHUNK_MIN = 64                # 折半的兜底下限：只保证不再原地打转，不代表平台认这么短
+TEXT_CHUNK_MIN = 64                # 二分的兜底下限：只保证不再原地打转，不代表平台认这么短
 GROUP_PER_MINUTE = 20              # 单群频控 20/qpm（主动消息）
 BOT_PER_MINUTE = 60                # Bot 维度 60/qpm
 PAIR_NOTIFY_INTERVAL = 60           # 陌生人反复私聊时，配对码最多 60 秒提醒一次
 PAIR_NOTIFY_CACHE_MAX = 256         # 通知表涨到这么大才清一次过期条目
 DM_ROUTE_MAX = 500                  # 私信路由上限：按会话记，只随配对人数增长
-TEXT_LIMIT = 4000                  # 保守起点：实测 ≥6946 字能整条发出去，4000 只是"一定没问题"的下界
-TEXT_PROBE_STEP = 1000             # 每次往上探一档的步长：探崩一次要耗一次被动回复额度，步子太密不划算
 DEDUP_SIZE = 500                   # 相同 msg_id 可能重复推送，按 id 去重
 BACKOFF_MAX = 60.0
 
@@ -464,9 +461,9 @@ class QqChannelPlugin(ServicePlugin):
         # "这条发不到 QQ"的站内提示上次时间（按目标）：失败要看得见，但不能刷屏
         self._fail_notice: dict[str, float] = {}
         # 补拉到的 union_openid（群:成员 → (时刻, union)）：成员接口只有 30 QPM，不能每条消息都问
-        # 平台认过的"单条能发多长"（0 = 还没认过，按 TEXT_LIMIT 试）；_probe_off = 撞过天花板，别再往上试
+        # 单条上限实测出来的两侧边界：最长发成功的一段 / 最短被拒的一段（0 = 还没测到）
         self._max_chars = 0
-        self._probe_off = False
+        self._too_long = 0
         self._union_cache: dict[str, tuple[float, str]] = {}
         self._union_order: deque[str] = deque()
         self._member_info_denied = False
@@ -513,10 +510,9 @@ class QqChannelPlugin(ServicePlugin):
             "recent_field": "qq_group_allowlist",
             "routed_groups": sorted(self._routes),
             "dm_sessions": len(self._dm_route),
-            # 实测出来的单条上限（probed=False 表示还没被平台认过任何一段，按 TEXT_LIMIT 拆）
-            "text_limit": self._max_chars or TEXT_LIMIT,
-            "text_limit_probed": bool(self._max_chars),
-            "text_probe_off": self._probe_off,
+            # 实测出来的单条上限两侧：最长发成功的一段 / 最短被拒的一段（0 = 还没测到）
+            "text_limit": self._max_chars or None,
+            "text_too_long": self._too_long or None,
             "replies_sent": self.replies,
             "dm_replies_sent": self.dm_replies,
             "recalls_sent": self.recalls,
@@ -1836,20 +1832,16 @@ class QqChannelPlugin(ServicePlugin):
 
         return render_mentions(text, _render)
 
-    def _split_size(self, kind: str, length: int, quota: int) -> int:
-        """这一段整条先按多长发。
+    def _first_size(self, length: int) -> int:
+        """这一段先按多长发：整条试。
 
-        平台没公布单条上限、只给了 40054007，所以上限只能实测：_max_chars 是平台认过的最长一段，
-        正文比它长时往上探一档（探中了下一条直接用，探崩了退回 _max_chars）。探崩的那一次也占一次
-        被动回复额度，所以只在"探崩后重发仍在额度内"时才探；单聊额度是召回周期里的一条，不探。
+        平台没公布单条上限，"认过的长度"也就不是上限——默认照整条发，被拒了再二分（见 _deliver）。
+        只有撞过钉子之后才收着来：被拒的那个长度本身就是上界，减一是还值得试的最大值，
+        免得每一条长消息都拿同一个长度再撞一次。
         """
-        safe = self._max_chars or TEXT_LIMIT
-        if kind != "group" or self._probe_off or length <= safe:
-            return min(safe, length)
-        # 不设人为天花板：上限本来就是探出来的，探崩了平台会告诉我们（代价已在下面按额度算过）
-        attempt = min(safe + TEXT_PROBE_STEP, length)
-        pieces = 1 + (length - attempt + safe - 1) // safe     # 探的那段 + 余下按 safe 拆
-        return attempt if pieces + 1 <= quota else safe
+        if self._too_long:
+            return max(TEXT_CHUNK_MIN, min(length, self._too_long - 1))
+        return length
 
     async def _deliver(self, route: dict, kind: str, text: str, *, passive_only: bool = False,
                        reference_id: str = "") -> dict:
@@ -1896,15 +1888,13 @@ class QqChannelPlugin(ServicePlugin):
                 raise RuntimeError(reason)
             mode, wakeup = "wakeup", True
         # 单条到底能有多长，官方没给数字、只给了 40054007「消息长度超限」这个错误码，所以不猜死：
-        # _max_chars 是平台认过的最长一段，正文更长时按它整条发、再往上探一档；平台说太长就当场
-        # 折回来重发（前面已经发出去的段不重来）。硬截断等于后半段凭空消失，不能再用。
+        # 整条先发；平台说太长就把这一段二分重发（前面已经发出去的段不重来），两侧边界都记下来。
+        # 硬截断等于后半段凭空消失，不能再用。
         data: dict = {}
         attempts = 0
         sent_count = 0
         unsent = 0
-        safe = self._max_chars or TEXT_LIMIT                     # 平台认过的长度：探崩了就退回它
-        quota = limit - seq if mode == "passive" else DM_MAX
-        queue = split_message(text, self._split_size(kind, len(text), quota))
+        queue = split_message(text, self._first_size(len(text)))
         while queue:
             if attempts or sent_count:
                 if mode == "passive":
@@ -1940,18 +1930,14 @@ class QqChannelPlugin(ServicePlugin):
                     claimed = None
                 if not too_long:
                     raise
-                # 撞过一次上界就不再往上试：上限就在这一档附近，再试只会白耗一次回复额度（重启后重新放开）
-                self._probe_off = True
-                if len(piece) > safe:
-                    # 撞的是刚往上探的那一档：退回平台认过的长度重发，别把确认能发的长度也砍半
-                    smaller = self._max_chars = safe
-                else:
-                    # 连确认能发的长度都被拒：说明上限比它小，折半继续逼
-                    smaller = max(TEXT_CHUNK_MIN, len(piece) // 2)
-                    self._max_chars = min(safe, smaller)
+                # 二分：在"平台认过的长度"和"刚被拒的长度"之间取中点，没有认过的长度就砍半。
+                good = self._max_chars
+                self._too_long = min(self._too_long or len(piece), len(piece))
+                smaller = (good + len(piece)) // 2 if good and good < len(piece) else len(piece) // 2
+                smaller = max(TEXT_CHUNK_MIN, min(smaller, len(piece) - 1))   # 必须比上一次小，否则原地打转
                 logger.info(
                     f"QQ 通道[{self.instance}] 单条 {len(piece)} 字被平台拒（长度超限）："
-                    f"改按 {smaller} 字拆开重发，下一条直接用这个上限"
+                    f"改按 {smaller} 字二分重发（认过的 {good or '—'}）"
                 )
                 queue = split_message(piece, smaller) + queue
                 attempts += 1        # 被拒的这次也占了序号：同一个 msg_id+seq 重发会被判"消息被去重"
@@ -1959,7 +1945,7 @@ class QqChannelPlugin(ServicePlugin):
             attempts += 1
             sent_count += 1
             if len(piece) > self._max_chars:
-                # 平台认了这一段，它就是新的"确认能发的长度"，下一条直接按它拆
+                # 平台认了这一段：它就是"认过的长度"，下次二分时当下界用
                 self._max_chars = len(piece)
         if msg_id:
             # 每一次尝试都占一次回复额度（含被拒的那次）；少记了会让下一个 seq 撞车

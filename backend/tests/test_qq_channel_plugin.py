@@ -1523,10 +1523,8 @@ def test_split_message_prefers_paragraph_breaks():
 
 
 async def test_long_reply_is_split_not_truncated(migrated_db):
-    """超过尝试上限的回复拆成多条发（同一个 msg_id、序号递增），而不是砍掉后半段"""
+    """整条先发被平台拒后二分重发：拆成两条也不许砍掉后半段（旧代码是 content[:1000] 直接截断）"""
     import time
-
-    module = _load_plugin_module()
 
     await _seed()
     plugin = await _make_plugin()
@@ -1534,16 +1532,16 @@ async def test_long_reply_is_split_not_truncated(migrated_db):
         route = {"copree_group_id": GROUP_ID, "qq": "QQGROUP-AAA", "msg_id": "MSG-1", "seq": 0,
                  "ts": time.time(), "peer_name": "小明", "peer_openid": "OPENID-XYZ"}
         plugin._routes["QQGROUP-AAA"] = route
-        # 两段各 3000 字：超过 TEXT_LIMIT（整条先试的上限），所以在发之前就拆好
-        text = "\n\n".join(["第一段" + "字" * 3000, "第二段" + "字" * 3000])
-        await plugin._send_reply(route, text, kind="group")
+        plugin._client.length_limit = 3000
+        await plugin._send_reply(route, "字" * 6000, kind="group")
 
         sent = plugin._client.sent
-        assert len(sent) == 2, [len(s["content"]) for s in sent]
-        assert [s["seq"] for s in sent] == [1, 2], sent
+        assert [len(s["content"]) for s in sent] == [3000, 3000], sent
+        assert [s["seq"] for s in sent] == [2, 3], f"被拒的那次也要占号：{sent}"
         assert all(s["msg_id"] == "MSG-1" for s in sent), sent
         assert "".join(s["content"] for s in sent).count("字") == 6000, "拆开也不许丢正文"
-        assert route["seq"] == 2, route
+        assert plugin._max_chars == 3000, plugin._max_chars
+        assert route["seq"] == 3, route
     finally:
         _cleanup(plugin)
 
@@ -1586,9 +1584,9 @@ def test_activity_indicator_keeps_one_id_space():
     assert ".pop(agent.id, None)" not in src
 
 async def test_overlong_reply_is_resplit_and_the_limit_is_learned(migrated_db):
-    """平台说"太长"（40054007）时：把这一段折半重发，并把学到的上限留给下一条用
+    """被拒之后二分，两侧边界都记下来；下一条比被拒的长度短就直接整条发，不再撞同一个长度
 
-    单条到底能多长，官方只给了错误码、没给数字，所以不猜死：先整条发、被拒就学。
+    单条到底能多长，官方只给了错误码、没给数字，所以不猜死：整条先发、被拒就学。
     被拒的那一次也占了序号（同一个 msg_id+seq 重发会被判"消息被去重"）。
     """
     import time
@@ -1603,26 +1601,24 @@ async def test_overlong_reply_is_resplit_and_the_limit_is_learned(migrated_db):
         await plugin._send_reply(route, "字" * 1500, kind="group")
 
         sent = plugin._client.sent
-        assert len(sent) == 2, sent
+        assert [len(s["content"]) for s in sent] == [750, 750], sent
         assert "".join(s["content"] for s in sent).count("字") == 1500, "拆开也不许丢正文"
         assert [s["seq"] for s in sent] == [2, 3], f"被拒的那次也要占号：{sent}"
         assert plugin._max_chars == 750, plugin._max_chars
+        assert plugin._too_long == 1500, plugin._too_long
         assert route["seq"] == 3, route
 
-        # 学到的上限立刻生效：下一条 1000 字的直接按 750 拆，不再先撞一次
+        # 下一条 1000 字：比被拒的 1500 短，直接整条发
+        route["seq"] = 0
         plugin._client.sent.clear()
         await plugin._send_reply(route, "字" * 1000, kind="group")
-        assert [len(s["content"]) for s in plugin._client.sent] == [750, 250], plugin._client.sent
+        assert [len(s["content"]) for s in plugin._client.sent] == [1000], plugin._client.sent
     finally:
         _cleanup(plugin)
 
 
-async def test_group_reply_probes_a_longer_limit_when_the_quota_allows(migrated_db):
-    """确认能发的长度之上再往上探一档：探中了就把单条上限抬高，这条正文也不用多分一段
-
-    上限靠实测（官方只给 40054007、不给数字），所以每条更长的正文都往上试一档；
-    探崩要占一次被动回复额度，所以只在"探崩后重发仍在额度内"时才探。
-    """
+async def test_reply_tries_the_whole_message_first(migrated_db):
+    """"认过的长度"不是上限：下一条更长也整条先发，能过就不用拆"""
     import time
 
     await _seed()
@@ -1633,13 +1629,9 @@ async def test_group_reply_probes_a_longer_limit_when_the_quota_allows(migrated_
         plugin._routes["QQGROUP-AAA"] = route
         plugin._client.length_limit = 5000
         await plugin._send_reply(route, "字" * 5000, kind="group")
-
-        sent = plugin._client.sent
-        assert [len(s["content"]) for s in sent] == [5000], sent
+        assert [len(s["content"]) for s in plugin._client.sent] == [5000], plugin._client.sent
         assert plugin._max_chars == 5000, plugin._max_chars
-        assert plugin._probe_off is False, "探中了就不该关掉往上试"
 
-        # 探中的长度立刻生效：下一条直接按它发，不再从 4000 起步
         route["seq"] = 0
         plugin._client.sent.clear()
         plugin._client.length_limit = 6000
@@ -1650,8 +1642,8 @@ async def test_group_reply_probes_a_longer_limit_when_the_quota_allows(migrated_
         _cleanup(plugin)
 
 
-async def test_group_probe_falls_back_to_the_known_good_size_and_stops(migrated_db):
-    """往上探被平台拒：退回确认能发的长度重发（不砍半），这条实例从此不再往上试"""
+async def test_reply_bisects_between_known_good_and_rejected(migrated_db):
+    """二分：5000 被拒（真实上限 4200）→ 砍半 2500 发出去；下一条 4500 再被拒 → 取中点 3500"""
     import time
 
     await _seed()
@@ -1664,49 +1656,29 @@ async def test_group_probe_falls_back_to_the_known_good_size_and_stops(migrated_
         await plugin._send_reply(route, "字" * 5000, kind="group")
 
         sent = plugin._client.sent
-        assert [len(s["content"]) for s in sent] == [4000, 1000], sent
+        assert [len(s["content"]) for s in sent] == [2500, 2500], sent
         assert "".join(s["content"] for s in sent).count("字") == 5000, "拆开也不许丢正文"
-        assert [s["seq"] for s in sent] == [2, 3], f"被拒的那次也要占号：{sent}"
-        assert plugin._max_chars == 4000, plugin._max_chars
-        assert plugin._probe_off is True
+        assert plugin._max_chars == 2500, plugin._max_chars
+        assert plugin._too_long == 5000, plugin._too_long
 
-        # 不再往上试：同样长度的下一条按 4000 拆，不去撞 5000
+        # 下一条 4500：先整条（差一点），被拒后取"认过的 2500"和"被拒的 4500"的中点
         route["seq"] = 0
         plugin._client.sent.clear()
         await plugin._send_reply(route, "字" * 4500, kind="group")
-        assert [len(s["content"]) for s in plugin._client.sent] == [4000, 500], plugin._client.sent
+        assert [len(s["content"]) for s in plugin._client.sent] == [3500, 1000], plugin._client.sent
+        assert plugin._max_chars == 3500, plugin._max_chars
     finally:
         _cleanup(plugin)
 
 
-async def test_group_probe_is_skipped_when_a_rejection_would_not_fit_the_quota(migrated_db):
-    """额度不够就不探：探崩那一次也占额度，宁可多拆一段，也不让末尾一块没发出去"""
-    import time
-
+async def test_first_size_has_no_artificial_ceiling(migrated_db):
+    """没被拒过就整条试；拒过之后也只按那次实测的上界收着，不认任何写死的天花板"""
     await _seed()
     plugin = await _make_plugin()
     try:
-        route = {"copree_group_id": GROUP_ID, "qq": "QQGROUP-AAA", "msg_id": "MSG-1", "seq": 0,
-                 "ts": time.time(), "peer_name": "小明", "peer_openid": "OPENID-XYZ"}
-        plugin._routes["QQGROUP-AAA"] = route
-        plugin._client.length_limit = 10000
-        await plugin._send_reply(route, "字" * 20000, kind="group")
-
-        sent = plugin._client.sent
-        assert [len(s["content"]) for s in sent] == [4000] * 5, sent
-        assert "".join(s["content"] for s in sent).count("字") == 20000, "额度用完前正文必须发全"
-    finally:
-        _cleanup(plugin)
-
-
-async def test_group_probe_has_no_artificial_ceiling(migrated_db):
-    """往上探不设天花板：平台上限只能实测，探崩了平台会拦；代码不该替它画一条没测过的线"""
-    await _seed()
-    plugin = await _make_plugin()
-    try:
-        plugin._max_chars = 6946
-        assert plugin._split_size("group", 20000, 5) == 6946 + 1000
-        # 额度不够时仍然退回确认能发的长度（探崩那一次也要占额度）
-        assert plugin._split_size("group", 20000, 3) == 6946
+        assert plugin._first_size(50000) == 50000
+        plugin._too_long = 20000
+        assert plugin._first_size(50000) == 19999
+        assert plugin._first_size(3000) == 3000
     finally:
         _cleanup(plugin)
