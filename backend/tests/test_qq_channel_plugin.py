@@ -36,11 +36,16 @@ class FakeClient:
         self.closed = False
         # 群成员信息接口（补拉 union_openid 用）
         self.member_calls: list = []
+        # 模拟平台的单条长度上限（0 = 不限）
+        self.length_limit = 0
         self.member_union = "UNION-FROM-API"
         self.member_error = ""
 
     async def send_group(self, group_openid, content, msg_id=None, msg_seq=1, message_reference="",
                          force_type=None):
+        if self.length_limit and len(content) > self.length_limit:
+            # 平台的原话：超长是整条被拒（40054007），不是截断
+            raise RuntimeError(f"发 QQ 消息失败（HTTP 400）：{{'code': 40054007, 'message': '消息长度超限'}}")
         self.sent.append({"kind": "group", "target": group_openid, "content": content,
                           "msg_id": msg_id, "seq": msg_seq, "reference": message_reference,
                           "force_type": force_type})
@@ -1518,7 +1523,7 @@ def test_split_message_prefers_paragraph_breaks():
 
 
 async def test_long_reply_is_split_not_truncated(migrated_db):
-    """超长回复拆成多条发（同一个 msg_id、序号递增），而不是砍掉后半段"""
+    """超过尝试上限的回复拆成多条发（同一个 msg_id、序号递增），而不是砍掉后半段"""
     import time
 
     module = _load_plugin_module()
@@ -1529,14 +1534,15 @@ async def test_long_reply_is_split_not_truncated(migrated_db):
         route = {"copree_group_id": GROUP_ID, "qq": "QQGROUP-AAA", "msg_id": "MSG-1", "seq": 0,
                  "ts": time.time(), "peer_name": "小明", "peer_openid": "OPENID-XYZ"}
         plugin._routes["QQGROUP-AAA"] = route
-        text = "\n\n".join(["第一段" + "字" * 600, "第二段" + "字" * 600])
+        # 两段各 3000 字：超过 TEXT_LIMIT（整条先试的上限），所以在发之前就拆好
+        text = "\n\n".join(["第一段" + "字" * 3000, "第二段" + "字" * 3000])
         await plugin._send_reply(route, text, kind="group")
 
         sent = plugin._client.sent
-        assert len(sent) == 2, sent
+        assert len(sent) == 2, [len(s["content"]) for s in sent]
         assert [s["seq"] for s in sent] == [1, 2], sent
         assert all(s["msg_id"] == "MSG-1" for s in sent), sent
-        assert "".join(s["content"] for s in sent).count("字") == 1200, "拆开也不许丢正文"
+        assert "".join(s["content"] for s in sent).count("字") == 6000, "拆开也不许丢正文"
         assert route["seq"] == 2, route
     finally:
         _cleanup(plugin)
@@ -1578,3 +1584,34 @@ def test_activity_indicator_keeps_one_id_space():
     assert "_thinking_state.setdefault(conv_key, {})[agent_user_id]" in src
     assert '"user_id": agent_user_id' in src
     assert ".pop(agent.id, None)" not in src
+
+async def test_overlong_reply_is_resplit_and_the_limit_is_learned(migrated_db):
+    """平台说"太长"（40054007）时：把这一段折半重发，并把学到的上限留给下一条用
+
+    单条到底能多长，官方只给了错误码、没给数字，所以不猜死：先整条发、被拒就学。
+    被拒的那一次也占了序号（同一个 msg_id+seq 重发会被判"消息被去重"）。
+    """
+    import time
+
+    await _seed()
+    plugin = await _make_plugin()
+    try:
+        route = {"copree_group_id": GROUP_ID, "qq": "QQGROUP-AAA", "msg_id": "MSG-1", "seq": 0,
+                 "ts": time.time(), "peer_name": "小明", "peer_openid": "OPENID-XYZ"}
+        plugin._routes["QQGROUP-AAA"] = route
+        plugin._client.length_limit = 1200
+        await plugin._send_reply(route, "字" * 1500, kind="group")
+
+        sent = plugin._client.sent
+        assert len(sent) == 2, sent
+        assert "".join(s["content"] for s in sent).count("字") == 1500, "拆开也不许丢正文"
+        assert [s["seq"] for s in sent] == [2, 3], f"被拒的那次也要占号：{sent}"
+        assert plugin._max_chars == 750, plugin._max_chars
+        assert route["seq"] == 3, route
+
+        # 学到的上限立刻生效：下一条 1000 字的直接按 750 拆，不再先撞一次
+        plugin._client.sent.clear()
+        await plugin._send_reply(route, "字" * 1000, kind="group")
+        assert [len(s["content"]) for s in plugin._client.sent] == [750, 250], plugin._client.sent
+    finally:
+        _cleanup(plugin)

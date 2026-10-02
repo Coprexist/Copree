@@ -66,12 +66,17 @@ UNION_TTL_SECONDS = 86400          # 补拉到的 union 缓存一天（没有也
 UNION_CACHE_MAX = 2000             # 缓存条目上限：按群成员数增长，满了丢最早的
 MIRROR_WINDOW_SECONDS = 3          # 同一句 QQ 消息被两台机器人分别送进来的认亲窗口
 MIRROR_MIN_CHARS = 2               # 太短的正文（"嗯"、"?"）撞车概率太高，不认
+# 单条正文先按多长发：官方只给了 40054007「消息长度超限」这个错误码、没给数字，
+# 所以不猜死一个常量——整条发，被平台拒了就拆条并把学到的上限记住（见 _deliver）。
+LENGTH_ERROR_HINTS = ("40054007", "长度超限")
+TEXT_CHUNK = 1000                  # 初次拆条粒度：1000 是实测被平台接受的长度
+TEXT_CHUNK_MIN = 64                # 折半的兜底下限：只保证不再原地打转，不代表平台认这么短
 GROUP_PER_MINUTE = 20              # 单群频控 20/qpm（主动消息）
 BOT_PER_MINUTE = 60                # Bot 维度 60/qpm
 PAIR_NOTIFY_INTERVAL = 60           # 陌生人反复私聊时，配对码最多 60 秒提醒一次
 PAIR_NOTIFY_CACHE_MAX = 256         # 通知表涨到这么大才清一次过期条目
 DM_ROUTE_MAX = 500                  # 私信路由上限：按会话记，只随配对人数增长
-TEXT_LIMIT = 1000                  # 文本超长直接截断，否则整条会被拒
+TEXT_LIMIT = 4000                  # 单条正文的尝试上限（学到的更小上限优先，见 _deliver）
 DEDUP_SIZE = 500                   # 相同 msg_id 可能重复推送，按 id 去重
 BACKOFF_MAX = 60.0
 
@@ -293,6 +298,12 @@ def parse_channel_origin(kind: str, raw: Any) -> tuple[str, str] | None:
     return parts[1], parts[2]
 
 
+def _is_length_error(exc: Exception) -> bool:
+    """平台的"这条太长"就认这一种错：按错误码/文案认，不靠 HTTP 状态猜"""
+    text = str(exc)
+    return any(hint in text for hint in LENGTH_ERROR_HINTS)
+
+
 def split_message(text: str, limit: int) -> list[str]:
     """长文拆成几条发（官方单条有长度上限，超了整条被拒，不是截断）。
 
@@ -451,6 +462,8 @@ class QqChannelPlugin(ServicePlugin):
         # "这条发不到 QQ"的站内提示上次时间（按目标）：失败要看得见，但不能刷屏
         self._fail_notice: dict[str, float] = {}
         # 补拉到的 union_openid（群:成员 → (时刻, union)）：成员接口只有 30 QPM，不能每条消息都问
+        # 学到的"单条能发多长"（0 = 还没被平台教过，按 TEXT_LIMIT 试）
+        self._max_chars = 0
         self._union_cache: dict[str, tuple[float, str]] = {}
         self._union_order: deque[str] = deque()
         self._member_info_denied = False
@@ -1860,40 +1873,63 @@ class QqChannelPlugin(ServicePlugin):
             if claimed is None:
                 raise RuntimeError(reason)
             mode, wakeup = "wakeup", True
-        # 长文拆成几条：官方单条有长度上限，超了整条被拒，硬截断等于后半段凭空消失。
-        # 后续段仍走同一次被动回复（同一个 msg_id、序号递增），额度用完就如实交代剩下的没发。
-        pieces = split_message(text, TEXT_LIMIT)
+        # 单条到底能有多长，官方没给数字、只给了 40054007「消息长度超限」这个错误码，所以不猜死：
+        # 先整条发；平台说太长就当场把这一段拆小重发（前面已经发出去的不重来），并把学到的
+        # 上限记住——下一条长消息第一次就按它拆。硬截断等于后半段凭空消失，不能再用。
         data: dict = {}
+        attempts = 0
         sent_count = 0
         unsent = 0
-        try:
-            for index, piece in enumerate(pieces):
-                if index and not (msg_id and mode == "passive" and seq + index < limit):
-                    unsent = sum(len(p) for p in pieces[index:])
-                    logger.warning(
-                        f"QQ 通道[{self.instance}] 这条太长：被动回复次数已用完，"
-                        f"末尾 {unsent} 字没发出去"
-                    )
+        queue = split_message(text, self._max_chars or TEXT_LIMIT)   # 学到的上限优先
+        while queue:
+            if attempts or sent_count:
+                if mode == "passive":
+                    if not (msg_id and seq + attempts < limit):
+                        unsent = sum(len(p) for p in queue)
+                        logger.warning(
+                            f"QQ 通道[{self.instance}] 这条太长：被动回复次数已用完，"
+                            f"末尾 {unsent} 字没发出去"
+                        )
+                        break
+                else:
+                    # 召回一个周期只有一条，接不下去就如实交代
+                    unsent = sum(len(p) for p in queue)
+                    logger.warning(f"QQ 通道[{self.instance}] 召回消息只有一条，末尾 {unsent} 字没发出去")
                     break
+            piece = queue.pop(0)
+            try:
                 if kind == "group":
                     data = await client.send_group(
-                        target, piece, msg_id=msg_id, msg_seq=seq + index + 1,
+                        target, piece, msg_id=msg_id, msg_seq=seq + attempts + 1,
                         message_reference=reference_id, force_type=self._msg_type,
                     )
                 else:
                     # 私聊的引用字段官方没给（也没实测过），宁可不发也不发错
-                    data = await client.send_c2c(target, piece, msg_id=msg_id, msg_seq=seq + index + 1,
+                    data = await client.send_c2c(target, piece, msg_id=msg_id, msg_seq=seq + attempts + 1,
                                                  force_type=self._msg_type, wakeup=wakeup)
-                sent_count += 1
-        except Exception:
-            # 腾讯明确拒了才把周期还回去；响应丢失时留着（见 _claim_recall）
-            if claimed is not None:
-                await self._release_recall(target, claimed)
-            raise
+            except Exception as e:
+                # 每被拒一次就折半，且必须比上一次小，否则原地打转（平台的真实上限可能比 TEXT_CHUNK 还小）
+                too_long = _is_length_error(e) and len(piece) > TEXT_CHUNK_MIN
+                if claimed is not None and not too_long:
+                    # 腾讯明确拒了才把周期还回去；响应丢失时留着（见 _claim_recall）
+                    await self._release_recall(target, claimed)
+                    claimed = None
+                if not too_long:
+                    raise
+                smaller = max(TEXT_CHUNK_MIN, len(piece) // 2)
+                self._max_chars = min(self._max_chars or TEXT_LIMIT, smaller)
+                logger.info(
+                    f"QQ 通道[{self.instance}] 单条 {len(piece)} 字被平台拒（长度超限）："
+                    f"改按 {smaller} 字拆开重发，下一条直接用这个上限"
+                )
+                queue = split_message(piece, smaller) + queue
+                attempts += 1        # 被拒的这次也占了序号：同一个 msg_id+seq 重发会被判"消息被去重"
+                continue
+            attempts += 1
+            sent_count += 1
         if msg_id:
-            # 发出去的每一段都各占一次回复额度（前面只预占了第一段）；失败也照样占，
-            # 否则同一个 msg_id + msg_seq 会重复发送（官方会直接拒）
-            route["seq"] = seq + max(1, sent_count)
+            # 每一次尝试都占一次回复额度（含被拒的那次）；少记了会让下一个 seq 撞车
+            route["seq"] = seq + max(1, attempts)
         if wakeup:
             self.recalls += 1
         if kind == "group":
