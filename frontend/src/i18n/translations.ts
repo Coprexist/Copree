@@ -1733,6 +1733,7 @@ const zh: TranslationDict = {
 
   // ======================== 创建 AI 弹窗 / CreateAgentModal ========================
   'modal.createAgentTitle': '创建新 AI',
+  'modal.agentNameLabel': 'AI 名称 *',
   'modal.createAgentNamePlaceholder': '给 AI 起个名字',
   'modal.createAgentSystemPrompt': '系统提示词（性格描述）',
   'modal.createAgentSystemPromptPlaceholder': '描述 AI 的性格和行为...',
@@ -3831,6 +3832,7 @@ const en: TranslationDict = {
 
   // ======================== CreateAgentModal ========================
   'modal.createAgentTitle': 'Create New AI',
+  'modal.agentNameLabel': 'AI name *',
   'modal.createAgentNamePlaceholder': 'Give the AI a name',
   'modal.createAgentSystemPrompt': 'System Prompt (Personality)',
   'modal.createAgentSystemPromptPlaceholder': "Describe AI's personality and behavior...",
@@ -5816,6 +5818,7 @@ const ja: TranslationDict = {
 
   // ======================== AI作成モーダル / CreateAgentModal ========================
   'modal.createAgentTitle': '新しいAIを作成',
+  'modal.agentNameLabel': 'AI 名 *',
   'modal.createAgentNamePlaceholder': 'AIに名前を付けてください',
   'modal.createAgentSystemPrompt': 'システムプロンプト（性格）',
   'modal.createAgentSystemPromptPlaceholder': 'AIの性格や行動を記述...',

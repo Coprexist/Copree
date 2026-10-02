@@ -339,7 +339,7 @@ export default function CreateAgentModal({
 
         {/* ── 名称输入 ── */}
         <div className="mb-4">
-          <label className="block text-xs font-medium mb-1.5 text-textSecondary">{t('chat.groupName')}</label>
+          <label className="block text-xs font-medium mb-1.5 text-textSecondary">{t('modal.agentNameLabel')}</label>
           <input
             type="text"
             value={name}

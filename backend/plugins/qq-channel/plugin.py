@@ -231,13 +231,13 @@ class QqClient:
     multi_instance=True,
     config_schema={
         "app_id": {
-            "type": "string", "title": "AppID", "required": True,
+            "type": "string", "title": "AppID", "required": True, "credential": True,
             "description": "QQ 开放平台 → 机器人管理页获取",
             "description_en": "From the QQ Open Platform bot settings page",
             "description_ja": "QQオープンプラットフォームのボット管理ページで取得します",
         },
         "client_secret": {
-            "type": "string", "title": "ClientSecret", "secret": True, "required": True,
+            "type": "string", "title": "ClientSecret", "secret": True, "required": True, "credential": True,
             "description": "只在这里填，加密落库、接口不回显",
             "description_en": "Enter it here only; stored encrypted and never echoed back",
             "description_ja": "ここにのみ入力します。暗号化して保存し、APIは返しません",

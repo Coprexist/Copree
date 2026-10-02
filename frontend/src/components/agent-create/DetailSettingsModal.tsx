@@ -134,7 +134,7 @@ export default function DetailSettingsModal({
           {/* ── 基础信息 ── */}
           <Section title={t('modal.detailSettingsBasicInfo')} desc={t('modal.detailSettingsBasicInfoDesc')}>
             <div>
-              <label className="block text-xs font-medium mb-1 text-textSecondary">{t('chat.groupName')}</label>
+              <label className="block text-xs font-medium mb-1 text-textSecondary">{t('modal.agentNameLabel')}</label>
               <input
                 type="text"
                 value={name}

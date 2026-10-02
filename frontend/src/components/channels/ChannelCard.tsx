@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { AlertTriangle, CheckCircle2, ExternalLink, Loader2, MessageSquare, Plug, UserCheck } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, ExternalLink, KeyRound, Loader2, MessageSquare, Plug, UserCheck } from 'lucide-react'
 import { api } from '../../api/client'
 import { useLang, useT } from '../../i18n/I18nContext'
 import type { Lang } from '../../i18n/languages'
@@ -24,6 +24,8 @@ interface FieldSpec {
   secret?: boolean
   required?: boolean
   managed?: boolean
+  /** 连接凭据：单独成块并排在配对之前（先连上，再决定谁能跟它说话） */
+  credential?: boolean
   /** 枚举字段：插件给选项，卡片统一渲染成下拉（不给就按普通文本框） */
   options?: { value: string; label?: string; label_en?: string; label_ja?: string }[]
 }
@@ -203,6 +205,8 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
   const secretDraft = secrets[activeId] || {}
   const mode = groupMode[activeId] || 'existing'
   const fields = Object.entries(view?.schema || {}).filter(([, spec]) => !spec.managed)
+  const credentialFields = fields.filter(([, spec]) => spec.credential)
+  const configFields = fields.filter(([, spec]) => !spec.credential)
 
   const setField = (key: string, value: string) =>
     setDrafts(prev => ({ ...prev, [activeId]: { ...(prev[activeId] || {}), [key]: value } }))
@@ -230,6 +234,18 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
     }
     return api.put(base, { values })
   }, t('tool:channel.saved'))
+
+  /** 凭据单独存：换 AppID/Secret 等于"换一个机器人重新连"，与落点/策略不是一件事。
+   *  后端允许部分保存，只交这两个键不会动其它配置；机密留空 = 不改（空串是"清除"）。 */
+  const saveCredential = () => {
+    const values: Record<string, string> = {}
+    for (const [key, spec] of credentialFields) {
+      const typed = spec.secret ? (secretDraft[key] || '').trim() : (draft[key] || '').trim()
+      if (typed) values[key] = typed
+    }
+    if (Object.keys(values).length === 0) return
+    return act('cred', () => api.put(base, { values }), t('tool:channel.saved'))
+  }
 
   /** 最近见到过的通道侧标识：一键进那个"白名单"字段（字段名由插件在状态里报，平台不猜） */
   const recentField = String(view?.detail?.recent_field || '')
@@ -522,63 +538,15 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
         </Card>
       )}
 
-      <Card title={t('tool:channel.configTitle')}>
-        {fields.map(([key, spec]) => renderField(key, spec))}
-        {/* 最近见到过的群：插件在状态里报了才画（NapCat 还没报，就没有这一块） */}
-        {recentField && (
-          <div className="space-y-1.5">
-            <div className="text-3xs text-textMuted">{t('tool:channel.recentGroups')}</div>
-            {recent.length === 0 ? (
-              <div className="text-3xs text-textMuted">{t('tool:channel.recentGroupsEmpty')}</div>
-            ) : recent.slice(0, 6).map(g => (
-              <div key={g.origin} className="grid grid-cols-[auto_1fr_auto] items-center gap-2 bg-canvas border border-border rounded-control px-3 py-2">
-                <span className={'w-1.5 h-1.5 rounded-full shrink-0 ' + (g.allowed ? 'bg-mint-400' : 'bg-amber-400')} />
-                <div className="min-w-0">
-                  <div className="text-3xs text-textPrimary truncate font-mono">{g.origin}</div>
-                  <div className="text-3xs text-textMuted">
-                    {t('tool:channel.recentGroupMeta', { count: String(g.count), time: new Date(g.last_at * 1000).toLocaleString() })}
-                  </div>
-                </div>
-                {g.allowed
-                  ? <span className="text-3xs text-mint-400 shrink-0">{t('tool:channel.allowListed')}</span>
-                  : <Button size="xs" variant="secondary" loading={busy === 'allow:' + g.origin} onClick={() => addToList(g.origin)}>{t('tool:channel.allowAdd')}</Button>}
-              </div>
-            ))}
+      {credentialFields.length > 0 && (
+        <Card title={t('tool:channel.credentialTitle')} icon={<KeyRound size={14} className="text-primary-400" />}>
+          {credentialFields.map(([key, spec]) => renderField(key, spec))}
+          <div className="flex justify-end">
+            <Button size="sm" variant="primary" loading={busy === 'cred'} onClick={saveCredential}>
+              {t('tool:channel.saveCredential')}
+            </Button>
           </div>
-        )}
-      </Card>
-
-      {/* 能力与限制：插件自带（平台不替它总结），用户配之前就该知道能做到什么 */}
-      {view.limits.length > 0 && (
-        <Card title={t('tool:channel.limitsTitle')} icon={<AlertTriangle size={14} className="text-amber-500" />}>
-          <ul className="text-3xs text-textSecondary space-y-1.5 list-disc list-inside">
-            {view.limits.map((item, i) => (
-              <li key={i}>{pick(lang, item.text, item.text_en, item.text_ja)}</li>
-            ))}
-          </ul>
         </Card>
-      )}
-
-      {/* 动作条：保存 + 缺口 / 报错，都在按钮这一行，视线不用来回跳 */}
-      <div className="flex items-center gap-3 flex-wrap">
-        <Button
-          size="sm"
-          variant="primary"
-          loading={busy === 'save'}
-          onClick={save}
-          disabled={!view.enabled || !filled}
-        >
-          {t('tool:channel.save')}
-        </Button>
-        {missingText && <span className="text-3xs text-amber-600 dark:text-amber-400">{t('tool:channel.missing', { fields: missingText })}</span>}
-        {!!view.detail?.last_error && <span className="text-3xs text-rose-400">{t('tool:channel.lastError', { error: String(view.detail.last_error) })}</span>}
-      </div>
-
-      {msg && (
-        <div className={'flex items-center gap-2 text-xs rounded-card border px-3 py-2 ' + (msg.tone === 'ok' ? 'border-mint-500/30 bg-mint-500/10 text-mint-400' : 'border-rose-500/30 bg-rose-500/10 text-rose-400')}>
-          {msg.tone === 'ok' ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
-          <span className="min-w-0 truncate">{msg.text}</span>
-        </div>
       )}
 
       {view.pairing && (
@@ -637,6 +605,66 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
           <p className="text-3xs text-textMuted leading-relaxed">{t('tool:channel.privacy')}</p>
         </Card>
       )}
+
+      <Card title={t('tool:channel.configTitle')}>
+        {configFields.map(([key, spec]) => renderField(key, spec))}
+        {/* 最近见到过的群：插件在状态里报了才画（NapCat 还没报，就没有这一块） */}
+        {recentField && (
+          <div className="space-y-1.5">
+            <div className="text-3xs text-textMuted">{t('tool:channel.recentGroups')}</div>
+            {recent.length === 0 ? (
+              <div className="text-3xs text-textMuted">{t('tool:channel.recentGroupsEmpty')}</div>
+            ) : recent.slice(0, 6).map(g => (
+              <div key={g.origin} className="grid grid-cols-[auto_1fr_auto] items-center gap-2 bg-canvas border border-border rounded-control px-3 py-2">
+                <span className={'w-1.5 h-1.5 rounded-full shrink-0 ' + (g.allowed ? 'bg-mint-400' : 'bg-amber-400')} />
+                <div className="min-w-0">
+                  <div className="text-3xs text-textPrimary truncate font-mono">{g.origin}</div>
+                  <div className="text-3xs text-textMuted">
+                    {t('tool:channel.recentGroupMeta', { count: String(g.count), time: new Date(g.last_at * 1000).toLocaleString() })}
+                  </div>
+                </div>
+                {g.allowed
+                  ? <span className="text-3xs text-mint-400 shrink-0">{t('tool:channel.allowListed')}</span>
+                  : <Button size="xs" variant="secondary" loading={busy === 'allow:' + g.origin} onClick={() => addToList(g.origin)}>{t('tool:channel.allowAdd')}</Button>}
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {/* 能力与限制：插件自带（平台不替它总结），用户配之前就该知道能做到什么 */}
+      {view.limits.length > 0 && (
+        <Card title={t('tool:channel.limitsTitle')} icon={<AlertTriangle size={14} className="text-amber-500" />}>
+          <ul className="text-3xs text-textSecondary space-y-1.5 list-disc list-inside">
+            {view.limits.map((item, i) => (
+              <li key={i}>{pick(lang, item.text, item.text_en, item.text_ja)}</li>
+            ))}
+          </ul>
+        </Card>
+      )}
+
+      {/* 动作条：保存 + 缺口 / 报错，都在按钮这一行，视线不用来回跳 */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <Button
+          size="sm"
+          variant="primary"
+          loading={busy === 'save'}
+          onClick={save}
+          disabled={!view.enabled || !filled}
+        >
+          {t('tool:channel.save')}
+        </Button>
+        {missingText && <span className="text-3xs text-amber-600 dark:text-amber-400">{t('tool:channel.missing', { fields: missingText })}</span>}
+        {!!view.detail?.last_error && <span className="text-3xs text-rose-400">{t('tool:channel.lastError', { error: String(view.detail.last_error) })}</span>}
+      </div>
+
+      {msg && (
+        <div className={'flex items-center gap-2 text-xs rounded-card border px-3 py-2 ' + (msg.tone === 'ok' ? 'border-mint-500/30 bg-mint-500/10 text-mint-400' : 'border-rose-500/30 bg-rose-500/10 text-rose-400')}>
+          {msg.tone === 'ok' ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
+          <span className="min-w-0 truncate">{msg.text}</span>
+        </div>
+      )}
+
     </div>
   )
 }

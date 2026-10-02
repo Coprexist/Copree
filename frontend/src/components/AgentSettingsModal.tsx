@@ -382,7 +382,7 @@ export default function AgentSettingsModal({
               {/* 基础信息 */}
               <Section title={t('modal.detailSettingsBasicInfo')} desc={t('modal.detailSettingsBasicInfoDesc')}>
                 <div>
-                  <label className="block text-xs font-medium mb-1 text-textSecondary">{t('chat.groupName')}</label>
+                  <label className="block text-xs font-medium mb-1 text-textSecondary">{t('modal.agentNameLabel')}</label>
                   <input type="text" value={name} onChange={(e) => setName(e.target.value)}
                     className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50" />
                 </div>
