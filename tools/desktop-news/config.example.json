@@ -1,0 +1,410 @@
+{
+  "app": {
+    "title": "每日新闻速览",
+    "subtitle": "作文素材 · 科技 · 时事 · 新奇",
+    "refresh_hour": 6,
+    "refresh_minute": 45,
+    "startup_stale_hours": 8,
+    "window_hours_default": 24,
+    "max_window_hours": 96,
+    "data_dir": "data",
+    "log_dir": "logs",
+    "log_level": "INFO",
+    "fetch_workers": 8,
+    "http_timeout": 15,
+    "http_retries": 2,
+    "cluster_threshold": 0.42,
+    "allow_insecure_fallback": false,
+    "proxy": ""
+  },
+  "ai": {
+    "enabled": true,
+    "base_url": "https://api.deepseek.com/v1",
+    "model": "deepseek-chat",
+    "api_key": "",
+    "api_key_env": "NEWSCAST_API_KEY",
+    "temperature": 0.3,
+    "max_tokens": 4000,
+    "timeout": 120,
+    "max_items_per_call": 22,
+    "max_batches": 3,
+    "max_summary_chars": 90,
+    "cache_days": 10
+  },
+  "search": {
+    "enabled": false,
+    "provider": "tavily",
+    "api_key": "",
+    "api_key_env": "NEWSCAST_SEARCH_KEY",
+    "queries": [
+      "今日重大新闻",
+      "今日科技新闻",
+      "今日国内时事",
+      "今日新奇趣闻"
+    ],
+    "results_per_query": 8
+  },
+  "categories": [
+    {
+      "key": "top",
+      "label": "大事件",
+      "accent": "#ff5f56",
+      "max": 4,
+      "keywords": [
+        "地震",
+        "台风",
+        "洪水",
+        "暴雨",
+        "山洪",
+        "决堤",
+        "事故",
+        "爆炸",
+        "火灾",
+        "战争",
+        "冲突",
+        "袭击",
+        "空袭",
+        "疫情",
+        "遇难",
+        "死亡",
+        "失联",
+        "救援",
+        "主席",
+        "总理",
+        "国务院",
+        "两会",
+        "中央",
+        "政治局",
+        "发布",
+        "通报",
+        "发射",
+        "飞船",
+        "空间站",
+        "峰会",
+        "签署",
+        "开幕",
+        "闭幕",
+        "重大",
+        "紧急"
+      ]
+    },
+    {
+      "key": "politics",
+      "label": "时政·社会",
+      "accent": "#ffb74d",
+      "max": 4,
+      "keywords": [
+        "政策",
+        "民生",
+        "教育",
+        "高考",
+        "中考",
+        "医保",
+        "就业",
+        "养老",
+        "改革",
+        "法院",
+        "立法",
+        "部委",
+        "通知",
+        "规定",
+        "补贴",
+        "乡村",
+        "城市",
+        "交通",
+        "校园",
+        "学生",
+        "教师",
+        "家长",
+        "就业",
+        "住房",
+        "物价",
+        "经济",
+        "外交"
+      ]
+    },
+    {
+      "key": "tech",
+      "label": "科技前沿",
+      "accent": "#4fc3f7",
+      "max": 4,
+      "keywords": [
+        "人工智能",
+        "AI",
+        "大模型",
+        "芯片",
+        "半导体",
+        "量子",
+        "航天",
+        "火箭",
+        "卫星",
+        "机器人",
+        "算法",
+        "互联网",
+        "电池",
+        "新能源",
+        "生物",
+        "基因",
+        "医学",
+        "物理",
+        "化学",
+        "材料",
+        "6G",
+        "5G",
+        "自动驾驶",
+        "无人机",
+        "天文",
+        "望远镜",
+        "核聚变",
+        "脑机",
+        "诺奖"
+      ]
+    },
+    {
+      "key": "novelty",
+      "label": "新奇趣闻",
+      "accent": "#9ccc65",
+      "max": 4,
+      "keywords": [
+        "罕见",
+        "首次",
+        "奇",
+        "怪",
+        "趣",
+        "意外",
+        "巧合",
+        "打破",
+        "纪录",
+        "吉尼斯",
+        "萌",
+        "暖心",
+        "流浪",
+        "发现",
+        "走红",
+        "爆火",
+        "反转",
+        "幸运",
+        "最长",
+        "最大",
+        "最小",
+        "最老",
+        "最年轻",
+        "哭笑不得"
+      ]
+    }
+  ],
+  "sources": [
+    {
+      "name": "IT之家",
+      "type": "rss",
+      "url": "https://www.ithome.com/rss/",
+      "hint": "tech",
+      "enabled": true
+    },
+    {
+      "name": "Solidot",
+      "type": "rss",
+      "url": "https://www.solidot.org/index.rss",
+      "hint": "tech",
+      "enabled": true
+    },
+    {
+      "name": "少数派",
+      "type": "rss",
+      "url": "https://sspai.com/feed",
+      "hint": "tech",
+      "enabled": true
+    },
+    {
+      "name": "爱范儿",
+      "type": "rss",
+      "url": "https://www.ifanr.com/feed",
+      "hint": "tech",
+      "enabled": true
+    },
+    {
+      "name": "人民网·科技",
+      "type": "rss",
+      "url": "http://www.people.com.cn/rss/scitech.xml",
+      "hint": "tech",
+      "enabled": true
+    },
+    {
+      "name": "人民网·时政",
+      "type": "rss",
+      "url": "http://www.people.com.cn/rss/politics.xml",
+      "hint": "politics",
+      "enabled": true
+    },
+    {
+      "name": "人民网·社会",
+      "type": "rss",
+      "url": "http://www.people.com.cn/rss/society.xml",
+      "hint": "politics",
+      "enabled": true
+    },
+    {
+      "name": "人民网·教育",
+      "type": "rss",
+      "url": "http://www.people.com.cn/rss/edu.xml",
+      "hint": "politics",
+      "enabled": true
+    },
+    {
+      "name": "人民网·文化",
+      "type": "rss",
+      "url": "http://www.people.com.cn/rss/culture.xml",
+      "hint": "politics",
+      "enabled": true
+    },
+    {
+      "name": "新华网·时政",
+      "type": "rss",
+      "url": "http://www.xinhuanet.com/politics/news_politics.xml",
+      "hint": "politics",
+      "enabled": true
+    },
+    {
+      "name": "中国新闻网",
+      "type": "rss",
+      "url": "https://www.chinanews.com.cn/rss/scroll-news.xml",
+      "hint": "politics",
+      "enabled": true
+    },
+    {
+      "name": "中新网·社会",
+      "type": "rss",
+      "url": "https://www.chinanews.com.cn/rss/society.xml",
+      "hint": "politics",
+      "enabled": true
+    },
+    {
+      "name": "界面新闻",
+      "type": "rss",
+      "url": "https://a.jiemian.com/index.php?m=article&a=rss",
+      "hint": "politics",
+      "enabled": true
+    },
+    {
+      "name": "人民网·国际",
+      "type": "rss",
+      "url": "http://www.people.com.cn/rss/world.xml",
+      "hint": "top",
+      "enabled": true
+    },
+    {
+      "name": "共同网",
+      "type": "rss",
+      "url": "https://china.kyodonews.net/rss/news.xml",
+      "hint": "top",
+      "enabled": true
+    },
+    {
+      "name": "百度热搜",
+      "type": "baidu_hot",
+      "url": "https://top.baidu.com/api/board?platform=wise&tab=realtime",
+      "hint": "top",
+      "enabled": true
+    },
+    {
+      "name": "头条热榜",
+      "type": "toutiao_hot",
+      "url": "https://www.toutiao.com/hot-event/hot-board/?origin=toutiao_pc",
+      "hint": "top",
+      "enabled": true
+    },
+    {
+      "name": "知乎日报",
+      "type": "zhihu_daily",
+      "url": "https://news-at.zhihu.com/api/4/news/latest",
+      "hint": "novelty",
+      "enabled": true
+    },
+    {
+      "name": "36氪",
+      "type": "rss",
+      "url": "https://36kr.com/feed",
+      "hint": "tech",
+      "enabled": false
+    },
+    {
+      "name": "果壳",
+      "type": "rss",
+      "url": "https://www.guokr.com/rss/",
+      "hint": "novelty",
+      "enabled": false
+    },
+    {
+      "name": "澎湃新闻",
+      "type": "rss",
+      "url": "https://www.thepaper.cn/rss_newsDetail_25950.xml",
+      "hint": "top",
+      "enabled": false
+    },
+    {
+      "name": "央视新闻",
+      "type": "rss",
+      "url": "http://news.cctv.com/rss/china.xml",
+      "hint": "top",
+      "enabled": false
+    },
+    {
+      "name": "微博热搜",
+      "type": "weibo_hot",
+      "url": "https://weibo.com/ajax/side/hotSearch",
+      "hint": "top",
+      "enabled": false
+    },
+    {
+      "name": "BBC中文",
+      "type": "rss",
+      "url": "https://feeds.bbci.co.uk/zhongwen/simp/rss.xml",
+      "hint": "top",
+      "enabled": false
+    }
+  ],
+  "ui": {
+    "desktop_mode": "auto",
+    "transparent_color": "#010203",
+    "alpha": 0.9,
+    "click_through": false,
+    "font_family": [
+      "微软雅黑",
+      "Microsoft YaHei UI",
+      "Microsoft YaHei",
+      "SimHei",
+      "sans-serif"
+    ],
+    "font_scale": 1.0,
+    "monitor": 0,
+    "margin": {
+      "left": 34,
+      "top": 26,
+      "right": 34,
+      "bottom": 22
+    },
+    "columns": 2,
+    "rows": 2,
+    "page_rotate_seconds": 25,
+    "summary_lines": 3,
+    "angle_lines": 1,
+    "show_angle": true,
+    "show_sources": true,
+    "colors": {
+      "panel": "#0d1117",
+      "panel_edge": "#1f2a37",
+      "title": "#f2f6fc",
+      "summary": "#c6d0dc",
+      "angle": "#8fa3b8",
+      "muted": "#6b7a8c",
+      "header": "#e8eef6"
+    },
+    "hotkeys": {
+      "enabled": true,
+      "refresh": "ctrl+alt+r",
+      "toggle_visible": "ctrl+alt+n",
+      "click_through": "ctrl+alt+t",
+      "quit": "ctrl+alt+q"
+    }
+  }
+}
