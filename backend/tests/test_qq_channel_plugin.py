@@ -1039,4 +1039,208 @@ async def test_reply_task_drained_before_client_close(migrated_db):
     finally:
         unregister_sink(getattr(plugin, "_sink_handle", None) or plugin.key)
 
+# ── 引用消息：QQ 的 message_type=103 与站内的 reply_to 对不对得上 ─────────────
+
+def test_readable_content_humanizes_qq_face_marks():
+    """腾讯把表情发成 content 里的标记（ext 是 base64 的 JSON，带表情自己的文本）。
+
+    原样入库的话，界面上是一串标记、AI 也读不出情绪，所以入站要还原成可读文本。
+    """
+    module = _load_plugin_module()
+    plugin = module.QqChannelPlugin()
+
+    assert plugin._readable_content(
+        {"content": '你还能信用我的话吗<faceType=1,faceId="6",ext="eyJ0ZXh0Ijoi5a6z576eIn0=">'}
+    ) == "你还能信用我的话吗[表情:害羞]"
+    assert plugin._readable_content(
+        {"content": '<faceType=3,faceId="312",ext="不是base64">'}
+    ) == "[表情]", "解不出的 ext 退成占位，别把半截标记留在正文里"
+    assert plugin._readable_content({"content": "纯文本"}) == "纯文本"
+
+
+def test_quoted_of_reads_msg_elements_and_ref_idx():
+    """引用消息的内容在 msg_elements 里，被引用那条的索引在 scene.ext 的 ref_msg_idx 上"""
+    module = _load_plugin_module()
+    plugin = module.QqChannelPlugin()
+
+    assert plugin._quoted_of({
+        "message_type": 103,
+        "content": "你还能信用我的话吗",
+        "msg_elements": [{"message_type": 103, "content": "晚安"}],
+        "message_scene": {"ext": ["auth_token=SECRET", "msg_idx=IDX-2", "ref_msg_idx=IDX-1"]},
+    }) == ("晚安", "IDX-1")
+
+    assert plugin._quoted_of({"message_type": 0, "content": "普通消息"}) == ("", ""), \
+        "普通消息不该被当成引用"
+    assert plugin._quoted_of({"message_type": "x", "msg_elements": []}) == ("", ""), \
+        "message_type 是脏值也不能把入站带崩"
+
+
+def _quote_event(msg_id: str, *, content: str, quoted: str, ref_idx: str, my_idx: str) -> dict:
+    """一条 QQ 引用消息事件：正文 + msg_elements（被引用的内容）+ ref_msg_idx（被引用那条的索引）"""
+    return {
+        **GROUP_EVENT, "id": msg_id, "content": content, "mentions": [],
+        "message_type": 103,
+        "msg_elements": [{"message_type": 103, "content": quoted}],
+        "message_scene": {"ext": [f"msg_idx={my_idx}", f"ref_msg_idx={ref_idx}"]},
+    }
+
+
+async def _messages_with_quote(group_id: int):
+    from app.database import async_session
+
+    async with async_session() as db:
+        return (await db.execute(text(
+            "SELECT id, content, reply_to, channel_ref_idx FROM messages "
+            "WHERE group_id = :g ORDER BY id"
+        ), {"g": group_id})).all()
+
+
+async def _wait_channel_ref(message_id: int, timeout: float = 2.0) -> str | None:
+    """出站记 REFIDX 是后台任务里的第二次写库，等它落下来"""
+    from app.database import async_session
+
+    for _ in range(int(timeout / 0.05)):
+        async with async_session() as db:
+            value = (await db.execute(text(
+                "SELECT channel_ref_idx FROM messages WHERE id = :i"
+            ), {"i": message_id})).scalar()
+        if value:
+            return str(value)
+        await asyncio.sleep(0.05)
+    return None
+
+
+async def test_qq_quote_becomes_a_copree_quote(migrated_db):
+    """QQ 里引用某条回过来 → 站内那条也画成引用块。
+
+    两端靠同一个 REFIDX 对上：入站把它自己的 msg_idx 写在 channel_ref_idx 上、出站把
+    ext_info.ref_idx 写在同一个字段上，所以"被引用的是哪条"一条 where 就找得回来。
+    """
+    await _seed()
+    plugin = await _make_plugin()
+    plugin._copree_group_id = GROUP_ID
+    try:
+        await plugin._on_group_message({
+            **GROUP_EVENT, "id": "Q-1", "content": "今天天气不错", "mentions": [],
+            "message_scene": {"ext": ["msg_idx=IDX-1"]},
+        })
+        await plugin._on_group_message(_quote_event(
+            "Q-2",
+            content='你还能信用我的话吗<faceType=1,faceId="6",ext="eyJ0ZXh0Ijoi5a6z576eIn0=">',
+            quoted="今天天气不错", ref_idx="IDX-1", my_idx="IDX-2",
+        ))
+
+        rows = await _messages_with_quote(GROUP_ID)
+        assert len(rows) == 2, rows
+        assert rows[0][3] == "IDX-1", "入站要把自己的 msg_idx 记在 channel_ref_idx 上"
+        assert rows[1][2] == rows[0][0], f"引用要落到站内那条消息上：{rows[1]}"
+        # QQ 的表情标记入站 → 入口归一成 unicode 字符入库（库里不再留自造写法）
+        assert rows[1][1] == "你还能信用我的话吗😳", rows[1][1]
+    finally:
+        _cleanup(plugin)
+
+
+async def test_bare_quote_still_lands_and_carries_the_quoted_text(migrated_db):
+    """只引用、一个字没打：也要落库。
+
+    正文带上被引用的原文——引用块只给人看，AI 读的是正文，不带它就接不住"他指的是哪句"。
+    """
+    await _seed()
+    plugin = await _make_plugin()
+    plugin._copree_group_id = GROUP_ID
+    try:
+        await plugin._on_group_message({
+            **GROUP_EVENT, "id": "Q-1", "content": "今天天气不错", "mentions": [],
+            "message_scene": {"ext": ["msg_idx=IDX-1"]},
+        })
+        await plugin._on_group_message(_quote_event(
+            "Q-2", content="", quoted="今天天气不错", ref_idx="IDX-1", my_idx="IDX-2",
+        ))
+
+        rows = await _messages_with_quote(GROUP_ID)
+        assert len(rows) == 2, rows
+        assert rows[1][1] == "[引用] 今天天气不错", rows[1][1]
+        assert rows[1][2] == rows[0][0], rows[1]
+    finally:
+        _cleanup(plugin)
+
+
+async def test_quote_of_a_message_we_never_saw_stays_unquoted(migrated_db):
+    """被引用的那条不在库里（机器人当时不在线）→ 不猜 id，只把正文落下来"""
+    await _seed()
+    plugin = await _make_plugin()
+    plugin._copree_group_id = GROUP_ID
+    try:
+        await plugin._on_group_message(_quote_event(
+            "Q-1", content="你还能信用我的话吗", quoted="很久以前的一条",
+            ref_idx="IDX-不存在", my_idx="IDX-1",
+        ))
+
+        rows = await _messages_with_quote(GROUP_ID)
+        assert len(rows) == 1, rows
+        assert rows[0][1] == "你还能信用我的话吗", rows[0][1]
+        assert rows[0][2] is None, "找不到就别猜一个 id，引用错人比不引用更糟"
+    finally:
+        _cleanup(plugin)
+
+
+async def test_emoji_markers_become_chars_on_the_qq_side(migrated_db):
+    """站内的 [表情:名字] 到 QQ 只能是字符：对得上的换掉，对不上的丢掉。
+
+    对不上的若原样发，QQ 那边看到的是 [表情:某某] 这种内部写法——把存储格式漏给了对方。
+    """
+    from app.database import async_session
+    from app.models.plugin import Plugin
+    from app.services.plugin import catalog
+
+    await _seed()
+    plugin = await _make_plugin()
+    try:
+        async with async_session() as db:
+            await catalog.sync_plugins_to_db(db)
+            row = await db.get(Plugin, "emoji-qq")
+            row.enabled = True
+            await db.commit()
+
+        assert await plugin._emoji_to_chars("你好 [表情:害羞] 再见") == "你好 😳 再见"
+        assert await plugin._emoji_to_chars("你好 :qq_shy: 再见") == "你好 😳 再见", "短码也认"
+        assert await plugin._emoji_to_chars("这个 [表情:没这个] 丢掉") == "这个  丢掉", "旧写法不留痕"
+        assert await plugin._emoji_to_chars("正文里的 :没这个: 别动") == "正文里的 :没这个: 别动", \
+            "未登记的短码可能是正文自带内容，保留"
+        assert await plugin._emoji_to_chars("没有表情") == "没有表情"
+    finally:
+        _cleanup(plugin)
+
+
+async def test_ai_message_quoted_in_qq_resolves_too(migrated_db):
+    """用户引用的若是 AI 在 QQ 里发的那条：出站记下的 ext_info.ref_idx 同样对得上"""
+    from app.chat.gm import send_gm_message
+    from app.database import async_session
+
+    await _seed()
+    plugin = await _make_plugin()
+    plugin._copree_group_id = GROUP_ID
+    try:
+        await plugin._on_group_at(dict(GROUP_EVENT))        # 先来一条入站，出站才知道回哪个群
+        async with async_session() as db:
+            ai_message = await send_gm_message(
+                db, group_id=GROUP_ID, sender_type="ai", sender_id=AGENT_USER, content="晚安",
+            )
+            ai_id = int(ai_message.id)
+            await db.commit()
+        await _wait_sent(plugin)
+        ref = await _wait_channel_ref(ai_id)
+        assert ref, "出站没把通道侧的 ext_info.ref_idx 记回库里"
+
+        await plugin._on_group_message(_quote_event(
+            "Q-AI", content="什么意思", quoted="晚安", ref_idx=ref, my_idx="IDX-AI",
+        ))
+
+        rows = await _messages_with_quote(GROUP_ID)
+        assert rows[-1][2] == ai_id, f"引用 AI 的消息也该对上：{rows[-1]}"
+    finally:
+        _cleanup(plugin)
+
+
 

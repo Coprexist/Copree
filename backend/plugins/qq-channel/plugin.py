@@ -19,12 +19,16 @@ QQ 通道 — 把 Copree 的 AI 接入 QQ（官方 QQ 机器人 API v2）
 - 富媒体不回传；收到的图片/语音/文件只转成文字占位，让 AI 知道"有人发了东西"
 - 多个 QQ 群共用一个 Copree 群时，群回复回到**最近一次来消息**的那个 QQ 群
 - 私聊不校验"是不是 AI 的创造者"：QQ 侧没有身份锚，认人要靠绑定流程（下一步）
+- 引用目前只做群消息（双向：QQ 引用 → 站内引用块，站内引用 → message_reference）。私聊既没记
+  REFIDX 也没实测过 c2c 的引用字段，所以私聊里的引用仍是平文本
 """
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
+import re
 import time
 from collections import OrderedDict, deque
 from typing import Any
@@ -63,6 +67,31 @@ DM_ROUTE_MAX = 500                  # 私信路由上限：按会话记，只随
 TEXT_LIMIT = 1000                  # 文本超长直接截断，否则整条会被拒
 DEDUP_SIZE = 500                   # 相同 msg_id 可能重复推送，按 id 去重
 BACKOFF_MAX = 60.0
+
+
+# 腾讯把表情塞进 content 发成一个标记：<faceType=1,faceId="6",ext="eyJ0ZXh0Ijoi5a6z576eIn0=">。
+# ext 是 base64 的 JSON，带该表情的文本。原样入库时界面是一串标记、AI 也读不出情绪，故入站先
+# 还原成 [表情:名字]，再由入口归一（catalog.normalize_emoji_text）换成对应的 unicode 字符。
+_FACE_MARK_RE = re.compile(r'<faceType=\d+,faceId="[^"]*"(?:,ext="([^"]*)")?>')
+
+
+def humanize_faces(text: str) -> str:
+    """QQ 的表情标记 → 可读文本；ext 解不出来时留一个「[表情]」，别把半截标记留在正文里"""
+    if not text or "<faceType=" not in text:
+        return text
+
+    def _one(match: re.Match) -> str:
+        raw = match.group(1) or ""
+        name = ""
+        if raw:
+            try:
+                decoded = base64.b64decode(raw + "=" * (-len(raw) % 4))
+                name = str(json.loads(decoded).get("text") or "").strip()
+            except Exception:
+                name = ""          # 认不出的 ext 不值得让整条消息失败
+        return f"[表情:{name}]" if name else "[表情]"
+
+    return _FACE_MARK_RE.sub(_one, text)
 
 
 class QqClient:
@@ -809,6 +838,11 @@ class QqChannelPlugin(ServicePlugin):
 
         content = self._readable_content(d)
         content = await self._materialize_mentions(d, content)
+        quoted_text, quoted_ref = self._quoted_of(d)
+        # 只引用、一个字没打的「空引用」也要落库：不落的话用户看着像消息没发出去。
+        # 被引用的原文进正文，AI 才接得住"他说的是哪句"（引用块只给人看，AI 看不到它）
+        if not content and quoted_text:
+            content = f"[引用] {quoted_text}"
         # 点名到机器人 → 加唤醒令牌（Copree 的唤醒规则认它）；没点名 → 只入库、不叫 AI
         if addressed:
             content = self._with_mention_prefix(content).strip()
@@ -821,12 +855,7 @@ class QqChannelPlugin(ServicePlugin):
         # message_scene.ext 里带 msg_idx（本条消息的 REFIDX，出站引用要用它）与 ref_msg_idx
         # （对方引用的是哪条）。只打键名：ext 里还可能有 auth_token，值不进日志
         scene = d.get("message_scene") or {}
-        raw_ext = scene.get("ext") if isinstance(scene.get("ext"), list) else []
-        ext: dict[str, str] = {}
-        for item in raw_ext:
-            key, _, value = str(item).partition("=")
-            if key:
-                ext[key] = value
+        ext = self._scene_ext(d)
         elements = d.get("msg_elements") if isinstance(d.get("msg_elements"), list) else []
         # 只报长度与类型，不报值：ext 里还有 auth_token（凭据），值一律不进日志。
         # msg_idx 是本条消息的引用索引（出站精准引用要用它）、ref_msg_idx 是"对方引用了哪条"
@@ -842,7 +871,7 @@ class QqChannelPlugin(ServicePlugin):
 
         try:
             delivered = await self._deliver_to_group(
-                qq_group, author, content, msg_id, str(ext.get("msg_idx") or "")
+                qq_group, author, content, msg_id, str(ext.get("msg_idx") or ""), quoted_ref
             )
             peer_user_id, peer_name, copree_msg_id = delivered or (0, "", 0)
             self._remember_delivered(msg_id, copree_msg_id, content)
@@ -944,11 +973,45 @@ class QqChannelPlugin(ServicePlugin):
             logger.warning(f"补全正文失败（非致命）：{type(e).__name__}: {e}")
 
     @staticmethod
+    def _scene_ext(d: dict) -> dict:
+        """message_scene.ext 的 key=value 列表 → 字典。
+
+        值一律不外传（里面有 auth_token 这个凭据），只用于取 msg_idx / ref_msg_idx。
+        """
+        scene = d.get("message_scene") or {}
+        raw = scene.get("ext") if isinstance(scene.get("ext"), list) else []
+        ext: dict[str, str] = {}
+        for item in raw:
+            key, _, value = str(item).partition("=")
+            if key:
+                ext[key] = value
+        return ext
+
+    @staticmethod
+    def _quoted_of(d: dict) -> tuple[str, str]:
+        """引用消息（message_type=103）→ (被引用的正文, 被引用那条的 REFIDX)。
+
+        腾讯不给"被引用的是哪条 msg_id"，只把内容塞进 msg_elements；它自己的索引在
+        message_scene.ext 的 ref_msg_idx 里，而那个值正是我们落库时写在 channel_ref_idx 上的
+        同一个索引——站内靠它找回回复对象（见 _resolve_quoted）。非引用消息返回空串。
+        """
+        try:
+            if int(d.get("message_type") or 0) != 103:
+                return "", ""
+        except (TypeError, ValueError):
+            return "", ""
+        elements = d.get("msg_elements") if isinstance(d.get("msg_elements"), list) else []
+        quoted = " ".join(
+            QqChannelPlugin._readable_content(e) for e in elements if isinstance(e, dict)
+        ).strip()
+        return quoted, QqChannelPlugin._scene_ext(d).get("ref_msg_idx", "")
+
+    @staticmethod
     def _readable_content(d: dict) -> str:
         """事件里的可用文本：正文优先，图片/语音/文件转成占位，别让 AI 以为没人说话"""
         text = str(d.get("content") or "").strip()
         if text:
-            return text
+            return humanize_faces(text)
         parts: list[str] = []
         for att in d.get("attachments") or []:
             ctype = str((att or {}).get("content_type") or "")
@@ -965,9 +1028,31 @@ class QqChannelPlugin(ServicePlugin):
                 parts.append(f"[文件] {(att or {}).get('filename') or ''}".strip())
         return " ".join(parts).strip()
 
+    @staticmethod
+    async def _resolve_quoted(db: Any, group_id: int, ref_idx: str) -> int | None:
+        """按 REFIDX 找回被引用的那条站内消息（找不到就返回 None）。
+
+        收：入站把它自己的 msg_idx 写在 channel_ref_idx 上；发：出站把 ext_info.ref_idx 写在
+        同一个字段上——两边是同一个索引体系，所以一条 where 就够（AI 自己的消息被引用也认得出）。
+        找不到只有一种情形：那条消息机器人没在线、压根没进过站内；此时宁可不引用，也不猜一个 id。
+        """
+        if not ref_idx:
+            return None
+        from sqlalchemy import select
+
+        from app.models.message import Message
+
+        row = (await db.execute(
+            select(Message.id)
+            .where(Message.group_id == group_id, Message.channel_ref_idx == ref_idx)
+            .order_by(Message.id.desc())
+            .limit(1)
+        )).first()
+        return int(row[0]) if row else None
+
     async def _deliver_to_group(
         self, qq_group: str, author: dict, content: str, channel_msg_id: str = "",
-        channel_ref_idx: str = "",
+        channel_ref_idx: str = "", quote_ref: str = "",
     ) -> tuple[int, str, int] | None:
         """把 QQ 群消息当作一次正常的群发言落库，并走与网页端完全相同的投递链路"""
         from app.chat.gm import send_gm_message
@@ -986,12 +1071,14 @@ class QqChannelPlugin(ServicePlugin):
             if ensured is None:
                 return None
             sender_id, peer_name = ensured
+            reply_to = await self._resolve_quoted(db, self._copree_group_id, quote_ref)
             message = await send_gm_message(
                 db,
                 group_id=self._copree_group_id,
                 sender_type="human",
                 sender_id=sender_id,
                 content=content,
+                reply_to=reply_to,      # 对方在 QQ 里引用着某条 → 站内也画成引用
                 via="qq",          # 群里要能看出这条是从 QQ 来的
             )
             if channel_msg_id:
@@ -1122,6 +1209,7 @@ class QqChannelPlugin(ServicePlugin):
             except Exception as e:
                 # 翻不成真 @ 也要照发：这条回复本身比 @ 的成色重要
                 logger.warning(f"QQ 群 @ 映射失败，按原文发送：{type(e).__name__}: {e}")
+        text = await self._emoji_to_chars(text)
         reference_id = await self._reply_reference(reply_to, kind)
         try:
             # 正文格式由 _deliver 统一施加（群与私聊一致；留空 = 先 Markdown、没权限降级纯文本）
@@ -1140,6 +1228,32 @@ class QqChannelPlugin(ServicePlugin):
             channel_id=str(response.get("id") or ""),
             ref_idx=str((response.get("ext_info") or {}).get("ref_idx") or ""),
         )
+
+    async def _emoji_to_chars(self, text: str) -> str:
+        """站内表情发往 QQ：有 unicode 的换成字符，仅图片的去掉。
+
+        官方 API 不回传富媒体，图片表情在本通道无法显示；保留短码则会把内部写法暴露给对方。
+        写法归一复用 catalog.resolve_emoji_text（与站内同一契约），此处只加通道策略。
+        """
+        if not text or ("[表情:" not in text and ":" not in text):
+            return text
+        from app.database import async_session
+        from app.services.plugin import catalog
+
+        try:
+            async with async_session() as db:
+                packs = await catalog.enabled_emoji_packs(db)
+        except Exception as e:
+            logger.warning(f"取表情包失败，按原样发：{type(e).__name__}: {e}")
+            return text
+        text = catalog.resolve_emoji_text(text, packs)
+        # 已登记但只有图的表情去掉；未登记的短码可能是正文自带的冒号词，原样保留
+        known = {face["id"] for pack in packs for face in pack["faces"]}
+        text = catalog.EMOJI_SHORTCODE_RE.sub(
+            lambda m: "" if m.group(1) in known else m.group(0), text
+        )
+        # 兼容写法只可能来自历史消息，原样发出会显示成一串中文括号，去掉
+        return catalog.EMOJI_LEGACY_RE.sub("", text)
 
     async def _reply_reference(self, reply_to: int | None, kind: str) -> str:
         """AI 的回复若 reply_to 指向一条 QQ 来消息，就取出它的 REFIDX 做精准引用。
