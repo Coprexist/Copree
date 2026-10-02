@@ -26,6 +26,7 @@ import logging
 from dataclasses import dataclass, field
 
 from app.repositories.world_repo import SQLAlchemyWorldRepository
+from app.utils.display_name import display_names
 from sqlalchemy.ext.asyncio import AsyncSession
 logger = logging.getLogger(__name__)
 
@@ -165,8 +166,6 @@ async def _window(p: _Pending, interval: float) -> None:
 async def _deliver(world_id: int, group_id: int, msgs: list) -> None:
     """投递一批消息给世界程序：查发件人名字 → 常驻进程或临时触发 handle(event)"""
     from app.database import async_session
-    from sqlalchemy import select
-    from app.models.user import User
 
     try:
         async with async_session() as db:
@@ -176,10 +175,7 @@ async def _deliver(world_id: int, group_id: int, msgs: list) -> None:
                 return
             # 批量查发件人名字
             sender_ids = {m["sender_id"] for m in msgs}
-            name_map: dict[int, str] = {}
-            if sender_ids:
-                u_res = await db.execute(select(User.id, User.username).where(User.id.in_(sender_ids)))
-                name_map = dict(u_res.all())
+            name_map = await display_names(db, sender_ids) if sender_ids else {}
             for m in msgs:
                 m["sender_name"] = name_map.get(m["sender_id"], f"#{m['sender_id']}")
             event = {

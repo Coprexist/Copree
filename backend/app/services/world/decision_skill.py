@@ -12,6 +12,7 @@ import json
 import logging
 
 from app.repositories.world_repo import SQLAlchemyWorldRepository
+from app.utils.display_name import display_names
 from sqlalchemy.ext.asyncio import AsyncSession
 logger = logging.getLogger(__name__)
 
@@ -283,7 +284,6 @@ async def emit_member_event(db, group_id: int, event_type: str, member_id: int,
     """
     from app.models.agent import Agent as AgentModel
     from app.models.group import GroupMember
-    from app.models.user import User
     from sqlalchemy import select
 
     try:
@@ -299,11 +299,7 @@ async def emit_member_event(db, group_id: int, event_type: str, member_id: int,
         if not rows:
             return
         rules_by_agent = await load_rules_map(db, "agent", [r[0] for r in rows])
-        names: dict[int, str] = {}
-        for uid in {member_id, operator_id} - {None}:
-            names[uid] = (await db.execute(
-                select(User.username).where(User.id == uid)
-            )).scalar_one_or_none() or f"用户{uid}"
+        names = await display_names(db, {member_id, operator_id} - {None})
         ctx = {
             "event": event_type,
             "group_id": group_id,
