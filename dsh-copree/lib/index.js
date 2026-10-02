@@ -805,7 +805,7 @@ function authorized(req, expected) {
   if (typeof got !== "string" || got.length !== expected.length) return false;
   return timingSafeEqual(Buffer.from(got), Buffer.from(expected));
 }
-function handle(req, res, controller, options, tools, scopeOf) {
+function handle(req, res, controller, options, tools, scopeOf, commands) {
   const route = new URL(req.url ?? "/", "http://dsh.local").pathname.slice(BRIDGE_PREFIX.length) || "/";
   if (!authorized(req, options.secret)) {
     sendJson(res, 401, { error: "unauthorized" });
@@ -881,6 +881,31 @@ ${saved.map((p) => `- ${p}`).join("\n")}`].filter(Boolean).join("\n\n");
       }
       if (!askBroker.answer(id, decision)) return { status: 404, body: { error: "ask not found" } };
       return { body: { ok: true } };
+    });
+    return;
+  }
+  if (req.method === "GET" && route === "/commands") {
+    run(async () => {
+      const sessionId = query.get("sessionId") ?? "";
+      if (!sessionId) return { status: 400, body: { error: "sessionId is required" } };
+      if (!commands.available) return { status: 501, body: { error: "DSH \u672A\u63D0\u4F9B commands \u670D\u52A1\uFF0C\u65E0\u6CD5\u5217\u51FA\u547D\u4EE4" } };
+      const items = commands.list(sessionId);
+      if (items === null) return { status: 404, body: { error: "\u4F1A\u8BDD\u4E0D\u5728 DSH \u7684\u6D3B\u52A8\u5217\u8868\u91CC" } };
+      return { body: { items } };
+    });
+    return;
+  }
+  if (req.method === "POST" && route === "/command") {
+    run(async () => {
+      const body = await readJsonBody(req);
+      const sessionId = String(body.sessionId ?? "");
+      const line = String(body.line ?? "").trim();
+      if (!sessionId || !line) return { status: 400, body: { error: "sessionId and line are required" } };
+      const outcome = await commands.execute(sessionId, line);
+      if (outcome.kind === "unavailable") return { status: 501, body: { error: "DSH \u672A\u63D0\u4F9B commands \u670D\u52A1\uFF0C\u65E0\u6CD5\u6267\u884C\u547D\u4EE4" } };
+      if (outcome.kind === "no-session") return { status: 404, body: { error: "\u4F1A\u8BDD\u4E0D\u5728 DSH \u7684\u6D3B\u52A8\u5217\u8868\u91CC" } };
+      if (outcome.kind === "unknown") return { status: 404, body: { error: `\u672A\u77E5\u547D\u4EE4\uFF1A${line}` } };
+      return { body: { commandId: outcome.commandId, result: outcome.result, text: outcome.text } };
     });
     return;
   }
@@ -1018,6 +1043,35 @@ function registerBridge(ctx, options) {
       return void 0;
     }
   };
+  let commandRemote;
+  ctx.inject?.(["typertGateway"], (gatewayCtx) => {
+    commandRemote = gatewayCtx.remote?.commands;
+  });
+  const commands = {
+    get available() {
+      return typeof commandRemote?.list === "function" && typeof commandRemote?.execute === "function";
+    },
+    list(sessionId) {
+      if (!commands.available) return null;
+      try {
+        return commandRemote.list(sessionId).map((item) => ({
+          name: String(item?.name ?? ""),
+          description: String(item?.description ?? ""),
+          hint: String(item?.input?.hint ?? "")
+        }));
+      } catch (error) {
+        options.log(`dsh-copree: \u5217\u547D\u4EE4\u5931\u8D25\uFF1A${String(error?.message ?? error)}`);
+        return null;
+      }
+    },
+    async execute(sessionId, line) {
+      if (!commands.available) return { kind: "unavailable" };
+      const execution = await commandRemote.execute(sessionId, line);
+      if (!execution) return { kind: "unknown" };
+      const result = execution.result?.kind === "error" ? "error" : "success";
+      return { commandId: String(execution.commandId ?? ""), result, text: String(execution.result?.text ?? "") };
+    }
+  };
   let disposeRoute = null;
   let stopHeartbeat = null;
   const apply2 = (allowed) => {
@@ -1035,7 +1089,7 @@ function registerBridge(ctx, options) {
       disposeRoute = ctx.webServer.register({
         kind: "prefix",
         path: BRIDGE_PREFIX,
-        handler: (req, res) => handle(req, res, controller, options, ctx.tools, scopeOf)
+        handler: (req, res) => handle(req, res, controller, options, ctx.tools, scopeOf, commands)
       });
       stopHeartbeat = startHeartbeat(options);
       options.log("dsh-copree: \u5DF2\u540C\u610F Copree \u63A5\u5165\uFF0C\u6865\u63A5\u8DEF\u7531\u4E0E\u5FC3\u8DF3\u5DF2\u542F\u52A8");

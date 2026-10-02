@@ -9,6 +9,8 @@ DSH 桥接 API —— Copree 管理端与 DSH 本体会话之间的唯一入口�
 - GET  /admin/dsh/stream      SSE 中继 DSH 会话事件（前端 fetch 流式读）
 - POST /admin/dsh/cancel      取消 DSH 会话当前轮次
 - POST /admin/dsh/answer      回答 DSH 会话里的审批 / 提问（人在 Copree 页面点的那一下）
+- GET  /admin/dsh/commands    列一条 DSH 会话可用的斜杠命令（命令由 DSH 注册，这里只透传）
+- POST /admin/dsh/command     在 DSH 会话里执行一行斜杠命令（不进模型）
 - GET  /dsh-bridge/attachment/{file_id}  DSH 插件按 id 取附件字节（密钥认证）
 """
 import logging
@@ -53,6 +55,15 @@ class PromptRequest(BaseModel):
 
 class SessionRequest(BaseModel):
     session_id: str = Field(alias="sessionId")
+
+    model_config = {"populate_by_name": True}
+
+
+class CommandRequest(BaseModel):
+    """一行斜杠命令：line 原样交给 DSH 的 commands 服务解析（如 /compact 收尾）。"""
+
+    session_id: str = Field(alias="sessionId")
+    line: str
 
     model_config = {"populate_by_name": True}
 
@@ -168,6 +179,30 @@ async def bridge_prompt(payload: PromptRequest, _: dict = Depends(require_admin)
         raise HTTPException(status_code=400, detail="消息不能为空")
     try:
         return await bridge.prompt(payload.text, payload.session_id, payload.cwd, payload.attachments, payload.mode)
+    except bridge.DshBridgeError as exc:
+        raise _bridge_error(exc) from exc
+
+
+@router.get("/admin/dsh/commands")
+async def bridge_commands(
+    session_id: str = Query(..., alias="sessionId"),
+    _: dict = Depends(require_admin),
+):
+    """一条会话可用的斜杠命令（名字 + 说明 + 是否要自由输入）。"""
+    try:
+        return {"items": await bridge.list_commands(session_id)}
+    except bridge.DshBridgeError as exc:
+        raise _bridge_error(exc) from exc
+
+
+@router.post("/admin/dsh/command")
+async def bridge_command(payload: CommandRequest, _: dict = Depends(require_admin)):
+    """在 DSH 会话里执行一行斜杠命令；结果与 DSH 的 command/done 事件同源。"""
+    line = payload.line.strip()
+    if not line:
+        raise HTTPException(status_code=400, detail="命令不能为空")
+    try:
+        return await bridge.run_command(payload.session_id, line)
     except bridge.DshBridgeError as exc:
         raise _bridge_error(exc) from exc
 

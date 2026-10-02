@@ -188,6 +188,37 @@ async def prompt(
     return response.json()
 
 
+async def list_commands(session_id: str) -> list[dict]:
+    """列一条会话可用的斜杠命令（命令在 DSH 本体里注册，这里只透传）。
+
+    命令的可见范围挂在会话的 agent 上，所以必须先有会话 id——没有它就问不出"有哪些命令"。
+    """
+    url, headers = _target("/commands")
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url, headers=headers, params={"sessionId": session_id})
+    except httpx.HTTPError as exc:
+        raise DshBridgeError(f"DSH 不可达：{exc}") from exc
+    _raise_for(response)
+    return list(response.json().get("items") or [])
+
+
+async def run_command(session_id: str, line: str) -> dict:
+    """把一行斜杠命令交给 DSH 执行，回它的结论（成功/失败 + 文本）。
+
+    为什么与 prompt 分开：prompt 是"说给模型听"，命令是 DSH 自己的动作——不进模型上下文、
+    不占一轮对话。合成一条链的话，命令会被当成普通消息发给模型，等于没执行。
+    """
+    url, headers = _target("/command")
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(url, headers=headers, json={"sessionId": session_id, "line": line})
+    except httpx.HTTPError as exc:
+        raise DshBridgeError(f"DSH 不可达：{exc}") from exc
+    _raise_for(response)
+    return response.json()
+
+
 async def cancel(session_id: str) -> None:
     """取消 DSH 会话的当前轮次（不动会话本身）。"""
     url, headers = _target("/cancel")

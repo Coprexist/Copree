@@ -15,7 +15,7 @@ import { ArrowLeft, ArrowDown, Bot, Brain, CheckCircle2, Circle, ImagePlus, Info
 import { api, getApiBaseUrl } from '../api/client'
 import { useT } from '../i18n/I18nContext'
 import { DropMask, AttachmentChips } from '../components/AttachmentChips'
-import { IconButton } from '../components/ui'
+import { IconButton, MENU_CAPTION, MenuItem, MenuPanel } from '../components/ui'
 import { ApprovalDialog, QuestionDialog, type AskPrompt, type ChatApproval } from '../components/shared/ChatDialogs'
 import MarkdownContent from '../components/shared/MarkdownContent'
 import { CONTENT_W_VAR, ColumnWidthHandles, ToolBubble, toolIcon, useContentColumnWidth } from '../components/shared/ChatPanelAtoms'
@@ -48,6 +48,12 @@ interface SessionItem {
 
 /** 已交给 DSH、但还没在会话里回显的一条消息（先给气泡，避免用户以为没发出去而再按一次） */
 interface OutboxItem { id: number; text: string }
+
+/** DSH 侧注册的一条斜杠命令（名字不带 /；hint 非空表示要自由输入） */
+interface DshCommand { name: string; description: string; hint: string }
+
+/** 命令写法：/名字 + 可选参数（与 DSH 的 parseCommand 同口径——名字是字母开头的标识符） */
+const COMMAND_LINE = /^\/[A-Za-z][A-Za-z0-9_-]*(\s|$)/
 
 interface Line {
   id: number
@@ -307,6 +313,13 @@ export default function DshChatPage() {
   const [outbox, setOutbox] = useState<OutboxItem[]>([])
   /** 一句解释性提示（例如"这条已经在会话里了，跳过"）：只说明情况，不当错误 */
   const [notice, setNotice] = useState('')
+  /** DSH 侧注册的斜杠命令：命令在 DSH 本体执行、不进模型（见后端 /admin/dsh/command） */
+  const [commands, setCommands] = useState<DshCommand[]>([])
+  const [cmdOpen, setCmdOpen] = useState(false)
+  /** 命令服务不可用（插件版本旧 / 桥接离线）：菜单里要说清是"取不到"，不能谎报"没有命令" */
+  const [cmdUnavailable, setCmdUnavailable] = useState(false)
+  const cmdMenuRef = useRef<HTMLDivElement | null>(null)
+  const inputRef = useRef<HTMLTextAreaElement | null>(null)
   const outboxSeq = useRef(1)
   /** 最近提交过的文本：5 秒内同一条再提交一次，判为"上一次没反馈、又按了一下"，直接忽略 */
   const recentSubmits = useRef<{ text: string; at: number }[]>([])
@@ -351,6 +364,41 @@ export default function DshChatPage() {
   useEffect(() => {
     if (status && status.state === 'online') loadSessions()
   }, [status && status.state, loadSessions])
+
+  // 命令挂在会话的 agent 上：没有会话就问不出「有哪些命令」，所以跟着会话走
+  useEffect(() => {
+    setCmdOpen(false)
+    if (!sessionId || status?.state !== 'online') { setCommands([]); setCmdUnavailable(false); return }
+    let cancelled = false
+    // 命令挂在会话的 agent 上，而 agent 是随流被拉活的：刚切过去就取，可能还没活跃。
+    // 失败后隔一拍自愈一次——这就是全部重试，不做指数退避（它只在切会话的那一瞬间可能发生）
+    const load = (attempt: number) => {
+      api.get<{ items: DshCommand[] }>(`/admin/dsh/commands?sessionId=${encodeURIComponent(sessionId)}`)
+        .then((data) => { if (!cancelled) { setCommands(data.items || []); setCmdUnavailable(false) } })
+        .catch(() => {
+          if (cancelled) return
+          if (attempt === 0) { setTimeout(() => load(1), 1500); return }
+          setCommands([]); setCmdUnavailable(true)
+        })
+    }
+    load(0)
+    return () => { cancelled = true }
+  }, [sessionId, status?.state])
+
+  // 浮层：点外面或按 Esc 就收（与消息菜单同一套手感）
+  useEffect(() => {
+    if (!cmdOpen) return
+    const onDown = (event: MouseEvent) => {
+      if (cmdMenuRef.current && !cmdMenuRef.current.contains(event.target as Node)) setCmdOpen(false)
+    }
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setCmdOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [cmdOpen])
 
   // 选中会话即开流：先补快照（reducer 会清空重建），再逐帧跟随。
   useEffect(() => {
@@ -434,6 +482,41 @@ export default function DshChatPage() {
   }, [imagesSupported, sessionId, sessions, loadSessions])
 
   /**
+   * 执行一条斜杠命令：与发消息分开——命令不进模型，由 DSH 的 commands 服务直接跑。
+   * 命令不会在会话里回显（它不是消息），所以先自己记一条气泡，否则用户看不出发生过什么。
+   */
+  const runCommand = useCallback(async (line: string) => {
+    if (!sessionId) { setError(t('tool:dsh.cmd.needsSession')); return }
+    setCmdOpen(false)
+    setError('')
+    setOutbox((prev) => [...prev, { id: outboxSeq.current++, text: line }])
+    try {
+      const res = await api.post<{ result: 'success' | 'error'; text: string }>('/admin/dsh/command', { sessionId, line })
+      if (res.result === 'error') setError(res.text || t('tool:dsh.cmd.failed'))
+      else setNotice(res.text || t('tool:dsh.cmd.done'))
+    } catch (e: any) {
+      setError(e && e.message ? e.message : String(e))
+    }
+  }, [sessionId, t])
+
+  /** 菜单里选中一条命令：要参数的填进输入框（补完按 Enter 走同一条执行链），不要参数的直接跑 */
+  const pickCommand = useCallback((cmd: DshCommand) => {
+    if (cmd.hint) {
+      setCmdOpen(false)
+      setInput(`/${cmd.name} `)
+      setNotice(t('tool:dsh.cmd.args'))
+      requestAnimationFrame(() => {
+        const el = inputRef.current
+        if (!el) return
+        el.focus()
+        el.setSelectionRange(el.value.length, el.value.length)
+      })
+      return
+    }
+    void runCommand(`/${cmd.name}`)
+  }, [runCommand, t])
+
+  /**
    * 发送：空闲就直接发，正在跑就排进队列。
    * 为什么不能"忙就丢掉"：丢掉时页面上看不出任何区别，用户以为发了——
    * 结果 DSH 没收到、他却已经在等回复。排队面板让"还没发出去"这件事可见。
@@ -442,6 +525,12 @@ export default function DshChatPage() {
     const text = input.trim()
     const ready = attachments.ready
     if (!text && ready.length === 0) return
+    // 命令写法 → 交给 DSH 的命令链。当消息发出去等于没执行：模型只会读到这行字，命令本身不会跑
+    if (ready.length === 0 && COMMAND_LINE.test(text)) {
+      setInput('')
+      void runCommand(text)
+      return
+    }
     const now = Date.now()
     // 同一段文本在 5 秒内被提交两次：几乎都是"上一次没看到反馈、又按了一下"，
     // 放过去只会让 DSH 收到两条一模一样的消息（实测出现过，用户看到后说"我没发这个"）
@@ -720,6 +809,7 @@ export default function DshChatPage() {
             style={{ maxWidth: `calc(var(${CONTENT_W_VAR}) + 32px)` }}
           >
             <textarea
+              ref={inputRef}
               value={input}
               onChange={(event) => {
                 setInput(event.target.value)
@@ -747,6 +837,32 @@ export default function DshChatPage() {
                 }}
               />
               <IconButton size="sm" icon={<ImagePlus size={14} />} label={t('tool:dsh.input.attach')} onClick={() => fileInputRef.current?.click()} />
+              {/* 斜杠命令：命令在 DSH 本体执行、不进模型，所以与「发消息」是两条链（按钮只是入口） */}
+              <div className="relative" ref={cmdMenuRef}>
+                <IconButton
+                  size="sm"
+                  icon={<Plus size={14} />}
+                  label={t('tool:dsh.cmd.button')}
+                  onClick={() => setCmdOpen((open) => !open)}
+                />
+                {cmdOpen && (
+                  <MenuPanel className="absolute bottom-full left-0 mb-1 w-72 max-h-72 overflow-y-auto z-modal">
+                    {commands.length === 0 ? (
+                      // 三种"空"要分开说：没选会话 / 取不到命令服务 / 这条会话真没有命令
+                      <div className={MENU_CAPTION}>
+                        {!sessionId
+                          ? t('tool:dsh.cmd.needsSession')
+                          : cmdUnavailable ? t('tool:dsh.cmd.unavailable') : t('tool:dsh.cmd.empty')}
+                      </div>
+                    ) : commands.map((cmd) => (
+                      <MenuItem key={cmd.name} onClick={() => pickCommand(cmd)} className="flex flex-col items-start gap-0.5">
+                        <span className="font-medium">/{cmd.name}{cmd.hint ? ' …' : ''}</span>
+                        {cmd.description && <span className="text-textMuted">{cmd.description}</span>}
+                      </MenuItem>
+                    ))}
+                  </MenuPanel>
+                )}
+              </div>
               {busy && <span className="min-w-0 truncate text-3xs text-textMuted">{t('tool:dsh.input.busyHint')}</span>}
               <div className="flex-1" />
               {busy && <button onClick={stop} className="btn btn-sm btn-outline shrink-0"><Square size={12} /> {t('tool:dsh.stop')}</button>}

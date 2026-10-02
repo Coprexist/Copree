@@ -646,6 +646,31 @@ type SessionController = {
   cancel(request: { sessionId: string }): Promise<unknown>
 }
 
+/** 一条可用命令的展示信息（就是 DSH 自己的 command 描述符）。 */
+export interface BridgeCommand {
+  name: string
+  description: string
+  /** 需要自由输入时的提示；空串表示这条命令一按就跑 */
+  hint: string
+}
+
+/** 执行一条命令的结果。unavailable/unknown/no-session 分开，路由层才能给出可诊断的状态码。 */
+export type BridgeCommandRun =
+  | { kind: 'ok'; commandId: string; result: 'success' | 'error'; text: string }
+  | { kind: 'unavailable' | 'unknown' | 'no-session' }
+
+/**
+ * 命令端口：DSH 的 commands 服务按 **agent** 注册与执行，这里把 sessionId 翻成 agent。
+ * 单独抽成端口是为了让路由分发不认识 ctx——与 scopeOf 同样的理由。
+ */
+export interface CommandsPort {
+  /** 老版本 DSH 没有 commands 服务：桥接据此回 501，而不是假装「这条会话没有命令」 */
+  readonly available: boolean
+  /** null = 会话不在活动列表里（拿不到 agent） */
+  list(sessionId: string): BridgeCommand[] | null
+  execute(sessionId: string, line: string): Promise<BridgeCommandRun>
+}
+
 /** 会话的工作区：附件落盘要落在 AI 读得到的地方；查不到就交回给调用方的兜底值。 */
 async function sessionCwd(controller: SessionController, sessionId: string, fallback: string): Promise<string> {
   try {
@@ -679,7 +704,7 @@ function authorized(req: IncomingMessage, expected: string): boolean {
 }
 
 /** 路由分发：所有分支先过鉴权，再按需读 body。 */
-function handle(req: IncomingMessage, res: ServerResponse, controller: SessionController, options: BridgeOptions, tools: unknown, scopeOf: (sessionId: string) => unknown): void {
+function handle(req: IncomingMessage, res: ServerResponse, controller: SessionController, options: BridgeOptions, tools: unknown, scopeOf: (sessionId: string) => unknown, commands: CommandsPort): void {
   const route = new URL(req.url ?? '/', 'http://dsh.local').pathname.slice(BRIDGE_PREFIX.length) || '/'
   if (!authorized(req, options.secret)) {
     sendJson(res, 401, { error: 'unauthorized' })
@@ -767,6 +792,34 @@ function handle(req: IncomingMessage, res: ServerResponse, controller: SessionCo
       }
       if (!askBroker.answer(id, decision)) return { status: 404, body: { error: 'ask not found' } }
       return { body: { ok: true } }
+    })
+    return
+  }
+  if (req.method === 'GET' && route === '/commands') {
+    run(async () => {
+      const sessionId = query.get('sessionId') ?? ''
+      if (!sessionId) return { status: 400, body: { error: 'sessionId is required' } }
+      if (!commands.available) return { status: 501, body: { error: 'DSH 未提供 commands 服务，无法列出命令' } }
+      const items = commands.list(sessionId)
+      // 会话不在活动列表：命令是挂在 agent 上的，没有 agent 就无从谈起——
+      // 与「这条会话没有命令」必须分开，否则页面会把 501/404 显示成「无可用命令」
+      if (items === null) return { status: 404, body: { error: '会话不在 DSH 的活动列表里' } }
+      return { body: { items } }
+    })
+    return
+  }
+  if (req.method === 'POST' && route === '/command') {
+    run(async () => {
+      const body = await readJsonBody(req)
+      const sessionId = String(body.sessionId ?? '')
+      const line = String(body.line ?? '').trim()
+      if (!sessionId || !line) return { status: 400, body: { error: 'sessionId and line are required' } }
+      const outcome = await commands.execute(sessionId, line)
+      if (outcome.kind === 'unavailable') return { status: 501, body: { error: 'DSH 未提供 commands 服务，无法执行命令' } }
+      if (outcome.kind === 'no-session') return { status: 404, body: { error: '会话不在 DSH 的活动列表里' } }
+      if (outcome.kind === 'unknown') return { status: 404, body: { error: `未知命令：${line}` } }
+      // 命令不进模型：结果由 command/run、command/done 两条会话事件留档，这里把结论同步回给发起方
+      return { body: { commandId: outcome.commandId, result: outcome.result, text: outcome.text } }
     })
     return
   }
@@ -932,6 +985,49 @@ export function registerBridge(ctx: Context, options: BridgeOptions): () => void
     } catch { return undefined }
   }
   /**
+   * 命令端口：DSH 的 commands 服务是 Remote 服务，按 agent 作用域注册与执行；
+   * 这里只做「sessionId → agent」与形状收敛，不认识命令本身。
+   */
+  /**
+   * 命令入口只有一个：DSH 自己的 remote 分发面（typertGateway）。
+   *
+   * 为什么不直调 ctx.commands：@Remote 方法不是给进程内 caller 用的——分发器负责把 sessionId
+   * 解析成 Agent（必要时把会话拉活）并补上执行上下文与信号。直调服务时信号是 undefined，
+   * 命令会在留档那一刻炸成 500（实测：Cannot read properties of undefined (reading 'aborted')）。
+   *
+   * 分发面可选：老版本 DSH 没有它时插件照样装得上，两条命令路由回 501（页面据此说"更新插件并重启"）。
+   */
+  let commandRemote: any
+  ;(ctx as any).inject?.(['typertGateway'], (gatewayCtx: any) => { commandRemote = gatewayCtx.remote?.commands })
+
+  const commands: CommandsPort = {
+    get available() {
+      return typeof commandRemote?.list === 'function' && typeof commandRemote?.execute === 'function'
+    },
+    list(sessionId) {
+      if (!commands.available) return null
+      try {
+        return (commandRemote.list(sessionId) as any[]).map((item) => ({
+          name: String(item?.name ?? ''),
+          description: String(item?.description ?? ''),
+          hint: String(item?.input?.hint ?? ''),
+        }))
+      } catch (error) {
+        // 会话解析不出来（不在活动列表、续接失败）走这里：与"这条会话没有命令"分开
+        options.log(`dsh-copree: 列命令失败：${String((error as Error)?.message ?? error)}`)
+        return null
+      }
+    },
+    async execute(sessionId, line) {
+      if (!commands.available) return { kind: 'unavailable' }
+      const execution = await commandRemote.execute(sessionId, line)
+      // undefined = 语法不成立或名字没解析出来（DSH 的语义：准入未命中就不留任何事件）
+      if (!execution) return { kind: 'unknown' }
+      const result = execution.result?.kind === 'error' ? 'error' : 'success'
+      return { commandId: String(execution.commandId ?? ''), result, text: String(execution.result?.text ?? '') }
+    },
+  }
+  /**
    * 开门 / 关门：**人点了同意才有桥**。
    *
    * 为什么做成「按需注册路由 + 按需发心跳」，而不是一个 if 判断放行：没同意时 DSH 上不该
@@ -956,7 +1052,7 @@ export function registerBridge(ctx: Context, options: BridgeOptions): () => void
       disposeRoute = ctx.webServer.register({
         kind: 'prefix',
         path: BRIDGE_PREFIX,
-        handler: (req, res) => handle(req, res, controller, options, (ctx as any).tools, scopeOf),
+        handler: (req, res) => handle(req, res, controller, options, (ctx as any).tools, scopeOf, commands),
       })
       stopHeartbeat = startHeartbeat(options)
       options.log('dsh-copree: 已同意 Copree 接入，桥接路由与心跳已启动')

@@ -161,16 +161,53 @@ const mod = await import('../lib/index.js')
 const webServer = mockWebServer()
 const controller = fakeController()
 const noop = () => {}
-mod.apply(
-  {
-    webServer,
-    ...eventBus,
-    tools: fakeTools,
-    systemPrompt: { section: noop },
-    sessionController: controller,
-    logger: { info: noop },
-    effect: () => () => {},
+
+// ── 命令服务：DSH 的 commands 是 Remote 服务，按 agent 作用域注册与执行；
+//    桥接只做「sessionId → agent」与形状收敛，所以这里给一个最小的假实现 ──
+const commandCalls = []
+// 桥接只跟 DSH 的 remote 分发面打交道：sessionId 由分发器解析成 agent、执行上下文也由它补。
+// 这里就按那条面来假：解析不出来（未知会话）抛错，未知命令回 undefined。
+const fakeRemoteCommands = {
+  list(sessionId) {
+    if (sessionId !== 'session-1') throw new Error(`lookup failed for session "${sessionId}"`)
+    return [
+      { name: 'compact', description: '压缩上下文', input: { hint: '可带一句说明' } },
+      { name: 'help', description: '列出全部命令' },
+    ]
   },
+  async execute(sessionId, line) {
+    if (sessionId !== 'session-1') throw new Error(`lookup failed for session "${sessionId}"`)
+    commandCalls.push({ sessionId, line })
+    if (line.startsWith('/nope')) return undefined
+    if (line.startsWith('/boom')) return { commandId: 'cmd-2', result: { kind: 'error', text: '跑不动' } }
+    return { commandId: 'cmd-1', result: { kind: 'success', text: '已压缩' } }
+  },
+}
+
+// 真 cordis 对「没在 inject 里声明的服务」读写会抛错（cannot get property ... without inject）。
+// 这里用 Proxy 复刻那条约束，并用 scoped inject 提供命令服务——桥接必须在 inject 回调里拿它，
+// 直接读 ctx.commands 会被这条守卫打回（真实现踩过：宿主侧 500，页面上只看到「命令路由没生效」）。
+const guardedCtx = (target, services) => new Proxy(target, {
+  get(source, prop, receiver) {
+    if (services.includes(prop)) throw new Error(`cannot get property "${String(prop)}" without inject`)
+    return Reflect.get(source, prop, receiver)
+  },
+})
+const pluginCtx = guardedCtx({
+  webServer,
+  ...eventBus,
+  tools: fakeTools,
+  systemPrompt: { section: noop },
+  sessionController: controller,
+  logger: { info: noop },
+  effect: () => () => {},
+  inject: (deps, callback) => {
+    if (deps.includes('typertGateway')) callback({ remote: { commands: fakeRemoteCommands } })
+    return { dispose: noop }
+  },
+}, ['commands', 'typertGateway'])
+mod.apply(
+  pluginCtx,
   {
     backendUrl: `http://127.0.0.1:${BACKEND_PORT}`,
     pluginSourceDir: '',
@@ -397,6 +434,70 @@ check('没人在看时交回 DSH 默认链', delegated === 'unavailable')
 
 watchAbort.abort()
 watchGateway.close()
+
+// ── 命令：不进模型，走 DSH 自己的 commands 服务（按 agent 作用域） ──
+const listings = await (await fetch(`${base}/commands?sessionId=session-1`, { headers: TOKEN })).json()
+check('列出会话可用命令', Array.isArray(listings.items) && listings.items.some((c) => c.name === 'compact' && c.hint === '可带一句说明'), JSON.stringify(listings))
+check('列命令缺 sessionId → 400', (await fetch(`${base}/commands`, { headers: TOKEN })).status === 400)
+check('列命令给未知会话 → 404', (await fetch(`${base}/commands?sessionId=ghost`, { headers: TOKEN })).status === 404)
+const ran = await (await fetch(`${base}/command`, {
+  method: 'POST', headers: { ...TOKEN, 'content-type': 'application/json' },
+  body: JSON.stringify({ sessionId: 'session-1', line: '/compact 收尾' }),
+})).json()
+check('执行命令拿到结果', ran.result === 'success' && ran.text === '已压缩' && ran.commandId === 'cmd-1', JSON.stringify(ran))
+check('命令原样交给 remote 分发面', commandCalls[0]?.line === '/compact 收尾' && commandCalls[0]?.sessionId === 'session-1', JSON.stringify(commandCalls[0] ?? null))
+const failedRun = await (await fetch(`${base}/command`, {
+  method: 'POST', headers: { ...TOKEN, 'content-type': 'application/json' },
+  body: JSON.stringify({ sessionId: 'session-1', line: '/boom' }),
+})).json()
+check('命令自身报错按 error 回传', failedRun.result === 'error' && failedRun.text === '跑不动', JSON.stringify(failedRun))
+check('未知命令 → 404', (await fetch(`${base}/command`, {
+  method: 'POST', headers: { ...TOKEN, 'content-type': 'application/json' },
+  body: JSON.stringify({ sessionId: 'session-1', line: '/nope' }),
+})).status === 404)
+check('执行命令缺字段 → 400', (await fetch(`${base}/command`, {
+  method: 'POST', headers: { ...TOKEN, 'content-type': 'application/json' },
+  body: JSON.stringify({ sessionId: 'session-1' }),
+})).status === 400)
+
+// 老版本 DSH 没有 commands 服务（scoped inject 的回调永不触发）：两条路由必须回 501——
+// 「这个版本不支持」与「这条会话没有命令」（空列表）是两件事，页面对它们的处理完全不同
+const OLD_PORT = 59331
+const oldServer = mockWebServer()
+mod.apply(
+  guardedCtx({
+    webServer: oldServer,
+    ...eventBus,
+    tools: fakeTools,
+    systemPrompt: { section: noop },
+    sessionController: controller,
+    logger: { info: noop },
+    effect: () => () => {},
+    inject: () => ({ dispose: noop }),   // 分发面一直不出现
+  }, ['commands', 'typertGateway']),
+  {
+    // 指向没人监听的端口：这一份实例的心跳不该混进主实例的次数统计（两次心跳会互相污染断言）
+    backendUrl: 'http://127.0.0.1:59330',
+    pluginSourceDir: '',
+    bridgeEnabled: true,
+    bridgeSecret: SECRET,
+    bridgeAdvertiseUrl: 'http://10.0.0.1:3083',
+    bridgeHeartbeatMs: SMOKE_HEARTBEAT_MS,
+  },
+)
+const oldGateway = await gatewayFor(oldServer.routes, OLD_PORT)
+await fetch(`http://127.0.0.1:${OLD_PORT}/copree-consent`, {
+  method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ allowed: true }),
+})
+await waitFor(() => bridgeRoutes(oldServer).length > 0)
+const oldBase = `http://127.0.0.1:${OLD_PORT}/copree-bridge`
+check('没有命令服务：列命令回 501', (await fetch(`${oldBase}/commands?sessionId=session-1`, { headers: TOKEN })).status === 501)
+check('没有命令服务：执行回 501', (await fetch(`${oldBase}/command`, {
+  method: 'POST', headers: { ...TOKEN, 'content-type': 'application/json' },
+  body: JSON.stringify({ sessionId: 'session-1', line: '/help' }),
+})).status === 501)
+check('没有命令服务也不影响桥接本身', oldServer.routes.some((r) => r.path === '/copree-bridge'))
+oldGateway.close()
 
 // 心跳：apply 时立刻注册一次，带密钥与可达地址
 const deadline = Date.now() + 2000
