@@ -68,15 +68,11 @@ export default function UsageDashboardTab() {
       setGlobal(g)
       setUserRows(Array.isArray(u) ? u : [])
 
-      // 构建全站每日汇总（从 by-user 数据聚合）
-      // 暂时用首条数据作为示意；后续可加全站 daily 端点
-      const firstAgentId = Array.isArray(u) && u.length > 0 ? u[0].agent_id : null
-      if (firstAgentId) {
-        try {
-          const dd = await api.get<DailyPoint[]>(`/admin/usage/agents/${firstAgentId}/daily?days=${d}`)
-          setDailyData(Array.isArray(dd) ? dd : [])
-        } catch { setDailyData([]) }
-      }
+      // 全站每日汇总走独立端点：以前拿首个 AI 的曲线顶替，画出来的不是全站
+      try {
+        const dd = await api.get<DailyPoint[]>(`/admin/usage/global/daily?days=${d}`)
+        setDailyData(Array.isArray(dd) ? dd : [])
+      } catch { setDailyData([]) }
     } catch { setGlobal(null); setUserRows([]) }
     finally { setLoading(false) }
   }

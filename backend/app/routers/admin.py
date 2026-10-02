@@ -122,8 +122,142 @@ async def system_overview(
         "total_users": user_count,
         "total_agents": agent_count,
         "total_groups": group_count,
-        "pending_vector_requests": 0,  # TODO: 实现
     }
+
+# ---------- 运维总览 ----------
+
+# 「疑似攻击」的门槛：窗口内同一来源失败这么多次才算（1~2 次是手滑，不是攻击）
+OPS_SUSPECT_MIN = 5
+
+
+@router.get("/ops/overview")
+async def ops_overview(
+    days: int = Query(7, ge=1, le=90),
+    admin: dict = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """运维总览：一屏给不看日志的人看的数字。
+
+    设计口径（每个数字都能说成一句人话，页面照抄这里的定义）：
+    - 登录成功/失败：审计里 login / login_failed 的条数，另给涉及的账号数
+      （失败按 `details.login_id` 去重——一个人反复试错只算一个账号）
+    - 疑似攻击来源：窗口内失败 >= OPS_SUSPECT_MIN 次的来源（来源 IP 或被撞的账号）
+    - 已拦截 = 锁定挡回的登录（审计里 kind=locked）+ 认证限流挡回的请求（进程内计数）
+    - 触发锁定：失败次数打满阈值、当场锁号/锁来源的次数（审计里带 locked_for 的失败）
+    - 对话轮次：ai_conversation_logs 的行数（AI 开口一次 = 一轮）
+    - 新用户：审计里 register 的条数 + users 表窗口内新增（两个口径互相印证）
+
+    窗口统一按 UTC 的 now - days 算：写这些表的都是 UTC 时间戳，不用各自再算一次时区。
+    """
+    from sqlalchemy import text as sql_text
+    from app.middleware import auth_limit_stats
+    from app.models.conversation_log import ConversationLog
+    from app.models.dm import DMMessage
+    from app.models.message import Message
+
+    since = utc_now() - timedelta(days=days)
+
+    # jsonb 字段用原生 SQL 取（全仓既有写法，见 conversation_log_service 的 token 聚合）。
+    # details.kind 是本功能引入的：上线前写的行没有这个键，一律按 fail 计。
+    row = (await db.execute(sql_text("""
+        SELECT
+          count(*) FILTER (WHERE log_type = 'login')                                    AS login_ok,
+          count(DISTINCT operator_id) FILTER (WHERE log_type = 'login')                 AS login_ok_accounts,
+          -- 「登录失败」只数真的输错了密码的那些；被锁定挡回去的算在「已拦截」里，不重复计数
+          count(*) FILTER (WHERE log_type = 'login_failed'
+                             AND COALESCE(details->>'kind', 'fail') = 'fail')           AS login_fail,
+          count(DISTINCT details->>'login_id') FILTER (WHERE log_type = 'login_failed'
+                             AND COALESCE(details->>'kind', 'fail') = 'fail')           AS login_fail_accounts,
+          count(*) FILTER (WHERE log_type = 'login_failed'
+                             AND COALESCE(details->>'kind', 'fail') = 'fail'
+                             AND details->>'locked_for' IS NOT NULL)                    AS lockouts,
+          count(*) FILTER (WHERE log_type = 'login_failed'
+                             AND details->>'kind' = 'locked')                           AS blocked_lockout,
+          count(*) FILTER (WHERE log_type = 'register')                                 AS new_audit
+        FROM system_logs WHERE created_at >= :since
+    """), {"since": since})).first()
+    (login_ok, login_ok_users, login_fail, fail_accounts,
+     lockouts, blocked_lockout, new_audit) = (int(x or 0) for x in row)
+
+    # 「反复失败占比」：失败来自失败 >=2 次的来源 IP 的比例——拦截数旁边要给这个，
+    # 否则就是一个只有量、没有效果的虚荣指标（来源是否在反复试，才是要不要处理的信号）
+    repeat = (await db.execute(sql_text("""
+        SELECT
+          count(*) FILTER (WHERE ip_address IN (
+            SELECT ip_address FROM system_logs
+            WHERE created_at >= :since AND log_type = 'login_failed'
+              AND COALESCE(details->>'kind', 'fail') = 'fail' AND ip_address IS NOT NULL
+            GROUP BY ip_address HAVING count(*) >= 2
+          )) AS repeat_failures,
+          count(*) AS total_failures
+        FROM system_logs
+        WHERE created_at >= :since AND log_type = 'login_failed'
+          AND COALESCE(details->>'kind', 'fail') = 'fail'
+    """), {"since": since})).first()
+    repeat_failures, total_failures = (int(x or 0) for x in repeat)
+
+    # 疑似攻击来源：按来源 IP 与被撞账号各聚合一次，两边都算（有的攻击换账号、有的换 IP）
+    suspects = [
+        {"kind": r[0], "value": r[1], "failures": int(r[2])}
+        for r in (await db.execute(sql_text("""
+            SELECT kind, value, failures FROM (
+              SELECT 'ip' AS kind, ip_address AS value, count(*) AS failures
+              FROM system_logs
+              WHERE created_at >= :since AND log_type = 'login_failed'
+                AND COALESCE(details->>'kind', 'fail') = 'fail' AND ip_address IS NOT NULL
+              GROUP BY ip_address
+              UNION ALL
+              SELECT 'account', details->>'login_id', count(*)
+              FROM system_logs
+              WHERE created_at >= :since AND log_type = 'login_failed'
+                AND COALESCE(details->>'kind', 'fail') = 'fail'
+                AND details->>'login_id' IS NOT NULL
+              GROUP BY 2
+            ) s WHERE failures >= :min ORDER BY failures DESC
+        """), {"since": since, "min": OPS_SUSPECT_MIN})).all()
+    ]
+
+    turns = (await db.execute(select(func.count(ConversationLog.id)).where(
+        ConversationLog.created_at >= since))).scalar() or 0
+    group_msgs = (await db.execute(select(func.count(Message.id)).where(
+        Message.created_at >= since))).scalar() or 0
+    dm_msgs = (await db.execute(select(func.count(DMMessage.id)).where(
+        DMMessage.created_at >= since))).scalar() or 0
+    new_users = (await db.execute(select(func.count(User.id)).where(
+        User.created_at >= since, User.type.notin_(("system", "external"))))).scalar() or 0
+    total_users = (await db.execute(select(func.count(User.id)).where(
+        User.type.notin_(("system", "external"))))).scalar() or 0
+
+    # 认证限流挡回的请求（进程内计数，重启归零）：启动时刻晚于窗口起点时，这个数只覆盖了部分窗口
+    limit_stats = auth_limit_stats()
+    throttle = limit_stats["total"]
+    throttle_partial = datetime.utcfromtimestamp(limit_stats["started_at"]) > since
+
+    return {
+        "days": days,
+        "since": since.isoformat(),
+        "login": {
+            "success": login_ok, "success_accounts": login_ok_users,
+            "failed": login_fail, "failed_accounts": fail_accounts,
+        },
+        "attack": {
+            "suspects": len(suspects), "min_failures": OPS_SUSPECT_MIN,
+            "top": suspects[0] if suspects else None,
+            "repeat_failures": repeat_failures, "total_failures": total_failures,
+        },
+        "blocked": {
+            "total": blocked_lockout + throttle,
+            "lockout": blocked_lockout,
+            "throttle": throttle,
+            # 限流那半是进程内计数：重启归零；窗口跨过重启时只覆盖一部分，页面要照实标
+            "throttle_process_local": True,
+            "throttle_partial": throttle_partial,
+        },
+        "lockouts": lockouts,
+        "conversation": {"turns": turns, "group_messages": group_msgs, "dm_messages": dm_msgs},
+        "people": {"new_local": new_users, "new_audit": new_audit, "total_local": total_users},
+    }
+
 
 
 # ---------- 用户管理 ----------
@@ -2734,7 +2868,7 @@ async def get_agent_conv_log_detail(
 from datetime import datetime, timedelta, timezone as tz
 
 
-@router.get("/admin/usage/global")
+@router.get("/usage/global")
 async def get_global_usage(
     days: int = Query(30, ge=1, le=365),
     admin: dict = Depends(require_admin),
@@ -2747,7 +2881,7 @@ async def get_global_usage(
     return await get_admin_global_token_stats(SQLAlchemyContentRepository(db), start_date, end_date)
 
 
-@router.get("/admin/usage/by-user")
+@router.get("/usage/by-user")
 async def get_usage_by_user(
     days: int = Query(30, ge=1, le=365),
     admin: dict = Depends(require_admin),
@@ -2760,7 +2894,7 @@ async def get_usage_by_user(
     return await get_admin_users_token_summary(SQLAlchemyContentRepository(db), start_date, end_date)
 
 
-@router.get("/admin/usage/agents/{agent_id}/daily")
+@router.get("/usage/agents/{agent_id}/daily")
 async def get_agent_daily_usage_admin(
     agent_id: int,
     days: int = Query(30, ge=1, le=365),
@@ -2774,11 +2908,24 @@ async def get_agent_daily_usage_admin(
     return await get_agent_token_daily(SQLAlchemyContentRepository(db), agent_id, start_date, end_date)
 
 
+@router.get("/usage/global/daily")
+async def get_global_daily_usage_admin(
+    days: int = Query(30, ge=1, le=365),
+    admin: dict = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """获取全站每日 token 消耗分布"""
+    from app.services.content.conversation_log_service import get_admin_global_token_daily
+    end_date = datetime.now(tz.utc).replace(tzinfo=None)
+    start_date = end_date - timedelta(days=days)
+    return await get_admin_global_token_daily(SQLAlchemyContentRepository(db), start_date, end_date)
+
+
 # ══════════════════════════════════════════════════════════════
 # v0.1.4: 系统监控指标
 # ══════════════════════════════════════════════════════════════
 
-@router.get("/admin/metrics")
+@router.get("/metrics")
 async def get_system_metrics(
     hours: int = Query(24, ge=1, le=168),
     admin: dict = Depends(require_admin),
@@ -2787,39 +2934,26 @@ async def get_system_metrics(
     """
     获取系统性能指标：
     - live: 当前内存中的实时快照
-    - timeline: 历史趋势（agent_metrics 表）
+    - timeline: 历史趋势（agent_metrics 表，长窗口在服务端聚合到 TIMELINE_MAX_POINTS 以内）
     - retention_days: 当前保留天数
     """
     from app.models.agent_metrics import AgentMetricsSnapshot
     from app.services.infrastructure.metrics_collector import metrics
+    from app.services.infrastructure.metrics_timeline import build_timeline
     from datetime import timedelta as _td
     from sqlalchemy import select as _sel_m
 
     # 实时指标
     live = await metrics.snapshot()
 
-    # 历史趋势
+    # 历史趋势：只取时间戳与快照内容两列，避免整行 ORM 水合（7 天实测 424ms → 223ms）
     cutoff = datetime.now(tz.utc).replace(tzinfo=None) - _td(hours=hours)
     result = await db.execute(
-        _sel_m(AgentMetricsSnapshot)
+        _sel_m(AgentMetricsSnapshot.created_at, AgentMetricsSnapshot.snapshot_data)
         .where(AgentMetricsSnapshot.created_at >= cutoff)
         .order_by(AgentMetricsSnapshot.created_at.asc())
     )
-    history = result.scalars().all()
-
-    timeline = []
-    for snap in history:
-        sd = snap.snapshot_data or {}
-        timeline.append({
-            "at": snap.created_at.isoformat() if snap.created_at else None,
-            "llm_calls": sd.get("llm", {}).get("total_calls", 0),
-            "llm_avg_latency": sd.get("llm", {}).get("latency", {}).get("avg", 0),
-            "llm_error_rate": sd.get("llm", {}).get("error_rate", 0),
-            "messages_per_second": sd.get("messages", {}).get("per_second_last_60s", 0),
-            "queue_depth": sd.get("queue", {}).get("max_depth", 0),
-            "willingness": sd.get("willingness", {}),
-            "errors": sd.get("errors", {}),
-        })
+    timeline = build_timeline(result.all())
 
     return {
         "live": live,

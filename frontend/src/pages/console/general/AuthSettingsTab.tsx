@@ -289,9 +289,9 @@ export default function AuthSettingsTab() {
   }
 
   return (
-    <div className="space-y-6 max-w-2xl">
+    <div className="columns-1 xl:columns-2 gap-4">
       {/* ── SMTP 多配置管理 ── */}
-      <section className="bg-surface border border-border rounded-card p-5">
+      <section className="break-inside-avoid mb-4 bg-surface border border-border rounded-card p-5">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-sm font-semibold text-textPrimary flex items-center gap-2">
             <Mail size={16} className="text-primary-400" />
@@ -460,7 +460,7 @@ export default function AuthSettingsTab() {
       </section>
 
       {/* ── 邮件模板编辑（v1.1.0: 预设选择）── */}
-      <section className="bg-surface border border-border rounded-card p-5">
+      <section className="break-inside-avoid mb-4 bg-surface border border-border rounded-card p-5">
         <h3 className="text-sm font-semibold text-textPrimary flex items-center gap-2 mb-4">
           <Mail size={16} className="text-accent-400" />
           {t('admin.emailTemplates')}
@@ -660,10 +660,12 @@ export default function AuthSettingsTab() {
       )}
 
       {/* ── LLM 厂商预设 ── */}
-      <ProviderPresetSelector />
+      <div className="break-inside-avoid mb-4">
+        <ProviderPresetSelector />
+      </div>
 
       {/* ── 认证设置 ── */}
-      <section className="bg-surface border border-border rounded-card p-5">
+      <section className="break-inside-avoid mb-4 bg-surface border border-border rounded-card p-5">
         <h3 className="text-sm font-semibold text-textPrimary flex items-center gap-2 mb-4">
           <Shield size={16} className="text-accent-400" />
           {t('admin.auth')}

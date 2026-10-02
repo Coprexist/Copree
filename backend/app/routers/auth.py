@@ -3,6 +3,8 @@
 POST /auth/register, POST /auth/login, GET /auth/me
 v0.2.0: + 邮箱验证码认证
 """
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -27,6 +29,27 @@ from app.utils.auth import get_current_user
 from app.models.user import User
 
 router = APIRouter(prefix="/auth", tags=["认证"])
+logger = logging.getLogger(__name__)
+
+
+async def _audit_login_success(db: AsyncSession, *, user_id: int, method: str | None, ip: str | None) -> None:
+    """成功登录的审计。
+
+    与失败那条同一口径：**不看 audit_user_actions 开关**——那个开关管的是"用户行为日志"
+    （发消息、改配置这类流水），而登录成功/失败是安全事件；关了它，登录在审计里就两头都看不见。
+    审计写不进去也不该让已经成功的登录变成 500。
+    """
+    from app.repositories.audit_repo import SQLAlchemyAuditRepository
+    from app.services.audit_service import create_audit_log
+
+    try:
+        await create_audit_log(
+            SQLAlchemyAuditRepository(db), log_type="login", operator_type="human",
+            operator_id=user_id, target_type="user",
+            ip_address=ip, details={"method": method or "password"},
+        )
+    except Exception as e:
+        logger.warning("登录成功审计写入失败：%s: %s", type(e).__name__, e)
 
 
 @router.get("/has-users")
@@ -82,7 +105,23 @@ async def login(
     settings_repo: SystemSettingsRepository = Depends(get_system_settings_repo),
     verification_repo: VerificationRepository = Depends(get_verification_repo),
 ):
-    """用户登录，返回 JWT 令牌。"""
+    """用户登录，返回 JWT 令牌。
+
+    失败也会留痕（审计 + 失败计数），连打到一个账号或一个来源被锁：
+    见 services/infrastructure/login_guard.py。锁定期间直接 429，不再验密码。
+    """
+    from app.services.infrastructure import login_guard
+
+    ip = request.client.host if request.client else None
+    locked = login_guard.retry_after(req.login_id, ip)
+    if locked:
+        await login_guard.audit_failure(login_id=req.login_id, ip=ip, repeat=True,
+                                        reason="账号或来源已被锁定", locked_for=locked)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"登录失败次数过多，请 {locked} 秒后再试",
+            headers={"Retry-After": str(locked)},
+        )
     try:
         result = await login_user(
             login_id=req.login_id,
@@ -93,13 +132,22 @@ async def login(
             settings_repo=settings_repo,
             verification_repo=verification_repo,
         )
-        from app.repositories.audit_repo import SQLAlchemyAuditRepository
-        from app.services.audit_service import log_user_action
-        ip = request.client.host if request.client else None
-        await log_user_action(SQLAlchemyAuditRepository(db), "login", result["user_id"], "user", details={"method": req.method or "password"}, ip=ip)
-        return result
     except ValueError as e:
+        # 先计数再审计：这一条可能正好把账号锁上，审计里要把锁定秒数一起记下来
+        locked = login_guard.count_failure(req.login_id, ip)
+        await login_guard.audit_failure(login_id=req.login_id, ip=ip,
+                                        reason=str(e), locked_for=locked)
+        if locked:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"登录失败次数过多，请 {locked} 秒后再试",
+                headers={"Retry-After": str(locked)},
+            )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
+
+    login_guard.clear(req.login_id)
+    await _audit_login_success(db, user_id=result["user_id"], method=req.method, ip=ip)
+    return result
 
 
 @router.get("/me", response_model=UserInfoResponse)

@@ -27,6 +27,7 @@ from app.models.conversation_log import ConversationLogConfig, ConversationLog
 from app.models.agent_metrics import AgentMetricsSnapshot
 from app.models.api_key_pool import ApiKeyPool, UserApiAssignment
 from app.models.api_usage_log import ApiUsageLog
+from app.models.usage_daily import UsageDaily
 from app.models.system_settings import SystemSettings
 from app.models.verification_code import VerificationCode
 from app.models.personality_anchor import PersonalityAnchor
@@ -86,6 +87,7 @@ __all__ = [
     "ApiKeyPool",
     "UserApiAssignment",
     "ApiUsageLog",
+    "UsageDaily",
     "SystemSettings",
     "VerificationCode",
     "PersonalityAnchor",

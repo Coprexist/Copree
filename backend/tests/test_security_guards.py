@@ -230,3 +230,31 @@ def test_ssrf_localhost_is_refused_without_dns():
     assert ips == [] and "本机" in block
     ips, block = resolve_candidates("http://nas.local/")
     assert ips == [] and "本机" in block
+
+# ── 登录防爆破（2026-09 补：失败无痕 = 撞库隐形）────────────
+
+def test_auth_endpoints_go_through_the_rate_limit_middleware():
+    """凭证端点必须挂在限流中间件下：漏挂就是给撞库留一条不限速的入口"""
+    from app.middleware import _AUTH_CREDENTIAL_PATHS, auth_rate_limit_middleware
+
+    registered = [m.kwargs.get("dispatch") for m in app.user_middleware]
+    assert auth_rate_limit_middleware in registered, "auth 限流中间件没注册"
+    for path in ("/auth/login", "/auth/register", "/auth/send-verification-code"):
+        assert path in _AUTH_CREDENTIAL_PATHS, path + " 不在严格配额里"
+
+
+def test_login_route_counts_and_audits_failures():
+    """失败登录要计次数、要留痕——只记成功那条等于看不见撞库"""
+    from app.routers import auth as auth_router
+
+    src = inspect.getsource(auth_router.login)
+    assert "count_failure" in src, "/auth/login 失败必须计数（否则锁定无从谈起）"
+    assert "audit_failure" in src, "/auth/login 失败必须写审计（撞库不能隐形）"
+
+
+def test_failed_login_audit_uses_its_own_session():
+    """审计要自己开会话提交：请求会话在 get_db 里遇异常就回滚，挂上去等于没写"""
+    from app.services.infrastructure import login_guard
+
+    src = inspect.getsource(login_guard.audit_failure)
+    assert "async_session" in src and "commit" in src, "失败登录审计必须独立提交"

@@ -13,6 +13,67 @@ logger = logging.getLogger(__name__)
 
 
 
+# ── 用量账 ──
+
+_USAGE_FIELDS = (
+    "total_tokens", "prompt_tokens", "completion_tokens",
+    "reasoning_tokens", "cached_tokens", "api_calls",
+)
+
+
+async def accumulate_usage_daily(
+    content_repo: ContentRepository,
+    agent_id: int | None,
+    user_id: int | None,
+    model: str | None,
+    token_usage: dict | None,
+) -> None:
+    """把一次 LLM 调用的用量累加到当天那一行
+
+    与 _trim_old_logs 相反：这里只累加、从不删除，对话日志被裁掉也带不走它。
+    agent_id / user_id 非正数一律归 0（见 UsageDaily 的列注释），
+    这样世界 AI（agent_id 为空、记账人记 user_id）和普通 AI 落进同一个唯一键。
+    """
+    usage = token_usage or {}
+    values = {f: int(usage.get(f) or 0) for f in _USAGE_FIELDS}
+    # 没真调模型、或调用没带回用量的轮次不占行，免得把「有记录的天数」灌水
+    if values["api_calls"] <= 0 and values["total_tokens"] <= 0:
+        return
+
+    params = {
+        "stat_date": datetime.now(timezone.utc).date(),
+        "agent_id": agent_id if agent_id and agent_id > 0 else 0,
+        "user_id": user_id if user_id and user_id > 0 else 0,
+        "model": model or "",
+        **values,
+    }
+    # ON CONFLICT 在 PG 与 SQLite 上语法一致，唯一键由 uq_usage_daily_key 保证
+    await content_repo.execute(text("""
+        INSERT INTO usage_daily (
+            stat_date, agent_id, user_id, model,
+            total_tokens, prompt_tokens, completion_tokens,
+            reasoning_tokens, cached_tokens, api_calls, updated_at
+        ) VALUES (
+            :stat_date, :agent_id, :user_id, :model,
+            :total_tokens, :prompt_tokens, :completion_tokens,
+            :reasoning_tokens, :cached_tokens, :api_calls, now()
+        )
+        ON CONFLICT (stat_date, agent_id, user_id, model) DO UPDATE SET
+            total_tokens = usage_daily.total_tokens + EXCLUDED.total_tokens,
+            prompt_tokens = usage_daily.prompt_tokens + EXCLUDED.prompt_tokens,
+            completion_tokens = usage_daily.completion_tokens + EXCLUDED.completion_tokens,
+            reasoning_tokens = usage_daily.reasoning_tokens + EXCLUDED.reasoning_tokens,
+            cached_tokens = usage_daily.cached_tokens + EXCLUDED.cached_tokens,
+            api_calls = usage_daily.api_calls + EXCLUDED.api_calls,
+            updated_at = now()
+    """), params)
+
+
+def _as_date(value: datetime | None):
+    """聚合表是天粒度，调用方传来的精确时刻按 UTC 日期比对（边界那一天整天计入）"""
+    return value.date() if isinstance(value, datetime) else value
+
+
 # ── 保存 ──
 
 async def save_conversation_log(
@@ -49,6 +110,13 @@ async def save_conversation_log(
         content_repo.add(log)
         await content_repo.flush()
         await content_repo.refresh(log)
+
+        # 用量账先落，且单独兜异常：它一旦失败不该连累日志本身，
+        # 反过来日志被裁掉也带不走它
+        try:
+            await accumulate_usage_daily(content_repo, agent_id, user_id, model, token_usage)
+        except Exception as e:
+            logger.error(f"累加用量日聚合失败 (agent={agent_id}): {e}")
 
         # 清理超出限制的旧记录
         await _trim_old_logs(content_repo, agent_id)
@@ -298,49 +366,57 @@ async def get_user_agents_token_summary(
     end_date: datetime | None = None,
 ) -> list[dict]:
     """获取用户所有 AI 的 token 消耗汇总（按 AI+模型分组）"""
-    from app.models.agent import Agent
-    where_clauses = ["cl.agent_id = ag.id", "ag.owner_id = :user_id"]
+    where_clauses = ["ag.owner_id = :user_id"]
     params: dict = {"user_id": user_id}
     if start_date:
-        where_clauses.append("cl.created_at >= :start_date")
-        params["start_date"] = start_date
+        where_clauses.append("ud.stat_date >= :start_date")
+        params["start_date"] = _as_date(start_date)
     if end_date:
-        where_clauses.append("cl.created_at <= :end_date")
-        params["end_date"] = end_date
+        where_clauses.append("ud.stat_date <= :end_date")
+        params["end_date"] = _as_date(end_date)
     where_sql = " AND ".join(where_clauses)
+
+    # 世界 AI 那半边的区间口径与普通 AI 对齐：原先它漏了日期条件，
+    # 不管选几天都把历史全算进去
+    world_clauses = ["ud.agent_id = 0", "ud.user_id = :user_id"]
+    if start_date:
+        world_clauses.append("ud.stat_date >= :start_date")
+    if end_date:
+        world_clauses.append("ud.stat_date <= :end_date")
+    world_sql = " AND ".join(world_clauses)
 
     stmt = text(f"""
         SELECT
-            cl.agent_id,
+            ud.agent_id,
             ag.name AS agent_name,
-            cl.model,
-            SUM(COALESCE((cl.token_usage->>'total_tokens')::int, 0)) AS total_tokens,
-            SUM(COALESCE((cl.token_usage->>'prompt_tokens')::int, 0)) AS prompt_tokens,
-            SUM(COALESCE((cl.token_usage->>'completion_tokens')::int, 0)) AS completion_tokens,
-            SUM(COALESCE((cl.token_usage->>'reasoning_tokens')::int, 0)) AS reasoning_tokens,
-            SUM(COALESCE((cl.token_usage->>'cached_tokens')::int, 0)) AS cached_tokens,
-            SUM(COALESCE((cl.token_usage->>'api_calls')::int, 0)) AS total_calls
-        FROM ai_conversation_logs cl
-        JOIN agents ag ON ag.id = cl.agent_id
+            NULLIF(ud.model, '') AS model,
+            COALESCE(SUM(ud.total_tokens), 0)::bigint AS total_tokens,
+            COALESCE(SUM(ud.prompt_tokens), 0)::bigint AS prompt_tokens,
+            COALESCE(SUM(ud.completion_tokens), 0)::bigint AS completion_tokens,
+            COALESCE(SUM(ud.reasoning_tokens), 0)::bigint AS reasoning_tokens,
+            COALESCE(SUM(ud.cached_tokens), 0)::bigint AS cached_tokens,
+            COALESCE(SUM(ud.api_calls), 0)::bigint AS total_calls
+        FROM usage_daily ud
+        JOIN agents ag ON ag.id = ud.agent_id
         WHERE {where_sql}
-        GROUP BY cl.agent_id, ag.name, cl.model
+        GROUP BY ud.agent_id, ag.name, ud.model
 
         UNION ALL
 
-        -- 世界 AI 用量：记账人 = user_id（世界 AI 表单的世界主人），agent_id 为空 → 虚拟「群视界 agent」
+        -- 世界 AI 用量：记账人 = user_id（世界 AI 表单的世界主人），没有 agent 行 → 虚拟「群视界 agent」
         SELECT
             -1 AS agent_id,
             '群视界 agent' AS agent_name,
-            cl.model,
-            SUM(COALESCE((cl.token_usage->>'total_tokens')::int, 0)) AS total_tokens,
-            SUM(COALESCE((cl.token_usage->>'prompt_tokens')::int, 0)) AS prompt_tokens,
-            SUM(COALESCE((cl.token_usage->>'completion_tokens')::int, 0)) AS completion_tokens,
-            SUM(COALESCE((cl.token_usage->>'reasoning_tokens')::int, 0)) AS reasoning_tokens,
-            SUM(COALESCE((cl.token_usage->>'cached_tokens')::int, 0)) AS cached_tokens,
-            SUM(COALESCE((cl.token_usage->>'api_calls')::int, 0)) AS total_calls
-        FROM ai_conversation_logs cl
-        WHERE cl.user_id = :user_id AND cl.agent_id IS NULL
-        GROUP BY cl.model
+            NULLIF(ud.model, '') AS model,
+            COALESCE(SUM(ud.total_tokens), 0)::bigint AS total_tokens,
+            COALESCE(SUM(ud.prompt_tokens), 0)::bigint AS prompt_tokens,
+            COALESCE(SUM(ud.completion_tokens), 0)::bigint AS completion_tokens,
+            COALESCE(SUM(ud.reasoning_tokens), 0)::bigint AS reasoning_tokens,
+            COALESCE(SUM(ud.cached_tokens), 0)::bigint AS cached_tokens,
+            COALESCE(SUM(ud.api_calls), 0)::bigint AS total_calls
+        FROM usage_daily ud
+        WHERE {world_sql}
+        GROUP BY ud.model
         ORDER BY total_tokens DESC
     """)
     result = await content_repo.execute(stmt, params)
@@ -357,31 +433,72 @@ async def get_agent_token_daily(
 ) -> list[dict]:
     """获取单个 AI 每日 token 消耗分布（agent_id=-1 = 群视界 agent 虚拟条目：按记账人 + agent_id 空）"""
     if agent_id == -1:
-        where_clauses = ["user_id = :user_id", "agent_id IS NULL"]
+        where_clauses = ["ud.user_id = :user_id", "ud.agent_id = 0"]
         params: dict = {"user_id": user_id}
     else:
-        where_clauses = ["agent_id = :agent_id"]
+        where_clauses = ["ud.agent_id = :agent_id"]
         params: dict = {"agent_id": agent_id}
     if start_date:
-        where_clauses.append("created_at >= :start_date")
-        params["start_date"] = start_date
+        where_clauses.append("ud.stat_date >= :start_date")
+        params["start_date"] = _as_date(start_date)
     if end_date:
-        where_clauses.append("created_at <= :end_date")
-        params["end_date"] = end_date
+        where_clauses.append("ud.stat_date <= :end_date")
+        params["end_date"] = _as_date(end_date)
     where_sql = " AND ".join(where_clauses)
 
     stmt = text(f"""
         SELECT
-            DATE(created_at) AS date,
-            SUM(COALESCE((token_usage->>'total_tokens')::int, 0)) AS total_tokens,
-            SUM(COALESCE((token_usage->>'prompt_tokens')::int, 0)) AS prompt_tokens,
-            SUM(COALESCE((token_usage->>'completion_tokens')::int, 0)) AS completion_tokens,
-            SUM(COALESCE((token_usage->>'reasoning_tokens')::int, 0)) AS reasoning_tokens,
-            SUM(COALESCE((token_usage->>'cached_tokens')::int, 0)) AS cached_tokens,
-            SUM(COALESCE((token_usage->>'api_calls')::int, 0)) AS request_count
-        FROM ai_conversation_logs
+            ud.stat_date AS date,
+            COALESCE(SUM(ud.total_tokens), 0)::bigint AS total_tokens,
+            COALESCE(SUM(ud.prompt_tokens), 0)::bigint AS prompt_tokens,
+            COALESCE(SUM(ud.completion_tokens), 0)::bigint AS completion_tokens,
+            COALESCE(SUM(ud.reasoning_tokens), 0)::bigint AS reasoning_tokens,
+            COALESCE(SUM(ud.cached_tokens), 0)::bigint AS cached_tokens,
+            COALESCE(SUM(ud.api_calls), 0)::bigint AS request_count
+        FROM usage_daily ud
         WHERE {where_sql}
-        GROUP BY DATE(created_at)
+        GROUP BY ud.stat_date
+        ORDER BY date ASC
+    """)
+    result = await content_repo.execute(stmt, params)
+    rows = result.mappings().all()
+    return [dict(r) for r in rows]
+
+
+async def get_admin_global_token_daily(
+    content_repo: ContentRepository,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+) -> list[dict]:
+    """获取全站每日 token 消耗分布（含世界 AI）
+
+    与按 AI 的每日曲线同一形状，只是不筛 agent：控制台那条「全站」曲线原先拿
+    第一个 AI 的数据顶替，画出来的根本不是全站。
+    """
+    where_clauses = []
+    params: dict = {}
+    if start_date:
+        where_clauses.append("ud.stat_date >= :start_date")
+        params["start_date"] = _as_date(start_date)
+    if end_date:
+        where_clauses.append("ud.stat_date <= :end_date")
+        params["end_date"] = _as_date(end_date)
+    where_sql = " AND ".join(where_clauses)
+    if where_sql:
+        where_sql = "WHERE " + where_sql
+
+    stmt = text(f"""
+        SELECT
+            ud.stat_date AS date,
+            COALESCE(SUM(ud.total_tokens), 0)::bigint AS total_tokens,
+            COALESCE(SUM(ud.prompt_tokens), 0)::bigint AS prompt_tokens,
+            COALESCE(SUM(ud.completion_tokens), 0)::bigint AS completion_tokens,
+            COALESCE(SUM(ud.reasoning_tokens), 0)::bigint AS reasoning_tokens,
+            COALESCE(SUM(ud.cached_tokens), 0)::bigint AS cached_tokens,
+            COALESCE(SUM(ud.api_calls), 0)::bigint AS request_count
+        FROM usage_daily ud
+        {where_sql}
+        GROUP BY ud.stat_date
         ORDER BY date ASC
     """)
     result = await content_repo.execute(stmt, params)
@@ -398,27 +515,29 @@ async def get_admin_global_token_stats(
     where_clauses = []
     params: dict = {}
     if start_date:
-        where_clauses.append("cl.created_at >= :start_date")
-        params["start_date"] = start_date
+        where_clauses.append("ud.stat_date >= :start_date")
+        params["start_date"] = _as_date(start_date)
     if end_date:
-        where_clauses.append("cl.created_at <= :end_date")
-        params["end_date"] = end_date
+        where_clauses.append("ud.stat_date <= :end_date")
+        params["end_date"] = _as_date(end_date)
     where_sql = " AND ".join(where_clauses)
     if where_sql:
         where_sql = "WHERE " + where_sql
 
+    # LEFT JOIN：世界 AI 用 agent_id=0 记账（没有 agent 行），join 不上但用量要算进全站；
+    # 人数与 AI 数仍然只数得到真实 agent 的那些，与改前口径一致
     stmt = text(f"""
         SELECT
-            SUM(COALESCE((cl.token_usage->>'total_tokens')::int, 0)) AS total_tokens,
-            SUM(COALESCE((cl.token_usage->>'prompt_tokens')::int, 0)) AS prompt_tokens,
-            SUM(COALESCE((cl.token_usage->>'completion_tokens')::int, 0)) AS completion_tokens,
-            SUM(COALESCE((cl.token_usage->>'reasoning_tokens')::int, 0)) AS reasoning_tokens,
-            SUM(COALESCE((cl.token_usage->>'cached_tokens')::int, 0)) AS cached_tokens,
-            SUM(COALESCE((cl.token_usage->>'api_calls')::int, 0)) AS total_calls,
-            COUNT(DISTINCT cl.agent_id) AS unique_agents,
+            COALESCE(SUM(ud.total_tokens), 0)::bigint AS total_tokens,
+            COALESCE(SUM(ud.prompt_tokens), 0)::bigint AS prompt_tokens,
+            COALESCE(SUM(ud.completion_tokens), 0)::bigint AS completion_tokens,
+            COALESCE(SUM(ud.reasoning_tokens), 0)::bigint AS reasoning_tokens,
+            COALESCE(SUM(ud.cached_tokens), 0)::bigint AS cached_tokens,
+            COALESCE(SUM(ud.api_calls), 0)::bigint AS total_calls,
+            COUNT(DISTINCT ag.id) AS unique_agents,
             COUNT(DISTINCT ag.owner_id) AS unique_users
-        FROM ai_conversation_logs cl
-        JOIN agents ag ON ag.id = cl.agent_id
+        FROM usage_daily ud
+        LEFT JOIN agents ag ON ag.id = ud.agent_id
         {where_sql}
     """)
     result = await content_repo.execute(stmt, params)
@@ -448,11 +567,11 @@ async def get_admin_users_token_summary(
     where_clauses = []
     params: dict = {}
     if start_date:
-        where_clauses.append("cl.created_at >= :start_date")
-        params["start_date"] = start_date
+        where_clauses.append("ud.stat_date >= :start_date")
+        params["start_date"] = _as_date(start_date)
     if end_date:
-        where_clauses.append("cl.created_at <= :end_date")
-        params["end_date"] = end_date
+        where_clauses.append("ud.stat_date <= :end_date")
+        params["end_date"] = _as_date(end_date)
     where_sql = " AND ".join(where_clauses)
     if where_sql:
         where_sql = "WHERE " + where_sql
@@ -461,19 +580,19 @@ async def get_admin_users_token_summary(
         SELECT
             u.id AS user_id,
             u.username,
-            cl.agent_id,
+            ud.agent_id,
             ag.name AS agent_name,
-            SUM(COALESCE((cl.token_usage->>'total_tokens')::int, 0)) AS total_tokens,
-            SUM(COALESCE((cl.token_usage->>'prompt_tokens')::int, 0)) AS prompt_tokens,
-            SUM(COALESCE((cl.token_usage->>'completion_tokens')::int, 0)) AS completion_tokens,
-            SUM(COALESCE((cl.token_usage->>'reasoning_tokens')::int, 0)) AS reasoning_tokens,
-            SUM(COALESCE((cl.token_usage->>'cached_tokens')::int, 0)) AS cached_tokens,
-            SUM(COALESCE((cl.token_usage->>'api_calls')::int, 0)) AS total_calls
-        FROM ai_conversation_logs cl
-        JOIN agents ag ON ag.id = cl.agent_id
+            COALESCE(SUM(ud.total_tokens), 0)::bigint AS total_tokens,
+            COALESCE(SUM(ud.prompt_tokens), 0)::bigint AS prompt_tokens,
+            COALESCE(SUM(ud.completion_tokens), 0)::bigint AS completion_tokens,
+            COALESCE(SUM(ud.reasoning_tokens), 0)::bigint AS reasoning_tokens,
+            COALESCE(SUM(ud.cached_tokens), 0)::bigint AS cached_tokens,
+            COALESCE(SUM(ud.api_calls), 0)::bigint AS total_calls
+        FROM usage_daily ud
+        JOIN agents ag ON ag.id = ud.agent_id
         JOIN users u ON u.id = ag.owner_id
         {where_sql}
-        GROUP BY u.id, u.username, cl.agent_id, ag.name
+        GROUP BY u.id, u.username, ud.agent_id, ag.name
         ORDER BY u.id, total_tokens DESC
     """)
     result = await content_repo.execute(stmt, params)

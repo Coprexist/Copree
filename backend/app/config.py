@@ -127,6 +127,18 @@ class Settings(BaseSettings):
     # ── 防滥用 ──
     rate_limit_per_second: int = 2  # 每个 AI 每秒最多发言次数
 
+    # ── 登录防爆破（进程内计数，见 services/infrastructure/login_guard.py）──
+    auth_fail_threshold: int = 15        # 同一账号在窗口内失败这么多次即锁定
+    auth_fail_window: int = 900          # 失败计数窗口（秒）
+    auth_lock_seconds: int = 300         # 首次锁定 5 分钟；解锁后再犯翻倍
+    auth_lock_max_seconds: int = 3600    # 翻倍上限
+    # 来源 IP 的阈值比账号高：网关地址是共享的，15 次就锁 IP 等于全站登录可被一个人锁住
+    auth_fail_ip_threshold: int = 40
+
+    # ── /auth/* 请求限流（进程内滑动窗口，按 IP，见 middleware.py）──
+    auth_rate_limit: int = 30            # 凭证端点（登录/注册/发验证码/校验验证码）每分钟
+    auth_rate_limit_other: int = 240     # 其余 /auth/*（/auth/me 这类每页都会调）每分钟
+
     # ── 向量检索默认参数 ──
     default_top_k: int = 10
     vector_weight: float = 0.6

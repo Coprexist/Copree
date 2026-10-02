@@ -15,9 +15,10 @@
 import type { ReactNode } from 'react'
 import PageHeader from './PageHeader'
 
-type Width = 'narrow' | 'content' | 'wide' | 'full'
+export type Width = 'narrow' | 'content' | 'wide' | 'full'
 
-const WIDTH: Record<Width, string> = {
+/** 宽度档位只此一份：页面（PageShell）与控制台页签（ConsolePage）都从这里取 */
+export const PAGE_WIDTH: Record<Width, string> = {
   narrow: 'max-w-xl',
   content: 'max-w-3xl',
   wide: 'max-w-4xl',
@@ -58,7 +59,7 @@ export default function PageShell({
         {flush ? (
           children
         ) : (
-          <div className={`${WIDTH[width]} mx-auto px-4 py-4 md:px-6 md:py-6 pb-24 md:pb-6 ${contentClassName}`}>
+          <div className={`${PAGE_WIDTH[width]} mx-auto px-4 py-4 md:px-6 md:py-6 pb-24 md:pb-6 ${contentClassName}`}>
             {children}
           </div>
         )}

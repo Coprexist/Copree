@@ -101,11 +101,11 @@ export default function SystemSettingsTab() {
   if (!config) return <p className="text-textMuted p-6">{t('common.loading')}</p>
 
   return (
-    <div className="bg-surface rounded-card border border-border p-5 max-w-lg space-y-6">
-      <h3 className="font-semibold text-textPrimary">{t('admin.systemSettings')}</h3>
+    <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+      <h3 className="xl:col-span-2 font-semibold text-textPrimary">{t('admin.systemSettings')}</h3>
 
       {/* 默认语言 */}
-      <div>
+      <div className="bg-surface rounded-card border border-border p-4">
         <label className="block text-sm font-medium mb-1 text-textSecondary">{t('admin.defaultLanguage')}</label>
         <p className="text-xs text-textMuted mb-2">{t('admin.defaultLanguageDesc')}</p>
         <select
@@ -122,12 +122,27 @@ export default function SystemSettingsTab() {
         </select>
       </div>
 
-      {/* 通用配置卡片（管理员图形化修改，DB 覆盖 env，带说明文案） */}
-      <ConfigGroupCard groupKey="embedding" />
-      <ConfigGroupCard groupKey="runtime" />
+      {/* 注册通道开关 */}
+      <div className="bg-surface rounded-card border border-border p-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <label className="text-sm font-medium text-textSecondary">{t('admin.registrationEnabled')}</label>
+            <p className="text-xs text-textMuted mt-0.5">{t('admin.registrationEnabledDesc')}</p>
+          </div>
+          <Toggle
+            checked={registrationEnabled}
+            onChange={(val: boolean) => {
+              if (regToggleRef.current) return
+              regToggleRef.current = true
+              setRegistrationEnabled(val)
+              handleSave('registration_enabled', val).finally(() => { regToggleRef.current = false })
+            }}
+          />
+        </div>
+      </div>
 
       {/* 平台赠送额度 */}
-      <div>
+      <div className="bg-surface rounded-card border border-border p-4">
         <label className="block text-sm font-medium mb-1 text-textSecondary">{t('admin.defaultPlatformCredit')}</label>
         <p className="text-xs text-textMuted mb-2">{t('admin.defaultPlatformCreditDesc')}</p>
         <div className="flex items-center gap-2">
@@ -154,7 +169,7 @@ export default function SystemSettingsTab() {
       </div>
 
       {/* 用户默认文件配额 */}
-      <div>
+      <div className="bg-surface rounded-card border border-border p-4">
         <label className="block text-sm font-medium mb-1 text-textSecondary">{t('admin.defaultFileQuota')}</label>
         <p className="text-xs text-textMuted mb-2">{t('admin.defaultFileQuotaDesc')}</p>
         <div className="flex items-center gap-2">
@@ -193,7 +208,7 @@ export default function SystemSettingsTab() {
       </div>
 
       {/* 单文件上传大小限制（运行时，重启后恢复 env 默认值） */}
-      <div>
+      <div className="bg-surface rounded-card border border-border p-4">
         <label className="block text-sm font-medium mb-1 text-textSecondary">单文件上传大小上限</label>
         <p className="text-xs text-textMuted mb-2">控制用户上传单个文件的最大尺寸（不含头像）</p>
         <div className="flex items-center gap-2">
@@ -217,7 +232,7 @@ export default function SystemSettingsTab() {
       </div>
 
       {/* 头像上传大小限制（运行时，重启后恢复 env 默认值） */}
-      <div>
+      <div className="bg-surface rounded-card border border-border p-4">
         <label className="block text-sm font-medium mb-1 text-textSecondary">头像上传大小上限</label>
         <p className="text-xs text-textMuted mb-2">控制用户/AI 上传头像的最大尺寸</p>
         <div className="flex items-center gap-2">
@@ -241,7 +256,7 @@ export default function SystemSettingsTab() {
       </div>
 
       {/* 用户行为日志 */}
-      <div>
+      <div className="bg-surface rounded-card border border-border p-4">
         <div className="flex items-center justify-between">
           <div>
             <label className="text-sm font-medium text-textSecondary">用户行为日志</label>
@@ -257,7 +272,7 @@ export default function SystemSettingsTab() {
         </div>
       </div>
 
-      <div>
+      <div className="bg-surface rounded-card border border-border p-4">
         <label className="text-sm font-medium text-textSecondary">审计日志保留天数</label>
         <p className="text-xs text-textMuted mt-0.5 mb-2">超期日志自动清理（7-730 天）</p>
         <div className="flex items-center gap-2">
@@ -272,7 +287,7 @@ export default function SystemSettingsTab() {
         </div>
       </div>
 
-      <div>
+      <div className="bg-surface rounded-card border border-border p-4">
         <label className="text-sm font-medium text-textSecondary">消息保留天数</label>
         <p className="text-xs text-textMuted mt-0.5 mb-2">0=永久保留，超期消息自动删除</p>
         <div className="flex items-center gap-2">
@@ -288,7 +303,7 @@ export default function SystemSettingsTab() {
       </div>
 
       {/* 每日数据库备份（管理员开关 + 保留份数） */}
-      <div>
+      <div className="bg-surface rounded-card border border-border p-4">
         <div className="flex items-center justify-between">
           <div>
             <label className="text-sm font-medium text-textSecondary">每日数据库备份</label>
@@ -314,29 +329,8 @@ export default function SystemSettingsTab() {
         </div>
       </div>
 
-      <hr className="border-border" />
-
-      {/* 注册通道开关 */}
-      <div>
-        <div className="flex items-center justify-between">
-          <div>
-            <label className="text-sm font-medium text-textSecondary">{t('admin.registrationEnabled')}</label>
-            <p className="text-xs text-textMuted mt-0.5">{t('admin.registrationEnabledDesc')}</p>
-          </div>
-          <Toggle
-            checked={registrationEnabled}
-            onChange={(val: boolean) => {
-              if (regToggleRef.current) return
-              regToggleRef.current = true
-              setRegistrationEnabled(val)
-              handleSave('registration_enabled', val).finally(() => { regToggleRef.current = false })
-            }}
-          />
-        </div>
-      </div>
-
       {/* IP 地理位置查询后端 */}
-      <div>
+      <div className="bg-surface rounded-card border border-border p-4">
         <label className="text-sm font-medium text-textSecondary">IP 地理位置查询后端</label>
         <p className="text-xs text-textMuted mt-0.5 mb-2">{'支持 {ip} 占位符，留空默认 ip-api.com'}</p>
         <div className="flex items-center gap-2">
@@ -355,10 +349,8 @@ export default function SystemSettingsTab() {
         </div>
       </div>
 
-      <hr className="border-border" />
-
       {/* 新建群聊默认 AI 并发数 */}
-      <div>
+      <div className="bg-surface rounded-card border border-border p-4">
         <label className="block text-sm font-medium mb-1 text-textSecondary">新建群聊默认 AI 并发数</label>
         <p className="text-xs text-textMuted mb-2">新建群聊时自动使用的 AI 并发上限（1-20）</p>
         <div className="flex items-center gap-2">
@@ -374,7 +366,7 @@ export default function SystemSettingsTab() {
       </div>
 
       {/* 批量修改所有群并发数 */}
-      <div>
+<div className="xl:col-span-2 bg-surface rounded-card border border-border p-4">
         <label className="block text-sm font-medium mb-1 text-textSecondary">批量修改所有群并发数</label>
         <p className="text-xs text-textMuted mb-2">将已有全部群聊的 AI 并发上限设为同一值（覆盖已有设置）</p>
         <div className="flex items-center gap-2">
@@ -397,7 +389,13 @@ export default function SystemSettingsTab() {
         </div>
       </div>
 
-      {msg && <p className={`text-sm ${msg.includes('失败') || msg.includes('无法') || msg.includes('No active') ? 'text-rose-400' : 'text-mint-400'}`}>{msg}</p>}
+      {/* 通用配置卡片（管理员图形化修改，DB 覆盖 env，带说明文案） */}
+      <ConfigGroupCard groupKey="embedding" />
+
+      <ConfigGroupCard groupKey="runtime" />
+
+      {msg && <p className={`xl:col-span-2 text-sm ${msg.includes('失败') || msg.includes('无法') || msg.includes('No active') ? 'text-rose-400' : 'text-mint-400'}`}>{msg}</p>}
+
     </div>
   )
 }

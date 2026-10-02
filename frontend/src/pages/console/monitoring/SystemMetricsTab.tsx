@@ -85,7 +85,9 @@ export default function SystemMetricsTab() {
                 <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} />
                 <XAxis dataKey="at" tick={{ fontSize: 11, fill: colors.text }}
                   tickFormatter={v => v?.slice(11, 16) || ''} />
-                <YAxis tick={{ fontSize: 11, fill: colors.text }} />
+                {/* 延迟是秒、吞吐是条/秒，量纲不同必须各挂一根轴；只声明一根而 Line 又指定了 yAxisId，recharts 会直接抛 invariant 崩掉整页 */}
+                <YAxis yAxisId="left" tick={{ fontSize: 11, fill: colors.text }} width={45} />
+                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11, fill: colors.text }} width={45} />
                 <Tooltip
                   contentStyle={{
                     background: isDark ? '#1F2937' : '#FFF',
@@ -96,10 +98,10 @@ export default function SystemMetricsTab() {
                   labelFormatter={v => v?.slice(0, 19) || ''}
                 />
                 <Legend />
-                <Line type="monotone" dataKey="llm_avg_latency" stroke={colors.primary}
+                <Line yAxisId="left" type="monotone" dataKey="llm_avg_latency" stroke={colors.primary}
                   name={t('admin.metricsAvgLatencyS')} dot={false} strokeWidth={2} />
-                <Line type="monotone" dataKey="messages_per_second" stroke={colors.mint}
-                  name={t('admin.metricsMsgPerSec')} dot={false} strokeWidth={2} yAxisId={1} />
+                <Line yAxisId="right" type="monotone" dataKey="messages_per_second" stroke={colors.mint}
+                  name={t('admin.metricsMsgPerSec')} dot={false} strokeWidth={2} />
               </LineChart>
             </ResponsiveContainer>
           </div>

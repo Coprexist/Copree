@@ -1,10 +1,12 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, BookOpen, ChevronRight, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { MANUAL_URL, ADMIN_MANUAL_URL } from '../../constants'
 import { useT } from '../../i18n/I18nContext'
 import { useResizableSidebar } from '../../hooks/useResizableSidebar'
+import { PAGE_WIDTH } from '../../components/ui/PageShell'
 import { CONSOLE_WORKSPACES, findConsoleItem, workspaceOf } from './workspaces'
+import { rememberTab } from './recentTabs'
 
 /**
  * 控制台外壳 — 两级导航（上面工作区，左边该工作区的页面）。
@@ -39,7 +41,20 @@ export default function ConsolePage() {
   const sidebarRef = useRef<HTMLDivElement>(null)
   const { sidebarWidth, handleResizeStart } = useResizableSidebar('admin_sidebar_width', sidebarRef)
 
-  const ActiveTab = findConsoleItem(activeKey).Component
+  // URL 是页签的唯一入口：从别的页签点数字跳过来、浏览器前进/后退，都要跟着切
+  useEffect(() => {
+    const key = searchParams.get('tab')
+    if (key && key !== activeKey) setActiveKey(findConsoleItem(key).key)
+  }, [searchParams, activeKey])
+
+  // 首页的「最近访问」靠这条记录：页签真正生效时记一次（左栏点、URL 进、首页跳都算）
+  useEffect(() => { rememberTab(activeKey) }, [activeKey])
+
+  const activeItem = findConsoleItem(activeKey)
+  const ActiveTab = activeItem.Component
+  // 内容宽度档位由页签自己声明（workspaces.tsx）：表格铺满，表单居中收窄。
+  // 档位表只有 PageShell 那一份，这里不另写宽度值。
+  const widthCls = PAGE_WIDTH[activeItem.width ?? 'wide']
 
   const openItem = (key: string) => {
     setActiveKey(key)
@@ -110,16 +125,29 @@ export default function ConsolePage() {
           {/* 滚动只发生在内层：外层 overflow-hidden 才不会让拖拽手柄的溢出变成横向滚动条
               （overflow-y-auto 会把 overflow-x 一起算成 auto，手柄原来挂在 -right-1.5 上） */}
           <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col">
-            <button
-              onClick={toggleRail}
-              className="icon-btn-sm text-textMuted hover:text-textPrimary self-end mr-2 mt-2 shrink-0"
-              title={collapsed ? t('admin.expandRail') : t('admin.collapseRail')}
-            >
-              {collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
-            </button>
+            {/* 顶部一行：回应用的出口 + 折叠开关。两者都是"外壳"级动作，各占一行太空，
+                排在一起后列表能多显示一行，视觉上也正好一头一尾（左边离开、右边收放） */}
+            <div className={'flex items-center border-b border-border shrink-0 mt-1 ' + (collapsed ? '' : 'pr-1.5')}>
+              <button
+                onClick={() => navigate('/chat')}
+                title={t('admin.backToApp')}
+                className={'flex-1 min-w-0 flex items-center gap-2 py-2 text-sm text-textSecondary hover:bg-elevated hover:text-textPrimary transition-colors ' +
+                  (collapsed ? 'justify-center px-0' : 'px-3')}
+              >
+                <ArrowLeft size={16} className="shrink-0" />
+                {!collapsed && <span className="truncate">{t('admin.backToApp')}</span>}
+              </button>
+              <button
+                onClick={toggleRail}
+                className="icon-btn-sm text-textMuted hover:text-textPrimary"
+                title={collapsed ? t('admin.expandRail') : t('admin.collapseRail')}
+              >
+                {collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+              </button>
+            </div>
 
             {!collapsed && (
-              <div className="px-3 h-7 font-medium text-2xs text-textMuted uppercase tracking-wider flex items-center shrink-0">
+              <div className="px-3 h-7 font-medium text-2xs text-textMuted uppercase tracking-wider flex items-center shrink-0 mt-1">
                 {t(workspace.labelKey)}
               </div>
             )}
@@ -137,18 +165,6 @@ export default function ConsolePage() {
                 </button>
               ))}
             </div>
-
-            {/* 出口：应用侧边栏在这里是收起的，回应用只能从控制台走 */}
-            <div className="mt-auto border-t border-border shrink-0">
-              <button
-                onClick={() => navigate('/chat')}
-                title={t('admin.backToApp')}
-                className="w-full flex items-center gap-2 py-2 text-sm text-textSecondary hover:bg-elevated hover:text-textPrimary transition-colors justify-center px-0"
-              >
-                <ArrowLeft size={16} className="shrink-0" />
-                {!collapsed && <span className="truncate">{t('admin.backToApp')}</span>}
-              </button>
-            </div>
           </div>
 
           {/* 拖拽手柄贴着侧栏右缘（在内部，不会被 overflow-hidden 裁掉，也不制造溢出） */}
@@ -161,7 +177,9 @@ export default function ConsolePage() {
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 xl:p-6 min-w-0">
-          <ActiveTab />
+          <div className={`${widthCls} mx-auto`}>
+            <ActiveTab />
+          </div>
         </div>
       </div>
 
@@ -196,7 +214,9 @@ export default function ConsolePage() {
 
       {/* 移动端：详情内容区 */}
       <div className={'md:hidden flex-1 overflow-y-auto p-4 pb-[var(--safe-bottom)] bg-canvas ' + (mobileView === 'list' ? 'hidden' : '')}>
-        <ActiveTab />
+        <div className={`${widthCls} mx-auto`}>
+          <ActiveTab />
+        </div>
       </div>
     </div>
   )

@@ -1,4 +1,5 @@
 import type { ElementType } from 'react'
+import type { Width } from '../../components/ui/PageShell'
 import {
   Activity, BarChart3, Bot, Database, Eraser, FileText, Gauge, Globe, Key, Layers,
   LayoutDashboard, MessageCircle, Plug, ScrollText, Settings, Shield, Store, Terminal, Ticket, Users,
@@ -16,6 +17,7 @@ import ApiKeyPoolTab from './capabilities/ApiKeyPoolTab'
 import OpenCliTab from './capabilities/OpenCliTab'
 import FederationTab from './capabilities/FederationTab'
 import StoreConsoleTab from './capabilities/StoreConsoleTab'
+import OpsOverviewTab from './monitoring/OpsOverviewTab'
 import SystemMetricsTab from './monitoring/SystemMetricsTab'
 import UsageDashboardTab from './monitoring/UsageDashboardTab'
 import ConversationLogTab from './monitoring/ConversationLogTab'
@@ -43,6 +45,12 @@ export interface ConsoleItem {
   descKey: string
   icon: ElementType
   Component: ElementType
+  /**
+   * 内容宽度档位（与 PageShell 同一套）。
+   * 表格/网格/日志这类靠宽度吃饭的用 full；表单与单列内容用窄档并居中——
+   * 不声明时按 wide 兜底，免得新页签在大屏上一条线贴到最左边。
+   */
+  width?: Width
 }
 
 export interface ConsoleWorkspace {
@@ -59,8 +67,10 @@ export const CONSOLE_WORKSPACES: ConsoleWorkspace[] = [
     icon: Gauge,
     items: [
       { key: 'overview', labelKey: 'admin.overview', descKey: 'admin.overviewDesc', icon: LayoutDashboard, Component: OverviewTab },
-      { key: 'system', labelKey: 'admin.system', descKey: 'admin.systemDesc', icon: Settings, Component: SystemSettingsTab },
-      { key: 'auth', labelKey: 'admin.auth', descKey: 'admin.authDesc', icon: Shield, Component: AuthSettingsTab },
+      // 运维总览是给不看日志的人看的门面，放通用里第一眼就能看到（图标避开同组的认证 Shield，免得两行同图标）
+      { key: 'ops', labelKey: 'admin.opsTab', descKey: 'admin.opsTabDesc', icon: Activity, Component: OpsOverviewTab },
+      { key: 'system', labelKey: 'admin.system', descKey: 'admin.systemDesc', icon: Settings, Component: SystemSettingsTab, width: 'full' },
+      { key: 'auth', labelKey: 'admin.auth', descKey: 'admin.authDesc', icon: Shield, Component: AuthSettingsTab, width: 'full' },
     ],
   },
   {
@@ -80,7 +90,7 @@ export const CONSOLE_WORKSPACES: ConsoleWorkspace[] = [
     icon: Plug,
     items: [
       { key: 'capabilities', labelKey: 'admin.capabilities', descKey: 'admin.capabilitiesDesc', icon: Plug, Component: CapabilitiesTab },
-      { key: 'prompt', labelKey: 'admin.prompt', descKey: 'admin.promptDesc', icon: Layers, Component: SystemPromptTab },
+      { key: 'prompt', labelKey: 'admin.prompt', descKey: 'admin.promptDesc', icon: Layers, Component: SystemPromptTab, width: 'content' },
       { key: 'apipool', labelKey: 'admin.apiKeyPool', descKey: 'admin.apiKeyPoolDesc', icon: Key, Component: ApiKeyPoolTab },
       { key: 'opencli', labelKey: 'admin.opencli', descKey: 'admin.opencliDesc', icon: Terminal, Component: OpenCliTab },
       { key: 'federation', labelKey: 'admin.federation', descKey: 'admin.federationDesc', icon: Globe, Component: FederationTab },

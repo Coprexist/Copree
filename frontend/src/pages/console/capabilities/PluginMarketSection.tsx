@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AlertTriangle, CheckCircle2, FileArchive, RefreshCw, Trash2, Upload } from 'lucide-react'
 import { api } from '../../../api/client'
+import { invalidateEmojiPacks } from '../../../utils/emojiPacks'
 import { useT } from '../../../i18n/I18nContext'
 import { useAuth } from '../../../context/AuthContext'
 import { Button, Dialog, EmptyState, Input, confirmAsync } from '../../../components/ui'
@@ -83,6 +84,7 @@ export default function PluginMarketSection() {
       await fn()
       setMsg({ tone: 'ok', text: okText })
       await load()
+      invalidateEmojiPacks()      // 装卸会改动可用表情，输入框缓存失效
     } catch (e: any) {
       setMsg({ tone: 'err', text: e?.message || String(e) })
     } finally {

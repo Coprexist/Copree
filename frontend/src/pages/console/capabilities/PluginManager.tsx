@@ -12,6 +12,7 @@ import PluginDetailPanel, { type PluginEntry } from './PluginDetailPanel'
 import Toggle from '../../../components/Toggle'
 import type { PluginView } from '../../../utils/skin'
 import { CATEGORY_ICON, CATEGORY_LABEL_KEY } from '../../../utils/pluginCategories'
+import { invalidateEmojiPacks } from '../../../utils/emojiPacks'
 
 interface Plugin {
   id: string
@@ -119,6 +120,7 @@ export default function PluginManager() {
       const res: any = await api.post(`/plugins/${plugin.id}/toggle`)
       setMessage({ type: 'success', text: res.message || '' })
       await fetchContentPlugins()
+      invalidateEmojiPacks()      // 表情包目录已变，输入框缓存失效
     } catch (e: any) {
       setMessage({ type: 'error', text: `${e?.message || e}` })
     } finally {
