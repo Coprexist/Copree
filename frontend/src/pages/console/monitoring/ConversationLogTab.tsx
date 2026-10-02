@@ -4,6 +4,7 @@ import { useT } from '../../../i18n/I18nContext'
 import { FileText, Settings, Bot, Eye, ChevronDown, ChevronUp, Loader2, Save, Sliders, X } from 'lucide-react'
 import Toggle from '../../../components/Toggle'
 import { Dialog } from '../../../components/ui'
+import RequestBodyViewer from '../../../components/shared/RequestBodyViewer'
 
 interface GlobalConfig {
   max_conversation_logs: number
@@ -461,7 +462,7 @@ export default function ConversationLogTab() {
           {selectedLog && (
             <Dialog onClose={() =>  { setSelectedLog(null); setLogDetail(null) } } className="flex items-start justify-center pt-10 overflow-y-auto">
               <div
-                className="bg-elevated border border-border rounded-dialog p-5 w-full max-w-2xl mx-4 shadow-2xl shadow-black/30 max-h-[80vh] overflow-y-auto"
+                className="bg-elevated border border-border rounded-dialog p-5 w-full max-w-4xl mx-4 shadow-2xl shadow-black/30 max-h-[80vh] overflow-y-auto"
                 onClick={e => e.stopPropagation()}
               >
                 <div className="flex items-center justify-between mb-4">
@@ -478,10 +479,8 @@ export default function ConversationLogTab() {
                       <span>{t('admin.logModel')} {logDetail.model || '-'}</span>
                       <span>{formatTime(logDetail.created_at)}</span>
                     </div>
-                    <div className="bg-canvas rounded-card p-3 max-h-[50vh] overflow-y-auto">
-                      <pre className="text-xs text-textSecondary whitespace-pre-wrap font-mono leading-relaxed">
-                        {JSON.stringify(logDetail.messages, null, 2)}
-                      </pre>
+                    <div className="bg-canvas rounded-card p-3 max-h-[60vh] overflow-y-auto">
+                      <RequestBodyViewer messages={logDetail.messages} />
                     </div>
                   </div>
                 ) : null}

@@ -16,6 +16,7 @@ import AgentSettingsModal from '../components/AgentSettingsModal'
 import { Dialog, EmptyState } from '../components/ui'
 import FilePreviewModal from '../components/FilePreviewModal'
 import ChannelCard from '../components/channels/ChannelCard'
+import RequestBodyViewer from '../components/shared/RequestBodyViewer'
 
 /** 扩展名→MIME 类型映射（后端未返回 mime_type 时 fallback） */
 const EXT_MIME_MAP: Record<string, string> = {
@@ -331,6 +332,7 @@ export default function AgentDetailPage() {
   const [logsLoading, setLogsLoading] = useState(false)
   const [logsError, setLogsError] = useState(false)
   const [selectedLog, setSelectedLog] = useState<any>(null)
+  const [latestLog, setLatestLog] = useState<any>(null)
   const [logDetailLoading, setLogDetailLoading] = useState(false)
   const [logExporting, setLogExporting] = useState(false)
 
@@ -438,8 +440,16 @@ export default function AgentDetailPage() {
     try {
       const data = await api.get(`/conversation-log/agents/${agentId}/logs?limit=50`)
       setLogs(data || [])
+      // 进来先看"最新一次的请求体"：列表接口不带正文，这里顺手把最新那条详情取回来（取不到不影响列表）
+      if (data?.length) {
+        try { setLatestLog(await api.get(`/conversation-log/agents/${agentId}/logs/${data[0].id}`)) }
+        catch { setLatestLog(null) }
+      } else {
+        setLatestLog(null)
+      }
     } catch {
       setLogs([])
+      setLatestLog(null)
       setLogsError(true)
     }
     finally { setLogsLoading(false) }
@@ -1201,6 +1211,20 @@ export default function AgentDetailPage() {
                 <span className="text-xs text-textMuted ml-auto">{logs.length} {t('agentDetail.logCountSuffix')}</span>
               )}
             </div>
+            {latestLog && (
+              <div className="mb-3 rounded-control border border-border bg-canvas p-3">
+                <div className="flex items-center gap-2 mb-2">
+                  <h4 className="text-xs font-medium text-textPrimary">{t('agentDetail.latestRequestBody')}</h4>
+                  <span className="text-3xs text-textMuted">
+                    #{latestLog.id}
+                    {latestLog.created_at ? ` · ${new Date(latestLog.created_at).toLocaleString('zh-CN')}` : ''}
+                  </span>
+                </div>
+                <div className="max-h-[65vh] overflow-y-auto pr-1">
+                  <RequestBodyViewer messages={latestLog.messages} />
+                </div>
+              </div>
+            )}
             {logsLoading ? (
               <div className="flex items-center gap-2 text-sm text-textMuted py-4 justify-center">
                 <Loader2 size={14} className="animate-spin" /> {t('agentDetail.storageLoading')}
@@ -1274,7 +1298,7 @@ export default function AgentDetailPage() {
             {selectedLog && (
               <Dialog onClose={() =>  setSelectedLog(null)} className="flex items-center justify-center">
                 <div
-                  className="bg-surface rounded-card border border-border max-w-2xl w-full mx-4 max-h-[80vh] flex flex-col shadow-2xl"
+                  className="bg-surface rounded-card border border-border max-w-4xl w-full mx-4 max-h-[80vh] flex flex-col shadow-2xl"
                   onClick={e => e.stopPropagation()}
                 >
                   <div className="flex items-center justify-between px-4 py-3 border-b border-border">
@@ -1302,34 +1326,8 @@ export default function AgentDetailPage() {
                       </button>
                     </div>
                   </div>
-                  <div className="flex-1 overflow-y-auto p-4 space-y-2">
-                    {(selectedLog.messages || []).map((msg: any, i: number) => (
-                      <div key={i} className={`text-xs p-2 rounded ${
-                        msg.role === 'system' ? 'bg-canvas text-textMuted italic' :
-                        msg.role === 'user' ? 'bg-primary-500/10 text-primary-600 dark:text-primary-300' :
-                        msg.role === 'assistant' ? 'bg-mint-500/10 text-mint-500 dark:text-mint-400' :
-                        'bg-accent-500/10 text-accent-600 dark:text-accent-300'
-                      }`}>
-                        <span className="font-medium">{msg.role}</span>
-                        {msg.reasoning_content && (
-                          <details className="group/details mt-1">
-                            <summary className="flex items-center gap-1 text-textMuted cursor-pointer list-none [&::-webkit-details-marker]:hidden">
-                              <ChevronRight size={12} className="transition-transform group-open/details:rotate-90" />
-                              {t('agentDetail.logReasoning')}
-                            </summary>
-                            <pre className="mt-1 whitespace-pre-wrap text-textMuted">{msg.reasoning_content}</pre>
-                          </details>
-                        )}
-                        <p className="mt-1 whitespace-pre-wrap">
-                          {typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)}
-                        </p>
-                        {msg.tool_calls && (
-                          <div className="mt-1 text-textMuted">
-                            {t('agentDetail.logToolCalls')} {msg.tool_calls.map((tc: any) => tc.function?.name || tc.name || '?').join(', ')}
-                          </div>
-                        )}
-                      </div>
-                    ))}
+                  <div className="flex-1 overflow-y-auto p-4">
+                    <RequestBodyViewer messages={selectedLog.messages || []} />
                   </div>
                 </div>
               </Dialog>
