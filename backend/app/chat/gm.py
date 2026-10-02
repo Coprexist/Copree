@@ -322,6 +322,11 @@ async def send_gm_message(
     # 入口归一：@名字 → <@!id>。人的手打、QQ 入站、工具调用都经这里，
     # 所以下游（唤醒判定、AI 上下文、通道出口）不必再各写一套名字比对
     content = await link_group_mentions(db, group_id, content)
+    # 表情归一：能对上 unicode 的换成字符、只有图的规范成 :id:——正文里从此不出现自造写法
+    # （唯一入口，见 catalog.resolve_emoji_text；失败按原文入库，表情不该挡住消息）
+    from app.services.plugin.catalog import normalize_emoji_text
+
+    content = await normalize_emoji_text(db, content)
     # 同上一条的道理：上下文里的 [msg_id=N] 标记被抄进正文时收掉，
     # N 确实是本群的消息就当成本意——它本来就是要"回复那条"
     from app.utils.text import take_trailing_msg_id
@@ -442,18 +447,25 @@ async def resolve_speaker_names(db, messages) -> dict[tuple[str, int], str]:
     当成一个可 @ 的人（用户 2026-09-25 在 QQ 群里看到 AI 回 "@None"）。
     联邦消息自带 sender_name，优先用它；AI 的 sender_id 也是它的用户行 id，所以一张表查得到。
     """
-    from app.models.user import User  # 函数内导入：与其它模型引用保持一致，避免循环导入
+    from app.utils.display_name import display_names
+
+    # 只为没有 sender_name 的消息查库（本地消息才是这样），一次查完
+    need = {
+        m.sender_id for m in messages
+        if not (getattr(m, "sender_name", None) or "").strip()
+    }
+    resolved = await display_names(db, need) if need else {}
 
     names: dict[tuple[str, int], str] = {}
     for m in messages:
         key = (m.sender_type, m.sender_id)
         if key in names:
             continue
-        name = (getattr(m, "sender_name", None) or "").strip()
-        if not name:
-            u = await db.get(User, m.sender_id)
-            name = (getattr(u, "username", "") or "").strip()
-        names[key] = name or f"用户{m.sender_id}"
+        names[key] = (
+            (getattr(m, "sender_name", None) or "").strip()
+            or resolved.get(m.sender_id)
+            or f"用户{m.sender_id}"
+        )
     return names
 
 
@@ -466,12 +478,15 @@ async def resolve_member_ids(db, group_id: int) -> dict[str, int]:
     from app.models.group import GroupMember
     from app.models.user import User
 
-    rows = (await db.execute(
-        select(User.id, User.username)
+    from app.utils.display_name import display_names
+
+    member_ids = (await db.execute(
+        select(User.id)
         .join(GroupMember, GroupMember.member_id == User.id)
         .where(GroupMember.group_id == group_id)
-    )).all()
-    return {str(name): int(uid) for uid, name in rows if name}
+    )).scalars().all()
+    # 键必须是显示名：入口把 @名字 归一成 <@!id> 时，人打的是界面上看见的那个名字
+    return {name: int(uid) for uid, name in (await display_names(db, member_ids)).items()}
 
 
 async def link_group_mentions(db, group_id: int, content: str) -> str:

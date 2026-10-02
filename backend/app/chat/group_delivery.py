@@ -36,6 +36,8 @@ async def message_view(db: AsyncSession, message, sender_name: str | None = None
     """群消息 → 通道统一视图（发送者名字与头像以库为准，WS 上报值可能过期）"""
     from app.models.user import User as UserModel
 
+    from app.utils.display_name import display_name
+
     name = sender_name
     avatar = None
     state = None
@@ -44,7 +46,7 @@ async def message_view(db: AsyncSession, message, sender_name: str | None = None
             select(UserModel).where(UserModel.id == message.sender_id)
         )).scalar_one_or_none()
         if row:
-            name = row.username
+            name = await display_name(db, message.sender_id)
             avatar = row.avatar_url
             if row.type == "ai":
                 agent = (await db.execute(

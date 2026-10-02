@@ -245,12 +245,14 @@ class ChatApi(BaseChatApi):
 
     async def get_user_info(self, db, user_id: int) -> dict:
         from app.models.user import User as UserModel
+        from app.utils.display_name import display_name
         user = await db.get(UserModel, user_id)
         if user is None:
             return {}
         return {
             "id": user.id,
-            "username": user.username,
+            # 这个字段是给人看的昵称，AI 的名字以 agents.name 为准（users.username 只是句柄）
+            "username": await display_name(db, user_id),
             "avatar_url": getattr(user, 'avatar_url', None),
             "language": getattr(user, 'language', 'zh'),
         }

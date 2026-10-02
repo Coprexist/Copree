@@ -361,7 +361,7 @@ async def check_unread_dms(db: AsyncSession, agent_id: int) -> list[dict]:
     所以这里只做"读出来"，不加表、不加迁移。
     """
     from app.models.dm import DMMessage, DMSession
-    from app.models.user import User
+    from app.utils.display_name import display_name
 
     agent = (await db.execute(select(Agent).where(Agent.id == agent_id))).scalar_one_or_none()
     if agent is None or not agent.user_id:
@@ -393,9 +393,7 @@ async def check_unread_dms(db: AsyncSession, agent_id: int) -> list[dict]:
             peer_id = session.user2_id if session.user1_id == me else session.user1_id
         peer_name = None
         if peer_id is not None:
-            peer_name = (await db.execute(
-                select(User.username).where(User.id == peer_id)
-            )).scalar_one_or_none()
+            peer_name = await display_name(db, peer_id)
         preview = (await db.execute(
             select(DMMessage.content)
             .where(

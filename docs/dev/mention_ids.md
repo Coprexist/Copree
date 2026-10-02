@@ -32,7 +32,8 @@ id 唯一且稳定，这些问题一次性消失；通道出口拿到 id 也能�
 2. **入口归一** —— `app/chat/gm.py:send_gm_message` 落库前调 `link_group_mentions`：
    人的手打、QQ 入站、工具调用、世界桥一次覆盖。只做群聊（私信没有 @ 这回事）。
    名字带空格时按"全名 → 第一个词"两档认；**同一个写法指向两个人时弃用**（宁可留原文也不 @ 错人）；
-   认不出的名字原样保留。
+   认不出的名字原样保留。这张"名字 → id"的表用**显示名**当键（见下）：改名后 @新名 照样归一，
+   否则人照着界面上的名字 @ 过去反而连不上。
 3. **识别兼容** —— `check_mention(content, name, id)` 同时认新令牌与旧 `@名字`
    （历史消息、人的手打还在用名字；世界群是 mention_only，认不出就等于叫不醒）。
    判定点：`response_worker`（主唤醒 + 群助手按名字）、`group_delivery`（分发/离线暂存）、
@@ -40,6 +41,20 @@ id 唯一且稳定，这些问题一次性消失；通道出口拿到 id 也能�
 4. **展示** —— 前端 `frontend/src/utils/mentions.ts:renderMentions`（ChatView 消息正文与引用预览）；
    后端"顺手给人看"的地方（会话列表预览、聊天记录导出）用
    `message_serializer.mention_names`（一次查全用到的 id）+ `text.render_mention_names`。
+
+## 名字给人看时取哪一份
+
+`users.username` 只是账号句柄：AI 建号时会抄一份当时的名字（重名还要加后缀），而改名只写
+`agents.name`——两份名字各自漂移。谁直接读 `users.username` 当昵称，同一个 AI 就会在会话列表里
+是旧名、在消息气泡里是新名。所以显示名只有一个入口：
+
+**`app/utils/display_name.py`** —— AI 取 `agents.name`，人类取 `username`，查不到给「用户{id}」。
+走它的是：私信列表 / 会话头 / 消息发送者、`mention_names`（会话预览与聊天记录导出里的 @ 名字）、
+群聊发送者名、`resolve_member_ids`（"@名字 → <@!id>"的键）、好友申请与群邀请列表、
+世界事件与决策技能（发给世界的 sender_name）、以及 AI 自己的私信上下文（对方是谁、其它私信会话列表）。
+
+不迁移数据、不动唯一约束：`users.username` 继续当句柄（搜索也仍可命中旧名），
+历史正文里的旧 `@名字` 照旧按名字兼容识别。
 
 ## 通道出口
 
@@ -118,6 +133,8 @@ QQ 那个「机器人可获取的群聊消息范围」开关**没有通知**，�
 ## 测试
 
 - `backend/tests/test_mentions.py`：令牌往返、入口归一（含空格昵称 / 边界 / 歧义弃用 / 幂等）、出口渲染、摘开头 @、双写法识别。
+- `backend/tests/test_display_name.py`：改名后列表/会话头/气泡同口径、人类与无 agent 行的兜底、
+  给 AI 看的 @ 名字渲染、改名后 `@新名` 仍能归一成 `<@!id>`。
 - `backend/tests/test_echoed_context_markers.py`：AI 把 `[msg_id=…]` 抄进正文时的收口。
 - `test_qq_channel_plugin.py` / `test_qq_napcat_plugin.py`：出站真 @（`<@!openid>` / CQ 码）、
   认不出的令牌不发出、全量事件补全正文、被 @ 的人建成群成员、

@@ -28,16 +28,13 @@ async def mention_names(db, contents) -> dict[int, str]:
 
     只查真正出现过的 id（通常 0~2 个），不为此拉整张成员表；导出时一次查全，别一条一条查。
     """
-    from sqlalchemy import select
-
-    from app.models.user import User
+    from app.utils.display_name import display_names
     from app.utils.text import iter_mention_ids
 
     ids = {uid for content in contents for uid in iter_mention_ids(content or "")}
     if not ids:
         return {}
-    rows = (await db.execute(select(User.id, User.username).where(User.id.in_(ids)))).all()
-    return {int(uid): str(name or "") for uid, name in rows}
+    return await display_names(db, ids)
 
 
 def make_preview(content: str | None, attachments: list | str | None = None, max_len: int = 50) -> str:

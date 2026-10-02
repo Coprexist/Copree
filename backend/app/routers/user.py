@@ -213,16 +213,11 @@ async def upload_user_avatar(
     import uuid
     from app.config import settings
 
-    # 验证文件类型
-    allowed_types = {"image/jpeg", "image/png", "image/gif", "image/webp"}
-    if file.content_type not in allowed_types:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="仅支持 JPEG/PNG/GIF/WebP 图片")
-
-    # 大小限制
-    max_bytes = settings.avatar_max_size_mb * 1024 * 1024
-    content = await file.read()
-    if len(content) > max_bytes:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"头像不能超过 {settings.avatar_max_size_mb}MB")
+    # 类型 / 大小 / 真伪一起校验（用户 / AI / 群聊三处头像共用，见 utils/avatar_upload）；
+    # 上限取「运行时生效值」，与 /user/config/upload-limits 告诉前端的那份保持一致
+    from app.config import get_effective_avatar_max_size_mb
+    from app.utils.avatar_upload import read_avatar
+    content = await read_avatar(file, get_effective_avatar_max_size_mb())
 
     # 压缩头像（≤2MB，保持透明通道）
     from app.utils.image_compress import compress_avatar

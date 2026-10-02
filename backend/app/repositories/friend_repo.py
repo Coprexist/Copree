@@ -15,6 +15,7 @@ from app.models.dm import DMSession
 class FriendRepository(Protocol):
     """好友数据访问接口。"""
 
+    async def execute(self, stmt, params=None): ...
     async def get_friendship(self, user_id: int, friend_type: str, friend_id: int) -> Optional[Friendship]: ...
     async def get_friendship_by_id(self, friendship_id: int, user_id: int) -> Optional[Friendship]: ...
     async def get_friend_request_by_id(self, request_id: int) -> Optional[FriendshipRequest]: ...
@@ -45,6 +46,12 @@ class SQLAlchemyFriendRepository:
 
     def __init__(self, session: AsyncSession):
         self.session = session
+
+    async def execute(self, stmt, params=None):
+        """共用取数工具（显示名等）只认 execute，仓库要能被直接传进去。"""
+        if params is not None:
+            return await self.session.execute(stmt, params)
+        return await self.session.execute(stmt)
 
     async def get_friendship(self, user_id: int, friend_type: str, friend_id: int) -> Optional[Friendship]:
         result = await self.session.execute(

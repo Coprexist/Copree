@@ -18,7 +18,7 @@ from app.services.infrastructure.notification_service import (
 )
 from app.repositories.invitation_repo import InvitationRepository
 from app.models.group import GroupInvitation, GroupMember
-from app.models.user import User
+from app.utils.display_name import display_name
 
 logger = logging.getLogger(__name__)
 
@@ -456,10 +456,7 @@ async def list_pending_approval_invitations(
 
 async def _username(invitation_repo: InvitationRepository, user_id: int) -> str:
     """用户名兜底口径：查不到给「用户{id}」，别让卡片/列表出现 None"""
-    row = (await invitation_repo.execute(
-        select(User.username).where(User.id == user_id)
-    )).one_or_none()
-    return row[0] if row else f"用户{user_id}"
+    return await display_name(invitation_repo, user_id)
 
 
 async def _notify_inviter(

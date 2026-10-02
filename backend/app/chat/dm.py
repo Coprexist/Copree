@@ -16,6 +16,7 @@ from app.models.user import User
 from app.models.agent import Agent
 from app.models.federation import FederatedEntity
 from app.models.friendship import Friendship
+from app.utils.display_name import display_name, display_names
 from app.utils.pure.history import make_entry
 from app.utils.pure.prompting import format_message, format_time_shanghai
 
@@ -38,13 +39,7 @@ def _dm_message_to_dict(m: DMMessage, sender_name: str, sender_type: str,
 
 async def resolve_dm_sender_names(db, messages) -> dict[int, str]:
     """一次把私信里「谁在说话」查成名字（同一人只查一次）。"""
-    names: dict[int, str] = {}
-    for m in messages:
-        if m.sender_id in names:
-            continue
-        u = await db.get(User, m.sender_id)
-        names[m.sender_id] = (getattr(u, "username", "") or "").strip() or f"用户{m.sender_id}"
-    return names
+    return await display_names(db, {m.sender_id for m in messages})
 
 
 def dm_message_entry(message, *, agent_name: str, agent_user_id: int | None,
@@ -340,9 +335,12 @@ async def send_dm_message(
     skip_friendship_check: bool = False,
 ) -> dict:
     """发送私信消息"""
+    # 表情归一：与群聊同一条契约（入口把写法换成字符或标准短码，见 catalog.resolve_emoji_text）
+    from app.services.plugin.catalog import normalize_emoji_text
     # AI 抄回来的 [msg_id=N] 收掉：标记是给它读的，N 属本会话就当成本意。
     from app.utils.text import take_trailing_msg_id
 
+    content = await normalize_emoji_text(db, content)
     content, echoed = take_trailing_msg_id(content)
     if echoed and reply_to is None:
         exists = (await db.execute(
@@ -403,12 +401,12 @@ async def send_dm_message(
     await db.refresh(msg)
 
     result = await db.execute(
-        select(User.username, User.type, User.avatar_url).where(User.id == sender_id)
+        select(User.type, User.avatar_url).where(User.id == sender_id)
     )
     row = result.one_or_none()
-    sender_name = row[0] if row else f"用户{sender_id}"
-    sender_type = (row[1] or "human") if row else "human"
-    sender_avatar_url = row[2] if row else None
+    sender_name = await display_name(db, sender_id)
+    sender_type = (row[0] or "human") if row else "human"
+    sender_avatar_url = row[1] if row else None
 
     if sender_type == "ai" and not sender_avatar_url:
         agent_avatar_result = await db.execute(
@@ -510,22 +508,25 @@ async def _get_partner_info(db: AsyncSession, user_id: int) -> dict:
     if user is None:
         return {"id": user_id, "name": f"未知:{user_id}", "type": "unknown", "state": None}
 
+    name = user.username
     state = None
     avatar_url = getattr(user, 'avatar_url', None)
     status_text = getattr(user, 'status_text', None)
     status_color = getattr(user, 'status_color', None)
     if user.type == "ai":
+        # 顺手取 Agent.name：显示名以 agents.name 为准（users.username 只是建号快照，改名不动它）
         agent_result = await db.execute(
-            select(Agent.state, Agent.avatar_url, Agent.status_text, Agent.status_color).where(Agent.user_id == user_id)
+            select(Agent.name, Agent.state, Agent.avatar_url, Agent.status_text, Agent.status_color).where(Agent.user_id == user_id)
         )
         agent_row = agent_result.one_or_none()
         if agent_row:
-            state = agent_row[0]
-            avatar_url = agent_row[1] or avatar_url
-            if agent_row[2]:
-                status_text = agent_row[2]
+            name = (agent_row[0] or "").strip() or name
+            state = agent_row[1]
+            avatar_url = agent_row[2] or avatar_url
             if agent_row[3]:
-                status_color = agent_row[3]
+                status_text = agent_row[3]
+            if agent_row[4]:
+                status_color = agent_row[4]
     else:
         from app.services.infrastructure.online_tracker import get_user_online_status
         if get_user_online_status(user_id):
@@ -533,7 +534,7 @@ async def _get_partner_info(db: AsyncSession, user_id: int) -> dict:
 
     return {
         "id": user.id,
-        "name": user.username,
+        "name": name,
         "type": user.type,
         "state": state,
         "avatar_url": avatar_url,
@@ -541,13 +542,6 @@ async def _get_partner_info(db: AsyncSession, user_id: int) -> dict:
         "status_color": status_color,
         "last_active_at": getattr(user, "last_active_at", None) and str(user.last_active_at),
     }
-
-
-async def _get_user_name(db: AsyncSession, user_id: int) -> str:
-    """获取用户名称"""
-    result = await db.execute(select(User.username).where(User.id == user_id))
-    name = result.scalar_one_or_none()
-    return name or f"用户{user_id}"
 
 
 async def _get_messages(db: AsyncSession, session_id: str, limit: int = 50,
@@ -571,22 +565,22 @@ async def _get_messages(db: AsyncSession, session_id: str, limit: int = 50,
     sender_ids = {m.sender_id for m in messages}
     sender_info: dict[int, dict] = {}
     if sender_ids:
+        names = await display_names(db, sender_ids)
         result = await db.execute(
-            select(User.id, User.username, User.type, User.avatar_url).where(User.id.in_(sender_ids))
+            select(User.id, User.type, User.avatar_url).where(User.id.in_(sender_ids))
         )
         for row in result.all():
-            sender_info[row[0]] = {"name": row[1], "type": row[2] or "human", "avatar_url": row[3]}
+            sender_info[row[0]] = {"name": names[row[0]], "type": row[1] or "human", "avatar_url": row[2]}
 
+        # 头像仍以 AI 自己的为准
         ai_sender_ids = [uid for uid, info in sender_info.items() if info["type"] == "ai"]
         if ai_sender_ids:
             agent_result = await db.execute(
-                select(Agent.user_id, Agent.name, Agent.avatar_url).where(Agent.user_id.in_(ai_sender_ids))
+                select(Agent.user_id, Agent.avatar_url).where(Agent.user_id.in_(ai_sender_ids))
             )
             for row in agent_result.all():
-                if row[0] in sender_info:
-                    sender_info[row[0]]["name"] = row[1] or sender_info[row[0]]["name"]
-                    if row[2]:
-                        sender_info[row[0]]["avatar_url"] = row[2]
+                if row[0] in sender_info and row[1]:
+                    sender_info[row[0]]["avatar_url"] = row[1]
 
     sorted_messages = sorted(messages, key=lambda m: m.id) if after_id else list(reversed(messages))
 

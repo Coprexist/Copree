@@ -8,6 +8,7 @@ from app.models.message import Message
 from app.models.user import User
 from app.models.agent import Agent
 from app.repositories.export_repo import ExportRepository
+from app.utils.display_name import display_names
 
 
 async def query_all_messages(
@@ -329,9 +330,10 @@ async def query_all_dm_messages(
     sender_names: dict[int, str] = {}
     sender_types: dict[int, str] = {}
     if sender_ids:
-        r = await export_repo.execute(select(User.id, User.username, User.type).where(User.id.in_(sender_ids)))
-        for uid, uname, utype in r.all():
-            sender_names[uid] = uname
+        r = await export_repo.execute(select(User.id, User.type).where(User.id.in_(sender_ids)))
+        names = await display_names(export_repo, sender_ids)
+        for uid, utype in r.all():
+            sender_names[uid] = names[uid]
             sender_types[uid] = utype or "human"
 
     # 导出是给人看的：正文里的 <@!id> 换成名字（一次查全）

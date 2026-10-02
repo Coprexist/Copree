@@ -464,12 +464,10 @@ async def upload_group_avatar(
     if not gm or gm.role not in ("owner", "admin"):
         raise HTTPException(status_code=403, detail="仅群主或管理员可操作")
 
-    # 读取并校验
-    content = await file.read()
-    if len(content) > 5 * 1024 * 1024:
-        raise HTTPException(400, "头像文件大小不能超过 5MB")
-
+    # 读取并校验（类型 / 大小 / 真伪，与用户、AI 头像同一套）
+    from app.utils.avatar_upload import read_avatar
     from app.utils.image_compress import compress_avatar
+    content = await read_avatar(file, 5)
     content = compress_avatar(content)
 
     import os

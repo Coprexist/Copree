@@ -10,6 +10,7 @@ from app.models.agent import Agent
 from app.models.friendship import Friendship, FriendshipRequest
 from app.models.user import User
 from app.chat.dm import generate_dm_session_id
+from app.utils.display_name import display_name, display_names
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +48,7 @@ async def send_friend_request(
         # 获取反向申请发起者的名称
         reverse_name = None
         try:
-            reverse_user = await friend_repo.get_user_by_id(r_user_id)
-            if reverse_user:
-                reverse_name = reverse_user.username
+            reverse_name = await display_name(friend_repo, r_user_id)
         except Exception:
             pass
 
@@ -255,8 +254,7 @@ async def get_pending_friend_requests_for_ai(
     rows = await friend_repo.get_pending_requests_for_ai(agent_user_id)
     result = []
     for r in rows:
-        requester = await friend_repo.get_user_by_id(r.requester_id)
-        name = requester.username if requester else None
+        name = await display_name(friend_repo, r.requester_id)
         result.append({
             "id": r.id,
             "requester_id": r.requester_id,
@@ -280,7 +278,8 @@ async def list_friend_requests(
 
     requester_ids = list({r.requester_id for r in all_requests})
     users = await friend_repo.get_users_by_ids(requester_ids)
-    users_map = {u.id: (u.username, u.avatar_url) for u in users}
+    requester_names = await display_names(friend_repo, requester_ids)
+    users_map = {u.id: (requester_names[u.id], u.avatar_url) for u in users}
 
     sent_reqs = [r for r in all_requests if r.requester_id == user_id]
     human_target_ids = [r.target_id for r in sent_reqs if r.target_type == "human"]

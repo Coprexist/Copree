@@ -22,6 +22,7 @@ from app.models.user import User
 from app.services.social.group_join_service import list_pending_join_requests
 from app.services.social.invitation_service import list_pending_approval_invitations
 from app.utils.auth import get_current_user
+from app.utils.display_name import display_names
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["申请列表"])
@@ -65,11 +66,12 @@ async def _user_profiles(db: AsyncSession, user_ids: set[int]) -> dict[int, dict
     if not user_ids:
         return {}
     rows = await db.execute(
-        select(User.id, User.username, User.avatar_url).where(User.id.in_(user_ids))
+        select(User.id, User.avatar_url).where(User.id.in_(user_ids))
     )
+    names = await display_names(db, user_ids)
     return {
-        uid: {"name": name, "avatar_url": avatar}
-        for uid, name, avatar in rows.all()
+        uid: {"name": names[uid], "avatar_url": avatar}
+        for uid, avatar in rows.all()
     }
 
 
