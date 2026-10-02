@@ -16,7 +16,10 @@ MAX_QUERIES = 4    # 模型一次能给的检索式条数上限（与工具 sche
 MAX_VARIANTS = 6   # 机械改写最多派生几条候选，回退阶梯按这个顺序走
 
 _BRACKETS = "（）()【】[]「」『』《》<>"
-_QUOTES = "\"'“”‘’"
+# 单引号只是引号，删掉；弯引号归一成直引号并**保留**——引号对引擎和闸门都有语义
+# （引擎按短语匹配，闸门要求整串出现），抹掉等于把调用方的精度要求丢掉
+_DROP_QUOTES = "'‘’"
+_QUOTE_NORM = {"“": '"', "”": '"'}
 _PUNCT = "，。、；：！？,.;:!?~～|"
 _GLUE = "-_/·—－"
 
@@ -40,8 +43,10 @@ SOURCE_MARKERS = frozenset({
 def _clean(text: str) -> str:
     """去括号与其内容边界外的标点、统一空白。括号只去符号不去内容（括号里常是别名）。"""
     out = str(text or "")
-    for ch in _BRACKETS + _QUOTES + _PUNCT:
+    for ch in _BRACKETS + _DROP_QUOTES + _PUNCT:
         out = out.replace(ch, " ")
+    for src, dst in _QUOTE_NORM.items():
+        out = out.replace(src, dst)
     for ch in _GLUE:
         out = out.replace(ch, " ")
     return re.sub(r"\s+", " ", out).strip()
@@ -51,6 +56,20 @@ def _split_glued(text: str) -> str:
     """CopreeAIsChat 与 copreeAIsChat 这类粘连词切开：Copree AIsChat。"""
     out = _CAMEL.sub(" ", text)
     return re.sub(r"\s+", " ", out).strip()
+
+
+_QUOTED = re.compile(r'"([^"]+)"')
+
+
+def quoted_phrases(text: str) -> list[str]:
+    """引号里的短语：调用方写引号就是「整串必须出现」，闸门按它硬判（见 rank.relevant）。
+
+    弯引号在这里也归一：这个函数可能被直接喂没走过 _clean 的原文。
+    """
+    raw = str(text or "")
+    for src, dst in _QUOTE_NORM.items():
+        raw = raw.replace(src, dst)
+    return [p.strip() for p in _QUOTED.findall(raw) if p.strip()]
 
 
 def latin_terms(text: str) -> list[str]:
