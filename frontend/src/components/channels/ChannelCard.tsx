@@ -235,6 +235,30 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
     return api.put(base, { values })
   }, t('tool:channel.saved'))
 
+  /** 给某个 QQ 群指定落点：写 group_map（后端允许部分保存，不动其它配置） */
+  const saveLanding = (origin: string, value: string) => {
+    const next: Record<string, string> = { ...((view?.detail?.group_map as Record<string, string>) || {}) }
+    if (value) next[origin] = value
+    else delete next[origin]
+    setMapDraft(prev => ({ ...prev, [activeId]: { ...(prev[activeId] || {}), [origin]: value } }))
+    setNewFor(prev => ({ ...prev, [origin]: '' }))
+    return act('map:' + origin, () => api.put(base, { values: { group_map: JSON.stringify(next) } }), t('tool:channel.landingSaved'))
+  }
+
+  /** 为这个 QQ 群新建一个 Copree 群，并直接指定成它的落点 */
+  const createLandingFor = (origin: string) => act('newmap:' + origin, async () => {
+    const created = await api.post<{ id: number; name: string }>(
+      base + '/landing-group', { name: (newFor[origin] || '').trim() },
+    )
+    const id = String(created.id)
+    const next: Record<string, string> = {
+      ...((view?.detail?.group_map as Record<string, string>) || {}), [origin]: id,
+    }
+    setMapDraft(prev => ({ ...prev, [activeId]: { ...(prev[activeId] || {}), [origin]: id } }))
+    setNewFor(prev => ({ ...prev, [origin]: '' }))
+    await api.put(base, { values: { group_map: JSON.stringify(next) } })
+  }, t('tool:channel.landingSaved'))
+
   /** 凭据单独存：换 AppID/Secret 等于"换一个机器人重新连"，与落点/策略不是一件事。
    *  后端允许部分保存，只交这两个键不会动其它配置；机密留空 = 不改（空串是"清除"）。 */
   const saveCredential = () => {
@@ -249,7 +273,14 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
 
   /** 最近见到过的通道侧标识：一键进那个"白名单"字段（字段名由插件在状态里报，平台不猜） */
   const recentField = String(view?.detail?.recent_field || '')
-  const recent: { origin: string; last_at: number; count: number; allowed: boolean }[] = (view?.detail?.recent_groups as any[]) || []
+  const recent: {
+    origin: string; last_at: number; count: number; allowed: boolean;
+    copree_group_id?: number | null; mapped?: boolean;
+  }[] = (view?.detail?.recent_groups as any[]) || []
+  /** 每个 QQ 群选了哪个落点（未提交前的本地值）：键是群 openid */
+  const [mapDraft, setMapDraft] = useState<Record<string, Record<string, string>>>({})
+  /** 正在为哪个群起名新建（openid → 名字，空串 = 面板已打开） */
+  const [newFor, setNewFor] = useState<Record<string, string>>({})
   const allowList = recentField ? String(draft[recentField] || '').split(/[,，\s]+/).filter(Boolean) : []
   const addToList = (origin: string) => {
     if (!recentField || allowList.includes(origin)) return
@@ -615,7 +646,7 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
             {recent.length === 0 ? (
               <div className="text-3xs text-textMuted">{t('tool:channel.recentGroupsEmpty')}</div>
             ) : recent.slice(0, 6).map(g => (
-              <div key={g.origin} className="grid grid-cols-[auto_1fr_auto] items-center gap-2 bg-canvas border border-border rounded-control px-3 py-2">
+              <div key={g.origin} className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-2 bg-canvas border border-border rounded-control px-3 py-2">
                 <span className={'w-1.5 h-1.5 rounded-full shrink-0 ' + (g.allowed ? 'bg-mint-400' : 'bg-amber-400')} />
                 <div className="min-w-0">
                   <div className="text-3xs text-textPrimary truncate font-mono">{g.origin}</div>
@@ -623,9 +654,41 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
                     {t('tool:channel.recentGroupMeta', { count: String(g.count), time: new Date(g.last_at * 1000).toLocaleString() })}
                   </div>
                 </div>
+                {/* 这个群落到哪个 Copree 群：一个群一个落点，选完立即保存（映射表说了算） */}
+                <Select
+                  value={mapDraft[activeId]?.[g.origin]
+                    ?? (newFor[g.origin] !== undefined
+                      ? '__new__'
+                      : String((view.detail?.group_map as Record<string, string> | undefined)?.[g.origin] || ''))}
+                  onChange={e => (e.target.value === '__new__'
+                    ? setNewFor(prev => ({ ...prev, [g.origin]: '' }))
+                    : saveLanding(g.origin, e.target.value))}
+                  options={[{ value: '', label: t('tool:channel.landingDefault') },
+                            ...groups.map(x => ({ value: String(x.id), label: x.name })),
+                            { value: '__new__', label: t('tool:channel.groupModeNew') }]}
+                  fieldSize="sm"
+                  className="w-44"
+                  disabled={!view.enabled}
+                />
                 {g.allowed
                   ? <span className="text-3xs text-mint-400 shrink-0">{t('tool:channel.allowListed')}</span>
                   : <Button size="xs" variant="secondary" loading={busy === 'allow:' + g.origin} onClick={() => addToList(g.origin)}>{t('tool:channel.allowAdd')}</Button>}
+                {newFor[g.origin] !== undefined && (
+                  <div className="col-span-full flex items-center gap-2">
+                    <Input
+                      value={newFor[g.origin]}
+                      onChange={e => setNewFor(prev => ({ ...prev, [g.origin]: e.target.value }))}
+                      placeholder={t('tool:channel.newGroupPlaceholder')}
+                      name="qq-group-new-copree-group"
+                      fieldSize="sm"
+                      className="w-56"
+                      disabled={!view.enabled}
+                      {...NO_AUTOFILL}
+                    />
+                    <Button size="xs" variant="primary" loading={busy === 'newmap:' + g.origin}
+                      onClick={() => createLandingFor(g.origin)}>{t('tool:channel.groupModeNew')}</Button>
+                  </div>
+                )}
               </div>
             ))}
           </div>

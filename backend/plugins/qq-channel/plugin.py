@@ -225,6 +225,27 @@ class QqClient:
         return data
 
 
+def _parse_group_map(raw: Any) -> dict[str, int]:
+    """解析 group_map（QQ 群 openid → Copree 群 id）。
+
+    坏项只丢那一项并记警告：一处手写错误不该让整份映射失效，否则表现是"某个群突然不接消息了"。
+    """
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else dict(raw)
+    except Exception:
+        logger.warning("group_map 不是合法 JSON，按空映射处理")
+        return {}
+    out: dict[str, int] = {}
+    for key, value in (data or {}).items():
+        try:
+            out[str(key).strip()] = int(value)
+        except (TypeError, ValueError):
+            logger.warning("group_map 里有一项的群 ID 不是数字，已忽略该项")
+    return out
+
+
 @service(
     name="QQ 通道",
     description="一个机器人接一个 AI：群里被 @、或私聊机器人，都进 Copree；AI 的回复发回 QQ",
@@ -257,6 +278,13 @@ class QqClient:
             "description": "群 openid，多个用逗号分隔；留空 = 不限制",
             "description_en": "Group openids, comma separated; empty = no limit",
             "description_ja": "グループ openid をカンマ区切り。空欄＝制限なし",
+        },
+        "group_map": {
+            "type": "string", "title": "QQ 群 → Copree 群",
+            "title_en": "QQ groups to Copree groups", "title_ja": "QQグループ → Copreeグループ",
+            "description": "每个 QQ 群落到哪个 Copree 群，写成 JSON：{\"群 openid\": 群 ID}。"
+                           "卡片上「最近见到过的群」可以直接给每个群选落点，不必手写这段；"
+                           "没在这里的群落到上面的「接入的 Copree 群 ID」。",
         },
         "body_format": {
             "type": "string", "title": "正文格式",
@@ -316,11 +344,18 @@ class QqChannelPlugin(ServicePlugin):
         self._quote_replies = True
         # 配对码通知节流：同一个人反复私聊时别把码刷屏（60 秒最多提醒一次）
         self._pair_notified: dict[str, float] = {}
-        # 回复路由：群 → 最近一次来消息的 QQ 群；私信会话 → 那条私聊（含被动回复凭据）
+        # 回复路由：QQ 群 openid → 那条会话的被动回复凭据（含 msg_id/seq/ts）。
+        # 一个机器人可以在多个 QQ 群里，回复必须回到"触发它的那条消息所在的群"，
+        # 所以按 openid 分槽；原来按 Copree 群一个槽，后说话的群会把前一个顶掉。
         # 路由里带着 msg_id/seq/ts：被动回复要用「触发它的那条消息」的 id，
         # 且同一个 msg_id 只能用一次（官方：相同 msg_id+msg_seq 重复发送会失败），
         # 所以这里存的是活字典，发送时原地递增 seq。
-        self._route: dict[int, dict[str, Any]] = {}
+        self._routes: dict[str, dict[str, Any]] = {}
+        # 站内消息 id → 它来自哪个 QQ 群：AI 回某条消息时据此选路由（查不到才退回最近一条）
+        self._site_route: dict[int, str] = {}
+        self._site_route_order: deque[int] = deque()
+        # QQ 群 → Copree 群 的映射（配置键 group_map）；没映射的群落到默认落点群
+        self._group_map: dict[str, int] = {}
         # OrderedDict：满了丢最早建立的那条（见 _remember_dm_route）
         self._dm_route: OrderedDict[str, dict[str, Any]] = OrderedDict()
         # 后台回复任务：保引用 + 停止前 drain（见 services/plugin/tasks.py）
@@ -356,13 +391,23 @@ class QqChannelPlugin(ServicePlugin):
             "target_agent": self._target_agent or None,
             "copree_group_id": self._copree_group_id or None,
             "dm_policy": self._dm_policy,
-            # 最近收到过消息的 QQ 群：openid + 时间 + 条数 + 是否已被白名单放行
-            "recent_groups": sorted(
-                self._seen_groups.values(), key=lambda r: float(r.get("last_at") or 0), reverse=True
-            ),
+            # 最近收到过消息的 QQ 群：openid + 时间 + 条数 + 白名单 + 落在哪个 Copree 群
+            "recent_groups": [
+                {
+                    **row,
+                    "copree_group_id": self._landing_group(str(row.get("origin") or "")) or None,
+                    "mapped": str(row.get("origin") or "") in self._group_map,
+                }
+                for row in sorted(
+                    self._seen_groups.values(), key=lambda r: float(r.get("last_at") or 0), reverse=True
+                )
+            ],
+            # 群 → Copree 群 的映射（卡片据此让每个群选落点）与"还没指定的群"
+            "group_map": dict(self._group_map),
+            "unmapped_groups": sorted(o for o in self._seen_groups if o not in self._group_map),
             # 卡片上的"一键加白名单"该往哪个字段写：插件自己说，平台不猜字段名
             "recent_field": "qq_group_allowlist",
-            "routed_groups": sorted({r.get("qq", "") for r in self._route.values() if r.get("qq")}),
+            "routed_groups": sorted(self._routes),
             "dm_sessions": len(self._dm_route),
             "replies_sent": self.replies,
             "dm_replies_sent": self.dm_replies,
@@ -400,6 +445,7 @@ class QqChannelPlugin(ServicePlugin):
             return False
 
         self._allow = _split_list(cfg.get("qq_group_allowlist"))
+        self._group_map = _parse_group_map(cfg.get("group_map"))
         self._dm_policy = (str(cfg.get("dm_policy") or "pairing").strip().lower() or "pairing")
         self._msg_type = _msg_type_of(cfg.get("body_format"))
         self._quote_replies = str(cfg.get("quote_replies", "true")).strip().lower() not in ("false", "0", "off")
@@ -426,7 +472,9 @@ class QqChannelPlugin(ServicePlugin):
         from app.chat.outbound import unregister_sink
 
         unregister_sink(getattr(self, "_sink_handle", None) or self.key)
-        self._route.clear()
+        self._routes.clear()
+        self._site_route.clear()
+        self._site_route_order.clear()
         self._dm_route.clear()
         self._delivered.clear()
         self._delivered_order.clear()
@@ -710,7 +758,7 @@ class QqChannelPlugin(ServicePlugin):
         """
         prev = self._full_mode
         self._full_mode = (bool(full), time.time())
-        if not self._copree_group_id:
+        if not self._copree_group_id and not self._group_map:
             return                      # 只做私聊的实例：没有群账本可投
         if prev is not None and prev[0] == bool(full):
             return
@@ -829,8 +877,9 @@ class QqChannelPlugin(ServicePlugin):
         # 先记账再判白名单：白名单该怎么填，前提是界面能看见"机器人在哪些群里出现过"。
         # 被白名单挡下的群同样记下来（allowed=False），否则用户永远发现不了它。
         self._note_group(qq_group, allowed=(not self._allow) or qq_group in self._allow)
-        if not self._copree_group_id:
-            logger.debug("未绑定 Copree 群，忽略群消息（这个实例只做私聊）")
+        landing = self._landing_group(qq_group)
+        if not landing:
+            logger.debug("这个 QQ 群没有落点群（实例没绑 Copree 群、映射里也没有），忽略")
             return
         if self._allow and qq_group not in self._allow:
             logger.debug(f"QQ 群 {qq_group} 不在白名单，忽略")
@@ -871,12 +920,13 @@ class QqChannelPlugin(ServicePlugin):
 
         try:
             delivered = await self._deliver_to_group(
-                qq_group, author, content, msg_id, str(ext.get("msg_idx") or ""), quoted_ref
+                landing, qq_group, author, content, msg_id, str(ext.get("msg_idx") or ""), quoted_ref
             )
             peer_user_id, peer_name, copree_msg_id = delivered or (0, "", 0)
             self._remember_delivered(msg_id, copree_msg_id, content)
-            self._route[self._copree_group_id] = {
-                "qq": qq_group, "msg_id": msg_id, "seq": 0, "ts": time.time(),
+            self._remember_site_route(copree_msg_id, qq_group)
+            self._routes[qq_group] = {
+                "qq": qq_group, "copree_group_id": landing, "msg_id": msg_id, "seq": 0, "ts": time.time(),
                 # 出站摘 @ 要用它：QQ 的被动回复自己显示 @对方，正文里那个 @是谁要对得上
                 "peer_name": peer_name or "",
                 # 自测要在正文里 @ 回去：群消息里只有 member_openid 能当 @ 的目标
@@ -1051,10 +1101,14 @@ class QqChannelPlugin(ServicePlugin):
         return int(row[0]) if row else None
 
     async def _deliver_to_group(
-        self, qq_group: str, author: dict, content: str, channel_msg_id: str = "",
+        self, group_id: int, qq_group: str, author: dict, content: str, channel_msg_id: str = "",
         channel_ref_idx: str = "", quote_ref: str = "",
     ) -> tuple[int, str, int] | None:
-        """把 QQ 群消息当作一次正常的群发言落库，并走与网页端完全相同的投递链路"""
+        """把 QQ 群消息当作一次正常的群发言落库，并走与网页端完全相同的投递链路。
+
+        落点群由调用方按映射表算好（见 _landing_group）：这个函数只认 group_id，
+        免得"消息进了 A 群、回复路由却记着 B 群"这种半截错位。
+        """
         from app.chat.gm import send_gm_message
         from app.chat.group_delivery import (
             broadcast_group_message,
@@ -1067,14 +1121,14 @@ class QqChannelPlugin(ServicePlugin):
         from app.database import async_session
 
         async with async_session() as db:
-            ensured = await self._ensure_qq_user(db, author, join_group=self._copree_group_id)
+            ensured = await self._ensure_qq_user(db, author, join_group=group_id)
             if ensured is None:
                 return None
             sender_id, peer_name = ensured
-            reply_to = await self._resolve_quoted(db, self._copree_group_id, quote_ref)
+            reply_to = await self._resolve_quoted(db, group_id, quote_ref)
             message = await send_gm_message(
                 db,
-                group_id=self._copree_group_id,
+                group_id=group_id,
                 sender_type="human",
                 sender_id=sender_id,
                 content=content,
@@ -1091,13 +1145,13 @@ class QqChannelPlugin(ServicePlugin):
             await db.flush()
             # 序列化一次，两处共用：AI 成员（fanout）和群里的人（broadcast）
             msg_data = await message_view(db, message)
-            await fanout_group_message(db, self._copree_group_id, message, content, msg_data)
-            await broadcast_group_message(self._copree_group_id, msg_data)
+            await fanout_group_message(db, group_id, message, content, msg_data)
+            await broadcast_group_message(group_id, msg_data)
             await db.commit()
-            await forward_group_message_federated(self._copree_group_id, msg_data, db)
-            wake_group_ai(self._copree_group_id, message, content)
-            await maybe_vectorize_group_message(db, self._copree_group_id, message)
-            logger.info(f"QQ 群 {qq_group} 的消息已进入 Copree 群 #{self._copree_group_id}（msg {message.id}）")
+            await forward_group_message_federated(group_id, msg_data, db)
+            wake_group_ai(group_id, message, content)
+            await maybe_vectorize_group_message(db, group_id, message)
+            logger.info(f"QQ 群 {qq_group} 的消息已进入 Copree 群 #{group_id}（msg {message.id}）")
             # 连 id 一起带回去：出站摘正文开头的 @ 要用它（入口归一之后是 <@!id>，名字摘不动）；
             # 站内消息 id 给"另一种事件更全时补正文"用
             return sender_id, str(peer_name or ""), int(message.id)
@@ -1148,19 +1202,60 @@ class QqChannelPlugin(ServicePlugin):
         )
 
     # ── 出站：AI 的回复 → QQ ───────────────────────────────────
+    # ── 落点与路由 ─────────────────────────────────────────────
+    def _landing_group(self, qq_group: str) -> int:
+        """这个 QQ 群落到哪个 Copree 群：先查映射表，没有就落到实例的默认落点群"""
+        return int(self._group_map.get(qq_group) or self._copree_group_id or 0)
+
+    def _remember_site_route(self, message_id: int, qq_group: str) -> None:
+        """记下"这条站内消息来自哪个 QQ 群"，AI 回它时才知道该回哪个群（有界，满了丢最早的）"""
+        if not message_id or not qq_group:
+            return
+        self._site_route[int(message_id)] = qq_group
+        self._site_route_order.append(int(message_id))
+        while len(self._site_route_order) > DEDUP_SIZE * 4:
+            stale = self._site_route_order.popleft()
+            if self._site_route.get(stale) is not None:
+                self._site_route.pop(stale, None)
+
+    def _route_for_outbound(self, group_id: int, reply_to: int | None) -> dict[str, Any] | None:
+        """AI 的这条消息该发到哪个 QQ 群：优先"它回的那条消息"来自的群，其次该群里最近来消息的那个"""
+        if reply_to:
+            openid = self._site_route.get(int(reply_to))
+            route = self._routes.get(openid) if openid else None
+            if route is not None and int(route.get("copree_group_id") or 0) == int(group_id):
+                return route
+        candidates = [
+            r for r in self._routes.values() if int(r.get("copree_group_id") or 0) == int(group_id)
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda r: float(r.get("ts") or 0))
+
+    def _serves_group(self, group_id: int) -> bool:
+        """这个实例接不接这个 Copree 群：默认落点，或映射表里任何一个群指向它"""
+        if self._copree_group_id and int(group_id) == int(self._copree_group_id):
+            return True
+        return any(int(v or 0) == int(group_id) for v in self._group_map.values())
+
     async def _outbound_sink(self, db: Any, group_id: int, message: Any, source: str) -> None:
         """群消息出口：只转发绑定群里 AI 发的消息。
 
         必须 fire-and-forget：这个 sink 在 send_gm_message 里、commit 之前被调用，
         等一次 HTTP 往返会把"发消息"本身拖慢。
         """
-        if not self._copree_group_id or group_id != self._copree_group_id:
-            return
+        if not self._serves_group(group_id):
+            return                          # 不是这个实例接的群，不归它管
         if getattr(message, "sender_type", None) != "ai":
             return
-        route = self._route.get(group_id)
         text = str(getattr(message, "content", "") or "").strip()
-        if not route or not text:
+        if not text:
+            return
+        route = self._route_for_outbound(group_id, getattr(message, "reply_to", None))
+        if not route:
+            # 有落点却没有被动凭据：本进程内还没收到过来自该群的入站消息（刚重启、
+            # 或这条 AI 消息不是回给 QQ 来消息的）。群里发不出去，留痕别静默丢。
+            logger.info(f"QQ 群回复跳过：Copree 群 #{group_id} 还没有可用的被动回复凭据")
             return
         # 只有「@ 事件」的回复才有腾讯自带的 @对方（见路由里 at_event 的注释）。那种情况摘掉开头
         # 对**这次回的那个人**的 @，免得两个 @；全量事件的回复腾讯不补，必须由我们自己把 @ 发出去。
@@ -1300,10 +1395,8 @@ class QqChannelPlugin(ServicePlugin):
 
         撤不掉就**如实回报**：调用方要把"站内已撤、QQ 撤不掉"告诉用户，别假装成功。
         """
-        if not self._copree_group_id or group_id != self._copree_group_id:
-            return None
         channel_id = str(getattr(message, "channel_msg_id", "") or "")
-        route = self._route.get(group_id)
+        route = self._route_for_outbound(group_id, getattr(message, "reply_to", None))
         if not channel_id or not route:
             return None                       # 这条没经通道，或我们没记住它的通道 id
         client = self._client
@@ -1407,7 +1500,7 @@ class QqChannelPlugin(ServicePlugin):
 
     def _live_route(self) -> tuple[dict[str, Any] | None, str]:
         """最近一次来消息的那条路由（群或私聊）——自测要打在最可能通的那条路上"""
-        candidates = [(float(r.get("ts") or 0), "group", r) for r in self._route.values()]
+        candidates = [(float(r.get("ts") or 0), "group", r) for r in self._routes.values()]
         candidates += [(float(r.get("ts") or 0), "dm", r) for r in self._dm_route.values()]
         if not candidates:
             return None, ""

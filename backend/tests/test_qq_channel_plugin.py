@@ -396,7 +396,7 @@ async def test_non_ai_or_other_group_is_not_forwarded(migrated_db):
     await _seed()
     plugin = await _make_plugin()
     try:
-        plugin._route[GROUP_ID] = {"qq": "QQGROUP-AAA", "msg_id": "MSG-1", "seq": 0, "ts": 0}
+        plugin._routes["QQGROUP-AAA"] = {"copree_group_id": GROUP_ID, "qq": "QQGROUP-AAA", "msg_id": "MSG-1", "seq": 0, "ts": 0}
         async with async_session() as db:
             await send_gm_message(db, group_id=GROUP_ID, sender_type="human",
                                   sender_id=GROUP_OWNER, content="人类发言")
@@ -485,7 +485,7 @@ async def test_self_test_sends_on_the_live_route(migrated_db):
         result = await plugin.self_test()
         assert result["sent"] is False and "还没有收到过消息" in result["reason"], result
 
-        plugin._route[GROUP_ID] = {
+        plugin._routes["QQGROUP-AAA"] = {"copree_group_id": GROUP_ID, 
             "qq": "QQGROUP-AAA", "msg_id": "MSG-1", "seq": 0, "ts": time.time(),
             "peer_name": "小明", "peer_openid": "OPENID-XYZ",
         }
@@ -496,7 +496,7 @@ async def test_self_test_sends_on_the_live_route(migrated_db):
         assert sent["kind"] == "group" and sent["msg_id"] == "MSG-1" and sent["seq"] == 1, sent
         assert "<@!OPENID-XYZ>" in sent["content"] and "@小明" in sent["content"], sent
 
-        plugin._route[GROUP_ID]["ts"] = 0                      # 窗口早就过期
+        plugin._routes["QQGROUP-AAA"]["ts"] = 0                      # 窗口早就过期
         result = await plugin.self_test()
         assert result["sent"] is False and "被动回复窗口已过" in result["reason"], result
         assert len(plugin._client.sent) == 1, "窗口过期时不该偷偷发一条主动消息"
@@ -516,7 +516,7 @@ async def test_group_outbound_strips_reply_mention(migrated_db):
     await _seed()
     plugin = await _make_plugin()
     plugin._copree_group_id = GROUP_ID
-    plugin._route[GROUP_ID] = {"qq": "QQGROUP-AAA", "msg_id": "MSG-1", "peer_name": "小明",
+    plugin._routes["QQGROUP-AAA"] = {"copree_group_id": GROUP_ID, "qq": "QQGROUP-AAA", "msg_id": "MSG-1", "peer_name": "小明",
                                "at_event": True}
 
     class _FakeMsg:
@@ -588,7 +588,7 @@ async def test_full_mode_reply_sends_the_mention_itself(migrated_db):
                 "SELECT id FROM users WHERE email = 'OPENID-XYZ@qq.bridge'"
             ))).scalar()
         assert uid, "入站应该建出锚点账号"
-        assert plugin._route[GROUP_ID].get("at_event") is False, plugin._route[GROUP_ID]
+        assert plugin._routes["QQGROUP-AAA"].get("at_event") is False, plugin._routes["QQGROUP-AAA"]
 
         class _FakeMsg:
             sender_type = "ai"
@@ -682,7 +682,7 @@ async def test_quote_replies_can_be_turned_off(migrated_db):
     plugin = await _make_plugin()
     plugin._quote_replies = False
     plugin._copree_group_id = GROUP_ID
-    plugin._route[GROUP_ID] = {"qq": "QQGROUP-AAA", "msg_id": "MSG-1", "seq": 0, "ts": time.time()}
+    plugin._routes["QQGROUP-AAA"] = {"copree_group_id": GROUP_ID, "qq": "QQGROUP-AAA", "msg_id": "MSG-1", "seq": 0, "ts": time.time()}
     try:
         async with async_session() as db:
             inbound = await send_gm_message(db, group_id=GROUP_ID, sender_type="human", sender_id=1,
@@ -716,7 +716,7 @@ async def test_configured_message_type_is_used(migrated_db):
     plugin = await _make_plugin()
     plugin._msg_type = 0                      # 即配置里选了「纯文本」
     plugin._copree_group_id = GROUP_ID
-    plugin._route[GROUP_ID] = {"qq": "QQGROUP-AAA", "msg_id": "MSG-1", "seq": 0, "ts": time.time()}
+    plugin._routes["QQGROUP-AAA"] = {"copree_group_id": GROUP_ID, "qq": "QQGROUP-AAA", "msg_id": "MSG-1", "seq": 0, "ts": time.time()}
     try:
         class _FakeMsg:
             sender_type = "ai"
