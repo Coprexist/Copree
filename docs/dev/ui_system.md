@@ -164,8 +164,10 @@ if (await confirmAsync({ title: '删除？', message: '不可恢复', danger: tr
 | 页面顶端 | 用 PageHeader（PageShell 已含），不要手写 `h-14 border-b` 的 div |
 | 弹窗 | Modal / Dialog，不要手写 `fixed inset-0` 遮罩（ESC、锁滚动、点遮罩关闭由 Dialog 统一给） |
 | 按钮 | `<Button>` 或 `.btn .btn-md .btn-* ` |
-| 控制台（/admin） | 进 /admin 收起应用侧边栏（Layout 按路径判断），宽度全给管理界面；控制台自带可折叠导航栏（收起=只剩图标，`localStorage` 记状态）与底部「返回应用」出口——侧边栏收起了就必须在这里留出口 |
-| 管理面板导航 | 分组/顺序/图标/文案/组件**只写在 `pages/admin/tabs.tsx`**；分组按"管理对象"分桶（通用 / 用户与内容 / 能力与扩展 / 监控与日志 / 数据与维护），每桶 2~6 项、桶名要能盖住桶内所有条目。页面里不许再写第二份标签表（桌面端与移动端会漂移） |
+| 控制台（/admin） | 进 /admin 收起应用侧边栏（Layout 按路径判断），宽度全给管理界面；控制台自带可折叠导航栏（收起=只剩图标，`localStorage` 记状态）与顶端「返回应用」出口（和折叠按钮同一排）——侧边栏收起了就必须在这里留出口 |
+| 控制台页签宽度 | 页签的宽度档位**只写在 `pages/console/workspaces.tsx`** 的 `width` 字段（表格/网格 `full`，表单 `wide`/`content` 居中），由 ConsolePage 统一套用 `PAGE_WIDTH`（定义在 `components/ui/PageShell.tsx`，全站仅此一份）；页签里不要再写 `max-w-*` 把内容钉在左边 |
+| 宽屏多列 | 宽屏上靠"列"填满，不靠把一张卡拉长：一组设置用 `grid xl:grid-cols-2 gap-4` 成对排列（同排卡片自动等高，行才对得齐），特别高的卡片并排放一行、独占行的用 `xl:col-span-2`；卡片高低差太大时改用 `columns-1 xl:columns-2` 让两列自然配平（子项加 `break-inside-avoid mb-4`） |
+| 管理面板导航 | 分组/顺序/图标/文案/组件/宽度**只写在 `pages/console/workspaces.tsx`**；分组按"管理对象"分桶（通用 / 用户与内容 / 能力与扩展 / 监控与日志 / 数据与维护），每桶 2~6 项、桶名要能盖住桶内所有条目。页面里不许再写第二份标签表（桌面端与移动端会漂移） |
 | 图标按钮 | `<IconButton>` 或 `.icon-btn` |
 | 输入框 | `<Input>` / `<Select>` 或 `.field` |
 | 卡片 | `.card .card-pad` 或 `<Card>` |
