@@ -3,12 +3,14 @@
 
 make_state_frame(): 构建单个状态帧（交接驱动：handoff/completed_handoff）
 format_state_stack_summary(): 栈 → AI 可读摘要（只渲染当前帧 + 交接信息）
+parse_state_summary(): 摘要 → 当时的栈顶帧身份（写与读共用一份标记，见 STATE_SUMMARY_MARK）
 
 情感向量纯函数见 emotion.py（独立模块）。
 """
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import re
 import uuid
 
 from app.utils.pure.emotion import (
@@ -17,6 +19,13 @@ from app.utils.pure.emotion import (
 
 
 MAX_STACK_DEPTH = 10
+
+# 状态摘要的写与读共用这一份标记：写入在 format_state_stack_summary，读回在 parse_state_summary。
+# 两边各留一份字面量的话，改一处就会让日志那边悄悄读不出状态——按状态分组全靠它。
+STATE_SUMMARY_MARK = "## 📋 当前状态"
+_STATE_SUMMARY_PREFIX = "\n\n" + STATE_SUMMARY_MARK
+# 摘要首行：{▸▶ 活跃 | ▸ 挂起} [type] (label): 在干嘛
+_STATE_FRAME_LINE = re.compile(r"^[▸▶]+\s*\[([^\]]*)\]\s*(?:\(([^)]*)\))?")
 
 # 帧的合法扩展字段（make_state_frame 白名单）
 _FRAME_FIELDS = (
@@ -155,7 +164,7 @@ def format_state_stack_summary(stack: list[dict], max_chars: int = 500,
     top = stack[-1]
 
     def render_top() -> list[str]:
-        lines = ["\n\n## 📋 当前状态"]
+        lines = [_STATE_SUMMARY_PREFIX]
         status = top.get("status", "active")
         type_name = top.get("type", "?")
         context = top.get("label") or top.get("context_ref", "")
@@ -219,3 +228,35 @@ def format_state_stack_summary(stack: list[dict], max_chars: int = 500,
     if len(compact) <= max_chars:
         return compact
     return compact[:max_chars].rstrip() + "\n……（摘要过长，已截断）"
+
+
+def parse_state_summary(summary: str) -> dict:
+    """从状态摘要里读回「当时栈顶是哪一帧」——format_state_stack_summary 的逆。
+
+    帧身份 = type + label（没有 label 时是 context_ref）。摘要里本来就没有帧实例 id：
+    日志该按「同一段状态」归堆，而不是按「同一次 push」——pop 再 push 是同一段状态。
+    """
+    if not summary or STATE_SUMMARY_MARK not in summary:
+        return {}
+    body = summary.split(STATE_SUMMARY_MARK, 1)[1]
+    for line in body.splitlines():
+        match = _STATE_FRAME_LINE.match(line.strip())
+        if match:
+            return {"type": match.group(1), "label": match.group(2) or ""}
+    return {}
+
+
+def state_frame_of(messages: list[dict]) -> dict:
+    """从一份请求体里读回当时的状态帧身份（那轮没注入状态摘要时返回空）。
+
+    只认开头就是标记的 system 消息：注入块的首字节固定，用户自己贴一段带同样标记的
+    文字不会被当成状态。
+    """
+    for msg in messages or []:
+        if not isinstance(msg, dict) or msg.get("role") != "system":
+            continue
+        content = msg.get("content")
+        if isinstance(content, str) and content.startswith(_STATE_SUMMARY_PREFIX):
+            return parse_state_summary(content)
+    return {}
+

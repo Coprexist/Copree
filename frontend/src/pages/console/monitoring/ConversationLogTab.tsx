@@ -5,7 +5,8 @@ import { FileText, Settings, Bot, Eye, ChevronDown, ChevronUp, Loader2, Save, Sl
 import Toggle from '../../../components/Toggle'
 import { Dialog } from '../../../components/ui'
 import RequestBodyViewer from '../../../components/shared/RequestBodyViewer'
-import { RunStatusChip, groupByStatus } from '../../../components/shared/RunStatus'
+import { RunStatusChip } from '../../../components/shared/RunStatus'
+import { StateChip, groupByState, logStateOf, stateKeyOf, type LogStateFrame } from '../../../components/shared/LogState'
 
 interface GlobalConfig {
   max_conversation_logs: number
@@ -35,6 +36,7 @@ interface LogSummary {
   token_usage: any
   has_output: boolean
   status?: string
+  state_frame?: LogStateFrame
   model: string | null
   thinking_enabled: boolean
   preview: any[]
@@ -416,10 +418,10 @@ export default function ConversationLogTab() {
           {logs.length > 0 && (
             <div className="bg-elevated border border-border rounded-card overflow-hidden">
               <div className="divide-y divide-border">
-                {groupByStatus(logs, log => log.status).map(group => (
-                  <div key={group.status}>
+                {groupByState(logs, logStateOf).map(group => (
+                  <div key={stateKeyOf(group.frame)}>
                     <div className="px-4 py-1.5 bg-canvas flex items-center gap-2">
-                      <RunStatusChip status={group.status} />
+                      <StateChip frame={group.frame} />
                       <span className="text-2xs text-textMuted">{group.items.length}</span>
                     </div>
                     <div className="divide-y divide-border">
@@ -432,6 +434,7 @@ export default function ConversationLogTab() {
                     <div className="flex items-center justify-between mb-1">
                       <div className="flex items-center gap-2">
                         <span className="text-xs font-mono text-textMuted">#{log.id}</span>
+                        <RunStatusChip status={log.status} />
                         <span className={`text-xs px-1.5 py-0.5 rounded ${
                           log.conversation_type === 'group' ? 'bg-blue-400/10 text-blue-400' : 'bg-primary-400/10 text-primary-400'
                         }`}>
@@ -479,6 +482,7 @@ export default function ConversationLogTab() {
               >
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="flex items-center gap-2 text-sm font-semibold text-textPrimary">
+                    <StateChip frame={logStateOf(logDetail)} />
                     <RunStatusChip status={logDetail?.status} />
                     {t('admin.conversationLog').replace('{id}', String(selectedLog))}
                   </h3>

@@ -10,11 +10,12 @@ import { ChevronRight } from 'lucide-react'
 import MarkdownContent from './MarkdownContent'
 import { useT } from '../../i18n/I18nContext'
 
-type Kind = 'system' | 'injected' | 'user' | 'assistant' | 'roundTools' | 'toolCall' | 'toolResult' | 'reasoning' | 'error'
+type Kind = 'system' | 'state' | 'injected' | 'user' | 'assistant' | 'roundTools' | 'toolCall' | 'toolResult' | 'reasoning' | 'error'
 
 /** 分块配色：左竖条定色、底色调淡；工具那两类再叠虚线框 + 等宽字体，同色系也不会混 */
 const STYLES: Record<Kind, { bar: string; box: string; key: string }> = {
   system:     { bar: 'bg-textMuted/40',   box: 'bg-canvas border-border',                          key: 'logs:kindSystem' },
+  state:      { bar: 'bg-primary-500',    box: 'bg-canvas border-primary-500/30',                  key: 'logs:kindState' },
   injected:   { bar: 'bg-accent-500',     box: 'bg-accent-500/10 border-accent-500/30 border-dashed', key: 'logs:kindInjected' },
   user:       { bar: 'bg-primary-500',    box: 'bg-primary-500/10 border-primary-500/30',           key: 'logs:kindUser' },
   assistant:  { bar: 'bg-mint-500',       box: 'bg-mint-500/10 border-mint-500/30',                 key: 'logs:kindAssistant' },
@@ -28,6 +29,8 @@ const STYLES: Record<Kind, { bar: string; box: string; key: string }> = {
 /** 等宽渲染的种类：工具入参/返回与「本轮工具」汇总行都是机器文本，等宽才看得出结构 */
 const MONO: Kind[] = ['roundTools', 'toolCall', 'toolResult']
 
+/** 状态栈摘要：这段状态的前缀（当前帧 / 交接 / 焦段）就长在这条里，是各状态请求体最大的不同 */
+const STATE_MARK = '## 📋 当前状态'
 /** 插入进来的上下文（不是对话双方说的话）：变更通知、上一轮交接、上下文压缩、未读提示 */
 const INJECTED_MARKS = ['【能力变更通知】', '【通道变更】', '[上一轮交接]', '[上下文压缩]', '（更早还有']
 /** 收尾/报错：工具轮次用尽、异常中断、模型报错都留在这里，单独上红色才不会被当成一句普通回复 */
@@ -57,11 +60,18 @@ function classify(msg: any): Kind {
   if (msg?.role === 'tool') return 'toolResult'
   if (Array.isArray(msg?.tool_calls) && msg.tool_calls.length > 0) return 'toolCall'
   if (content.startsWith('[本轮工具]')) return 'roundTools'
+  if (content.trimStart().startsWith(STATE_MARK)) return 'state'
   if (ERROR_MARKS.some(mark => content.includes(mark))) return 'error'
   if (INJECTED_MARKS.some(mark => content.includes(mark))) return 'injected'
   if (msg?.role === 'user') return 'user'
   if (msg?.role === 'assistant') return 'assistant'
   return 'system'
+}
+
+/** 状态块的首行就是这轮的帧身份（▸▶ [type] (label): 在干嘛），原样拿来当标题 */
+function stateTitle(content: string): string | undefined {
+  const line = content.split('\n').map(s => s.trim()).find(s => s.startsWith('▸') || s.startsWith('▶'))
+  return line ? line.replace(/^[▸▶]+\s*/, '') : undefined
 }
 
 function toolName(call: any): string {
@@ -152,6 +162,9 @@ export default function RequestBodyViewer({ messages, className = '' }: { messag
       } else if (kind === 'toolResult') {
         title = msg.tool_call_id ? String(msg.tool_call_id) : undefined
         body = <Body text={textOf(msg.content)} mono />
+      } else if (kind === 'state') {
+        title = stateTitle(textOf(msg.content))
+        body = <Body text={textOf(msg.content)} />
       } else {
         body = <Body text={textOf(msg.content)} mono={MONO.includes(kind)} />
       }

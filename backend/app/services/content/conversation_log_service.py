@@ -8,6 +8,7 @@ from sqlalchemy import select, delete, func, text
 
 from app.models.conversation_log import ConversationLogConfig, ConversationLog
 from app.repositories.content_repo import ContentRepository
+from app.utils.pure.state_stack import state_frame_of
 
 logger = logging.getLogger(__name__)
 
@@ -732,6 +733,9 @@ def _log_to_summary(log: ConversationLog) -> dict:
         "token_usage": log.token_usage,
         "has_output": log.has_output,
         "status": _run_status(msgs, bool(log.has_output)),
+        # 这轮是在哪段状态下发出的（帧身份 = type + label）：不同状态的请求体前缀本就不同，
+        # 列表按它归堆才看得出「这段状态的上下文长什么样」
+        "state_frame": state_frame_of(msgs),
         "model": log.model,
         "thinking_enabled": log.thinking_enabled,
         "preview": preview,
@@ -752,6 +756,7 @@ def _log_to_detail(log: ConversationLog) -> dict:
         "token_usage": log.token_usage,
         "has_output": log.has_output,
         "status": _run_status(log.messages or [], bool(log.has_output)),
+        "state_frame": state_frame_of(log.messages or []),
         "model": log.model,
         "thinking_enabled": log.thinking_enabled,
         "created_at": str(log.created_at) if log.created_at else None,

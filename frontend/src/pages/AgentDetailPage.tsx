@@ -17,7 +17,8 @@ import { Dialog, EmptyState } from '../components/ui'
 import FilePreviewModal from '../components/FilePreviewModal'
 import ChannelCard from '../components/channels/ChannelCard'
 import RequestBodyViewer from '../components/shared/RequestBodyViewer'
-import { RunStatusChip, groupByStatus } from '../components/shared/RunStatus'
+import { RunStatusChip } from '../components/shared/RunStatus'
+import { StateChip, groupByState, logStateOf, stateKeyOf, type LogStateFrame } from '../components/shared/LogState'
 
 /** 扩展名→MIME 类型映射（后端未返回 mime_type 时 fallback） */
 const EXT_MIME_MAP: Record<string, string> = {
@@ -110,6 +111,7 @@ interface LogSummary {
   token_usage: any
   has_output: boolean
   status?: string
+  state_frame?: LogStateFrame
   model: string | null
   thinking_enabled: boolean
   preview: any[]
@@ -1217,6 +1219,7 @@ export default function AgentDetailPage() {
               <div className="mb-3 rounded-control border border-border bg-canvas p-3">
                 <div className="flex items-center gap-2 mb-2">
                   <h4 className="text-xs font-medium text-textPrimary">{t('logs:latestRequest')}</h4>
+                  <StateChip frame={logStateOf(latestLog)} />
                   <RunStatusChip status={latestLog.status} />
                   <span className="text-3xs text-textMuted">
                     #{latestLog.id}
@@ -1245,10 +1248,10 @@ export default function AgentDetailPage() {
               </p>
             ) : (
               <div className="space-y-3 max-h-96 overflow-y-auto">
-                {groupByStatus(logs, (log) => log.status).map((group) => (
-                  <div key={group.status} className="space-y-2">
+                {groupByState(logs, logStateOf).map((group) => (
+                  <div key={stateKeyOf(group.frame)} className="space-y-2">
                     <div className="flex items-center gap-2">
-                      <RunStatusChip status={group.status} />
+                      <StateChip frame={group.frame} />
                       <span className="text-3xs text-textMuted">
                         {group.items.length} {t('agentDetail.logCountSuffix')}
                       </span>
@@ -1257,6 +1260,7 @@ export default function AgentDetailPage() {
                   <div key={log.id} className="p-3 rounded-control bg-canvas border border-border">
                     <div className="flex items-center justify-between mb-1">
                       <div className="flex items-center gap-2">
+                        <RunStatusChip status={log.status} />
                         <span className="text-xs px-1.5 py-0.5 rounded bg-primary-500/10 text-primary-400">
                           {log.conversation_type === 'dm' ? t('agentDetail.logTypeDm') : t('agentDetail.logTypeGroup')}
                         </span>
@@ -1316,6 +1320,7 @@ export default function AgentDetailPage() {
                 >
                   <div className="flex items-center justify-between px-4 py-3 border-b border-border">
                     <h4 className="flex items-center gap-2 font-medium text-sm text-textPrimary">
+                      <StateChip frame={logStateOf(selectedLog)} />
                       <RunStatusChip status={selectedLog.status} />
                       {t('agentDetail.logDetailTitle')} #{selectedLog.id}
                       <span className="text-textMuted ml-2 text-xs">
