@@ -1396,3 +1396,98 @@ async def test_merged_group_replies_only_through_the_owning_bot(migrated_db):
     finally:
         _cleanup(bot_a)
         _cleanup(bot_b)
+
+async def test_union_openid_binds_one_account_across_bots(migrated_db):
+    """两台机器人认到同一个 union → 一个本地账号；两边的地址各留一份（@ 他要用各自那份）"""
+    from app.database import async_session
+    from app.services.plugin.channel_user import channel_contacts, ensure_channel_user
+
+    await _seed()
+    async with async_session() as db:
+        first = await ensure_channel_user(
+            db, kind="qq", owner_scope="bot-a", origin="OPENID-A", display_name="小明",
+            origin_channel="qq", union_id="UNION-X", commit=False,
+        )
+        second = await ensure_channel_user(
+            db, kind="qq", owner_scope="bot-b", origin="OPENID-B", display_name="小明",
+            origin_channel="qq", union_id="UNION-X", commit=False,
+        )
+        await db.commit()
+    assert first[0] == second[0], f"同一个 union 应该只占一个账号：{first} {second}"
+
+    async with async_session() as db:
+        assert await channel_contacts(db, kind="qq", owner_scope="bot-a", user_ids=[first[0]]) == {
+            first[0]: "OPENID-A",
+        }
+        assert await channel_contacts(db, kind="qq", owner_scope="bot-b", user_ids=[first[0]]) == {
+            first[0]: "OPENID-B",
+        }
+
+
+async def test_same_qq_message_from_two_bots_lands_once(migrated_db):
+    """两台机器人都收到了同一句 QQ 消息：站内只留一条，两侧的人是同一个账号
+
+    合并后的群里同一句话出现两遍、说话人还是两个账号——这是"把两台机器人都拉进一个群"
+    最先撞上的事（两台都开了全量模式时，群里每条人话都会各送一次）。
+    """
+    from app.database import async_session
+
+    await _seed()
+    bot_a = await _make_plugin("bot-a")
+    bot_b = await _make_plugin("bot-b")
+    try:
+        await bot_a._on_group_at(dict(GROUP_EVENT, id="MSG-A", group_openid="QQGROUP-A"))
+        await bot_b._on_group_at(dict(GROUP_EVENT, id="MSG-B", group_openid="QQGROUP-B"))
+
+        async with async_session() as db:
+            rows = (await db.execute(text(
+                "SELECT id, sender_id, channel_origin FROM messages WHERE group_id = :g"
+            ), {"g": GROUP_ID})).all()
+            users = (await db.execute(text(
+                "SELECT owner_scope, origin, user_id FROM external_identities WHERE kind = 'qq'"
+            ))).all()
+        assert len(rows) == 1, f"同一句只该落一条：{rows}"
+        assert rows[0][2] == "qq:bot-a:QQGROUP-A", rows
+        assert {u[0] for u in users} == {"bot-a", "bot-b"}, users
+        assert len({u[2] for u in users}) == 1, f"两侧应该是同一个账号：{users}"
+    finally:
+        _cleanup(bot_a)
+        _cleanup(bot_b)
+
+async def test_one_bot_sends_when_two_serve_the_same_group(migrated_db):
+    """两台机器人接同一个 Copree 群：AI 自己起的话头（没有来源可认）只由一台发出去
+
+    来源可认的回复已经由 channel_origin 定死了归谁；这条管的是认不出来的时候——
+    两台各自"本群最近来消息那条"都有凭据，谁也不让，群里就会出现两条一样的消息。
+    """
+    import time
+
+    from app.chat.gm import send_gm_message
+    from app.database import async_session
+    from app.services.infrastructure.plugin_registry import PluginRegistry
+
+    await _seed()
+    bot_a = await _make_plugin("bot-a")
+    bot_b = await _make_plugin("bot-b")
+    PluginRegistry.register(bot_a)
+    PluginRegistry.register(bot_b)
+    try:
+        now = time.time()
+        for bot, openid in ((bot_a, "QQGROUP-A"), (bot_b, "QQGROUP-B")):
+            assert bot._serves_group(GROUP_ID)
+            bot._routes[openid] = {
+                "qq": openid, "copree_group_id": GROUP_ID, "msg_id": f"MSG-{openid}", "seq": 0,
+                "ts": now, "peer_name": "小明", "peer_openid": f"OPENID-{openid}",
+            }
+        async with async_session() as db:
+            await send_gm_message(db, GROUP_ID, "ai", AGENT_USER, "我先说一句")
+            await db.commit()
+        await _wait_sent(bot_a)
+
+        assert [s["target"] for s in bot_a._client.sent] == ["QQGROUP-A"], bot_a._client.sent
+        assert bot_b._client.sent == [], f"第二台不该再发一遍：{bot_b._client.sent}"
+    finally:
+        PluginRegistry.unregister(bot_a.key)
+        PluginRegistry.unregister(bot_b.key)
+        _cleanup(bot_a)
+        _cleanup(bot_b)

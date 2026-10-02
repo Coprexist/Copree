@@ -39,6 +39,15 @@ class ExternalIdentity(Base):
         comment="该通道下的归属实例：QQ 是 agent-<agentId>，联邦是对端公网 ID",
     )
     origin = Column(String(200), nullable=False, comment="通道侧的稳定标识：QQ 是 openid，联邦是远端实体 ID")
+    # 跨应用统一 ID（QQ 的 union_openid，官方说明"可能为空"）：同一个开发者名下的多个机器人
+    # 靠它认出"这是同一个人"，否则同一个人在每个机器人眼里各是一个 openid、各占一行
+    union_id = Column(String(200), nullable=True, comment="跨应用统一标识（QQ 是 union_openid）")
+    # 这个地址对应的本地锚点账号（见 services/plugin/channel_user）：@ 翻译、发消息都靠它，
+    # 同一 union 的多个地址共用同一个锚点，所以这里不做唯一约束
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True,
+        comment="这个通道地址对应的本地锚点账号",
+    )
     display_name = Column(String(120), default="", comment="通道侧昵称，仅用于展示")
     avatar_url = Column(Text, default="")
     status = Column(String(16), default=PENDING, server_default=PENDING, comment="pending | approved | blocked")
@@ -56,6 +65,8 @@ class ExternalIdentity(Base):
     __table_args__ = (
         UniqueConstraint("kind", "owner_scope", "origin", name="uq_external_identity"),
         Index("ix_external_identity_lookup", "kind", "owner_scope", "status"),
+        # 同一个 union 在别的实例下有没有行：跨机器人认亲就走这条
+        Index("ix_external_identity_union", "kind", "union_id"),
     )
 
 

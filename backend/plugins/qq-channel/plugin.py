@@ -62,6 +62,8 @@ DM_WINDOW, DM_MAX = 3600, 4
 # 互动召回（官方：只有单聊有 is_wakeup 字段；对方主动对话后 30 天内 4 个周期各 1 条）
 RECALL_PERIOD_DAYS = (1, 3, 7, 30)
 UNREACHABLE_NOTICE_INTERVAL = 300  # 同一个目标的"发不出去"提示最多 5 分钟一条，别刷屏
+MIRROR_WINDOW_SECONDS = 3          # 同一句 QQ 消息被两台机器人分别送进来的认亲窗口
+MIRROR_MIN_CHARS = 2               # 太短的正文（"嗯"、"?"）撞车概率太高，不认
 GROUP_PER_MINUTE = 20              # 单群频控 20/qpm（主动消息）
 BOT_PER_MINUTE = 60                # Bot 维度 60/qpm
 PAIR_NOTIFY_INTERVAL = 60           # 陌生人反复私聊时，配对码最多 60 秒提醒一次
@@ -1137,6 +1139,89 @@ class QqChannelPlugin(ServicePlugin):
         )).first()
         return int(row[0]) if row else None
 
+    @staticmethod
+    def _author_openid(author: dict) -> str:
+        """通道侧的会话/成员标识：群里是 member_openid，私聊是 user_openid（官方两套都可能是空）"""
+        return str(
+            author.get("member_openid") or author.get("user_openid") or author.get("id") or ""
+        ).strip()
+
+    async def _twin_message(self, db: Any, group_id: int, qq_group: str, author: dict,
+                            content: str) -> Any | None:
+        """同一条 QQ 消息被两台机器人分别送进来时，认出先落库的那条。
+
+        判据：同群、QQ 进来的人话、正文一字不差、几秒之内、来源不是本实例，且两边认到的
+        union 不冲突（都认得出又不同名 = 根本不是同一个人）。
+        两台各建一条的后果：合并后的 Copree 群里同一句话出现两遍，说话人还是两个账号。
+        """
+        if len(content.strip()) < MIRROR_MIN_CHARS:
+            return None
+        from datetime import timedelta
+
+        from sqlalchemy import select
+
+        from app.models.external import ExternalIdentity
+        from app.models.message import Message
+        from app.utils.pure.timeutil import utc_now
+
+        mine = format_channel_origin(self.channel_kind, self.instance, qq_group)
+        twin = (await db.execute(
+            select(Message).where(
+                Message.group_id == int(group_id),
+                Message.sender_type == "human",
+                Message.channel_origin.isnot(None),
+                Message.channel_origin != mine,
+                Message.content == content,
+                Message.created_at >= utc_now() - timedelta(seconds=MIRROR_WINDOW_SECONDS),
+            ).order_by(Message.id.desc()).limit(1)
+        )).scalars().first()
+        if twin is None:
+            return None
+        theirs = parse_channel_origin(self.channel_kind, twin.channel_origin)
+        union = str(author.get("union_openid") or "").strip()
+        if theirs and union:
+            row = (await db.execute(
+                select(ExternalIdentity.union_id).where(
+                    ExternalIdentity.kind == self.channel_kind,
+                    ExternalIdentity.owner_scope == theirs[0],
+                    ExternalIdentity.origin == theirs[1],
+                )
+            )).first()
+            other_union = str((row[0] if row else "") or "")
+            if other_union and other_union != union:
+                return None             # 两边都认得出人，而且不是同一个 → 只是碰巧说了同一句话
+        return twin
+
+    async def _adopt_twin(self, db: Any, twin: Any, author: dict) -> tuple[int, str]:
+        """另一台机器人已经落下这一条：把这一侧的人接到那个账号上，不再建第二条消息。
+
+        这就是"两侧 AI 都收到了、同时只有这一条"时的捆绑：本地账号从此只有一个，
+        这一侧的地址（member_openid）照旧留着——@ 他、回他都要用它。
+        """
+        from sqlalchemy import select
+
+        from app.models.user import User
+        from app.services.plugin import pairing
+
+        openid = self._author_openid(author)
+        identity = await pairing.ensure(
+            db, kind=self.channel_kind, owner_scope=self.instance, origin=openid,
+            display_name=str(author.get("username") or ""), commit=False,
+        )
+        union = str(author.get("union_openid") or "").strip()
+        if union and identity.union_id != union:
+            identity.union_id = union
+        if int(identity.user_id or 0) != int(twin.sender_id):
+            identity.user_id = int(twin.sender_id)
+        name = (await db.execute(
+            select(User.username).where(User.id == int(twin.sender_id))
+        )).scalar()
+        logger.info(
+            f"QQ 群 {openid[-6:]} 与已落库的那条是同一句（来自 {twin.channel_origin}）："
+            f"接到账号 #{twin.sender_id}"
+        )
+        return int(twin.sender_id), str(name or "")
+
     async def _deliver_to_group(
         self, group_id: int, qq_group: str, author: dict, content: str, channel_msg_id: str = "",
         channel_ref_idx: str = "", quote_ref: str = "",
@@ -1158,6 +1243,12 @@ class QqChannelPlugin(ServicePlugin):
         from app.database import async_session
 
         async with async_session() as db:
+            twin = await self._twin_message(db, group_id, qq_group, author, content)
+            if twin is not None:
+                # 另一台机器人已经落下这一条：捆绑身份、不再建第二条（见 _adopt_twin）
+                sender_id, peer_name = await self._adopt_twin(db, twin, author)
+                await db.commit()
+                return sender_id, peer_name, int(twin.id)
             ensured = await self._ensure_qq_user(db, author, join_group=group_id)
             if ensured is None:
                 return None
@@ -1227,12 +1318,15 @@ class QqChannelPlugin(ServicePlugin):
         """
         from app.services.plugin.channel_user import ensure_channel_user
 
-        openid = str(author.get("member_openid") or author.get("user_openid") or author.get("id") or "").strip()
+        openid = self._author_openid(author)
         return await ensure_channel_user(
             db,
             kind=self.channel_kind,
             owner_scope=self.instance,
             origin=openid,
+            # 跨应用统一标识（官方：可能为空）：多台机器人认同一个人就靠它，
+            # 否则同一个人在每台机器人眼里各是一个 openid、各占一个账号
+            union_id=str(author.get("union_openid") or "").strip(),
             display_name=str(author.get("username") or "").strip(),
             origin_channel=self.channel_kind[:16],
             join_group=join_group,
@@ -1289,6 +1383,44 @@ class QqChannelPlugin(ServicePlugin):
             return True
         return any(int(v or 0) == int(group_id) for v in self._group_map.values())
 
+    @staticmethod
+    def _alive(plugin: Any) -> bool:
+        task = getattr(plugin, "_task", None)
+        return task is not None and not task.done()
+
+    def _siblings(self) -> list[Any]:
+        """同插件的其它实例：所有通道实例都跑在同一个进程里，选举不必跨进程协商"""
+        from app.services.infrastructure.plugin_registry import PluginRegistry
+
+        # 按插件 id 认亲 + 鸭子类型确认：注册表里躺着所有服务插件，只有这套实现才有
+        # "接哪个群、绑哪个 AI、有没有被动凭据"的概念（按类比会在"同一份代码被加载两次"时漏认）
+        return [
+            p for p in PluginRegistry.get_all()
+            if p is not self and getattr(p, "id", "") == self.id and hasattr(p, "_route_for_outbound")
+        ]
+
+    def _carrier(self, group_id: int, author_id: int) -> Any:
+        """这条 AI 消息该由哪台机器人发出去（返回的就是那台实例）。
+
+        同一个 Copree 群可能被多台接着：本群没有来源可认时（AI 自己起的话头）谁都能发，
+        两边都发群里就是两条。选举规则确定性（先作者归属、再有可用被动凭据、最后实例名），
+        每台各算一次都得到同一个答案——用一个进程内的实例表就够了，不需要额外的账本。
+        """
+        candidates = [
+            p for p in [self] + self._siblings()
+            if self._alive(p) and p._serves_group(group_id)
+        ]
+        if not candidates:
+            return self
+        ready = [p for p in candidates if p._route_for_outbound(group_id, "") is not None]
+        pool = ready or candidates
+        owned = [
+            p for p in pool
+            if int(getattr(p, "_target_user_id", 0) or 0) == int(author_id or 0)
+        ]
+        pool = owned or pool
+        return min(pool, key=lambda p: str(getattr(p, "instance", "") or ""))
+
     async def _outbound_sink(self, db: Any, group_id: int, message: Any, source: str) -> None:
         """群消息出口：只转发绑定群里 AI 发的消息。
 
@@ -1306,6 +1438,10 @@ class QqChannelPlugin(ServicePlugin):
         if origin is not None and origin[0] != self.instance:
             # 这条来自别的实例的通道会话（同一个 Copree 群被两个机器人接着）：归它回。
             # 我们插一手只会把它发进自己那个群——被动凭据也只在它那边
+            return
+        if origin is None and self._carrier(group_id, int(getattr(message, "sender_id", 0) or 0)) is not self:
+            # 没有来源可认（AI 自己起的话头）：同群还有别的机器人在接，选一台发，
+            # 否则两台各发一条，群里就是重复的
             return
         route = self._route_for_outbound(group_id, origin[1] if origin else "")
         if not route:

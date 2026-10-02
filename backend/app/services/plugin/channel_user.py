@@ -27,16 +27,6 @@ def anchor_email(kind: str, origin: str) -> str:
     return f"{origin}{_anchor_suffix(kind)}"
 
 
-def origin_from_anchor(kind: str, email: str) -> str | None:
-    """锚点邮箱反解回通道侧标识 —— 正写与反解必须同一份拼法，所以摆在一起
-
-    认不出（不是这条通道的锚点）返回 None，而不是猜一个出来。
-    """
-    suffix = _anchor_suffix(kind)
-    text = str(email or "")
-    return text[: -len(suffix)] if text.endswith(suffix) else None
-
-
 async def channel_contacts(
     db: Any, *, kind: str, owner_scope: str, user_ids: Iterable[int]
 ) -> dict[int, str]:
@@ -45,11 +35,10 @@ async def channel_contacts(
     出站要把 <@!平台id> 翻成通道侧的真 @（QQ 官方的 <@!openid>、NapCat 的 [CQ:at,qq=…]），
     靠的就是这张表：只有走过这条通道的人，在那条通道上才有 id 可 @。
 
-    只查调用方点名的那几个 id：一次回复里 @ 的人通常 1-3 个，而通道身份会随配对人数一直涨，
+     只查调用方点名的那几个 id：一次回复里 @ 的人通常 1-3 个，而通道身份会随配对人数一直涨，
     按通道全表拉出来再在 Python 里筛是拿 O(通道历史) 换 O(@数)。
-    两步都只碰这几个 id：先按 id 认人（锚点由 origin_from_anchor 反解，不在这里重写拼法），
-    再拿解出来的标识确认它确实属于 (kind, owner_scope) —— 同一个 QQ 号接了两个实例时，
-    只有走过**这个实例**的那条身份才算数。
+    一次 where 就够：外部身份那一行直接记着锚点账号（user_id），而 (kind, owner_scope)
+    限定"哪台机器人"，所以同一个 QQ 号接了两个实例时，只有走过**这个实例**的那条地址算数。
     """
     ids = sorted({int(uid) for uid in user_ids})
     if not ids:
@@ -57,25 +46,15 @@ async def channel_contacts(
     from sqlalchemy import select
 
     from app.models.external import ExternalIdentity
-    from app.models.user import User
 
     rows = (await db.execute(
-        select(User.id, User.email).where(User.id.in_(ids))
-    )).all()
-    decoded = {
-        int(uid): origin for uid, email in rows
-        if (origin := origin_from_anchor(kind, str(email)))
-    }
-    if not decoded:
-        return {}
-    known = set((await db.execute(
-        select(ExternalIdentity.origin).where(
+        select(ExternalIdentity.user_id, ExternalIdentity.origin).where(
             ExternalIdentity.kind == kind,
             ExternalIdentity.owner_scope == owner_scope,
-            ExternalIdentity.origin.in_(list(decoded.values())),
+            ExternalIdentity.user_id.in_(ids),
         )
-    )).scalars().all())
-    return {uid: origin for uid, origin in decoded.items() if origin in known}
+    )).all()
+    return {int(uid): str(origin) for uid, origin in rows if uid is not None}
 
 
 async def _unique_username(db: Any, desired: str, fallback: str) -> str:
@@ -95,7 +74,7 @@ async def _unique_username(db: Any, desired: str, fallback: str) -> str:
 
 async def ensure_channel_user(
     db: Any, *, kind: str, owner_scope: str, origin: str, display_name: str,
-    origin_channel: str, join_group: int = 0, commit: bool = True,
+    origin_channel: str, join_group: int = 0, commit: bool = True, union_id: str = "",
 ) -> tuple[int, str] | None:
     """外部通道的本地锚点账号：没有就建（type='external'、一次性随机口令、
     email=origin@<kind>.bridge），拿到昵称就补写 username（撞名加 #2/#3…），
@@ -104,11 +83,16 @@ async def ensure_channel_user(
     kind 用插件 manifest 里的 channel.kind：它同时决定 email 锚点后缀与外部身份的归类，
     所以 QQ 的 openid 和 NapCat 的 QQ 号天然不会互相撞上。
 
+    union_id 是通道侧的**跨应用统一标识**（QQ 的 union_openid，官方说明"可能为空"）：
+    有它就按它认人——同一个开发者名下多个机器人看到的是同一个人，共用一个锚点账号；
+    空则退回"这个地址自己一个账号"的老行为。
+
     commit=True 适合"建号就是这次操作全部"的调用方；投递链路（消息落库前还要 fanout /
     broadcast）必须传 False，把提交留给同一条链路的最后一步。
     """
     from sqlalchemy import select
 
+    from app.models.external import ExternalIdentity
     from app.models.group import GroupMember
     from app.models.user import User
     from app.utils.auth import hash_password
@@ -125,8 +109,34 @@ async def ensure_channel_user(
     raw_name = str(display_name or "").strip()
     nickname = raw_name[:40]
 
+    union_id = str(union_id or "").strip()
     anchor = anchor_email(kind, origin)
     row = (await db.execute(select(User).where(User.email == anchor))).scalar_one_or_none()
+    if union_id:
+        # 跨机器人认亲：同一个 union 已经在别的实例下露过面就用它那个锚点，并把这些地址都指过去。
+        # 不合并的话，同一个人在"两个机器人都接一个群"的合并会话里就是两个账号、两份记忆。
+        siblings = (await db.execute(
+            select(ExternalIdentity).where(
+                ExternalIdentity.kind == kind,
+                ExternalIdentity.union_id == union_id,
+                ExternalIdentity.origin != origin,
+            ).order_by(ExternalIdentity.id)
+        )).scalars().all()
+        seen = {int(s.user_id) for s in siblings if s.user_id}
+        if row is not None:
+            seen.add(int(row.id))
+        # 取最早的那个账号当正主：谁先来谁的名字与记忆留下，合并方向固定，不看这次是谁先说话
+        canonical = (await db.get(User, min(seen))) if seen else None
+        if canonical is not None:
+            if row is None or int(row.id) != int(canonical.id):
+                logger.info(
+                    f"外部通道账号合并：{kind} …{origin[-6:]} → {canonical.username}（union 认出是同一个人）"
+                )
+            row = canonical
+            anchor = str(canonical.email or "")
+            for sibling in siblings:
+                if int(sibling.user_id or 0) != int(canonical.id):
+                    sibling.user_id = int(canonical.id)
     if row is None:
         row = User(
             username=await _unique_username(db, nickname or placeholder, placeholder),
@@ -153,11 +163,15 @@ async def ensure_channel_user(
     # 外部身份那一行：通道侧昵称优先，拿不到就用本地显示名
     from app.services.plugin import pairing
 
-    await pairing.ensure(
+    identity = await pairing.ensure(
         db, kind=kind, owner_scope=owner_scope, origin=origin,
         display_name=raw_name or str(row.username or ""),
         commit=False,
     )
+    if union_id and identity.union_id != union_id:
+        identity.union_id = union_id
+    if identity.user_id != int(row.id):
+        identity.user_id = int(row.id)
 
     if join_group:
         member = (await db.execute(

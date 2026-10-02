@@ -36,6 +36,15 @@ app/chat/group_delivery.py 与 dm_delivery.py，和网页端完全同路。
 私信会话都挂在它上面；他以后自己注册了 Copree 账号，才用 `bound_user_id` 把两边绑起来。
 锚点邮箱的拼法只有一处：`services/plugin/channel_user.anchor_email()`。
 
+**同一个人在多个机器人眼里是多个 origin**（QQ 的 openid 按机器人加密，官方只有 `union_openid`
+是"跨应用统一"且可能为空），所以外部身份那一行还记两样东西：`union_id`（跨应用标识）与
+`user_id`（这个地址对应的锚点账号）。认人顺序是 **union 优先**——同一个 union 在别的实例下
+已经露过面就用它那个锚点，并把两行都指过去；拿不到 union 才退回"这个地址自己一个账号"。
+同一条 QQ 消息若被两台机器人分别送进来（两台都开了全量模式时每条人话都会各送一次），
+后到的那条会认出先落库的那条（同群、正文一字不差、几秒之内、union 不冲突）：
+**不再建第二条消息**，只把这一侧的人也接到那个账号上。
+反向的 `bound_user_id` 仍然是"他后来自己注册了 Copree 账号"才用。
+
 ## 3. 配对（默认策略）
 
 默认 `dm_policy = pairing`：
