@@ -59,6 +59,9 @@ OP_HELLO = 10
 # 被动回复窗口（官方：群 5 分钟/5 次，单聊 60 分钟/4 次）
 GROUP_WINDOW, GROUP_MAX = 300, 5
 DM_WINDOW, DM_MAX = 3600, 4
+# 互动召回（官方：只有单聊有 is_wakeup 字段；对方主动对话后 30 天内 4 个周期各 1 条）
+RECALL_PERIOD_DAYS = (1, 3, 7, 30)
+UNREACHABLE_NOTICE_INTERVAL = 300  # 同一个目标的"发不出去"提示最多 5 分钟一条，别刷屏
 GROUP_PER_MINUTE = 20              # 单群频控 20/qpm（主动消息）
 BOT_PER_MINUTE = 60                # Bot 维度 60/qpm
 PAIR_NOTIFY_INTERVAL = 60           # 陌生人反复私聊时，配对码最多 60 秒提醒一次
@@ -153,7 +156,7 @@ class QqClient:
 
     async def _send_rich(
         self, path: str, content: str, msg_id: str | None, msg_seq: int,
-        message_reference: str = "", force_type: int | None = None,
+        message_reference: str = "", force_type: int | None = None, wakeup: bool = False,
     ) -> dict:
         """先按 Markdown 发，机器人没有 MD 权限时退回纯文本。
 
@@ -166,6 +169,9 @@ class QqClient:
         from app.utils.text import plainify_markdown
 
         extra: dict[str, Any] = {"msg_id": msg_id, "msg_seq": msg_seq} if msg_id else {}
+        if wakeup:
+            # 互动召回：与 msg_id / event_id 互斥（官方），所以只在不带 msg_id 时才可能为真
+            extra["is_wakeup"] = True
         if message_reference:
             # 精准引用：填了它 QQ 里就以引用形式展示（官方 message_reference）
             extra["message_reference"] = {"message_id": message_reference}
@@ -199,14 +205,15 @@ class QqClient:
 
     async def send_c2c(
         self, user_openid: str, content: str, msg_id: str | None = None, msg_seq: int = 1,
-        force_type: int | None = None,
+        force_type: int | None = None, wakeup: bool = False,
     ) -> dict:
-        """发私聊消息（被动回复 60 分钟内、最多 4 次）
+        """发私聊消息（被动回复 60 分钟内、最多 4 次；wakeup = 互动召回，见 _deliver）
 
         force_type 与群一致：正文格式是通道级配置，私聊也要能固定成纯文本。
         """
         return await self._send_rich(
-            f"/v2/users/{user_openid}/messages", content, msg_id, msg_seq, force_type=force_type
+            f"/v2/users/{user_openid}/messages", content, msg_id, msg_seq,
+            force_type=force_type, wakeup=wakeup,
         )
 
     async def delete_group_message(self, group_openid: str, message_id: str) -> dict:
@@ -244,6 +251,18 @@ def _parse_group_map(raw: Any) -> dict[str, int]:
         except (TypeError, ValueError):
             logger.warning("group_map 里有一项的群 ID 不是数字，已忽略该项")
     return out
+
+
+def recall_period(elapsed_days: float) -> int | None:
+    """距对方最近一次主动对话过了多久 → 命中第几个召回周期；超出 30 天返回 None。
+
+    官方四个周期是「当天 / 1-3 天 / 3-7 天 / 7-30 天」，边界取上界，
+    所以 [0,1) [1,3) [3,7) [7,30) 各一个名额。
+    """
+    for index, upper in enumerate(RECALL_PERIOD_DAYS):
+        if elapsed_days < upper:
+            return index
+    return None
 
 
 @service(
@@ -367,6 +386,8 @@ class QqChannelPlugin(ServicePlugin):
         self._delivered_order: deque[str] = deque()
         # 最近见到过的 QQ 群（诊断用，内存态）：卡片上要能看见群 openid 才好填白名单
         self._seen_groups: dict[str, dict[str, Any]] = {}
+        # "这条发不到 QQ"的站内提示上次时间（按目标）：失败要看得见，但不能刷屏
+        self._fail_notice: dict[str, float] = {}
         # 这个群的推送模式（最近一次观测到的事件类型 + 时间）：True=全量、False=只喂点名。
         # None = 本次启动后还没收到过群消息。通道说明据此选文案；给 AI 的持久记录在账本里
         self._full_mode: tuple[bool, float] | None = None
@@ -377,6 +398,7 @@ class QqChannelPlugin(ServicePlugin):
         self.bot_name = ""
         self.replies = 0
         self.dm_replies = 0
+        self.recalls = 0
         self.last_error = ""
         self.started_at = 0.0
 
@@ -411,6 +433,7 @@ class QqChannelPlugin(ServicePlugin):
             "dm_sessions": len(self._dm_route),
             "replies_sent": self.replies,
             "dm_replies_sent": self.dm_replies,
+            "recalls_sent": self.recalls,
             "uptime_seconds": int(time.time() - self.started_at) if self.started_at else 0,
             "last_error": self.last_error,
         }
@@ -476,6 +499,7 @@ class QqChannelPlugin(ServicePlugin):
         self._site_route.clear()
         self._site_route_order.clear()
         self._dm_route.clear()
+        self._fail_notice.clear()
         self._delivered.clear()
         self._delivered_order.clear()
         # 先等在飞的回复发完：紧接着 aclose() 会把它们的 HTTP 客户端收走
@@ -1254,8 +1278,13 @@ class QqChannelPlugin(ServicePlugin):
         route = self._route_for_outbound(group_id, getattr(message, "reply_to", None))
         if not route:
             # 有落点却没有被动凭据：本进程内还没收到过来自该群的入站消息（刚重启、
-            # 或这条 AI 消息不是回给 QQ 来消息的）。群里发不出去，留痕别静默丢。
+            # 或这条 AI 消息不是回给 QQ 来消息的）。群里发不出去，留痕别静默丢——
+            # 站内提示就近告诉人"去群里 @ 一次就能恢复"，比让他对着 QQ 干等强。
             logger.info(f"QQ 群回复跳过：Copree 群 #{group_id} 还没有可用的被动回复凭据")
+            self._replies.spawn(self._report_unreachable(
+                "group", {"copree_group_id": group_id},
+                "这个群还没有被动回复凭据（重启后群里还没人来过）：去群里 @ 一次机器人就能恢复",
+            ), f"{self.key} 群回复凭据缺失提示")
             return
         # 只有「@ 事件」的回复才有腾讯自带的 @对方（见路由里 at_event 的注释）。那种情况摘掉开头
         # 对**这次回的那个人**的 @，免得两个 @；全量事件的回复腾讯不补，必须由我们自己把 @ 发出去。
@@ -1315,6 +1344,7 @@ class QqChannelPlugin(ServicePlugin):
                 f"回复到 QQ {'群' if kind == 'group' else '用户'} "
                 f"{str(route.get('qq') or '')[-6:]} 失败：{self.last_error}"
             )
+            await self._report_unreachable(kind, route, str(e))
             return
         # 记下通道侧那条消息的 id（撤回要用）与引用索引（引用要用）
         response = result.get("response") or {}
@@ -1323,6 +1353,62 @@ class QqChannelPlugin(ServicePlugin):
             channel_id=str(response.get("id") or ""),
             ref_idx=str((response.get("ext_info") or {}).get("ref_idx") or ""),
         )
+
+    async def _report_unreachable(self, kind: str, route: dict, reason: str) -> None:
+        """这条发不到 QQ → 通知 AI 主人。
+
+        为什么不能只写日志：QQ 那边没收到的时候，人在 Copree 里只看到 AI 说得热闹，
+        不知道该去 QQ 里再 @ 一次。提示只能走系统会话发给主人——群消息表的 sender_type
+        只认 human/ai，插一条"系统"会被约束拒掉；冒充人说话又会惊动群里的 AI。
+        """
+        target = str(route.get("qq") or "")
+        key = f"{kind}:{target or route.get('copree_group_id') or ''}"
+        now = time.time()
+        if now - self._fail_notice.get(key, 0) < UNREACHABLE_NOTICE_INTERVAL:
+            return                      # 同一个目标最多 5 分钟提示一次，别把人刷烦
+        self._fail_notice[key] = now
+        where = f"（QQ {'群' if kind == 'group' else '用户'} …{target[-6:]}）" if target else ""
+        if kind == "group" and route.get("copree_group_id"):
+            where += f"（Copree 群 #{int(route['copree_group_id'])}）"
+        text = f"QQ 通道发不出消息{where}：{reason}"
+        try:
+            from app.database import async_session
+
+            async with async_session() as db:
+                await self._notify_owner(db, text)
+                await db.commit()
+        except Exception as e:
+            logger.warning(f"QQ 通道[{self.instance}] 站内提示发送失败：{type(e).__name__}: {e}")
+
+    async def _notify_owner(self, db: Any, text: str) -> None:
+        """提示 AI 主人（系统用户 ↔ 主人的会话，与执行器的系统通知同一条路）"""
+        from sqlalchemy import select
+
+        from app.chat import chat_api
+        from app.models.agent import Agent
+        from app.models.sender import SYSTEM_SENDER
+
+        owner_id = (await db.execute(
+            select(Agent.owner_id).where(Agent.user_id == self._target_user_id)
+        )).scalar()
+        if not owner_id:
+            return
+        sender_id = SYSTEM_SENDER.sender_id
+        session = await chat_api.get_or_create_dm_session(
+            db, sender_id, int(owner_id), skip_friendship_check=True
+        )
+        session_id = str(session["session_id"])
+        msg = await chat_api.send_dm_message(
+            db, session_id, sender_id, text,
+            skip_friendship_check=True, message_type="system",
+        )
+        try:
+            await chat_api.broadcast_to_dm(session_id, {
+                "type": "new_dm_message",
+                "message": {**msg, "sender_name": "系统通知", "is_system": True},
+            })
+        except Exception:
+            pass                        # 推不到就下次刷新看见，不该因此算发送失败
 
     async def _emoji_to_chars(self, text: str) -> str:
         """站内表情发往 QQ：有 unicode 的换成字符，仅图片的去掉。
@@ -1461,6 +1547,9 @@ class QqChannelPlugin(ServicePlugin):
         各写一份"为什么没发出去"迟早不一致。
         passive_only：窗口过期时宁可失败也不退成主动消息——自测走这条路，
         它不该靠一条有配额的主动消息来冒充"通"。
+
+        窗口过期后的出路两边不同：私聊走互动召回（is_wakeup，配额按周期落库），
+        群聊直接失败——腾讯早就没有群主动推送，也没有群召回字段，硬发只会换一个错误码。
         """
         client = self._client
         if client is None or not self._task or self._task.done():
@@ -1474,29 +1563,118 @@ class QqChannelPlugin(ServicePlugin):
         msg_id = route.get("msg_id") or None
         seq = int(route.get("seq") or 0)
         fresh = (time.time() - float(route.get("ts") or 0)) < window
+        wakeup = False
+        claimed: int | None = None
         if msg_id and fresh and seq < limit:
             route["seq"] = seq + 1
             mode = "passive"
         elif passive_only:
             raise RuntimeError("被动回复窗口已过：先去那个会话里说一句（群里 @ 一次机器人）再自测")
+        elif kind == "group":
+            # 群聊没有主动推送（2025-04-21 起下线），也没有召回字段：只能等下一次 @
+            raise RuntimeError(f"被动回复窗口已过（{GROUP_WINDOW // 60} 分钟），QQ 群聊没有主动/召回能力")
         else:
+            # 私聊走互动召回：官方只给单聊 is_wakeup，且 30 天内每个周期只有一条
             msg_id = None
-            mode = "active"
-        if kind == "group":
-            data = await client.send_group(
-                target, text, msg_id=msg_id, msg_seq=seq + 1, message_reference=reference_id,
-                force_type=self._msg_type,
-            )
-        else:
-            # 私聊的引用字段官方没给（也没实测过），宁可不发也不发错
-            data = await client.send_c2c(target, text, msg_id=msg_id, msg_seq=seq + 1,
-                                         force_type=self._msg_type)
+            claimed, reason = await self._claim_recall(target, float(route.get("ts") or 0))
+            if claimed is None:
+                raise RuntimeError(reason)
+            mode, wakeup = "wakeup", True
+        try:
+            if kind == "group":
+                data = await client.send_group(
+                    target, text, msg_id=msg_id, msg_seq=seq + 1, message_reference=reference_id,
+                    force_type=self._msg_type,
+                )
+            else:
+                # 私聊的引用字段官方没给（也没实测过），宁可不发也不发错
+                data = await client.send_c2c(target, text, msg_id=msg_id, msg_seq=seq + 1,
+                                             force_type=self._msg_type, wakeup=wakeup)
+        except Exception:
+            # 腾讯明确拒了才把周期还回去；响应丢失时留着（见 _claim_recall）
+            if claimed is not None:
+                await self._release_recall(target, claimed)
+            raise
+        if wakeup:
+            self.recalls += 1
         if kind == "group":
             self.replies += 1
         else:
             self.dm_replies += 1
         self.last_error = ""
         return {"mode": mode, "response": dict(data or {})}
+
+    # ── 互动召回记账 ───────────────────────────────────────────
+    async def _claim_recall(self, target: str, anchor_ts: float) -> tuple[int | None, str]:
+        """领一个召回周期：返回 (周期号, 领不到的原因)。
+
+        先记账再发（见 _deliver）：腾讯的响应丢了不代表消息没发出去，
+        所以宁可这个周期少发一条，也不要同一周期发两条。
+        周期起点只认账本里那一行——内存里的路由 ts 每条消息都在变，
+        拿它算"过了几天"会让周期永远停在当天，等于把 4 条额度当无限用。
+        """
+        from datetime import datetime, timezone
+
+        from sqlalchemy import select
+
+        from app.database import async_session
+        from app.models.external import ChannelWakeupLedger
+        from app.utils.pure.timeutil import as_utc
+
+        now = time.time()
+        async with async_session() as db:
+            row = (await db.execute(
+                select(ChannelWakeupLedger).where(
+                    ChannelWakeupLedger.kind == self.channel_kind,
+                    ChannelWakeupLedger.owner_scope == self.instance,
+                    ChannelWakeupLedger.target == target,
+                )
+            )).scalars().first()
+            started = as_utc(row.anchor_at).timestamp() if row is not None else 0.0
+            if row is None or now - started >= RECALL_PERIOD_DAYS[-1] * 86400:
+                # 没有账本、或上一轮已过 30 天：这次对话开一个新周期
+                started = anchor_ts or now
+                if row is None:
+                    row = ChannelWakeupLedger(
+                        kind=self.channel_kind, owner_scope=self.instance, target=target,
+                        anchor_at=datetime.fromtimestamp(started, tz=timezone.utc).replace(tzinfo=None),
+                        used_mask=0,
+                    )
+                    db.add(row)
+                else:
+                    row.anchor_at = datetime.fromtimestamp(started, tz=timezone.utc).replace(tzinfo=None)
+                    row.used_mask = 0
+            index = recall_period((now - started) / 86400)
+            if index is None:
+                return None, "对方最近一次主动对话已超过 30 天，召回额度不再可用：等对方来说一句话"
+            if int(row.used_mask or 0) >> index & 1:
+                return None, f"本周期的召回名额已经用掉（共 {len(RECALL_PERIOD_DAYS)} 个周期）：等对方来说一句话"
+            row.used_mask = int(row.used_mask or 0) | (1 << index)
+            await db.commit()
+        return index, ""
+
+    async def _release_recall(self, target: str, index: int) -> None:
+        """这次发送被腾讯明确拒了 → 把刚占的周期还回去，本轮还能再试"""
+        from sqlalchemy import select
+
+        from app.database import async_session
+        from app.models.external import ChannelWakeupLedger
+
+        try:
+            async with async_session() as db:
+                row = (await db.execute(
+                    select(ChannelWakeupLedger).where(
+                        ChannelWakeupLedger.kind == self.channel_kind,
+                        ChannelWakeupLedger.owner_scope == self.instance,
+                        ChannelWakeupLedger.target == target,
+                    )
+                )).scalars().first()
+                if row is None:
+                    return
+                row.used_mask = int(row.used_mask or 0) & ~(1 << index)
+                await db.commit()
+        except Exception as e:
+            logger.warning(f"QQ 通道[{self.instance}] 归还召回周期失败：{type(e).__name__}: {e}")
 
     def _live_route(self) -> tuple[dict[str, Any] | None, str]:
         """最近一次来消息的那条路由（群或私聊）——自测要打在最可能通的那条路上"""

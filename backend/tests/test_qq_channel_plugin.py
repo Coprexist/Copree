@@ -42,9 +42,11 @@ class FakeClient:
                           "force_type": force_type})
         return {"id": "fake", "ext_info": {"ref_idx": "REFIDX-OUT"}}
 
-    async def send_c2c(self, user_openid, content, msg_id=None, msg_seq=1, force_type=None):
+    async def send_c2c(self, user_openid, content, msg_id=None, msg_seq=1, force_type=None,
+                       wakeup=False):
         self.sent.append({"kind": "dm", "target": user_openid, "content": content,
-                          "msg_id": msg_id, "seq": msg_seq, "force_type": force_type})
+                          "msg_id": msg_id, "seq": msg_seq, "force_type": force_type,
+                          "wakeup": wakeup})
         return {"id": "fake"}
 
     async def aclose(self):
@@ -57,7 +59,8 @@ async def _seed():
 
     async with async_session() as db:
         from db_reset import clear
-        await clear(db, "external_identities", "plugin_service_states", "plugin_configs", "plugins",
+        await clear(db, "external_identities", "channel_wakeup_ledger",
+                    "plugin_service_states", "plugin_configs", "plugins",
                     "pending_messages", "messages", "dm_messages", "dm_sessions", "group_members",
                     "groups", "users", "agents")
         # 下面用写死的 id 播种，序列要往前挪，否则插件新建用户会撞上 id=1/2
@@ -65,6 +68,8 @@ async def _seed():
             await db.execute(text(f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), 100)"))
         await db.execute(text(
             "INSERT INTO users (id, username, password_hash, type) VALUES "
+            # id=0 是生产库里本来就有的系统用户（系统通知以它发言），测试库照建一份
+            "(0, '系统', 'x', 'system'), "
             f"({GROUP_OWNER}, '群主', 'x', 'human'), ({AGENT_USER}, '浮生', 'x', 'ai')"
         ))
         await db.execute(text(
@@ -516,8 +521,10 @@ async def test_group_outbound_strips_reply_mention(migrated_db):
     await _seed()
     plugin = await _make_plugin()
     plugin._copree_group_id = GROUP_ID
+    import time
+
     plugin._routes["QQGROUP-AAA"] = {"copree_group_id": GROUP_ID, "qq": "QQGROUP-AAA", "msg_id": "MSG-1", "peer_name": "小明",
-                               "at_event": True}
+                               "ts": time.time(), "at_event": True}
 
     class _FakeMsg:
         sender_type = "ai"
@@ -1244,3 +1251,106 @@ async def test_ai_message_quoted_in_qq_resolves_too(migrated_db):
 
 
 
+
+def test_recall_period_boundaries():
+    """召回周期就是官方那四段：当天 / 1-3 天 / 3-7 天 / 7-30 天，边界取上界"""
+    module = _load_plugin_module()
+    assert [module.recall_period(d) for d in (0.0, 0.9, 1.0, 2.9, 3.0, 6.9, 7.0, 29.9)] == \
+        [0, 0, 1, 1, 2, 2, 3, 3]
+    assert module.recall_period(30.0) is None
+    assert module.recall_period(999.0) is None
+
+
+async def test_group_reply_after_window_fails_loudly(migrated_db):
+    """群回复窗口过期：不发那条假的主动消息，并把原因写成一条系统通知给主人
+
+    群聊没有主动推送（2025-04-21 起下线）、也没有召回字段，硬发只会换一个错误码；
+    而人在 Copree 里只看到 AI 说得热闹，不知道该去 QQ 里再 @ 一次——所以要让他知道。
+    """
+    import time
+
+    from app.database import async_session
+
+    await _seed()
+    plugin = await _make_plugin()
+    try:
+        route = {"copree_group_id": GROUP_ID, "qq": "QQGROUP-AAA", "msg_id": "MSG-1", "seq": 0,
+                 "ts": time.time() - 3600, "peer_name": "小明", "peer_openid": "OPENID-XYZ"}
+        plugin._routes["QQGROUP-AAA"] = route
+        await plugin._send_reply(route, "晚了一步", kind="group")
+
+        assert plugin._client.sent == [], "窗口过期后不该再往群里发"
+        async with async_session() as db:
+            notices = (await db.execute(text(
+                "SELECT content FROM dm_messages WHERE sender_id = 0"
+            ))).scalars().all()
+        assert len(notices) == 1, notices
+        assert "QQ 通道发不出消息" in notices[0], notices
+        assert "没有主动/召回能力" in notices[0], notices
+        assert plugin.last_error.startswith("发送失败："), plugin.last_error
+    finally:
+        _cleanup(plugin)
+
+
+async def test_dm_after_window_spends_one_recall_per_period(migrated_db):
+    """私聊窗口过期：改走互动召回（is_wakeup），同一个周期只花一条"""
+    import time
+
+    from app.database import async_session
+
+    await _seed()
+    plugin = await _make_plugin()
+    try:
+        route = {"session_id": "S1", "qq": "OPENID-DM", "msg_id": "DMMSG-1", "seq": 0,
+                 "ts": time.time() - 7200}
+        await plugin._send_reply(route, "在的", kind="dm")
+        sent = plugin._client.sent[-1]
+        assert sent["kind"] == "dm" and sent["wakeup"] is True, sent
+        assert sent["msg_id"] is None, "召回消息与 msg_id 互斥，必须摘掉被动凭据"
+        assert plugin.recalls == 1, plugin.recalls
+
+        route["ts"] = time.time() - 7200          # 对方一直没再说话：还是同一个周期
+        await plugin._send_reply(route, "还在吗", kind="dm")
+        assert len(plugin._client.sent) == 1, "同一周期不该再花第二条召回额度"
+
+        async with async_session() as db:
+            row = (await db.execute(text(
+                "SELECT used_mask FROM channel_wakeup_ledger WHERE target = 'OPENID-DM'"
+            ))).first()
+        assert row is not None and int(row[0]) == 0b1, row
+    finally:
+        _cleanup(plugin)
+
+
+async def test_recall_cycle_reopens_after_thirty_days(migrated_db):
+    """30 天期满后再说话：开一个新周期，四个名额重新计（账本跨重启还在）"""
+    import time
+    from datetime import datetime, timedelta, timezone
+
+    from app.database import async_session
+    from app.models.external import ChannelWakeupLedger
+
+    await _seed()
+    plugin = await _make_plugin()
+    try:
+        stale = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=31)
+        async with async_session() as db:
+            db.add(ChannelWakeupLedger(
+                kind=plugin.channel_kind, owner_scope=plugin.instance, target="OPENID-DM",
+                anchor_at=stale, used_mask=0b1111,
+            ))
+            await db.commit()
+
+        # 对方 31 天后又说了一句：被动窗口之内回得到，等窗口过了才用得着新周期的召回额度
+        route = {"session_id": "S1", "qq": "OPENID-DM", "msg_id": "DMMSG-1", "seq": 0,
+                 "ts": time.time() - 7200}
+        await plugin._send_reply(route, "好久不见", kind="dm")
+        assert plugin._client.sent[-1]["wakeup"] is True, plugin._client.sent
+
+        async with async_session() as db:
+            row = (await db.execute(text(
+                "SELECT used_mask FROM channel_wakeup_ledger WHERE target = 'OPENID-DM'"
+            ))).first()
+        assert int(row[0]) == 0b1, "新周期应该只剩刚花掉的那一个名额"
+    finally:
+        _cleanup(plugin)

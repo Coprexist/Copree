@@ -57,3 +57,29 @@ class ExternalIdentity(Base):
         UniqueConstraint("kind", "owner_scope", "origin", name="uq_external_identity"),
         Index("ix_external_identity_lookup", "kind", "owner_scope", "status"),
     )
+
+
+class ChannelWakeupLedger(Base):
+    """一行 = 某个通道实例对某个目标的「互动召回」记账。
+
+    召回额度由平台按周期发放（用户主动对话后 30 天内 4 个周期各 1 条），
+    记在内存里重启就归零、会把用过的周期再用一次，腾讯直接拒发——所以要落库。
+    """
+
+    __tablename__ = "channel_wakeup_ledger"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    kind = Column(String(80), nullable=False, comment="通道/来源种类，如 qq-channel")
+    owner_scope = Column(String(120), nullable=False, server_default="", comment="该通道下的归属实例：QQ 是 agent-<agentId>")
+    target = Column(String(200), nullable=False, comment="通道侧的对话对象：QQ 单聊是用户 openid")
+    anchor_at = Column(DateTime, nullable=False, comment="本周期起点：对方最近一次主动对话")
+    used_mask = Column(
+        Integer, nullable=False, default=0, server_default="0",
+        comment="已用掉的周期位掩码，bit i = 第 i 个周期已经发过一条",
+    )
+    created_at = Column(DateTime, default=_now)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
+
+    __table_args__ = (
+        UniqueConstraint("kind", "owner_scope", "target", name="uq_channel_wakeup"),
+    )

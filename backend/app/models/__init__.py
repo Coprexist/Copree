@@ -2,7 +2,7 @@
 SQLAlchemy ORM 模型
 """
 from app.models.user import User
-from app.models.external import ExternalIdentity
+from app.models.external import ChannelWakeupLedger, ExternalIdentity
 from app.models.agent import Agent, AgentConfigHistory, AgentUserConfig, AgentCollaborator, CapabilityVersion
 from app.models.group import Group, GroupMember, GroupInvitation
 from app.models.message import Message, GroupMessageEmbedding, PendingMessage
@@ -49,6 +49,7 @@ from app.models.world import (World, WorldBinding, WorldAgent, WorldChatMessage,
 __all__ = [
     "User",
     "ExternalIdentity",
+    "ChannelWakeupLedger",
     "Agent",
     "AgentConfigHistory",
     "AgentUserConfig",
