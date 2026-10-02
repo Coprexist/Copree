@@ -5,6 +5,7 @@
                                    + service 类的运行态与配置需求）
 - POST   /plugins/{id}/toggle     管理员全局开放/关闭
 - POST   /plugins/{id}/pref       用户个人启用/停用
+- GET    /plugins/{id}/assets/{f} emojipack 插件里的图片（无需鉴权，白名单 = emoji.json 声明过的文件）
 - POST   /plugins/rescan          管理员手动重扫磁盘（新增/卸载/改代码立即生效）
 - GET    /plugins/{id}/config     管理员：每个实例的配置与运行态（永不回显机密）
 - PUT    /plugins/{id}/config     管理员：全量保存实例列表（列表即真相；未传的键不动，空串=清除）
@@ -39,6 +40,7 @@ router = APIRouter(prefix="/plugins", tags=["统一插件"])
 
 async def _broadcast_plugins_changed() -> None:
     """广播插件变更 → 在线用户前端即时刷新皮肤/插件状态（回退保障）"""
+    catalog.invalidate_caches()           # 插件目录可能已变，入口归一不能沿用旧缓存
     try:
         from app.routers.ws import manager as ws_manager
         await ws_manager.broadcast_to_all({"type": "plugins_changed"})
@@ -105,6 +107,11 @@ async def _service_view(plugin_id: str, db: AsyncSession) -> dict:
 def _to_view(row, manifest: dict, user_pref: bool, is_admin: bool, users_count: int | None = None) -> dict:
     """DB 行 + 磁盘 manifest → API 视图"""
     skin_vars = catalog.get_skin_vars(manifest) if manifest.get("category") == "skin" else {}
+    # 仅在管理员开放时下发载荷：前端选择器与渲染层按 effective 使用
+    emoji_pack = (
+        catalog.get_emoji_pack(manifest)
+        if manifest.get("category") == "emojipack" and row.enabled else {}
+    )
     return {
         "id": row.id,
         "name": row.name,
@@ -120,6 +127,7 @@ def _to_view(row, manifest: dict, user_pref: bool, is_admin: bool, users_count: 
         "is_admin": is_admin,
         "users_count": users_count,  # 管理员视角：显式启用了该插件的用户数（皮肤 = 正在用这套的人数）
         "skin_vars": skin_vars,
+        "emoji_pack": emoji_pack,
     }
 
 
@@ -172,6 +180,21 @@ async def list_plugins(
             view["service"] = await _service_view(pid, db)
         plugins.append(view)
     return {"plugins": plugins}
+
+
+@router.get("/{plugin_id}/assets/{file_path:path}")
+async def serve_plugin_asset(plugin_id: str, file_path: str):
+    """表情包资源。无需鉴权：<img> 无法携带 Authorization 头，与 /fs/download-avatar 一致。
+
+    白名单为 emoji.json 声明的文件，其余一律 404（判定见 catalog.emoji_asset_path）。
+    """
+    from fastapi.responses import FileResponse
+
+    manifest = catalog.scan_disk().get(plugin_id) or {}
+    path = catalog.emoji_asset_path(manifest, file_path)
+    if path is None:
+        raise HTTPException(404, "资源不存在")
+    return FileResponse(path, headers={"Cache-Control": "public, max-age=604800"})
 
 
 @router.post("/rescan")
@@ -322,6 +345,7 @@ async def _after_store_change(db: AsyncSession, plugin_id: str | None = None) ->
     from sqlalchemy import delete
 
     changed = await catalog.sync_plugins_to_db(db)
+    catalog.invalidate_caches()           # 装卸后目录已变，立即失效缓存
     if plugin_id:
         await db.execute(delete(PluginServiceState).where(PluginServiceState.plugin_id == plugin_id))
         await db.commit()

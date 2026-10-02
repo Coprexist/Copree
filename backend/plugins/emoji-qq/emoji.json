@@ -1,0 +1,385 @@
+{
+  "usage": "用在句子里表达情绪，别连着刷；一条消息最多一两个。有 QQ 对应名字的表情，发到 QQ 也认得。",
+  "faces": [
+    {
+      "id": "qq_smile",
+      "name": "微笑",
+      "emoji": "🙂"
+    },
+    {
+      "id": "qq_pout",
+      "name": "撇嘴",
+      "emoji": "😒"
+    },
+    {
+      "id": "qq_leer",
+      "name": "色",
+      "emoji": "😍"
+    },
+    {
+      "id": "qq_daze",
+      "name": "发呆",
+      "emoji": "😑"
+    },
+    {
+      "id": "qq_proud",
+      "name": "得意",
+      "emoji": "😏"
+    },
+    {
+      "id": "qq_cry",
+      "name": "流泪",
+      "emoji": "😢"
+    },
+    {
+      "id": "qq_shy",
+      "name": "害羞",
+      "emoji": "😳"
+    },
+    {
+      "id": "qq_shutup",
+      "name": "闭嘴",
+      "emoji": "🤐"
+    },
+    {
+      "id": "qq_sleep",
+      "name": "睡",
+      "emoji": "😴"
+    },
+    {
+      "id": "qq_cry_loud",
+      "name": "大哭",
+      "emoji": "😭"
+    },
+    {
+      "id": "qq_awkward",
+      "name": "尴尬",
+      "emoji": "😅"
+    },
+    {
+      "id": "qq_angry",
+      "name": "发怒",
+      "emoji": "😡"
+    },
+    {
+      "id": "qq_naughty",
+      "name": "调皮",
+      "emoji": "😜"
+    },
+    {
+      "id": "qq_grin",
+      "name": "呲牙",
+      "emoji": "😁"
+    },
+    {
+      "id": "qq_surprise",
+      "name": "惊讶",
+      "emoji": "😲"
+    },
+    {
+      "id": "qq_sad",
+      "name": "难过",
+      "emoji": "😞"
+    },
+    {
+      "id": "qq_cool",
+      "name": "酷",
+      "emoji": "😎"
+    },
+    {
+      "id": "qq_cold_sweat",
+      "name": "冷汗",
+      "emoji": "😰"
+    },
+    {
+      "id": "qq_crazy",
+      "name": "抓狂",
+      "emoji": "😫"
+    },
+    {
+      "id": "qq_vomit",
+      "name": "吐",
+      "emoji": "🤮"
+    },
+    {
+      "id": "qq_giggle",
+      "name": "偷笑",
+      "emoji": "🤭"
+    },
+    {
+      "id": "qq_cute",
+      "name": "可爱",
+      "emoji": "😊"
+    },
+    {
+      "id": "qq_roll_eyes",
+      "name": "白眼",
+      "emoji": "🙄"
+    },
+    {
+      "id": "qq_arrogant",
+      "name": "傲慢",
+      "emoji": "😤"
+    },
+    {
+      "id": "qq_hungry",
+      "name": "饥饿",
+      "emoji": "🤤"
+    },
+    {
+      "id": "qq_sleepy",
+      "name": "困",
+      "emoji": "😪"
+    },
+    {
+      "id": "qq_terrified",
+      "name": "惊恐",
+      "emoji": "😱"
+    },
+    {
+      "id": "qq_sweat",
+      "name": "流汗",
+      "emoji": "😓"
+    },
+    {
+      "id": "qq_laugh",
+      "name": "憨笑",
+      "emoji": "😄"
+    },
+    {
+      "id": "qq_strive",
+      "name": "奋斗",
+      "emoji": "😤"
+    },
+    {
+      "id": "qq_question",
+      "name": "疑问",
+      "emoji": "❓"
+    },
+    {
+      "id": "qq_shush",
+      "name": "嘘",
+      "emoji": "🤫"
+    },
+    {
+      "id": "qq_dizzy",
+      "name": "晕",
+      "emoji": "😵"
+    },
+    {
+      "id": "qq_weary",
+      "name": "衰",
+      "emoji": "😩"
+    },
+    {
+      "id": "qq_skull",
+      "name": "骷髅",
+      "emoji": "💀"
+    },
+    {
+      "id": "qq_bye",
+      "name": "再见",
+      "emoji": "👋"
+    },
+    {
+      "id": "qq_wipe_sweat",
+      "name": "擦汗",
+      "emoji": "😅"
+    },
+    {
+      "id": "qq_clap",
+      "name": "鼓掌",
+      "emoji": "👏"
+    },
+    {
+      "id": "qq_embarrassed",
+      "name": "糗大了",
+      "emoji": "😖"
+    },
+    {
+      "id": "qq_smirk",
+      "name": "坏笑",
+      "emoji": "😼"
+    },
+    {
+      "id": "qq_yawn",
+      "name": "哈欠",
+      "emoji": "🥱"
+    },
+    {
+      "id": "qq_despise",
+      "name": "鄙视",
+      "emoji": "😒"
+    },
+    {
+      "id": "qq_aggrieved",
+      "name": "委屈",
+      "emoji": "🥺"
+    },
+    {
+      "id": "qq_about_to_cry",
+      "name": "快哭了",
+      "emoji": "😖"
+    },
+    {
+      "id": "qq_sinister",
+      "name": "阴险",
+      "emoji": "😈"
+    },
+    {
+      "id": "qq_kiss",
+      "name": "亲亲",
+      "emoji": "😘"
+    },
+    {
+      "id": "qq_scared",
+      "name": "吓",
+      "emoji": "😨"
+    },
+    {
+      "id": "qq_pitiful",
+      "name": "可怜",
+      "emoji": "🥺"
+    },
+    {
+      "id": "qq_knife",
+      "name": "菜刀",
+      "emoji": "🔪"
+    },
+    {
+      "id": "qq_watermelon",
+      "name": "西瓜",
+      "emoji": "🍉"
+    },
+    {
+      "id": "qq_beer",
+      "name": "啤酒",
+      "emoji": "🍺"
+    },
+    {
+      "id": "qq_basketball",
+      "name": "篮球",
+      "emoji": "🏀"
+    },
+    {
+      "id": "qq_coffee",
+      "name": "咖啡",
+      "emoji": "☕"
+    },
+    {
+      "id": "qq_pig",
+      "name": "猪头",
+      "emoji": "🐷"
+    },
+    {
+      "id": "qq_rose",
+      "name": "玫瑰",
+      "emoji": "🌹"
+    },
+    {
+      "id": "qq_flower_fade",
+      "name": "凋谢",
+      "emoji": "🥀"
+    },
+    {
+      "id": "qq_heart",
+      "name": "爱心",
+      "emoji": "❤️"
+    },
+    {
+      "id": "qq_heartbroken",
+      "name": "心碎",
+      "emoji": "💔"
+    },
+    {
+      "id": "qq_cake",
+      "name": "蛋糕",
+      "emoji": "🎂"
+    },
+    {
+      "id": "qq_lightning",
+      "name": "闪电",
+      "emoji": "⚡"
+    },
+    {
+      "id": "qq_bomb",
+      "name": "炸弹",
+      "emoji": "💣"
+    },
+    {
+      "id": "qq_soccer",
+      "name": "足球",
+      "emoji": "⚽"
+    },
+    {
+      "id": "qq_moon",
+      "name": "月亮",
+      "emoji": "🌙"
+    },
+    {
+      "id": "qq_sun",
+      "name": "太阳",
+      "emoji": "☀️"
+    },
+    {
+      "id": "qq_gift",
+      "name": "礼物",
+      "emoji": "🎁"
+    },
+    {
+      "id": "qq_hug",
+      "name": "拥抱",
+      "emoji": "🤗"
+    },
+    {
+      "id": "qq_thumbsup",
+      "name": "强",
+      "emoji": "👍"
+    },
+    {
+      "id": "qq_thumbsdown",
+      "name": "弱",
+      "emoji": "👎"
+    },
+    {
+      "id": "qq_handshake",
+      "name": "握手",
+      "emoji": "🤝"
+    },
+    {
+      "id": "qq_victory",
+      "name": "胜利",
+      "emoji": "✌️"
+    },
+    {
+      "id": "qq_fist",
+      "name": "抱拳",
+      "emoji": "🙏"
+    },
+    {
+      "id": "qq_punch",
+      "name": "拳头",
+      "emoji": "👊"
+    },
+    {
+      "id": "qq_no",
+      "name": "NO",
+      "emoji": "🙅"
+    },
+    {
+      "id": "qq_ok",
+      "name": "OK",
+      "emoji": "👌"
+    },
+    {
+      "id": "qq_fly_kiss",
+      "name": "飞吻",
+      "emoji": "😘"
+    },
+    {
+      "id": "qq_shiver",
+      "name": "发抖",
+      "emoji": "🥶"
+    }
+  ]
+}

@@ -40,7 +40,7 @@ MAX_TOTAL_UNCOMPRESSED = 20 * 1024 * 1024      # 解压后总体积上限（防 
 MAX_ENTRIES = 500                              # 条目数上限
 MAX_FILE_BYTES = 2 * 1024 * 1024               # 单文件上限
 
-CATEGORIES = ("skin", "skill", "world", "service", "other")
+CATEGORIES = ("skin", "skill", "emojipack", "world", "service", "other")
 
 # 这些后缀出现在插件包里没有正当理由：插件行为走 plugin.py，不靠外部可执行文件
 BANNED_SUFFIXES = (

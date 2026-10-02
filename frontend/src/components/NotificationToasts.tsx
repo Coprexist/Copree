@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   AtSign, Bell, CheckCircle2, Mail, Megaphone, MessageSquare, UserPlus, Users, X, XCircle,
 } from 'lucide-react'
+import EmojiText from './shared/EmojiText'
 import { useT } from '../i18n/I18nContext'
 import type { NotificationItem, NotificationKind } from '../hooks/useNotificationSocket'
 
@@ -156,7 +157,7 @@ function Toast({ item, onDismiss, onOpen }: {
 
       <div className="flex-1 min-w-0">
         <div className="text-sm font-medium text-textPrimary truncate">{title}</div>
-        {body && <div className="text-xs text-textMuted line-clamp-2 mt-0.5 break-words">{body}</div>}
+        {body && <div className="text-xs text-textMuted line-clamp-2 mt-0.5 break-words"><EmojiText content={body} /></div>}
       </div>
 
       <button

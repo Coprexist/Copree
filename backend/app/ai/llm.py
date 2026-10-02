@@ -15,6 +15,7 @@ from app.models.group import Group as GroupModel
 from app.models.context_config import ContextConfig
 from app.chat import chat_api
 from app.services.memory.memory_service import recall_relevant_memories, format_memories_for_prompt
+from app.utils.display_name import display_name
 from app.utils.pure.prompting import (
     resolve_model, build_personality_segment, format_time_shanghai,
     format_message, format_context_for_ai, assemble_system_prompt,
@@ -595,6 +596,27 @@ async def _inject_personality_anchor(db, agent, system_prompt: str, language: st
 # _build_personality ——已迁移到 utils/pure/prompting.py，导入为 build_personality_segment
 
 
+async def _emoji_packs_note(db) -> str:
+    """可用表情包：常驻只给包名、用法与写法，具体表情名走 list_emoji_faces。
+
+    全量清单是每轮的固定开销，包一多即上千 token，而多数轮次并不发表情；按需查询更省。
+    """
+    from app.services.plugin import catalog
+
+    packs = await catalog.enabled_emoji_packs(db)
+    if not packs:
+        return ""
+    lines = [
+        "## 可用表情包",
+        "标准表情直接写字符（如 🙂），自定义表情写短码（如 :qq_shy:）——一条消息最多一两个：",
+    ]
+    for pack in packs:
+        usage = f"：{pack['usage']}" if pack["usage"] else ""
+        lines.append(f"- **{pack['name']}**（{len(pack['faces'])} 个）{usage}")
+    lines.append("具体有哪些表情、名字怎么写，调用 list_emoji_faces 查，别凭印象编名字。")
+    return "\n".join(lines)
+
+
 async def _build_tools_segment(db, agent, is_dm: bool = False) -> str:
     """tools 段：技能背包视图——按 6 段分组展示，含段描述"""
     from app.services.tool_registry import get_allowed_tools
@@ -643,6 +665,11 @@ async def _build_tools_segment(db, agent, is_dm: bool = False) -> str:
         lines.append(f"📦 **{seg_name}** — {seg_desc}{suffix}")
         lines.append(f"   {', '.join(available)}")
         lines.append("")
+
+    emoji_note = await _emoji_packs_note(db)
+    if emoji_note:
+        lines.append("")
+        lines.append(emoji_note)
 
     lines.append(
         "工具列表中不含的工具说明当前状态下不可用。如需查看全部能力（含不可用的），"
@@ -1310,7 +1337,6 @@ async def build_dm_messages(
 ) -> list[dict]:
     """构建 DM 私信的消息列表（6 段系统提示词 + DM 历史消息）"""
     from app.models.dm import DMMessage, DMSession
-    from app.models.user import User
     from sqlalchemy import select as sa_select
 
     partner_name = "对方"
@@ -1323,9 +1349,7 @@ async def build_dm_messages(
         dm_sess = dm_sess_result.scalar_one_or_none()
         if dm_sess and agent.user_id:
             partner_user_id = dm_sess.user2_id if dm_sess.user1_id == agent.user_id else dm_sess.user1_id
-            name_result = await db.execute(
-                sa_select(User.username).where(User.id == partner_user_id)
-            )
+            partner_name = await display_name(db, partner_user_id)
     except Exception:
         pass
 
@@ -1441,9 +1465,7 @@ async def build_dm_messages(
                     if ds.session_id == session_id:
                         continue  # 当前会话单独展示
                     other_id = ds.user2_id if ds.user1_id == agent.user_id else ds.user1_id
-                    oname = (await db.execute(
-                        sa_select(User.username).where(User.id == other_id)
-                    )).scalar_one_or_none() or f"用户{other_id}"
+                    oname = await display_name(db, other_id)
                     # 未读数：对方发的且自己未读
                     unread = (await db.execute(
                         sa_select(sa_func.count())

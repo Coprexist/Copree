@@ -1,5 +1,6 @@
 import { memo, useState, useMemo, useEffect, useRef } from 'react'
 import { useAuth } from '../context/AuthContext'
+import { useBubbleDark } from '../hooks/useBubbleDark'
 import { FileIcon, Download, Globe, ShieldAlert, MessageSquare, MoreHorizontal } from 'lucide-react'
 import { formatMessageTime } from '../utils/time'
 import { formatFileSize } from '../utils/format'
@@ -83,6 +84,7 @@ function fileIconColor(mimeType: string): string {
 
 // 共享 Markdown 渲染（GFM/公式/代码高亮/彩色文字），见 shared/MarkdownContent
 import MarkdownContent from './shared/MarkdownContent'
+import EmojiText from './shared/EmojiText'
 
 const MessageBubble = memo(function MessageBubble({
   senderName, senderAvatarUrl, content, isMine, createdAt, state,
@@ -97,6 +99,7 @@ const MessageBubble = memo(function MessageBubble({
   const [invStatus, setInvStatus] = useState<string | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [avatarBroken, setAvatarBroken] = useState(false)
   const menuRef = useRef<HTMLDivElement | null>(null)
 
   /** 复制这条消息的正文（就是界面上看到的那份：@ 已经渲染成名字） */
@@ -127,18 +130,19 @@ const MessageBubble = memo(function MessageBubble({
     }
   }, [menuOpen])
 
-  // 表格昼夜适配：将 DARK_VARS / LIGHT_VARS 转换为 inline style 挂到气泡上
-  //（DARK_VARS/LIGHT_VARS 定义了但从未被使用，这里修复）
+  // 气泡里表格/代码/链接的昼夜配色，转成 inline style 挂在气泡上。
+  // 深浅判定只有 useBubbleDark 一处：它读主题上下文而非 <html> 的 dark class（那个 class 由
+  // ThemeProvider 在 effect 里同步，渲染阶段读到的还是上一个主题），正文彩色文字用的是同一个函数
+  const darkBubble = useBubbleDark(isMine)
   const tableVars = useMemo(() => {
-    const isPageDark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
-    const vars = (isMine || isPageDark) ? DARK_VARS : LIGHT_VARS
+    const vars = darkBubble ? DARK_VARS : LIGHT_VARS
     const obj: Record<string, string> = {}
     for (const v of vars) {
       const idx = v.indexOf(':')
       if (idx !== -1) obj[v.slice(0, idx).trim()] = v.slice(idx + 1).trim()
     }
     return obj
-  }, [isMine])
+  }, [darkBubble])
 
 
   const invAtt = attachments?.find(a => a.type === 'group_invitation')
@@ -174,7 +178,9 @@ const MessageBubble = memo(function MessageBubble({
       ? 'text-rose-900 dark:text-rose-300'
       : 'text-textPrimary'
 
-  const avatarGradientCls = avatarGradient(senderType, isMine, !!senderAvatarUrl)
+  // 头像地址坏掉（文件被删、格式不对）时退回首字母渐变，别把浏览器的裂图图标露给用户
+  const hasAvatar = !!senderAvatarUrl && !avatarBroken
+  useEffect(() => setAvatarBroken(false), [senderAvatarUrl])
   const avatarGradientShadow = isMine ? 'shadow-primary-500/15' : senderType === 'system' ? 'shadow-rose-400/15' : 'shadow-teal-400/10'
   const { gap, mb, avatar: avatarSize, textSize: avatarTextSize } = chatStyleClasses(getChatStyle())
 
@@ -207,14 +213,14 @@ const MessageBubble = memo(function MessageBubble({
         {!isMine && (thinking || isTyping) && (
           <div className="absolute -inset-px w-10 h-10 rounded-full ai-pulse-active" />
         )}
-        {senderAvatarUrl ? (
+        {hasAvatar ? (
           <div
             onClick={() => { if (onAvatarClick && senderType && senderId && senderType !== 'system') onAvatarClick(senderType, senderId, senderName, state) }}
             className={`relative ${avatarSize} rounded-full overflow-hidden ${senderType !== 'system' ? 'cursor-pointer hover:scale-105 transition-transform' : ''} shadow ${avatarGradientShadow}`}
             title={t('chat.viewProfile').replace('{name}', senderName)}
           >
             <div className={`absolute inset-px rounded-full ${avatarGradient(senderType, isMine, true)}`} />
-            <img src={senderAvatarUrl} alt={senderName} className="relative w-full h-full rounded-full object-cover" loading="lazy" decoding="async" />
+            <img src={senderAvatarUrl ?? undefined} alt={senderName} className="relative w-full h-full rounded-full object-cover" loading="lazy" decoding="async" onError={() => setAvatarBroken(true)} />
           </div>
         ) : (
           <div
@@ -264,7 +270,7 @@ const MessageBubble = memo(function MessageBubble({
               <div className={`w-0.5 h-full min-h-[1.5em] rounded-full shrink-0 ${isMine ? 'bg-white/40' : 'bg-primary-400'}`} />
               <div className="text-2xs leading-relaxed line-clamp-2">
                 <span className={`font-medium ${isMine ? 'text-white/80' : 'text-primary-400'}`}>@{replyTo.sender}</span>
-                <span className={`${isMine ? 'text-white/50' : 'text-textMuted'}`}> {replyTo.content}</span>
+                <span className={`${isMine ? 'text-white/50' : 'text-textMuted'}`}> <EmojiText content={replyTo.content} /></span>
               </div>
             </div>
           )}

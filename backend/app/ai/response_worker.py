@@ -24,6 +24,7 @@ from app.models.group import Group, GroupMember
 from app.models.user import User
 from app.config import settings
 from app.chat import chat_api
+from app.utils.display_name import display_name
 from app.utils.text import extract_mentions as _extract_mentions, check_mention as _check_mention
 from app.utils.crypto import APIKeyDecryptError
 from app.ai.executor import _tool_call_loop, _get_api_config, _check_rate_limit, _send_system_error, _send_system_error_notification, add_pending_interrupt, is_agent_running, mark_agent_running, unmark_agent_running
@@ -207,10 +208,7 @@ async def _process_dm_event(db, event: dict):
     # ── 2026-08-09: 聊天即情景——自动维护会话帧（无论是否真正回复，先记录「有人找过」）──
     try:
         from app.services.agent.state_stack_service import ensure_active_frame
-        sender_row = await db.execute(
-            select(User.username).where(User.id == sender_id)
-        )
-        sender_name = sender_row.scalar_one_or_none() or f"用户{sender_id}"
+        sender_name = await display_name(db, sender_id)
         await ensure_active_frame(
             db, agent.id, "dm", session_id,
             title=sender_name, actor_name=sender_name,
