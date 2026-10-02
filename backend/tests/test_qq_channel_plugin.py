@@ -34,6 +34,10 @@ class FakeClient:
     def __init__(self):
         self.sent = []
         self.closed = False
+        # 群成员信息接口（补拉 union_openid 用）
+        self.member_calls: list = []
+        self.member_union = "UNION-FROM-API"
+        self.member_error = ""
 
     async def send_group(self, group_openid, content, msg_id=None, msg_seq=1, message_reference="",
                          force_type=None):
@@ -48,6 +52,12 @@ class FakeClient:
                           "msg_id": msg_id, "seq": msg_seq, "force_type": force_type,
                           "wakeup": wakeup})
         return {"id": "fake"}
+
+    async def member_info(self, group_openid, member_openid):
+        self.member_calls.append((group_openid, member_openid))
+        if self.member_error:
+            raise RuntimeError(self.member_error)
+        return {"member_openid": member_openid, "union_openid": self.member_union}
 
     async def aclose(self):
         # 停止流程会在在飞回复之后调它：顺序错了请求就打到已关闭的客户端上
@@ -1491,3 +1501,80 @@ async def test_one_bot_sends_when_two_serve_the_same_group(migrated_db):
         PluginRegistry.unregister(bot_b.key)
         _cleanup(bot_a)
         _cleanup(bot_b)
+
+def test_split_message_prefers_paragraph_breaks():
+    """长文按段拆：优先空行、其次单行，都不够长才硬切，而且每段都不超限"""
+    module = _load_plugin_module()
+    text = "\n\n".join(["甲" * 40, "乙" * 40, "丙" * 40])
+    pieces = module.split_message(text, 50)
+    assert len(pieces) == 3, pieces
+    assert all(len(p) <= 50 for p in pieces), pieces
+    assert pieces[0] == "甲" * 40, pieces[0]
+
+    long_line = "丁" * 130                      # 没有换行可断 → 硬切
+    pieces = module.split_message(long_line, 50)
+    assert [len(p) for p in pieces] == [50, 50, 30], pieces
+    assert module.split_message("", 50) == []
+
+
+async def test_long_reply_is_split_not_truncated(migrated_db):
+    """超长回复拆成多条发（同一个 msg_id、序号递增），而不是砍掉后半段"""
+    import time
+
+    module = _load_plugin_module()
+
+    await _seed()
+    plugin = await _make_plugin()
+    try:
+        route = {"copree_group_id": GROUP_ID, "qq": "QQGROUP-AAA", "msg_id": "MSG-1", "seq": 0,
+                 "ts": time.time(), "peer_name": "小明", "peer_openid": "OPENID-XYZ"}
+        plugin._routes["QQGROUP-AAA"] = route
+        text = "\n\n".join(["第一段" + "字" * 600, "第二段" + "字" * 600])
+        await plugin._send_reply(route, text, kind="group")
+
+        sent = plugin._client.sent
+        assert len(sent) == 2, sent
+        assert [s["seq"] for s in sent] == [1, 2], sent
+        assert all(s["msg_id"] == "MSG-1" for s in sent), sent
+        assert "".join(s["content"] for s in sent).count("字") == 1200, "拆开也不许丢正文"
+        assert route["seq"] == 2, route
+    finally:
+        _cleanup(plugin)
+
+
+async def test_union_is_backfilled_once_and_cached(migrated_db):
+    """事件里没有 union 时按需补拉一次并缓存；接口没权限（11253）就不再撞第二次"""
+    module = _load_plugin_module()
+
+    await _seed()
+    plugin = await _make_plugin()
+    try:
+        author: dict = {"member_openid": "OPENID-XYZ", "username": "小明"}
+        await plugin._fill_union("QQGROUP-AAA", author)
+        assert author["union_openid"] == "UNION-FROM-API", author
+        assert len(plugin._client.member_calls) == 1, plugin._client.member_calls
+
+        other: dict = {"member_openid": "OPENID-XYZ", "username": "小明"}     # 同一个人再来一条
+        await plugin._fill_union("QQGROUP-AAA", other)
+        assert other["union_openid"] == "UNION-FROM-API", other
+        assert len(plugin._client.member_calls) == 1, "命中缓存后不该再问接口"
+
+        plugin._client.member_error = "取群成员信息失败（HTTP 403）：{'code': 11253}"
+        fresh: dict = {"member_openid": "OPENID-OTHER", "username": "小红"}
+        await plugin._fill_union("QQGROUP-AAA", fresh)
+        assert plugin._member_info_denied is True
+        assert len(plugin._client.member_calls) == 2, plugin._client.member_calls
+        await plugin._fill_union("QQGROUP-AAA", {"member_openid": "OPENID-THIRD"})
+        assert len(plugin._client.member_calls) == 2, "已确认无权限就不该再撞"
+    finally:
+        _cleanup(plugin)
+
+
+def test_activity_indicator_keeps_one_id_space():
+    """活动指示器的键只能有一把尺（user_id）：一处按 agent.id 存、一处按 user_id 发，
+    同一个 AI 就会同时占两条（"某某、某某 等2人"），而且恢复出来的那条永远清不掉。"""
+    src = (PLUGIN_PATH.parents[2] / "app" / "ai" / "response_worker.py").read_text()
+    assert "_thinking_state.setdefault(conv_key, {})[agent.user_id]" in src
+    assert "_thinking_state.setdefault(conv_key, {})[agent_user_id]" in src
+    assert '"user_id": agent_user_id' in src
+    assert ".pop(agent.id, None)" not in src

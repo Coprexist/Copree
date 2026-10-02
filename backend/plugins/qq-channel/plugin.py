@@ -62,6 +62,8 @@ DM_WINDOW, DM_MAX = 3600, 4
 # 互动召回（官方：只有单聊有 is_wakeup 字段；对方主动对话后 30 天内 4 个周期各 1 条）
 RECALL_PERIOD_DAYS = (1, 3, 7, 30)
 UNREACHABLE_NOTICE_INTERVAL = 300  # 同一个目标的"发不出去"提示最多 5 分钟一条，别刷屏
+UNION_TTL_SECONDS = 86400          # 补拉到的 union 缓存一天（没有也缓存，成员接口只有 30 QPM）
+UNION_CACHE_MAX = 2000             # 缓存条目上限：按群成员数增长，满了丢最早的
 MIRROR_WINDOW_SECONDS = 3          # 同一句 QQ 消息被两台机器人分别送进来的认亲窗口
 MIRROR_MIN_CHARS = 2               # 太短的正文（"嗯"、"?"）撞车概率太高，不认
 GROUP_PER_MINUTE = 20              # 单群频控 20/qpm（主动消息）
@@ -233,6 +235,25 @@ class QqClient:
             raise RuntimeError(f"撤回 QQ 消息失败（HTTP {res.status_code}）：{data}")
         return data
 
+    async def member_info(self, group_openid: str, member_openid: str) -> dict:
+        """群成员信息（官方 30 QPM）。跨应用统一的 union_openid 只有这条路才稳定拿到：
+        事件载荷里那个字段常常是空的（官方本身就写了"可能为空"）。
+
+        需要白名单权限（无权限时返回 11253），调用方负责降级。
+        """
+        http = await self._client()
+        res = await http.get(
+            f"/v2/groups/{group_openid}/members/{member_openid}",
+            headers={"Authorization": f"QQBot {await self.token()}"},
+        )
+        try:
+            data = res.json() if res.content else {}
+        except Exception:
+            data = {}
+        if res.status_code >= 400 or data.get("code"):
+            raise RuntimeError(f"取群成员信息失败（HTTP {res.status_code}）：{data}")
+        return data
+
 
 def _parse_group_map(raw: Any) -> dict[str, int]:
     """解析 group_map（QQ 群 openid → Copree 群 id）。
@@ -270,6 +291,31 @@ def parse_channel_origin(kind: str, raw: Any) -> tuple[str, str] | None:
     if len(parts) != 3 or parts[0] != kind:
         return None
     return parts[1], parts[2]
+
+
+def split_message(text: str, limit: int) -> list[str]:
+    """长文拆成几条发（官方单条有长度上限，超了整条被拒，不是截断）。
+
+    优先在空行处断，其次单行，都没有才按字符硬切：按字符硬切会把 Markdown 语法切坏、
+    也会把一句话劈成两半。断点太靠前（不足 limit 的三分之一）就不值得，宁可硬切。
+    """
+    text = str(text or "")
+    if len(text) <= limit:
+        return [text] if text else []
+    pieces: list[str] = []
+    rest = text
+    while len(rest) > limit:
+        window = rest[:limit]
+        cut = window.rfind("\n\n")
+        if cut < limit // 3:
+            cut = window.rfind("\n")
+        if cut < limit // 3:
+            cut = limit
+        pieces.append(rest[:cut].rstrip())
+        rest = rest[cut:].lstrip("\n")
+    if rest.strip():
+        pieces.append(rest)
+    return [p for p in pieces if p]
 
 
 def recall_period(elapsed_days: float) -> int | None:
@@ -404,6 +450,10 @@ class QqChannelPlugin(ServicePlugin):
         self._seen_groups: dict[str, dict[str, Any]] = {}
         # "这条发不到 QQ"的站内提示上次时间（按目标）：失败要看得见，但不能刷屏
         self._fail_notice: dict[str, float] = {}
+        # 补拉到的 union_openid（群:成员 → (时刻, union)）：成员接口只有 30 QPM，不能每条消息都问
+        self._union_cache: dict[str, tuple[float, str]] = {}
+        self._union_order: deque[str] = deque()
+        self._member_info_denied = False
         # 这个群的推送模式（最近一次观测到的事件类型 + 时间）：True=全量、False=只喂点名。
         # None = 本次启动后还没收到过群消息。通道说明据此选文案；给 AI 的持久记录在账本里
         self._full_mode: tuple[bool, float] | None = None
@@ -514,6 +564,8 @@ class QqChannelPlugin(ServicePlugin):
         self._routes.clear()
         self._dm_route.clear()
         self._fail_notice.clear()
+        self._union_cache.clear()
+        self._union_order.clear()
         self._delivered.clear()
         self._delivered_order.clear()
         # 先等在飞的回复发完：紧接着 aclose() 会把它们的 HTTP 客户端收走
@@ -956,6 +1008,8 @@ class QqChannelPlugin(ServicePlugin):
             f"元素类型={[e.get('message_type') for e in elements if isinstance(e, dict)]}",
         )
 
+        # 事件里的 union_openid 常常是空的（官方也写了"可能为空"），跨机器人认人只能按需补拉一次
+        await self._fill_union(qq_group, author)
         try:
             delivered = await self._deliver_to_group(
                 landing, qq_group, author, content, msg_id, str(ext.get("msg_idx") or ""), quoted_ref
@@ -1138,6 +1192,52 @@ class QqChannelPlugin(ServicePlugin):
             .limit(1)
         )).first()
         return int(row[0]) if row else None
+
+    async def _fill_union(self, qq_group: str, author: dict) -> None:
+        """按需把 union_openid 补进 author：事件里为空就走"获取群成员信息"，结果缓存一天。
+
+        为什么不能只信事件：官方只在成员信息接口里承诺返回稳定值，事件载荷里那个字段
+        本来就写着"可能为空"（真机也是空的）。成员接口只有 30 QPM，所以补到就缓存，
+        **没补到也缓存**——不然每来一条消息都要撞一次同样的失败。
+        """
+        if author.get("union_openid") or self._member_info_denied:
+            return
+        member = self._author_openid(author)
+        client = self._client
+        if not member or client is None:
+            return
+        key = f"{qq_group}:{member}"
+        cached = self._union_cache.get(key)
+        if cached is not None and time.time() - cached[0] < UNION_TTL_SECONDS:
+            if cached[1]:
+                author["union_openid"] = cached[1]
+            return
+        try:
+            info = await client.member_info(qq_group, member)
+        except Exception as e:
+            text = f"{type(e).__name__}: {e}"
+            if "11253" in text or "无接口访问权限" in text:
+                # 该接口只对白名单机器人开放：一次就够了，别每条消息都去撞
+                self._member_info_denied = True
+                logger.warning(
+                    f"QQ 通道[{self.instance}] 取不到群成员信息（11253：该接口仅白名单机器人可用），"
+                    f"union_openid 只能继续看事件载荷"
+                )
+            else:
+                logger.info(f"QQ 通道[{self.instance}] 取群成员信息失败：{text[:160]}")
+            return
+        union = str(info.get("union_openid") or "").strip()
+        self._remember_union(key, union)
+        if union:
+            author["union_openid"] = union
+            logger.info(f"QQ 通道[{self.instance}] 已补拉到一个 union（群成员信息接口）")
+
+    def _remember_union(self, key: str, union: str) -> None:
+        """缓存补拉结果（空也缓存），满了丢最早的那条"""
+        self._union_cache[key] = (time.time(), union)
+        self._union_order.append(key)
+        while len(self._union_order) > UNION_CACHE_MAX:
+            self._union_cache.pop(self._union_order.popleft(), None)
 
     @staticmethod
     def _author_openid(author: dict) -> str:
@@ -1514,6 +1614,10 @@ class QqChannelPlugin(ServicePlugin):
             )
             await self._report_unreachable(kind, route, str(e))
             return
+        if result.get("unsent"):
+            await self._report_unreachable(
+                kind, route, f"消息太长，被动回复次数用完了，末尾 {result['unsent']} 字没发出去",
+            )
         # 记下通道侧那条消息的 id（撤回要用）与引用索引（引用要用）
         response = result.get("response") or {}
         await self._remember_channel_ids(
@@ -1756,21 +1860,40 @@ class QqChannelPlugin(ServicePlugin):
             if claimed is None:
                 raise RuntimeError(reason)
             mode, wakeup = "wakeup", True
+        # 长文拆成几条：官方单条有长度上限，超了整条被拒，硬截断等于后半段凭空消失。
+        # 后续段仍走同一次被动回复（同一个 msg_id、序号递增），额度用完就如实交代剩下的没发。
+        pieces = split_message(text, TEXT_LIMIT)
+        data: dict = {}
+        sent_count = 0
+        unsent = 0
         try:
-            if kind == "group":
-                data = await client.send_group(
-                    target, text, msg_id=msg_id, msg_seq=seq + 1, message_reference=reference_id,
-                    force_type=self._msg_type,
-                )
-            else:
-                # 私聊的引用字段官方没给（也没实测过），宁可不发也不发错
-                data = await client.send_c2c(target, text, msg_id=msg_id, msg_seq=seq + 1,
-                                             force_type=self._msg_type, wakeup=wakeup)
+            for index, piece in enumerate(pieces):
+                if index and not (msg_id and mode == "passive" and seq + index < limit):
+                    unsent = sum(len(p) for p in pieces[index:])
+                    logger.warning(
+                        f"QQ 通道[{self.instance}] 这条太长：被动回复次数已用完，"
+                        f"末尾 {unsent} 字没发出去"
+                    )
+                    break
+                if kind == "group":
+                    data = await client.send_group(
+                        target, piece, msg_id=msg_id, msg_seq=seq + index + 1,
+                        message_reference=reference_id, force_type=self._msg_type,
+                    )
+                else:
+                    # 私聊的引用字段官方没给（也没实测过），宁可不发也不发错
+                    data = await client.send_c2c(target, piece, msg_id=msg_id, msg_seq=seq + index + 1,
+                                                 force_type=self._msg_type, wakeup=wakeup)
+                sent_count += 1
         except Exception:
             # 腾讯明确拒了才把周期还回去；响应丢失时留着（见 _claim_recall）
             if claimed is not None:
                 await self._release_recall(target, claimed)
             raise
+        if msg_id:
+            # 发出去的每一段都各占一次回复额度（前面只预占了第一段）；失败也照样占，
+            # 否则同一个 msg_id + msg_seq 会重复发送（官方会直接拒）
+            route["seq"] = seq + max(1, sent_count)
         if wakeup:
             self.recalls += 1
         if kind == "group":
@@ -1778,7 +1901,7 @@ class QqChannelPlugin(ServicePlugin):
         else:
             self.dm_replies += 1
         self.last_error = ""
-        return {"mode": mode, "response": dict(data or {})}
+        return {"mode": mode, "response": dict(data or {}), "unsent": unsent}
 
     # ── 互动召回记账 ───────────────────────────────────────────
     async def _claim_recall(self, target: str, anchor_ts: float) -> tuple[int | None, str]:

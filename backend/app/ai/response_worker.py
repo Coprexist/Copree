@@ -907,7 +907,10 @@ async def _maybe_trigger_ai_reply(
 
     # 8. 工具调用循环（含思考状态广播）
     conv_key = f"group:{group_id}"
-    _thinking_state.setdefault(conv_key, {})[agent.id] = {
+    # 键用 user_id 而不是 agent.id：广播出去的是 user_id，前端也按 user_id 认人；
+    # 两套 id 混用会让进会话时的 /activity 恢复（agent.id）和实时事件（user_id）
+    # 各占一条，同一个 AI 显示成两个人，而且恢复那条永远清不掉
+    _thinking_state.setdefault(conv_key, {})[agent.user_id] = {
         "name": agent.name, "avatar_url": agent.avatar_url,
     }
     logger.info(f"🚀 AI {agent.name}: 开始调用 LLM...")
@@ -950,7 +953,7 @@ async def _maybe_trigger_ai_reply(
     except Exception as e:
         logger.error(f"❌ AI {agent.name} 群聊回复异常 (group={group_id}): {e}", exc_info=True)
     finally:
-        _thinking_state.get(conv_key, {}).pop(agent.id, None)
+        _thinking_state.get(conv_key, {}).pop(agent.user_id, None)
         await chat_api.broadcast_to_group(
             group_id,
             {
@@ -997,6 +1000,7 @@ async def _trigger_dm_ai_reply(
 
     # 提前捕获 agent 属性（防止 session 过期后 DetachedInstanceError）
     agent_id = agent.id
+    agent_user_id = agent.user_id      # 活动指示器的键用 user_id：消息里的说话人（sender_id）就是它
     agent_name = agent.name
     agent_state = agent.state
     agent_avatar = agent.avatar_url
@@ -1084,7 +1088,7 @@ async def _trigger_dm_ai_reply(
     logger.info(f"🚀 AI {agent_name}: 开始 DM 回复 (session={session_id})")
 
     conv_key = f"dm:{session_id}"
-    _thinking_state.setdefault(conv_key, {})[agent_id] = {
+    _thinking_state.setdefault(conv_key, {})[agent_user_id] = {
         "name": agent_name, "avatar_url": agent_avatar,
     }
     try:
@@ -1094,6 +1098,9 @@ async def _trigger_dm_ai_reply(
                 "type": "ai_thinking",
                 "conversation_type": "dm",
                 "data": {
+                    # 键与会话里其他地方一致：前端按 user_id 认人（原来发 agent_id，
+                    # 前端读到 undefined，进会话时 /activity 恢复的那条又清不掉，一直挂着）
+                    "user_id": agent_user_id,
                     "agent_id": agent_id,
                     "agent_name": agent_name,
                     "agent_avatar_url": agent_avatar,
@@ -1127,13 +1134,14 @@ async def _trigger_dm_ai_reply(
     except Exception as e:
         logger.error(f"❌ AI {agent_name} DM 回复异常 (session={session_id}): {e}", exc_info=True)
     finally:
-        _thinking_state.get(conv_key, {}).pop(agent_id, None)
+        _thinking_state.get(conv_key, {}).pop(agent_user_id, None)
         await chat_api.broadcast_to_dm(
             session_id,
             {
                 "type": "ai_thinking_end",
                 "conversation_type": "dm",
                 "data": {
+                    "user_id": agent_user_id,
                     "agent_id": agent_id,
                     "agent_name": agent_name,
                     "agent_avatar_url": agent_avatar,
