@@ -1697,3 +1697,16 @@ async def test_group_probe_is_skipped_when_a_rejection_would_not_fit_the_quota(m
         assert "".join(s["content"] for s in sent).count("字") == 20000, "额度用完前正文必须发全"
     finally:
         _cleanup(plugin)
+
+
+async def test_group_probe_has_no_artificial_ceiling(migrated_db):
+    """往上探不设天花板：平台上限只能实测，探崩了平台会拦；代码不该替它画一条没测过的线"""
+    await _seed()
+    plugin = await _make_plugin()
+    try:
+        plugin._max_chars = 6946
+        assert plugin._split_size("group", 20000, 5) == 6946 + 1000
+        # 额度不够时仍然退回确认能发的长度（探崩那一次也要占额度）
+        assert plugin._split_size("group", 20000, 3) == 6946
+    finally:
+        _cleanup(plugin)

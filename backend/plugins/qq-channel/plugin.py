@@ -76,10 +76,8 @@ BOT_PER_MINUTE = 60                # Bot 维度 60/qpm
 PAIR_NOTIFY_INTERVAL = 60           # 陌生人反复私聊时，配对码最多 60 秒提醒一次
 PAIR_NOTIFY_CACHE_MAX = 256         # 通知表涨到这么大才清一次过期条目
 DM_ROUTE_MAX = 500                  # 私信路由上限：按会话记，只随配对人数增长
-TEXT_LIMIT = 4000                  # 实测能整条发出去的长度（一条 6952 字的回复按 4000+2952 发成两条、两条都到）
-TEXT_TOO_LONG = 6952               # 实测被整条拒掉的长度（40054007）：往上探的天花板
+TEXT_LIMIT = 4000                  # 保守起点：实测 ≥6946 字能整条发出去，4000 只是"一定没问题"的下界
 TEXT_PROBE_STEP = 1000             # 每次往上探一档的步长：探崩一次要耗一次被动回复额度，步子太密不划算
-TEXT_PROBE_MAX = TEXT_TOO_LONG - 1 # 探到这就别过线了，>它必被拒
 DEDUP_SIZE = 500                   # 相同 msg_id 可能重复推送，按 id 去重
 BACKOFF_MAX = 60.0
 
@@ -1848,7 +1846,8 @@ class QqChannelPlugin(ServicePlugin):
         safe = self._max_chars or TEXT_LIMIT
         if kind != "group" or self._probe_off or length <= safe:
             return min(safe, length)
-        attempt = min(safe + TEXT_PROBE_STEP, TEXT_PROBE_MAX, length)
+        # 不设人为天花板：上限本来就是探出来的，探崩了平台会告诉我们（代价已在下面按额度算过）
+        attempt = min(safe + TEXT_PROBE_STEP, length)
         pieces = 1 + (length - attempt + safe - 1) // safe     # 探的那段 + 余下按 safe 拆
         return attempt if pieces + 1 <= quota else safe
 
