@@ -18,9 +18,23 @@ export function logStateOf(log: { state_frame?: LogStateFrame } | null | undefin
   return frame && frame.type ? frame : null
 }
 
-/** 分组键：type + label 相同才是同一段状态；'\0' 分开，免得 "a" + "bc" 与 "ab" + "c" 撞成一堆 */
+/**
+ * 帧身份的编码：`type|label`（无状态帧时空串）。
+ *
+ * 它同时是分组键和 URL 参数——同一个身份只有一种写法，刷新回来才对得上。
+ * type 是固定标识（group_chat / dm / …），不含 |，所以按第一个 | 切开就能还原。
+ */
 export function stateKeyOf(frame: LogStateFrame | null): string {
-  return frame ? `${frame.type}\u0000${frame.label ?? ''}` : ''
+  return frame ? `${frame.type}|${frame.label ?? ''}` : ''
+}
+
+/** stateKeyOf 的逆（URL 参数还原用）；空串还原成 null */
+export function stateFrameOfKey(key: string | null | undefined): LogStateFrame | null {
+  if (!key) return null
+  const at = key.indexOf('|')
+  const type = at < 0 ? key : key.slice(0, at)
+  const label = at < 0 ? '' : key.slice(at + 1)
+  return type ? { type, label } : null
 }
 
 /**

@@ -2,6 +2,8 @@
 AI 对话日志服务
 保存、查询、清理 AI 完整对话记录
 """
+import difflib
+import json
 import logging
 from datetime import datetime, timezone
 from sqlalchemy import select, delete, func, text
@@ -341,6 +343,43 @@ async def get_log_detail(
             raise ValueError("无权查看此对话日志")
 
     return _log_to_detail(log)
+
+
+async def get_log_delta(
+    content_repo: ContentRepository,
+    log_id: int,
+    prev_id: int | None = None,
+    user_id: int | None = None,
+    is_admin: bool = False,
+) -> dict | None:
+    """这段状态下「这一条比上一条多了什么」（增量视图用）；日志不存在返回 None。
+
+    prev_id 由调用方从同一段状态的历史里挑：列表已经带回每条的状态帧身份，前端点开时
+    就知道上一条是谁，后端不必逐条回读 messages 去找。两条状态帧不一致时不给增量——
+    跨状态的请求体本来就不同源，差值没有意义。
+    """
+    result = await content_repo.execute(
+        select(ConversationLog).where(ConversationLog.id == log_id)
+    )
+    log = result.scalar_one_or_none()
+    if log is None:
+        return None
+    if not is_admin and not await _user_can_view_agent_logs(content_repo, log.agent_id, user_id):
+        raise ValueError("无权查看此对话日志")
+
+    no_delta = {"prev_log_id": None, "ops": [], "added_count": 0, "removed_count": 0, "shared_count": 0}
+    if not prev_id or prev_id == log_id:
+        return no_delta
+
+    prev_result = await content_repo.execute(
+        select(ConversationLog).where(ConversationLog.id == prev_id)
+    )
+    prev = prev_result.scalar_one_or_none()
+    if prev is None or prev.agent_id != log.agent_id:
+        return no_delta
+    if state_frame_of(prev.messages or []) != state_frame_of(log.messages or []):
+        return no_delta
+    return {"prev_log_id": prev.id, **_diff_messages(prev.messages or [], log.messages or [])}
 
 
 async def get_agent_log_stats(content_repo: ContentRepository, agent_id: int) -> dict:
@@ -708,6 +747,46 @@ def _run_status(messages: list[dict], has_output: bool) -> str:
         if any(mark in text for mark in marks):
             return status
     return "ok" if has_output else "no_output"
+
+
+def _message_key(msg) -> str:
+    """一条消息的内容指纹：键序不影响比对，同内容就算同一条"""
+    return json.dumps(msg, sort_keys=True, ensure_ascii=False, default=str)
+
+
+def _diff_messages(prev: list[dict], current: list[dict]) -> dict:
+    """两条请求体的「改变量」——按内容对齐后，多出来的、没了的、没动的。
+
+    不能按公共前缀算：请求体不是纯追加，中间那几块注入（相关记忆、状态摘要、当前时间）
+    每次调用都会变，实测 199 条里只有第 0 条对得上，前缀法会把整份都算成新的。
+    按内容对齐则内容相同就算没变（挪了位置也算）。ops 保持原顺序，前端才能把
+    「这里少了这几条、那里多了这几条」照着位置摆出来——有增有减，只给新增那一截是看不全的。
+    """
+    ops: list[dict] = []
+    added = removed = shared = 0
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(
+        a=[_message_key(m) for m in prev or []],
+        b=[_message_key(m) for m in current or []],
+        autojunk=False,
+    ).get_opcodes():
+        if tag == "equal":
+            shared += i2 - i1
+            ops.append({"tag": "equal", "count": i2 - i1})
+        elif tag == "insert":
+            added += j2 - j1
+            ops.append({"tag": "insert", "messages": (current or [])[j1:j2]})
+        elif tag == "delete":
+            removed += i2 - i1
+            ops.append({"tag": "delete", "messages": (prev or [])[i1:i2]})
+        else:  # replace：同一处既少了又多了，分开摆，别让前端猜
+            added += j2 - j1
+            removed += i2 - i1
+            ops.append({
+                "tag": "replace",
+                "removed": (prev or [])[i1:i2],
+                "added": (current or [])[j1:j2],
+            })
+    return {"ops": ops, "added_count": added, "removed_count": removed, "shared_count": shared}
 
 
 def _log_to_summary(log: ConversationLog) -> dict:

@@ -4,9 +4,7 @@ import { useT } from '../../../i18n/I18nContext'
 import { FileText, Settings, Bot, Eye, ChevronDown, ChevronUp, Loader2, Save, Sliders, X } from 'lucide-react'
 import Toggle from '../../../components/Toggle'
 import { Dialog } from '../../../components/ui'
-import RequestBodyViewer from '../../../components/shared/RequestBodyViewer'
-import { RunStatusChip } from '../../../components/shared/RunStatus'
-import { StateChip, groupByState, logStateOf, stateKeyOf, type LogStateFrame } from '../../../components/shared/LogState'
+import LogBrowser from '../../../components/shared/LogBrowser'
 
 interface GlobalConfig {
   max_conversation_logs: number
@@ -26,21 +24,6 @@ interface AgentSettings {
   effective_user_access: boolean
   system_max: number
   system_default_access: boolean
-}
-
-interface LogSummary {
-  id: number
-  agent_id: number
-  conversation_type: string
-  message_count: number
-  token_usage: any
-  has_output: boolean
-  status?: string
-  state_frame?: LogStateFrame
-  model: string | null
-  thinking_enabled: boolean
-  preview: any[]
-  created_at: string | null
 }
 
 interface AgentOption {
@@ -67,11 +50,7 @@ export default function ConversationLogTab() {
 
   // Log viewer
   const [viewAgentId, setViewAgentId] = useState<number | null>(null)
-  const [logs, setLogs] = useState<LogSummary[]>([])
-  const [logsLoading, setLogsLoading] = useState(false)
-  const [selectedLog, setSelectedLog] = useState<any>(null)
-  const [logDetail, setLogDetail] = useState<any>(null)
-  const [detailLoading, setDetailLoading] = useState(false)
+
 
   // ── Load global config ──
   useEffect(() => {
@@ -137,28 +116,6 @@ export default function ConversationLogTab() {
       setAgentSettings(updated)
     } catch (err: any) { alert(err.message) }
     finally { setAgentSaving(false) }
-  }
-
-  // ── Load logs ──
-  const loadLogs = async () => {
-    if (!viewAgentId) return
-    setLogsLoading(true)
-    try {
-      const data = await api.get<LogSummary[]>(`/admin/conversation-log/agents/${viewAgentId}/logs?limit=30`)
-      setLogs(data)
-    } catch (err: any) { alert(err.message) }
-    finally { setLogsLoading(false) }
-  }
-
-  // ── View log detail ──
-  const viewDetail = async (logId: number) => {
-    setDetailLoading(true)
-    setSelectedLog(logId)
-    try {
-      const data = await api.get(`/admin/conversation-log/agents/${viewAgentId}/logs/${logId}`)
-      setLogDetail(data)
-    } catch (err: any) { alert(err.message) }
-    finally { setDetailLoading(false) }
   }
 
   const formatTime = (t: string | null) => {
@@ -389,11 +346,7 @@ export default function ConversationLogTab() {
             />
             <select
               value={viewAgentId || ''}
-              onChange={e => {
-                setViewAgentId(e.target.value ? parseInt(e.target.value) : null)
-                setLogs([])
-                setSelectedLog(null)
-              }}
+              onChange={e => setViewAgentId(e.target.value ? parseInt(e.target.value) : null)}
               className="px-3 py-2 rounded-control border border-border bg-elevated text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
             >
               <option value="">{t('admin.selectAiPlaceholder')}</option>
@@ -405,106 +358,13 @@ export default function ConversationLogTab() {
                 ))
               )}
             </select>
-            <button
-              onClick={loadLogs}
-              disabled={!viewAgentId || logsLoading}
-              className="btn btn-sm btn-primary shrink-0"
-            >
-              {logsLoading ? <Loader2 className="animate-spin" size={14} /> : t('common.load')}
-            </button>
           </div>
 
-          {/* Log list */}
-          {logs.length > 0 && (
-            <div className="bg-elevated border border-border rounded-card overflow-hidden">
-              <div className="divide-y divide-border">
-                {groupByState(logs, logStateOf).map(group => (
-                  <div key={stateKeyOf(group.frame)}>
-                    <div className="px-4 py-1.5 bg-canvas flex items-center gap-2">
-                      <StateChip frame={group.frame} />
-                      <span className="text-2xs text-textMuted">{group.items.length}</span>
-                    </div>
-                    <div className="divide-y divide-border">
-                {group.items.map(log => (
-                  <div
-                    key={log.id}
-                    className="px-4 py-3 hover:bg-canvas cursor-pointer transition-colors"
-                    onClick={() => viewDetail(log.id)}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-mono text-textMuted">#{log.id}</span>
-                        <RunStatusChip status={log.status} />
-                        <span className={`text-xs px-1.5 py-0.5 rounded ${
-                          log.conversation_type === 'group' ? 'bg-blue-400/10 text-blue-400' : 'bg-primary-400/10 text-primary-400'
-                        }`}>
-                          {log.conversation_type === 'group' ? t('admin.groupChat') : log.conversation_type === 'dm' ? t('admin.directMessage') : log.conversation_type}
-                        </span>
-                        {log.has_output && <span className="text-xs text-mint-400">{t('admin.hasOutput')}</span>}
-                        {log.thinking_enabled && <span className="text-xs text-accent-400">{t('admin.deepReasoning')}</span>}
-                      </div>
-                      <span className="text-xs text-textMuted">{formatTime(log.created_at)}</span>
-                    </div>
-                    <div className="text-xs text-textSecondary">
-                      <span>{log.message_count} {t('admin.messages')}</span>
-                      {log.token_usage && (
-                        <span className="ml-3">
-                          {t('admin.tokens')} {log.token_usage.total_tokens}
-                        </span>
-                      )}
-                      {log.model && <span className="ml-3 text-textMuted">{log.model}</span>}
-                    </div>
-                    {log.preview && log.preview.length > 0 && (
-                      <div className="mt-1.5 text-xs text-textMuted space-y-0.5">
-                        {log.preview.slice(0, 2).map((p: any, i: number) => (
-                          <div key={i} className="truncate">
-                            <span className="font-medium">{p.role}:</span>{' '}
-                            {p.content || (p.tool_calls ? p.tool_calls.join(', ') : '...')}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Log detail modal */}
-          {selectedLog && (
-            <Dialog onClose={() =>  { setSelectedLog(null); setLogDetail(null) } } className="flex items-start justify-center pt-10 overflow-y-auto">
-              <div
-                className="bg-elevated border border-border rounded-dialog p-5 w-full max-w-4xl mx-4 shadow-2xl shadow-black/30 max-h-[80vh] overflow-y-auto"
-                onClick={e => e.stopPropagation()}
-              >
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="flex items-center gap-2 text-sm font-semibold text-textPrimary">
-                    <StateChip frame={logStateOf(logDetail)} />
-                    <RunStatusChip status={logDetail?.status} />
-                    {t('admin.conversationLog').replace('{id}', String(selectedLog))}
-                  </h3>
-                  <button onClick={() => { setSelectedLog(null); setLogDetail(null) }} className="text-textMuted hover:text-textSecondary"><X size={16} /></button>
-                </div>
-                {detailLoading ? (
-                  <div className="flex justify-center py-12"><Loader2 className="animate-spin" size={24} /></div>
-                ) : logDetail ? (
-                  <div className="space-y-3">
-                    <div className="flex gap-4 text-xs text-textSecondary">
-                      <span>{t('admin.logType')} {logDetail.conversation_type}</span>
-                      <span>{t('admin.logMessageCount')} {logDetail.message_count}</span>
-                      <span>{t('admin.logModel')} {logDetail.model || '-'}</span>
-                      <span>{formatTime(logDetail.created_at)}</span>
-                    </div>
-                    <div className="bg-canvas rounded-card p-3 max-h-[60vh] overflow-y-auto">
-                      <RequestBodyViewer messages={logDetail.messages} />
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            </Dialog>
+          {/* 状态帧一览 → 某段状态的请求体与历史；当前在哪一步写在 URL 上 */}
+          {viewAgentId ? (
+            <LogBrowser agentId={viewAgentId} basePath="/admin/conversation-log" />
+          ) : (
+            <p className="text-sm text-textMuted py-4 text-center">{t('admin.selectAiPlaceholder')}</p>
           )}
         </div>
       )}

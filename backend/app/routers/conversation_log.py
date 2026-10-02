@@ -100,6 +100,31 @@ async def get_agent_log_detail_user(
         raise HTTPException(status_code=403, detail=str(e))
 
 
+@router.get("/conversation-log/agents/{agent_id}/logs/{log_id}/delta")
+async def get_agent_log_delta_user(
+    agent_id: int,
+    log_id: int,
+    prev_id: int | None = Query(None, description="同一段状态的上一条日志 id；不传则不给增量"),
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    content_repo: ContentRepository = Depends(get_content_repo),
+):
+    """这条日志比同状态的上一条多了哪些消息（增量视图用）"""
+    from app.services.content.conversation_log_service import get_log_delta
+    user_result = await db.execute(select(User.role).where(User.id == current_user["user_id"]))
+    is_admin = user_result.scalar_one_or_none() == "admin"
+    try:
+        delta = await get_log_delta(
+            content_repo, log_id, prev_id=prev_id,
+            user_id=current_user["user_id"], is_admin=is_admin,
+        )
+        if delta is None:
+            raise HTTPException(status_code=404, detail="日志不存在")
+        return delta
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+
 # ============================================================
 # 导出端点
 # ============================================================

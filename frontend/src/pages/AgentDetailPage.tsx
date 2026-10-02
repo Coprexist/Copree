@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import { STATE_BADGE_COLORS } from '../constants'
@@ -16,9 +16,7 @@ import AgentSettingsModal from '../components/AgentSettingsModal'
 import { Dialog, EmptyState } from '../components/ui'
 import FilePreviewModal from '../components/FilePreviewModal'
 import ChannelCard from '../components/channels/ChannelCard'
-import RequestBodyViewer from '../components/shared/RequestBodyViewer'
-import { RunStatusChip } from '../components/shared/RunStatus'
-import { StateChip, groupByState, logStateOf, stateKeyOf, type LogStateFrame } from '../components/shared/LogState'
+import LogBrowser from '../components/shared/LogBrowser'
 
 /** 扩展名→MIME 类型映射（后端未返回 mime_type 时 fallback） */
 const EXT_MIME_MAP: Record<string, string> = {
@@ -101,21 +99,6 @@ interface FileReference {
   referrer_id: number
   ref_type: string
   display: string
-}
-
-interface LogSummary {
-  id: number
-  agent_id: number
-  conversation_type: string
-  message_count: number
-  token_usage: any
-  has_output: boolean
-  status?: string
-  state_frame?: LogStateFrame
-  model: string | null
-  thinking_enabled: boolean
-  preview: any[]
-  created_at: string | null
 }
 
 interface MemoryItem {
@@ -268,6 +251,9 @@ function StructuredMemoryView({ agentId }: { agentId: number }) {
   )
 }
 
+const TABS = ['info', 'channels', 'memories', 'storage', 'workspace', 'logs', 'collaborators'] as const
+type Tab = (typeof TABS)[number]
+
 export default function AgentDetailPage() {
   const t = useT()
   const { id } = useParams<{ id: string }>()
@@ -277,7 +263,19 @@ export default function AgentDetailPage() {
 
   const [agent, setAgent] = useState<Agent | null>(null)
   const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<'info' | 'channels' | 'memories' | 'storage' | 'workspace' | 'logs' | 'collaborators'>('info')
+  // 页签写在 URL 上（?tab=channels）：刷新、收藏、后退都回到原来那一步，
+  // 也才看得出这个链接指向的是通道还是对话日志
+  const [searchParams, setSearchParams] = useSearchParams()
+  const tabParam = searchParams.get('tab')
+  const activeTab = (TABS as readonly string[]).includes(tabParam ?? '') ? (tabParam as Tab) : 'info'
+  const setActiveTab = (tab: Tab) => {
+    const next = new URLSearchParams(searchParams)
+    if (tab === 'info') next.delete('tab')
+    else next.set('tab', tab)
+    // 换页签等于换一屏，日志那段状态的选择不该跟着漂过去
+    next.delete('log')
+    setSearchParams(next, { replace: true })
+  }
   // 页签文案：一张表代替七层三元表达式；每项都写成字面量 key（不要用变量拼），
   // i18n 静态检查只认源码里的字面量调用，加页签只动一行
   const tabLabels: Record<string, string> = {
@@ -331,13 +329,7 @@ export default function AgentDetailPage() {
   // Storage
   const [storage, setStorage] = useState<StorageInfo | null>(null)
 
-  // Logs
-  const [logs, setLogs] = useState<LogSummary[]>([])
-  const [logsLoading, setLogsLoading] = useState(false)
-  const [logsError, setLogsError] = useState(false)
-  const [selectedLog, setSelectedLog] = useState<any>(null)
-  const [latestLog, setLatestLog] = useState<any>(null)
-  const [logDetailLoading, setLogDetailLoading] = useState(false)
+  // Logs：列表/状态/详情都由 LogBrowser 自己管，页面只提供导出入口
   const [logExporting, setLogExporting] = useState(false)
 
   // Memories
@@ -438,37 +430,6 @@ export default function AgentDetailPage() {
     } catch { /* ignore */ }
   }, [agentId])
 
-  const loadLogs = useCallback(async () => {
-    setLogsLoading(true)
-    setLogsError(false)
-    try {
-      const data = await api.get(`/conversation-log/agents/${agentId}/logs?limit=50`)
-      setLogs(data || [])
-      // 进来先看"最新一次的请求体"：列表接口不带正文，这里顺手把最新那条详情取回来（取不到不影响列表）
-      if (data?.length) {
-        try { setLatestLog(await api.get(`/conversation-log/agents/${agentId}/logs/${data[0].id}`)) }
-        catch { setLatestLog(null) }
-      } else {
-        setLatestLog(null)
-      }
-    } catch {
-      setLogs([])
-      setLatestLog(null)
-      setLogsError(true)
-    }
-    finally { setLogsLoading(false) }
-  }, [agentId])
-
-  const openLogDetail = async (logId: number) => {
-    setLogDetailLoading(true)
-    setSelectedLog(null)
-    try {
-      const detail = await api.get(`/conversation-log/agents/${agentId}/logs/${logId}`)
-      setSelectedLog(detail)
-    } catch { /* silently fail */ }
-    finally { setLogDetailLoading(false) }
-  }
-
   const exportLog = async (logId: number, format: 'json' | 'md') => {
     setLogExporting(true)
     try {
@@ -508,11 +469,10 @@ export default function AgentDetailPage() {
 
   useEffect(() => {
     if (activeTab === 'storage') loadStorage()
-    if (activeTab === 'logs') loadLogs()
     if (activeTab === 'memories') loadMemories(1)
     if (activeTab === 'workspace') loadWorkspace()
     if (activeTab === 'collaborators') loadCollaborators()
-  }, [activeTab, loadStorage, loadLogs, loadMemories, loadWorkspace, loadCollaborators])
+  }, [activeTab, loadStorage, loadMemories, loadWorkspace, loadCollaborators])
 
   // Delete handler
   const handleDelete = async () => {
@@ -1211,146 +1171,8 @@ export default function AgentDetailPage() {
             <div className="flex items-center gap-2 mb-3">
               <ScrollText size={16} className="text-primary-400" />
               <h3 className="font-medium text-textPrimary text-sm">{t('agentDetail.logTitle')}</h3>
-              {logs.length > 0 && (
-                <span className="text-xs text-textMuted ml-auto">{logs.length} {t('agentDetail.logCountSuffix')}</span>
-              )}
             </div>
-            {latestLog && (
-              <div className="mb-3 rounded-control border border-border bg-canvas p-3">
-                <div className="flex items-center gap-2 mb-2">
-                  <h4 className="text-xs font-medium text-textPrimary">{t('logs:latestRequest')}</h4>
-                  <StateChip frame={logStateOf(latestLog)} />
-                  <RunStatusChip status={latestLog.status} />
-                  <span className="text-3xs text-textMuted">
-                    #{latestLog.id}
-                    {latestLog.created_at ? ` · ${new Date(latestLog.created_at).toLocaleString('zh-CN')}` : ''}
-                  </span>
-                </div>
-                <div className="max-h-[65vh] overflow-y-auto pr-1">
-                  <RequestBodyViewer messages={latestLog.messages} />
-                </div>
-              </div>
-            )}
-            {logsLoading ? (
-              <div className="flex items-center gap-2 text-sm text-textMuted py-4 justify-center">
-                <Loader2 size={14} className="animate-spin" /> {t('agentDetail.storageLoading')}
-              </div>
-            ) : logs.length === 0 ? (
-              <p className="text-sm text-textMuted py-4 text-center">
-                {logsError ? (
-                  <>
-                    {t('agentDetail.logsEmpty')}<br />
-                    <span className="text-xs">{t('agentDetail.logsEmptyHint')}</span>
-                  </>
-                ) : (
-                  t('agentDetail.logsNone')
-                )}
-              </p>
-            ) : (
-              <div className="space-y-3 max-h-96 overflow-y-auto">
-                {groupByState(logs, logStateOf).map((group) => (
-                  <div key={stateKeyOf(group.frame)} className="space-y-2">
-                    <div className="flex items-center gap-2">
-                      <StateChip frame={group.frame} />
-                      <span className="text-3xs text-textMuted">
-                        {group.items.length} {t('agentDetail.logCountSuffix')}
-                      </span>
-                    </div>
-                    {group.items.map((log) => (
-                  <div key={log.id} className="p-3 rounded-control bg-canvas border border-border">
-                    <div className="flex items-center justify-between mb-1">
-                      <div className="flex items-center gap-2">
-                        <RunStatusChip status={log.status} />
-                        <span className="text-xs px-1.5 py-0.5 rounded bg-primary-500/10 text-primary-400">
-                          {log.conversation_type === 'dm' ? t('agentDetail.logTypeDm') : t('agentDetail.logTypeGroup')}
-                        </span>
-                        <span className="text-xs text-textMuted">
-                          {log.message_count} {t('agentDetail.logMessageCount')}
-                        </span>
-                        {log.has_output && (
-                          <span className="text-xs px-1.5 py-0.5 rounded bg-mint-500/10 text-mint-400">
-                            {t('agentDetail.logHasOutput')}
-                          </span>
-                        )}
-                        {log.thinking_enabled && (
-                          <span className="text-xs px-1.5 py-0.5 rounded bg-accent-500/10 text-accent-400">
-                            {t('agentDetail.logThinking')}
-                          </span>
-                        )}
-                      </div>
-                      <span className="text-xs text-textMuted">
-                        {log.created_at ? new Date(log.created_at).toLocaleString('zh-CN') : ''}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2 mt-2">
-                      <button
-                        onClick={() => openLogDetail(log.id)}
-                        className="text-xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 transition-colors"
-                      >
-                        {t('agentDetail.logViewDetail')}
-                      </button>
-                      <button
-                        onClick={() => exportLog(log.id, 'json')}
-                        disabled={logExporting}
-                        className="text-xs text-textMuted hover:text-textSecondary transition-colors"
-                      >
-                        {t('agentDetail.logDownloadJson')}
-                      </button>
-                      <button
-                        onClick={() => exportLog(log.id, 'md')}
-                        disabled={logExporting}
-                        className="text-xs text-textMuted hover:text-textSecondary transition-colors"
-                      >
-                        {t('agentDetail.logDownloadMd')}
-                      </button>
-                    </div>
-                  </div>
-                    ))}
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* 日志详情弹窗 */}
-            {selectedLog && (
-              <Dialog onClose={() =>  setSelectedLog(null)} className="flex items-center justify-center">
-                <div
-                  className="bg-surface rounded-card border border-border max-w-4xl w-full mx-4 max-h-[80vh] flex flex-col shadow-2xl"
-                  onClick={e => e.stopPropagation()}
-                >
-                  <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-                    <h4 className="flex items-center gap-2 font-medium text-sm text-textPrimary">
-                      <StateChip frame={logStateOf(selectedLog)} />
-                      <RunStatusChip status={selectedLog.status} />
-                      {t('agentDetail.logDetailTitle')} #{selectedLog.id}
-                      <span className="text-textMuted ml-2 text-xs">
-                        {selectedLog.created_at ? new Date(selectedLog.created_at).toLocaleString('zh-CN') : ''}
-                      </span>
-                    </h4>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => exportLog(selectedLog.id, 'json')}
-                        className="text-xs px-2 py-1 rounded border border-border hover:bg-canvas text-textSecondary transition-colors"
-                      >
-                        {t('agentDetail.logDownloadJson')}
-                      </button>
-                      <button
-                        onClick={() => exportLog(selectedLog.id, 'md')}
-                        className="text-xs px-2 py-1 rounded border border-border hover:bg-canvas text-textSecondary transition-colors"
-                      >
-                        {t('agentDetail.logDownloadMd')}
-                      </button>
-                      <button onClick={() => setSelectedLog(null)} className="p-1 rounded hover:bg-elevated text-textMuted">
-                        <X size={16} />
-                      </button>
-                    </div>
-                  </div>
-                  <div className="flex-1 overflow-y-auto p-4">
-                    <RequestBodyViewer messages={selectedLog.messages || []} />
-                  </div>
-                </div>
-              </Dialog>
-            )}
+            <LogBrowser agentId={agentId} exportLog={exportLog} />
           </div>
         )}
 

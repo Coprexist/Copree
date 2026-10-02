@@ -29,6 +29,9 @@ const STYLES: Record<Kind, { bar: string; box: string; key: string }> = {
 /** 等宽渲染的种类：工具入参/返回与「本轮工具」汇总行都是机器文本，等宽才看得出结构 */
 const MONO: Kind[] = ['roundTools', 'toolCall', 'toolResult']
 
+/** removed 用于改变量里"已经没了"的那几条：压暗再加一圈红，跟留下的分得开 */
+type Tone = 'normal' | 'removed'
+
 /** 状态栈摘要：这段状态的前缀（当前帧 / 交接 / 焦段）就长在这条里，是各状态请求体最大的不同 */
 const STATE_MARK = '## 📋 当前状态'
 /** 插入进来的上下文（不是对话双方说的话）：变更通知、上一轮交接、上下文压缩、未读提示 */
@@ -83,12 +86,16 @@ function toolArgs(call: any): string {
   return typeof raw === 'string' ? raw : textOf(raw)
 }
 
-function Block({ index, kind, title, children }: { index: number; kind: Kind; title?: string; children: React.ReactNode }) {
+function Block({ index, kind, title, tone = 'normal', children }: {
+  index: number; kind: Kind; title?: string; tone?: Tone; children: React.ReactNode
+}) {
   const t = useT()
   const [open, setOpen] = useState(true)
   const style = STYLES[kind]
   return (
-    <div className={`flex gap-2 rounded-control border ${style.box} overflow-hidden`}>
+    <div className={`flex gap-2 rounded-control border ${style.box} overflow-hidden ${
+      tone === 'removed' ? 'opacity-70 ring-1 ring-rose-500/30' : ''
+    }`}>
       <div className={`w-1 shrink-0 ${style.bar}`} />
       <div className="flex-1 min-w-0 py-2 pr-2">
         <button
@@ -131,7 +138,13 @@ function Body({ text, mono = false }: { text: string; mono?: boolean }) {
   )
 }
 
-export default function RequestBodyViewer({ messages, className = '' }: { messages: any[]; className?: string }) {
+export default function RequestBodyViewer({ messages, className = '', legend = true, tone = 'normal' }: {
+  messages: any[]
+  className?: string
+  /** 拼在改变量里时不重复摆图例和原始 JSON 开关（一屏摆好几截，图例只该出现一次） */
+  legend?: boolean
+  tone?: Tone
+}) {
   const t = useT()
   const list = Array.isArray(messages) ? messages : []
   const [raw, setRaw] = useState(false)
@@ -179,7 +192,7 @@ export default function RequestBodyViewer({ messages, className = '' }: { messag
 
   return (
     <div className={`space-y-2 ${className}`}>
-      <div className="flex items-center gap-2 flex-wrap">
+      {legend && <div className="flex items-center gap-2 flex-wrap">
         {!raw && (Object.keys(STYLES) as Kind[]).map(kind => (
           <span key={kind} className="flex items-center gap-1 text-3xs text-textMuted">
             <span className={`w-2 h-2 rounded-full ${STYLES[kind].bar}`} />
@@ -193,7 +206,7 @@ export default function RequestBodyViewer({ messages, className = '' }: { messag
         >
           {raw ? t('logs:viewSegments') : t('logs:viewRaw')}
         </button>
-      </div>
+      </div>}
       {raw ? (
         <pre className="text-2xs font-mono text-textSecondary whitespace-pre-wrap break-words bg-canvas border border-border rounded-control p-3 max-h-[60vh] overflow-y-auto">
           {JSON.stringify(list, null, 2) || EMPTY}
@@ -201,7 +214,7 @@ export default function RequestBodyViewer({ messages, className = '' }: { messag
       ) : (
         <div className="space-y-1.5">
           {blocks.map((block, i) => (
-            <Block key={i} index={i} kind={block.kind} title={block.title}>{block.body}</Block>
+            <Block key={i} index={i} kind={block.kind} title={block.title} tone={tone}>{block.body}</Block>
           ))}
         </div>
       )}

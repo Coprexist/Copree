@@ -2861,6 +2861,25 @@ async def get_agent_conv_log_detail(
         raise HTTPException(status_code=403, detail=str(e))
 
 
+@router.get("/conversation-log/agents/{agent_id}/logs/{log_id}/delta")
+async def get_agent_conv_log_delta(
+    agent_id: int,
+    log_id: int,
+    prev_id: int | None = Query(None, description="同一段状态的上一条日志 id；不传则不给增量"),
+    admin: dict = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """这条日志比同状态的上一条多了哪些消息（增量视图用，管理员）"""
+    from app.services.content.conversation_log_service import get_log_delta
+    try:
+        delta = await get_log_delta(SQLAlchemyContentRepository(db), log_id, prev_id=prev_id, is_admin=True)
+        if delta is None:
+            raise HTTPException(status_code=404, detail="日志不存在")
+        return delta
+    except ValueError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+
 # ============================================================
 # Token 用量分析（管理员）
 # ============================================================
