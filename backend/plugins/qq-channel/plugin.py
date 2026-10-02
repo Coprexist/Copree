@@ -76,7 +76,8 @@ BOT_PER_MINUTE = 60                # Bot 维度 60/qpm
 PAIR_NOTIFY_INTERVAL = 60           # 陌生人反复私聊时，配对码最多 60 秒提醒一次
 PAIR_NOTIFY_CACHE_MAX = 256         # 通知表涨到这么大才清一次过期条目
 DM_ROUTE_MAX = 500                  # 私信路由上限：按会话记，只随配对人数增长
-TEXT_LIMIT = 4000                  # 单条正文的尝试上限（学到的更小上限优先，见 _deliver）
+TEXT_LIMIT = 4000                  # 单条正文的尝试上限（学到的更小上限优先，见 _deliver）。
+                                   # 实测平台接受 4000 字：一条 6952 字的回复按 4000+2952 发成两条，两条都到
 DEDUP_SIZE = 500                   # 相同 msg_id 可能重复推送，按 id 去重
 BACKOFF_MAX = 60.0
 
