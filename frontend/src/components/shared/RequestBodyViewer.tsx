@@ -232,8 +232,8 @@ function toolArgs(call: any): string {
   return typeof raw === 'string' ? raw : textOf(raw)
 }
 
-function Block({ index, kind, title, source, marks = [], tone = 'normal', children }: {
-  index: number; kind: Kind; title?: string; tone?: Tone; children: React.ReactNode
+function Block({ index, msgIndex, kind, title, source, marks = [], tone = 'normal', children }: {
+  index: number; msgIndex: number; kind: Kind; title?: string; tone?: Tone; children: React.ReactNode
   /** 这一块的原始文本（那条消息本身）；给了才摆「原文 / 渲染」开关 */
   source?: string
   /** 从正文里拆出来的标记（时间 / 谁 / msg_id / @了谁），摆在块头供扫读 */
@@ -300,7 +300,7 @@ function Block({ index, kind, title, source, marks = [], tone = 'normal', childr
             {/* 两份视图都在 DOM 里：导出件没有 React，切「原文 / 渲染」只能靠 data-value */}
             <div id={viewId} data-value={showSource ? 'source' : 'rendered'} className="switch">
               <div data-case="rendered">{children}</div>
-              {source !== undefined && <div data-case="source"><Raw text={source || ''} /></div>}
+              {source !== undefined && <div data-case="source"><Raw text={source || ''} lazy={'msg:' + msgIndex} /></div>}
             </div>
           </div>
         </div>
@@ -309,10 +309,13 @@ function Block({ index, kind, title, source, marks = [], tone = 'normal', childr
   )
 }
 
-/** 等宽原文块：JSON 格式化、机器文本、逐字原文都用它，样式只写一遍 */
-function Raw({ text }: { text: string }) {
+/**
+ * 等宽原文块：JSON 格式化、机器文本、逐字原文都用它，样式只写一遍。
+ * lazy 是导出件用的键：那份 JSON 不在文件里存第二遍，打开时按它从紧凑数据现算。
+ */
+function Raw({ text, lazy }: { text: string; lazy?: string }) {
   return (
-    <pre className="text-2xs font-mono text-textSecondary whitespace-pre-wrap break-words bg-black/5 dark:bg-black/20 rounded-control p-2 max-h-96 overflow-y-auto">
+    <pre data-lazy-json={lazy} className="text-2xs font-mono text-textSecondary whitespace-pre-wrap break-words bg-black/5 dark:bg-black/20 rounded-control p-2 max-h-96 overflow-y-auto">
       {text}
     </pre>
   )
@@ -349,9 +352,12 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
   const [raw, setRaw] = useState(false)
   // 分段视图与原始 JSON 也是一组视图：关系同样留在 DOM 上，导出件才切得动
   const viewId = useId()
+  // 导出件里「原始 JSON」与每条的「原文」都按这份紧凑数据现算，不在文件里重复存两遍；
+  // 把 < 转义掉是为了内容里出现 </script> 时不会提前结束这个标签
+  const logJson = useMemo(() => JSON.stringify(list).replace(/</g, '\\u003c'), [list])
 
   const blocks = useMemo(() => {
-    const out: { kind: Kind; title?: string; source: string; marks: Mark[]; body: React.ReactNode }[] = []
+    const out: { kind: Kind; title?: string; source: string; marks: Mark[]; body: React.ReactNode; msgIndex: number }[] = []
     // 工具返回自己不带函数名，只能拿 tool_call_id 回上面那条工具调用里认
     const callNames = new Map<string, string>()
     for (const msg of list) {
@@ -359,12 +365,12 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
         if (call?.id) callNames.set(String(call.id), toolName(call))
       }
     }
-    list.forEach((msg) => {
+    list.forEach((msg, mi) => {
       const content = textOf(msg.content)
       if (msg?.reasoning_content) {
         const thinking = textOf(msg.reasoning_content)
         out.push({
-          kind: 'reasoning', title: String(msg.role || ''), source: thinking, marks: [],
+          kind: 'reasoning', title: String(msg.role || ''), source: thinking, marks: [], msgIndex: mi,
           body: <Body text={thinking} names={mentionNames} />,
         })
       }
@@ -402,7 +408,7 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
       }
       // 原文 = 这条消息本身（库里的字段一个不少），跟上面渲染出来的视图对得上
       out.push({
-        kind, title, source: JSON.stringify(msg, null, 2),
+        kind, title, source: JSON.stringify(msg, null, 2), msgIndex: mi,
         marks: headerMarks(content),
         body,
       })
@@ -416,6 +422,8 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
 
   return (
     <div className={`space-y-2 ${className}`}>
+      {/* 数据只存一份：导出件打开时按这份紧凑 JSON 现算「原始 JSON」与每条「原文」 */}
+      <script type="application/json" data-log-json dangerouslySetInnerHTML={{ __html: logJson }} />
       {legend && <div className="flex items-center gap-2 flex-wrap" data-value={raw ? 'raw' : 'segments'}>
         <div className="flex items-center gap-2 flex-wrap" data-when="segments">
         {(Object.keys(STYLES) as Kind[]).map(kind => (
@@ -440,14 +448,14 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
       <div id={viewId} data-value={raw ? 'raw' : 'segments'} className="switch">
         <div data-case="segments" className="space-y-1.5">
           {blocks.map((block, i) => (
-            <Block key={i} index={i} kind={block.kind} title={block.title} source={block.source} marks={block.marks} tone={tone}>
+            <Block key={i} index={i} msgIndex={block.msgIndex} kind={block.kind} title={block.title} source={block.source} marks={block.marks} tone={tone}>
               {block.body}
             </Block>
           ))}
         </div>
         {legend && (
           <div data-case="raw">
-            <pre className="text-2xs font-mono text-textSecondary whitespace-pre-wrap break-words bg-canvas border border-border rounded-control p-3 max-h-[60vh] overflow-y-auto">
+            <pre data-lazy-json="raw" className="text-2xs font-mono text-textSecondary whitespace-pre-wrap break-words bg-canvas border border-border rounded-control p-3 max-h-[60vh] overflow-y-auto">
               {JSON.stringify(list, null, 2) || EMPTY}
             </pre>
           </div>

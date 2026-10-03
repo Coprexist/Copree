@@ -27,20 +27,73 @@ function absolutizeUrls(root: HTMLElement): void {
   })
 }
 
-/** 收集当前页面的样式规则：同源样式表读得到，跨域的（外链字体）读不到就跳过 */
-function collectCss(): string {
-  const parts: string[] = []
-  for (const sheet of Array.from(document.styleSheets)) {
-    let rules: CSSRuleList | null = null
-    try { rules = sheet.cssRules } catch { continue }
-    if (!rules) continue
+/**
+ * 伪类、伪元素剥掉之后再看命中：规则本身要留着（:hover 的样式在导出件里照样有用），
+ * 只是不能拿带伪类的选择器去 querySelector。
+ */
+const PSEUDO = /::?(hover|focus|focus-visible|focus-within|active|disabled|checked|placeholder-shown|placeholder|before|after|visited|selection|marker|file|backdrop)\b(\([^)]*\))?/g
+
+/** 以根元素开头的选择器（.dark .prose 这种）在子树里永远判不出命中，直接留 */
+const ROOTED = /^\s*(html|body|:root|\.dark)[\s>+~]/
+
+/** 判断不了就留：丢样式比多带几 KB 难受得多 */
+function selectorHits(rawSelector: string, scope: HTMLElement): boolean {
+  const selector = rawSelector.replace(PSEUDO, '').trim()
+  if (!selector || ROOTED.test(selector)) return true
+  try {
+    if (scope.querySelector(selector)) return true
+    // body / html / :root 上的基础规则不在导出内容的子树里，得单独看一眼
+    return document.body.matches(selector) || document.documentElement.matches(selector)
+  } catch {
+    return true
+  }
+}
+
+/** 逗号分组里有一个命中就整条保留 */
+function ruleHits(selectorText: string, scope: HTMLElement): boolean {
+  return selectorText.split(',').some(selector => selectorHits(selector, scope))
+}
+
+/**
+ * 收集当前页面的样式规则，只留导出内容用得上的那些。
+ * 全量抄一遍是文件里最大的一笔（整站样式表一两百 KB，日志正文用到的只是其中一小撮）；
+ * 判不出来的一律保留，宁可多带也不能丢样式。
+ */
+function collectCss(scope: HTMLElement): string {
+  const kept = new Set<string>()
+  let total = 0
+  const walk = (rules: CSSRuleList): void => {
     for (const rule of Array.from(rules)) {
       // @import 在导出件里按文件所在目录解析，带过去只会 404
       if (rule.type === CSSRule.IMPORT_RULE) continue
-      parts.push(rule.cssText)
+      total++
+      if (rule.type === CSSRule.STYLE_RULE) {
+        if (ruleHits((rule as CSSStyleRule).selectorText, scope)) kept.add(rule.cssText)
+        continue
+      }
+      // 媒体/支持查询：只留命中的那几条，整块搬会带上没命中的
+      if (rule.type === CSSRule.MEDIA_RULE || rule.type === CSSRule.SUPPORTS_RULE) {
+        const hits = Array.from((rule as CSSMediaRule).cssRules)
+          .filter(one => one.type === CSSRule.STYLE_RULE && ruleHits((one as CSSStyleRule).selectorText, scope))
+          .map(one => '  ' + one.cssText)
+        if (hits.length) {
+          const at = rule.type === CSSRule.MEDIA_RULE ? '@media ' : '@supports '
+          kept.add(at + (rule as CSSMediaRule).conditionText + ' {\n' + hits.join('\n') + '\n}')
+        }
+        continue
+      }
+      // @keyframes / @font-face 没法按选择器判断，体积也小，整条留
+      kept.add(rule.cssText)
     }
   }
-  return parts.join('\n')
+  for (const sheet of Array.from(document.styleSheets)) {
+    let rules: CSSRuleList | null = null
+    try { rules = sheet.cssRules } catch { continue }
+    if (rules) walk(rules)
+  }
+  const css = Array.from(kept).join('\n')
+  console.log('[export] 样式规则 ' + total + ' 条，保留 ' + kept.size + ' 条 / ' + css.length + ' 字符')
+  return css
 }
 
 /**
@@ -49,6 +102,18 @@ function collectCss(): string {
  */
 const EXPORT_SCRIPT = [
   '<script>',
+  '/* 文件里只存一份紧凑 JSON：「原始 JSON」和每条的「原文」都在打开时现算 */',
+  'var dataEl = document.querySelector("script[data-log-json]")',
+  'if (dataEl) {',
+  '  try {',
+  '    var msgs = JSON.parse(dataEl.textContent || "[]")',
+  '    document.querySelectorAll("[data-lazy-json]").forEach(function (pre) {',
+  '      var key = pre.getAttribute("data-lazy-json")',
+  '      var value = key === "raw" ? msgs : msgs[Number(key.slice(4))]',
+  '      pre.textContent = JSON.stringify(value, null, 2) || ""',
+  '    })',
+  '  } catch (e) { /* 数据坏了就当没有，折叠与切换不受影响 */ }',
+  '}',
   'document.querySelectorAll("[data-collapsible]").forEach(function (button) {',
   '  button.addEventListener("click", function () {',
   '    var body = document.getElementById(button.getAttribute("data-collapsible"))',
@@ -87,6 +152,16 @@ export function saveElementAsHtml(el: HTMLElement, filename: string, title: stri
   // 页面上这块靠布局限高滚动（max-h-[70vh] overflow-y-auto），导出件要自然展开
   clone.className = 'exported-log-body'
   absolutizeUrls(clone)
+
+  // 瘦身：每条的「原文」和整段「原始 JSON」不在文件里存第二遍——清空，打开时按紧凑数据现算
+  // （见 EXPORT_SCRIPT 的填充段），省下的正是同一份 JSON 的第二遍
+  let lazyBytes = 0
+  clone.querySelectorAll('[data-lazy-json]').forEach(node => {
+    lazyBytes += (node.textContent || '').length
+    node.textContent = ''
+  })
+  if (lazyBytes) console.log('[export] 懒生成 JSON 少写 ' + lazyBytes + ' 字符')
+
   const root = document.documentElement
   const html = [
     '<!DOCTYPE html>',
@@ -96,7 +171,7 @@ export function saveElementAsHtml(el: HTMLElement, filename: string, title: stri
     '<meta name="viewport" content="width=device-width, initial-scale=1">',
     '<title>' + escapeHtml(title) + '</title>',
     '<style>',
-    collectCss(),
+    collectCss(el),
     '</style>',
     '<style>',
     '/* 导出件自用：页面里这块的限高与滚动由布局给，这里换成整页留白 */',
