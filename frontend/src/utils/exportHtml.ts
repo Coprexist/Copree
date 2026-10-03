@@ -161,9 +161,9 @@ const EXPORT_SCRIPT = [
   'document.querySelectorAll("[data-smooth-height]").forEach(function (el) {',
   '  var prev = el.offsetHeight',
   '  var timer = 0',
-  '  /* 完全收起之后才让这一块退出渲染：折叠过程中还看得见，提前隐藏会看见内容凭空消失 */',
+  '  /* 收到底的标记：网格 0 行高与「不用再渲染」都挂在它上面，动画期间不设，内容才完整可见 */',
   '  var markCollapsed = function () {',
-  '    if (el.offsetHeight === 0) el.setAttribute("data-collapsed", "true")',
+  '    if (el.getAttribute("data-open") === "false") el.setAttribute("data-collapsed", "true")',
   '    else el.removeAttribute("data-collapsed")',
   '  }',
   '  markCollapsed()',
@@ -177,17 +177,18 @@ const EXPORT_SCRIPT = [
   '    el.style.overflow = "hidden"',
   '    el.style.height = from + "px"',
   '    void el.offsetHeight',
-  '    el.style.transition = "height 0.22s cubic-bezier(0.4, 0, 0.2, 1)"',
+  '    el.style.transition = "height 0.28s cubic-bezier(0.65, 0, 0.35, 1)"',
   '    el.style.height = to + "px"',
   '    clearTimeout(timer)',
   '    timer = setTimeout(function () {',
+  '      /* 先落「收到底」的标记再交还高度：反过来的话网格会先弹回一行、再跳回 0 */',
+  '      markCollapsed()',
   '      el.style.transition = ""',
   '      el.style.height = ""',
   '      el.style.overflow = ""',
   '      prev = el.offsetHeight',
-  '      markCollapsed()',
   '      ro.observe(el)',
-  '    }, 260)',
+  '    }, 320)',
   '  })',
   '  ro.observe(el)',
   '})',
@@ -211,6 +212,8 @@ export function saveElementAsHtml(el: HTMLElement, filename: string, title: stri
   // 页面里正文那层自己限高滚动（两栏各自滑），导出件是一整页：这一层要平铺开，
   // 否则整段内容被切在 70vh 里还多一条滚动条（块内代码/JSON 的小滚动条保留，跟站内一致）
   clone.querySelectorAll('[data-export-flat]').forEach(node => { node.className = '' })
+  // 页面里已经折叠着的块，导出件打开时也该是收起的（0 行高现在只认这个标记）
+  clone.querySelectorAll('.collapse-body[data-open="false"]').forEach(node => node.setAttribute('data-collapsed', 'true'))
   absolutizeUrls(clone)
 
   // 瘦身：每条的「原文」和整段「原始 JSON」不在文件里存第二遍——清空，打开时按紧凑数据现算

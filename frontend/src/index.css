@@ -373,10 +373,10 @@
     /* 一份长日志里几十个块的内容都挂在文档上，收放时要重排整篇；把影响圈在这块里 */
     contain: layout paint;
   }
-  .collapse-body[data-open="false"] { grid-template-rows: 0fr; }
-  /* 完全收起之后才退出渲染：折叠过程中内容还得看得见（提前隐藏会看见内容凭空消失），
-     这个标记由高度动画收尾时打上（见 useSmoothHeights） */
-  .collapse-body[data-collapsed="true"][data-open="false"] > * { content-visibility: hidden; }
+  /* 收到底之后才是 0 行高（标记由高度动画收尾时打，见 useSmoothHeights）：
+     动画期间网格仍是一行、内容完整可见，缩的是外层高度，所以看得见它滑上去 */
+  .collapse-body[data-collapsed="true"] { grid-template-rows: 0fr; }
+  .collapse-body[data-collapsed="true"] > * { content-visibility: hidden; }
   .collapse-body > * { overflow: hidden; min-height: 0; }
   /* 箭头跟着 aria-expanded 转：同一份 CSS 同时管站内与导出件 */
   .collapse-arrow { transition: transform 0.2s ease; }
