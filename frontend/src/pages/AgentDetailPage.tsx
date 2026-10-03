@@ -40,6 +40,10 @@ function getMimeType(file: { name: string; mime_type?: string }): string {
   return EXT_MIME_MAP[ext] || ''
 }
 
+/** 操作区按钮统一形态：尺寸/描边/悬停强调只在这里定一份，六颗按钮不再各写一套 */
+const ACTION_BTN = 'btn btn-sm btn-outline gap-1.5 hover:border-primary-500/30'
+const ACTION_BTN_DANGER = 'btn btn-sm btn-outline-danger gap-1.5'
+
 interface Agent {
   id: number
   owner_id: number
@@ -1023,16 +1027,16 @@ export default function AgentDetailPage() {
               <h3 className="font-medium text-textPrimary text-sm mb-3">{t('agentDetail.actions')}</h3>
               <div className="flex flex-wrap gap-2">
                 {/* Export */}
-                <button onClick={handleExport} className="btn btn-sm btn-outline gap-1.5 hover:text-textPrimary hover:border-primary-500/30">
-                  <Download size={14} /> {t('agentDetail.downloadExport')}
+                <button onClick={handleExport} className={ACTION_BTN}>
+                  <Download size={14} /> {t('agentDetail.exportSoul')}
                 </button>
-                <button onClick={handleCopyExport} className="btn btn-sm btn-outline gap-1.5 hover:text-textPrimary hover:border-primary-500/30">
+                <button onClick={handleCopyExport} className={ACTION_BTN}>
                   {copied ? <Check size={14} className="text-mint-400" /> : <Copy size={14} />}
-                  {copied ? t('agentDetail.copied') : t('agentDetail.copyJson')}
+                  {copied ? t('agentDetail.copied') : t('agentDetail.copySoul')}
                 </button>
 
                 {/* Import */}
-                <label className="flex items-center gap-1.5 px-3 py-2 rounded-control border border-border text-sm text-textSecondary hover:text-textPrimary hover:border-primary-500/30 transition-colors cursor-pointer">
+                <label className={ACTION_BTN}>
                   <Upload size={14} />
                   {importing ? t('common.saving') : t('agentDetail.importSoul')}
                   <input type="file" accept=".json" onChange={handleImport} className="hidden" />
@@ -1042,14 +1046,14 @@ export default function AgentDetailPage() {
                 <button
                   onClick={() => setAvatarPickerOpen(true)}
                   disabled={uploadingAvatar}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-control border border-border text-sm text-textSecondary hover:text-textPrimary hover:border-primary-500/30 transition-colors disabled:opacity-50"
+                  className={ACTION_BTN}
                 >
                   <Image size={14} />
                   {uploadingAvatar ? t('me.uploadingAvatar') : t('agentDetail.changeAvatar')}
                 </button>
 
                 {/* Token */}
-                <button onClick={handleGenerateToken} disabled={generatingToken} className="btn btn-sm btn-outline gap-1.5 hover:text-textPrimary hover:border-primary-500/30">
+                <button onClick={handleGenerateToken} disabled={generatingToken} className={ACTION_BTN}>
                   <RefreshCw size={14} className={generatingToken ? 'animate-spin' : ''} />
                   {tokenMasked ? `Token: ${tokenMasked}` : t('agentDetail.generateToken')}
                 </button>
@@ -1066,7 +1070,7 @@ export default function AgentDetailPage() {
                 )}
 
                 {/* Delete */}
-                <button onClick={() => setShowDelete(true)} className="flex items-center gap-1.5 px-3 py-2 rounded-control border border-rose-500/20 text-sm text-rose-400 hover:bg-rose-500/10 transition-colors">
+                <button onClick={() => setShowDelete(true)} className={ACTION_BTN_DANGER}>
                   <Trash2 size={14} /> {t('agentDetail.deleteAgent')}
                 </button>
               </div>

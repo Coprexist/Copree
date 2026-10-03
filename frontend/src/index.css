@@ -657,6 +657,9 @@
 /* 描边次级按钮 —— 列表/工具条里最常见的「白底描边」按钮 */
 .btn-outline { background: transparent; border: 1px solid rgb(var(--tw-border)); color: rgb(var(--tw-text-secondary)); }
 .btn-outline:hover { background: rgb(var(--tw-elevated)); color: rgb(var(--tw-text-primary)); }
+/* 描边危险按钮 —— 删除这类不可逆操作：描边而非实心，免得在操作区抢焦点 */
+.btn-outline-danger { background: transparent; border: 1px solid rgb(var(--tw-rose-500) / .2); color: rgb(var(--tw-rose-400)); }
+.btn-outline-danger:hover { background: rgb(var(--tw-rose-500) / .1); border-color: rgb(var(--tw-rose-500) / .4); color: rgb(var(--tw-rose-400)); }
 
 /* 补档 xs=24px —— 工具条/列表行里的小按钮（此前的 px-2 py-0.5 一族） */
 .btn-xs { height: 1.5rem; padding: 0 0.5rem; font-size: 0.6875rem; gap: 0.25rem; }
