@@ -367,15 +367,14 @@
      内容始终留在 DOM 里：导出成静态 HTML 后没有 React，只靠 data-open 切换，
      所以用 grid 行高过渡，而不是挂载/卸载 */
   .collapse-body {
-    display: grid;
-    grid-template-rows: 1fr;
-    /* 高的过渡交给 JS（见 useSmoothHeights）：折叠与切视图走同一条，不在这里各写一份 */
+    /* 高的过渡交给 JS（见 useHeightTransition）：折叠与切视图走同一条，不在这里各写一份 */
     /* 一份长日志里几十个块的内容都挂在文档上，收放时要重排整篇；把影响圈在这块里 */
     contain: layout paint;
   }
-  /* 收到底之后才是 0 行高（标记由高度动画收尾时打，见 useSmoothHeights）：
-     动画期间网格仍是一行、内容完整可见，缩的是外层高度，所以看得见它滑上去 */
-  .collapse-body[data-collapsed="true"] { grid-template-rows: 0fr; }
+  /* 收到底之后整块不再渲染（标记由高度动画收尾时打，见 useHeightTransition）：
+     动画期间内容完整可见、缩的是外层高度，所以看得见它滑上去；收到底才隐去——
+     网格的 0fr 压不掉子项自己的 padding，留着会让收起后的块底下多一条空档 */
+  .collapse-body[data-collapsed="true"] { display: none; }
   /* 内容自成一块布局：容器高度在动画里每帧都变，不隔开的话整棵子树要跟着重排，这正是收起发卡的来源。
      收到底后曾经还给内容挂过 content-visibility: hidden，但展开时要重建整棵渲染树，代价比省下的更大 */
   .collapse-body > * { overflow: hidden; min-height: 0; contain: layout paint; }
