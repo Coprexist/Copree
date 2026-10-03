@@ -404,7 +404,7 @@ async def lifespan(app: FastAPI):
 | `database_url` | str | postgresql+asyncpg://... | 异步数据库连接 |
 | `jwt_secret_key` | str | dev-secret-change-me | JWT 密钥 |
 | `deepseek_base_url` | str | https://api.deepseek.com | AI API 地址 |
-| `default_chat_model` | str | deepseek-v4-flash | 默认聊天模型 |
+| `default_chat_model` | str | deepseek-flash | 默认聊天模型 |
 | `default_work_model` | str | deepseek-v4-pro | 默认工作模型 |
 | `default_embedding_model` | str | text-embedding-3-small | Embedding 模型 |
 | `rate_limit_per_second` | int | 2 | AI 每秒最大发言次数 |

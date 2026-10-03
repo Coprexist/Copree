@@ -145,7 +145,7 @@ def test_resolve_probe_model_prefers_preset():
     from app.services.agent.api_probe import resolve_probe_model
 
     assert resolve_probe_model(MIMO) == "mimo-v2.5"
-    assert resolve_probe_model("https://api.deepseek.com") == "deepseek-v4-flash"
+    assert resolve_probe_model("https://api.deepseek.com") == "deepseek-flash"
     # 不认识的地址 → 平台默认模型（不抛异常）
     assert resolve_probe_model("https://not-a-real-provider.example") != ""
 

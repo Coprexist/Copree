@@ -212,6 +212,40 @@ async def _ensure_platform_version_once() -> None:
         logger.warning(f"[WARN] 平台能力版本化失败（不影响启动）: {e}", exc_info=True)
 
 
+async def _upgrade_stored_model_names() -> None:
+    """库里的旧模型名平升成现名（别名表住在 provider_presets，见 services/agent/model_upgrade）
+
+    与 _ensure_platform_version_once 同一类活：一次性的数据修正。区别是这步在关键路径上——
+    名字没平升完就有人来发消息的话，那条请求会打到一个可能已经下线的 model id 上。
+    """
+    from app.database import async_session
+    from app.services.agent.model_upgrade import upgrade_stored_model_names
+
+    try:
+        async with async_session() as db:
+            changed = await upgrade_stored_model_names(db)
+            await db.commit()
+        if changed:
+            detail = "、".join(f"{key} {count} 条" for key, count in changed.items())
+            logger.info(f"[OK] 旧模型名已平升: {detail}")
+    except Exception as e:
+        logger.warning(f"[WARN] 旧模型名平升失败（不影响启动）: {e}", exc_info=True)
+
+
+async def _ensure_auto_providers() -> None:
+    """标了 auto_config 的预设直接补成一条配置项（管理员删过的不补，见 provider_bootstrap）"""
+    from app.database import async_session
+    from app.services.agent.provider_bootstrap import ensure_auto_providers
+
+    try:
+        async with async_session() as db:
+            added = await ensure_auto_providers(db)
+        if added:
+            logger.info(f"[OK] 自动加入的配置项: {'、'.join(added)}")
+    except Exception as e:
+        logger.warning(f"[WARN] 自动加入配置项失败（不影响启动）: {e}", exc_info=True)
+
+
 async def _startup_workers() -> None:
     """核心循环型后台 worker（异常退出自动重启）"""
     from app.ai.response_worker import ai_response_worker
@@ -419,6 +453,8 @@ async def lifespan(app: FastAPI):
     maintenance.set_auto()
 
     await _startup_db()
+    await _upgrade_stored_model_names()
+    await _ensure_auto_providers()
     await _startup_plugins()
     await _startup_workers()
     await _startup_world()

@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 # 模型解析
 # ═══════════════════════════════════════════════════════════════
 
-def resolve_model(agent, default_model: str = "deepseek-v4-flash", global_default_model: str | None = None) -> str:
+def resolve_model(agent, default_model: str = "deepseek-flash", global_default_model: str | None = None) -> str:
     """
     解析 AI 代理实际使用的模型（纯函数）。
     优先级：agent 自定义模型 > 全局默认模型 > 传入的默认值

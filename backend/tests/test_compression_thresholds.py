@@ -63,7 +63,7 @@ def test_context_window_follows_the_model():
     """窗口按模型取（认不出退回保守默认）——不能再拿一个常量套所有模型"""
     from app.utils.pure.model_window import DEFAULT_CONTEXT_WINDOW, context_window_for
 
-    assert context_window_for("deepseek-v4-flash") == 128_000
+    assert context_window_for("deepseek-flash") == 128_000
     assert context_window_for("GPT-4.1-preview") == 1_000_000, "大小写与后缀无关"
     assert context_window_for("some-unknown-model") == DEFAULT_CONTEXT_WINDOW
     assert context_window_for(None) == DEFAULT_CONTEXT_WINDOW

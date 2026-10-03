@@ -3260,7 +3260,7 @@ async def save_provider(
     if row is None:
         row = SystemSettings(id=1)
         db.add(row)
-    row.provider_config = json.dumps(providers, ensure_ascii=False)
+    row.provider_config = providers        # list 交给 JSON 列自己序列化：手动 dumps 会双重编码
     await db.commit()
 
     return {"message": f"已保存供应商 {body.name}", "providers": providers}
@@ -3278,17 +3278,22 @@ async def delete_provider(
     from app.utils.pure.provider_config import remove_provider
 
     providers = await get_providers(db)
+    removed = next((p for p in providers if p.get("name") == provider_name), None)
     new_list = remove_provider(providers, provider_name)
     if len(new_list) == len(providers):
         raise HTTPException(404, f"供应商 {provider_name} 不存在")
 
     from app.models.system_settings import SystemSettings
+    from app.services.agent.provider_bootstrap import dismiss_provider
     result = await db.execute(select(SystemSettings).where(SystemSettings.id == 1))
     row = result.scalar_one_or_none()
     if row is None:
         row = SystemSettings(id=1)
         db.add(row)
-    row.provider_config = json.dumps(new_list, ensure_ascii=False) if new_list else None
+    # 删掉的是"预设自带"的配置项时记一笔：下一次发布不再把它补回来（见 provider_bootstrap）
+    if removed:
+        await dismiss_provider(db, str(removed.get("provider") or ""))
+    row.provider_config = new_list or None        # list 交给 JSON 列，别 dumps
     await db.commit()
 
     return {"message": f"已删除供应商 {provider_name}", "providers": new_list}

@@ -31,6 +31,10 @@ class SystemSettings(Base):
 
     # v0.2.0 LLM 厂商配置
     provider_config = Column(json_column(), nullable=True, comment="LLM 厂商预设：{provider, base_url, chat_model, work_model, embedding_model, model_options}")
+
+    # 运行时参数（检索参数/时区/摘要 TTL 等，图形化入口见 app_config_service）。
+    # 列早就存在、只是长期没映射；provider_bootstrap 也要用它记"删过哪些配置项"，所以补上。
+    runtime_config = Column(json_column(), nullable=True, comment="运行时参数（含 dismissed_providers：删过就不再自动补的配置项）")
     # v0.3.6 Embedding 提供方配置（DB 覆盖 env，管理员前端可视化修改）
     # 结构: {backend, base_url, api_key_encrypted, model, dimension, enabled}
     embedding_config = Column(json_column(), nullable=True, comment="Embedding 提供方配置（覆盖 EMBEDDING_* 环境变量）")

@@ -3,6 +3,7 @@
 
 包含：查找默认供应商、按名称/URL 匹配、模型列表收集、thinking 判定。
 """
+import json
 from typing import Any
 
 
@@ -141,6 +142,12 @@ def normalize_legacy_config(raw: Any) -> list[dict]:
     """
     if raw is None:
         return []
+    if isinstance(raw, str):
+        # 历史数据可能被双重编码过（JSONB 里存了一个字符串）：解一层再判类型
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return []
     if isinstance(raw, list):
         return raw
     if isinstance(raw, dict):
@@ -202,6 +209,60 @@ def upsert_provider(providers: list[dict], config: dict, index: int | None = Non
         result.append(config)
 
     return result
+
+
+def align_provider_models(
+    providers: list[dict],
+    *,
+    presets: dict[str, dict],
+    aliases: dict[str, str],
+    labels: dict[str, str] | None = None,
+) -> tuple[list[dict], int]:
+    """把供应商配置的模型三项对齐到现役预设，返回 (新列表, 改动处数)
+
+    为什么是"对齐"而不只是"改名"：库里这份配置是预设清单在库里的镜像（管理台上看到的就是它），
+    只做别名平升的话，新加的档位与换过的标签都进不去——代码更新了，界面还是旧的。
+    只动 chat_model / work_model / model_options 三项：base_url、名称、密钥属于使用者的配置，
+    预设无权覆盖；provider 键不在预设里的（手工新增的）也只平升名字，不动它自己的清单。
+    """
+    result = [dict(p) for p in providers]
+    labels = labels or {}
+    changed = 0
+    for item in result:
+        preset = presets.get(str(item.get("provider") or ""))
+        if preset:
+            for key in ("chat_model", "work_model"):
+                want = preset.get(key)
+                if want and item.get(key) != want:
+                    item[key] = want
+                    changed += 1
+            want_models = [
+                {"value": m["value"], "label": m["label"]} for m in preset.get("models") or []
+            ]
+            if want_models and (item.get("model_options") or []) != want_models:
+                item["model_options"] = want_models
+                changed += 1
+            continue
+        for key in ("chat_model", "work_model"):
+            new_name = aliases.get(str(item.get(key) or ""))
+            if new_name:
+                item[key] = new_name
+                changed += 1
+        options = []
+        for opt in item.get("model_options") or []:
+            entry = dict(opt) if isinstance(opt, dict) else opt
+            if isinstance(entry, dict):
+                value = str(entry.get("value") or "")
+                if value in aliases:
+                    value = aliases[value]
+                    entry["value"] = value
+                    changed += 1
+                if value in labels and entry.get("label") != labels[value]:
+                    entry["label"] = labels[value]
+                    changed += 1
+            options.append(entry)
+        item["model_options"] = options
+    return result, changed
 
 
 def remove_provider(providers: list[dict], name: str) -> list[dict]:

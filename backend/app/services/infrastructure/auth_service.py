@@ -241,6 +241,8 @@ async def get_user_info(
         "status_text": getattr(user, 'status_text', None),
         "status_color": getattr(user, 'status_color', None),
         "api_base_url": user.api_base_url,
+        "global_chat_model": getattr(user, "global_chat_model", None),
+        "global_work_model": getattr(user, "global_work_model", None),
         "has_api_key": user.api_key_encrypted is not None,
         "api_key_last4": _get_api_key_last4(user) if user.api_key_encrypted else "",
         "auto_approve_vector_timeout": user.auto_approve_vector_timeout,

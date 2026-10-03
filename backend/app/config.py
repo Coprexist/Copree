@@ -33,7 +33,7 @@ class Settings(BaseSettings):
 
     # ── API 默认配置 ──
     deepseek_base_url: str = "https://api.deepseek.com"
-    default_chat_model: str = "deepseek-v4-flash"
+    default_chat_model: str = "deepseek-flash"
     default_work_model: str = "deepseek-v4-pro"
     # JSON 格式的自定义模型选项列表（优先于默认列表）
     model_options: str = ""
@@ -89,7 +89,7 @@ class Settings(BaseSettings):
         # 默认模型列表
         if self.is_deepseek_api:
             return [
-                {"value": "deepseek-v4-flash", "label": "DeepSeek V4 Flash（快速）", "provider": "deepseek"},
+                {"value": "deepseek-flash", "label": "DeepSeek V4.1 Flash（快速）", "provider": "deepseek"},
                 {"value": "deepseek-v4-pro", "label": "DeepSeek V4 Pro（高质量）", "provider": "deepseek"},
             ]
         else:

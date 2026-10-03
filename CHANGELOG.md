@@ -90,6 +90,28 @@
 - **夜间模式的滚动条不再和背景融为一体**：深色下拇指色用的就是边框色（同一组 RGB 42 37 64），
   与画布/面板的对比度只有 1.34 / 1.26，滚到底也看不出滑块在哪。现在提亮到 74 66 112，对比度 2.16，
   hover 再亮一档。
+- **厂商预设整体对齐官方现状，库里的旧模型名同时平升**：各家 /models 与官方目录逐条对过——
+  DeepSeek（实测 `/models`）只给 `deepseek-flash` 与 `deepseek-v4-pro`，旧名 `deepseek-v4-flash`
+  被服务端解析成前者（两次请求回来的 model 字段都是 `deepseek-flash`），也就是说一直在跑的其实是
+  V4.1，只是名字还写着 V4；小米（实测 `/v1/models`）已不下发 `mimo-v2-pro` / `mimo-v2-omni` /
+  `mimo-v2-flash`，现售是 `mimo-v2.6-pro` 系；OpenAI、Kimi、智谱的清单还停在上几代（gpt-4o、
+  `moonshot-v1-*`、`glm-4-*`）。现在预设统一更新：OpenAI 到 gpt-5 系、Kimi 到 k2.5~k3、智谱加
+  5.3 三档、小米换 v2.6、通义补 qwen3.6 两档（没 key 的两家只补名字，默认值不动）。标签沿用列表里的
+  中文档位写法（「DeepSeek V4.1 Flash」），不照搬 DSH 的紧排 `DeepSeek-V41-Flash`。库里已有的旧名
+  一并平升（agents 的 chat/work 共 5 处、users 全局 1 处、world_ais 1 处），历史用量与日志表不动；
+  窗口表按前缀匹配（`deepseek` 等），无需迁移。改名的平升不再靠手改库：别名表就写在
+  provider_presets 的 `MODEL_ALIASES`，启动时由 services/agent/model_upgrade 按它把库里旧名就地
+  改掉（只碰配置列，不碰用量与日志；自带 base_url 的 AI 也跳过——中转站认哪个名字由对方定）——
+  别的部署者拉到新代码即自动迁移，以后加一行就能继续跟进。
+  预设本身也从 9 家扩到 14 家：补上 Google Gemini（走 `/v1beta/openai` 兼容根 —— llm_endpoint 认这个
+  尾巴，不再画蛇添足补 `/v1`）、xAI Grok、Groq、OpenRouter、Mistral，OpenAI 的清单追到 gpt-5.6/6 代。
+  Anthropic 没直接加：它是 `/v1/messages` 协议，Copree 这条链路只走 OpenAI 兼容，要用 Claude 走
+  OpenRouter（清单里已经放了 claude-opus-5）。再补一批聚合/推理平台（Together、Fireworks、Cerebras、
+  NVIDIA NIM、HuggingFace Router、Baseten、蚂蚁 Ling），预设共 21 家。
+  标了 `auto_config` 的预设（这一批是 Google / xAI / Groq / OpenRouter / Mistral）在启动时**直接变成
+  一条配置项**，不必等使用者一个个去点；管理员删掉的不会再长回来——删除时把键记进 `runtime_config` 的
+  `dismissed_providers`（那是"我不要这家"的账）。顺带修掉保存供应商时的双重编码：往 JSONB 列写
+  `json.dumps(...)` 会把整份配置存成一个字符串，"已配置"随即读成空的（切供应商时踩到过）。
 
 ## [v0.4.13] - 2026-10-03
 

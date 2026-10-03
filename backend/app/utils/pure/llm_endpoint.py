@@ -18,12 +18,16 @@ from __future__ import annotations
 import re
 
 _VERSION_TAIL = re.compile(r"/v\d+$")
+# Gemini 的 OpenAI 兼容根是 .../v1beta/openai：本身就是完整根，再补 /v1 会 404
+_OPENAI_TAIL = re.compile(r"/openai$")
 
 
 def api_root(base_url: str) -> str:
     """补出版本段后的 API 根，如 `https://api.deepseek.com/v1`"""
     base = (base_url or "").rstrip("/")
-    return base if _VERSION_TAIL.search(base) else f"{base}/v1"
+    if _VERSION_TAIL.search(base) or _OPENAI_TAIL.search(base):
+        return base
+    return f"{base}/v1"
 
 
 def chat_completions_url(base_url: str) -> str:

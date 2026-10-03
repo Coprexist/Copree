@@ -104,3 +104,7 @@ gitignore-本地docs/
 SECURITY-AUDIT-*.md
 PENTEST-*.md
 
+# 打包产物：桌面新闻工具的源码在 tools/desktop-news/，压缩包只是它的快照
+# （exe 由 CI 的 desktop-news-build.yml 产出并直接上传，不落仓库）
+tools/**/*.zip
+

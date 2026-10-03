@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 # 默认并发限制（按模型名后缀匹配）
 DEFAULT_CONCURRENT_LIMITS = {
-    "flash": 2500,  # deepseek-v4-flash
+    "flash": 2500,  # deepseek-flash（V4.1）
     "pro": 500,     # deepseek-v4-pro
 }
 FALLBACK_CONCURRENT_LIMIT = 500  # 未知模型默认
