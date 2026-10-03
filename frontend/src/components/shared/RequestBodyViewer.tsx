@@ -96,22 +96,28 @@ const MARK_CLASS: Record<Mark['tone'], string> = {
 
 /** 会话历史行的行头：`[Shanghai 09-26 13:36] 谁（id=96）: 正文 [msg_id=1443]`（prompting.format_message 拼的） */
 const LINE_HEAD_RE = /^\[([^\]]+)\]\s+([\s\S]+)$/
+/** 真时间戳长这个形状；[本轮工具] / [历史消息] 这种方括号前缀不算，别把前缀搬进块头 */
+const CLOCK_RE = /\d{1,2}-\d{1,2}\s+\d{1,2}:\d{2}/
 const MSG_ID_RE = /\s*\[msg_id=(\d+)\]\s*$/
 const SPEAKER_RE = /^(.{1,40}?):\s([\s\S]*)$/
 const SPEAKER_ID_RE = /^(.*)（id=(\d+)）$/
 
 
-/** 块头只放这条消息的 id：时间 / 谁 / @ 都在正文里就地渲染，不往块头搬 */
+/** 块头只放「这条消息自己的属性」：时间与 msg_id（两者一条一条对应，实测没有只带其中一个的行）。
+ *  谁 / @ 属于内容，留在正文里就地渲染。 */
 function headerMarks(text: string): Mark[] {
   const head = LINE_HEAD_RE.exec(text)
   if (!head) return []
+  const marks: Mark[] = []
+  if (CLOCK_RE.test(head[1])) marks.push({ key: 'time', label: head[1], tone: 'muted' })
   const msgId = MSG_ID_RE.exec(head[2])
-  return msgId ? [{ key: 'msg-id', label: `msg#${msgId[1]}`, tone: 'id' }] : []
+  if (msgId) marks.push({ key: 'msg-id', label: `msg#${msgId[1]}`, tone: 'id' })
+  return marks
 }
 
 /**
  * 历史行就地渲染：`[时间] 谁（id=N）: 正文 [msg_id=N]`
- * → 时间标签 + 说话人标签 + 正文（msg_id 已搬到块头，正文里不再露那串标记）。
+ * → 说话人标签 + 正文（时间与 msg_id 已搬到块头，正文里不再露那两串标记）。
  * 不是那种行（系统提示、JSON、工具往返…）就只把 @ 换成标签。
  */
 function renderLine(content: string, names: MentionNames | undefined, unknown: string): string {
@@ -120,14 +126,14 @@ function renderLine(content: string, names: MentionNames | undefined, unknown: s
   let rest = head[2]
   const msgId = MSG_ID_RE.exec(rest)
   if (msgId) rest = rest.slice(0, msgId.index)
-  // 首标签可能是时间，也可能是 [本轮工具] / [历史消息] 这种前缀，同一个长相（见 .log-tag）
-  const tag = `<span class="log-tag">${escapeHtml(head[1])}</span>`
+  // 时间已经搬到块头；不是时间的方括号前缀（[本轮工具] / [历史消息]）留在正文里
+  const tag = CLOCK_RE.test(head[1]) ? '' : `<span class="log-tag">${escapeHtml(head[1])}</span> `
   const speaker = SPEAKER_RE.exec(rest)
-  if (!speaker) return `${tag} ${renderMentionChips(rest, names || {}, unknown)}`
+  if (!speaker) return tag + renderMentionChips(rest, names || {}, unknown)
   const withId = SPEAKER_ID_RE.exec(speaker[1])
   const whoId = withId ? `<span class="log-who-id">#${withId[2]}</span>` : ''
   const who = `<span class="log-who">${escapeHtml(withId ? withId[1] : speaker[1])}${whoId}</span>`
-  return `${tag} ${who} ${renderMentionChips(speaker[2], names || {}, unknown)}`
+  return `${tag}${who} ${renderMentionChips(speaker[2], names || {}, unknown)}`
 }
 
 function toolName(call: any): string {
