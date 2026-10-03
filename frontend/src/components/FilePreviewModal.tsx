@@ -6,7 +6,7 @@ import { formatFileSize } from '../utils/format'
 import { isTextPreviewable, getCodeLang, isMarkdownFile, resolveMimeType, EXT_LANG_MAP } from '../utils/mime'
 import MarkdownContent from './shared/MarkdownContent'
 import ForwardFileModal from './ForwardFileModal'
-import { Dialog } from './ui'
+import { Dialog, ResizeEdges } from './ui'
 
 // FileCodeRenderer ——已迁移到 components/shared/CodeRenderer.tsx
 
@@ -30,6 +30,7 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
   // 图片缩放
   const [scale, setScale] = useState(1)
   const imgContainerRef = useRef<HTMLDivElement>(null)
+
   const [forwardFile, setForwardFile] = useState<{file_id:number;name:string;size:number;mime_type:string}|null>(null)
   // 富文本（md/html/代码）渲染 ↔ 原文切换：看渲染效果或源码
 
@@ -486,61 +487,8 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
           {/* 拖拽缩放手柄（仅电脑版且非全屏） */}
           {!isFullscreen && (
             <>
-              {/* 外发光描边 —— 用 box-shadow 的 spread 而不是 outline：outline 在圆角处会斜接，
-                  四角看着像被封成扇形，而 shadow 的圆角是跟着元素半径推出来的，正是一段弧 */}
-              <div className="absolute inset-0 rounded-dialog pointer-events-none z-overlay"
-                style={{ boxShadow: '0 0 0 3px rgba(99,102,241,0.45), 0 0 14px rgba(99,102,241,0.25)' }} />
-
-              {/* 四边拖拽条 — 微光可见，hover 更亮 */}
-              <div
-                className="hidden md:block absolute inset-y-0 -left-1 w-[8px] cursor-ew-resize z-overlay
-                  bg-gradient-to-r from-primary-500/25 to-transparent
-                  hover:from-primary-500/45 active:from-primary-500/55 transition-all duration-150"
-                onMouseDown={startResize('w')}
-              />
-              <div
-                className="hidden md:block absolute inset-y-0 -right-1 w-[8px] cursor-ew-resize z-overlay
-                  bg-gradient-to-l from-primary-500/25 to-transparent
-                  hover:from-primary-500/45 active:from-primary-500/55 transition-all duration-150"
-                onMouseDown={startResize('e')}
-              />
-              <div
-                className="hidden md:block absolute inset-x-0 -bottom-1 h-[8px] cursor-ns-resize z-overlay
-                  bg-gradient-to-b from-primary-500/25 to-transparent
-                  hover:from-primary-500/45 active:from-primary-500/55 transition-all duration-150"
-                onMouseDown={startResize('s')}
-              />
-              <div
-                className="hidden md:block absolute inset-x-0 -top-1 h-[8px] cursor-ns-resize z-overlay
-                  bg-gradient-to-t from-primary-500/25 to-transparent
-                  hover:from-primary-500/45 active:from-primary-500/55 transition-all duration-150"
-                onMouseDown={startResize('n')}
-              />
-              {/* 四角 — 圆角 2xl 完全贴合弹窗弧线，hover 加厚加亮 */}
-              <div
-                className="hidden md:block absolute -top-1 -left-1 w-[12px] h-[12px] cursor-nwse-resize z-overlay
-                  rounded-tl-2xl border-l-[2px] border-t-[2px] border-primary-500/45
-                  hover:border-[3px] hover:border-primary-500/70 hover:bg-primary-500/15 active:bg-primary-500/25 transition-all"
-                onMouseDown={startResize('nw')}
-              />
-              <div
-                className="hidden md:block absolute -top-1 -right-1 w-[12px] h-[12px] cursor-nesw-resize z-overlay
-                  rounded-tr-2xl border-r-[2px] border-t-[2px] border-primary-500/45
-                  hover:border-[3px] hover:border-primary-500/70 hover:bg-primary-500/15 active:bg-primary-500/25 transition-all"
-                onMouseDown={startResize('ne')}
-              />
-              <div
-                className="hidden md:block absolute -bottom-1 -left-1 w-[12px] h-[12px] cursor-nesw-resize z-overlay
-                  rounded-bl-2xl border-l-[2px] border-b-[2px] border-primary-500/45
-                  hover:border-[3px] hover:border-primary-500/70 hover:bg-primary-500/15 active:bg-primary-500/25 transition-all"
-                onMouseDown={startResize('sw')}
-              />
-              <div
-                className="hidden md:block absolute -bottom-1 -right-1 w-[12px] h-[12px] cursor-nwse-resize z-overlay
-                  rounded-br-2xl border-r-[2px] border-b-[2px] border-primary-500/45
-                  hover:border-[3px] hover:border-primary-500/70 hover:bg-primary-500/15 active:bg-primary-500/25 transition-all"
-                onMouseDown={startResize('se')}
-              />
+              {/* 外描边 + 八向缩放热区：几何在 index.css 的 .resize-edge，由 --edge-r / --edge-w 推出 */}
+              <ResizeEdges onResizeStart={startResize} className="z-overlay" />
             </>
           )}
         </div>

@@ -762,3 +762,89 @@ textarea.field { height: auto; padding: 0.5rem 0.75rem; resize: vertical; }
 .chip-accent  { background: rgb(var(--tw-accent-400) / .2);  color: rgb(var(--tw-accent-600)); }
 .chip-rose    { background: rgb(var(--tw-rose-500) / .12);   color: rgb(var(--tw-rose-400)); }
 .chip-muted   { background: rgb(var(--tw-elevated));         color: rgb(var(--tw-text-secondary)); }
+
+/* ────────────────────────────────────────────────
+   可缩放卡片的外描边与八向热区（四边 + 四角）
+   几何全由 --edge-r（卡片圆角半径，须与 rounded-dialog 一致）与 --edge-w（线宽）推出来，
+   改一个数八段一起变 —— 之前是手算半径，接缝错了好几回。
+   常态是「离卡片越远越淡、贴到边缘才清晰」的渐变，像压在边上的一层阴影；
+   hover / 拖拽换成不透明实色，并且只亮被指着的那一段。
+   ──────────────────────────────────────────────── */
+.resize-edge {
+  --edge-r: 16px;    /* = rounded-dialog 的圆角 */
+  --edge-w: 4px;     /* 线的粗细 */
+  --edge-zone: 16px; /* 边的热区厚度：线细，热区得宽一点才抓得住 */
+  --edge-c: var(--tw-primary-500);
+  position: absolute;
+}
+.resize-edge::before,
+.resize-edge::after {
+  content: '';
+  position: absolute;
+  pointer-events: none;
+  transition: opacity .15s ease;
+  inset: var(--edge-inset, 0);
+  width: var(--edge-line-w, auto);
+  height: var(--edge-line-h, auto);
+}
+/* ::after 是实色那层，平时藏着；hover / 拖拽时两层对调 */
+.resize-edge::after { opacity: 0; }
+.resize-edge:hover::before,
+.resize-edge:active::before { opacity: 0; }
+.resize-edge:hover::after,
+.resize-edge:active::after { opacity: 1; }
+
+/* 四条直边：两端给圆角让位，线贴在外侧（改 --edge-dir 只管渐变朝向） */
+.resize-edge[data-edge='n'],
+.resize-edge[data-edge='s'] { left: var(--edge-r); right: var(--edge-r); height: var(--edge-zone); cursor: ns-resize; }
+.resize-edge[data-edge='w'],
+.resize-edge[data-edge='e'] { top: var(--edge-r); bottom: var(--edge-r); width: var(--edge-zone); cursor: ew-resize; }
+.resize-edge[data-edge='n'] { top: calc(-1 * var(--edge-zone)); --edge-inset: auto 0 0 0; --edge-dir: to bottom; --edge-line-h: var(--edge-w); }
+.resize-edge[data-edge='s'] { bottom: calc(-1 * var(--edge-zone)); --edge-inset: 0 0 auto 0; --edge-dir: to top; --edge-line-h: var(--edge-w); }
+.resize-edge[data-edge='w'] { left: calc(-1 * var(--edge-zone)); --edge-inset: 0 0 0 auto; --edge-dir: to right; --edge-line-w: var(--edge-w); }
+.resize-edge[data-edge='e'] { right: calc(-1 * var(--edge-zone)); --edge-inset: 0 auto 0 0; --edge-dir: to left; --edge-line-w: var(--edge-w); }
+.resize-edge[data-edge='n']::before,
+.resize-edge[data-edge='s']::before,
+.resize-edge[data-edge='w']::before,
+.resize-edge[data-edge='e']::before {
+  background: linear-gradient(var(--edge-dir), rgb(var(--edge-c) / .08), rgb(var(--edge-c) / .55));
+}
+.resize-edge[data-edge='n']::after,
+.resize-edge[data-edge='s']::after,
+.resize-edge[data-edge='w']::after,
+.resize-edge[data-edge='e']::after { background: rgb(var(--edge-c)); }
+
+/* 四角：直径 = 2 ×（圆角 + 半个线宽），同心摆在负的半个线宽处，弧与直边在切点相切 */
+.resize-edge[data-edge='nw'],
+.resize-edge[data-edge='ne'],
+.resize-edge[data-edge='sw'],
+.resize-edge[data-edge='se'] {
+  /* 直径 = 2 ×（圆角 + 线宽）：线中心落在半径 r + w/2 = 18，与直边那条「距边缘 w/2」的线相切 */
+  width: calc(2 * (var(--edge-r) + var(--edge-w)));
+  height: calc(2 * (var(--edge-r) + var(--edge-w)));
+}
+.resize-edge[data-edge='nw'] { top: calc(-1 * var(--edge-w)); left: calc(-1 * var(--edge-w)); clip-path: inset(0 50% 50% 0); cursor: nwse-resize; }
+.resize-edge[data-edge='ne'] { top: calc(-1 * var(--edge-w)); right: calc(-1 * var(--edge-w)); clip-path: inset(0 0 50% 50%); cursor: nesw-resize; }
+.resize-edge[data-edge='sw'] { bottom: calc(-1 * var(--edge-w)); left: calc(-1 * var(--edge-w)); clip-path: inset(50% 50% 0 0); cursor: nesw-resize; }
+.resize-edge[data-edge='se'] { bottom: calc(-1 * var(--edge-w)); right: calc(-1 * var(--edge-w)); clip-path: inset(50% 0 0 50%); cursor: nwse-resize; }
+.resize-edge[data-edge='nw']::before,
+.resize-edge[data-edge='ne']::before,
+.resize-edge[data-edge='sw']::before,
+.resize-edge[data-edge='se']::before {
+  border-radius: 9999px;
+  /* 内缘硬起（否则贴卡片那 1px 是渐入的，看着像描边往内缩）；两端各留过渡，硬切不抗锯齿会出阶梯 */
+  background: radial-gradient(circle at 50% 50%,
+    transparent 0 calc(var(--edge-r) - .4px),
+    rgb(var(--edge-c) / .55) calc(var(--edge-r) + .4px),
+    rgb(var(--edge-c) / .08) calc(var(--edge-r) + var(--edge-w) - .6px),
+    transparent calc(var(--edge-r) + var(--edge-w)));
+}
+.resize-edge[data-edge='nw']::after,
+.resize-edge[data-edge='ne']::after,
+.resize-edge[data-edge='sw']::after,
+.resize-edge[data-edge='se']::after {
+  border-radius: 9999px;
+  border: var(--edge-w) solid rgb(var(--edge-c));
+}
+
+
