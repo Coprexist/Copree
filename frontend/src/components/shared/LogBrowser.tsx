@@ -5,7 +5,7 @@
  * 点进去看这段状态的最近一次完整请求体、与上一条的增量、以及这段状态的历史。
  * 「停在哪段状态、看的是哪一条」写进查询参数（state / log），刷新和后退都回到原地。
  */
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Loader2 } from 'lucide-react'
 import { api } from '../../api/client'
@@ -45,7 +45,7 @@ function Hunk({ label, removed, messages, names }: {
     <div className="space-y-1.5">
       <div className={`text-3xs ${removed ? 'text-rose-400' : 'text-mint-400'}`}>{label}</div>
       <RequestBodyViewer
-        messages={messages} legend={false} mentionNames={names}
+        messages={messages} legend={false} mentionNames={names} lazy={false}
         tone={removed ? 'removed' : 'normal'}
       />
     </div>
@@ -68,7 +68,8 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
    */
   const exportRef = useRef<HTMLDivElement>(null)
   const [rawBody, setRawBody] = useState(false)
-  // 导出前先把分片渲染补完，否则克隆下来的 DOM 会缺掉还没补上的块
+  // 导出要把分片补完再落盘（否则导出件会缺掉没补上的块），这段时间按钮得看得出在干活
+  const [exporting, setExporting] = useState(false)
   // 「原始 JSON」按钮在这一行、开关组在正文里，两边靠这个 id 对上（见 RequestBodyViewer）
   const rawSwitchId = useId()
 
@@ -130,15 +131,28 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
    * 也正因为纯前端，管理台的日志浏览器同样能用。
    */
   const exportHtml = () => {
+    if (!currentId || exporting) return
     const el = exportRef.current
-    if (!el || !currentId) return
-    saveElementAsHtml(el, 'log-' + currentId + '.html', '#' + currentId)
+    // 改变量里的每截都不分片，DOM 本来就是完整的，直接落盘
+    if (showDelta && el) {
+      saveElementAsHtml(el, 'log-' + currentId + '.html', '#' + currentId)
+      return
+    }
+    // 整篇视图要先补完分片：开口之后由正文回调落盘，这段时间页面不冻结
+    setExporting(true)
   }
+
+  /** 正文整篇都在 DOM 里了：落盘并收工 */
+  const finishExport = useCallback(() => {
+    const el = exportRef.current
+    if (el && currentId) saveElementAsHtml(el, 'log-' + currentId + '.html', '#' + currentId)
+    setExporting(false)
+  }, [currentId])
 
   if (loading) {
     return (
       <div className="flex items-center gap-2 text-sm text-textMuted py-6 justify-center">
-        <Loader2 size={14} className="animate-spin" /> {t('common.loading')}
+        <Loader2 size={14} className="animate-spin will-change-transform" /> {t('common.loading')}
       </div>
     )
   }
@@ -262,11 +276,11 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
                 type="button"
                 data-export-skip
                 onClick={exportHtml}
-                disabled={detail === null}
+                disabled={detail === null || exporting}
                 title={t('logs:downloadHtmlHint')}
                 className="text-3xs text-textMuted hover:text-textSecondary transition-colors disabled:opacity-40"
               >
-                {t('logs:downloadHtml')}
+                {exporting ? t('logs:downloadHtmlPreparing') : t('logs:downloadHtml')}
               </button>
               {/* 原始 JSON 的开关跟下载按钮并排；改变量视图里没有整段 JSON，那条路上不摆 */}
               {!showDelta && (
@@ -288,7 +302,7 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
           <div className="min-h-0 flex flex-col">
           {bodyLoading ? (
             <div className="flex items-center gap-2 text-xs text-textMuted py-6 justify-center">
-              <Loader2 size={13} className="animate-spin" /> {t('common.loading')}
+              <Loader2 size={13} className="animate-spin will-change-transform" /> {t('common.loading')}
             </div>
           ) : showDelta && comparable ? (
             // 改变量：按原顺序摆——相同的那几段折叠成一行，多出来/没了的各自成截
@@ -319,6 +333,8 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
             </div>
           ) : (
             <RequestBodyViewer
+              renderAll={exporting}
+              onAllRendered={finishExport}
               raw={rawBody}
               onToggleRaw={() => setRawBody(v => !v)}
               rawSwitchId={rawSwitchId}
