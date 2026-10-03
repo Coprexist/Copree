@@ -19,6 +19,26 @@ def _ensure_repo(db_or_repo):
     return db_or_repo
 
 
+def _clip_text(text: str, limit: int) -> str:
+    """把文本截到 limit 字以内：收口在行边界，并把切断的 Markdown 标记补回。
+
+    记忆正文多半是多行 Markdown，硬切字符会把 **加粗** 切成半个标记——
+    注入 prompt 后渲染成字面星号，看着像内容坏了；截在行中间也会让最后一句话断得莫名其妙。
+    """
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    newline = head.rfind("\n")
+    # 行边界离得够近才贴它收口：首行很短时贴着收会白扔大半预算
+    if newline >= limit // 2:
+        head = head[:newline]
+    # 截断点可能正落在标记中间：先丢掉那半个，再给还开着的 ** 补上闭合
+    head = head.rstrip().rstrip("*")
+    if head.count("**") % 2:
+        head += "**"
+    return head + "..."
+
+
 def merge_keyword_and_vector(
     keyword_results: list[dict],
     vector_results: list[dict],
@@ -497,11 +517,8 @@ async def auto_extract_key_facts(
     if not triggered_category:
         return False
 
-    # 生成标题（取内容前 60 字符）
     clean_content = content.strip()
-    title = clean_content[:60]
-    if len(clean_content) > 60:
-        title += "..."
+    title = _clip_text(clean_content, 60)
 
     # 获取 AI 类型
     ai_type = "resonance"
@@ -520,7 +537,7 @@ async def auto_extract_key_facts(
         await enqueue_memory(
             agent_id=agent_id,
             title=f"[{triggered_category}] {title}",
-            content=clean_content[:500],
+            content=_clip_text(clean_content, 500),
             scope="private",
             group_id=group_id,
             api_base_url=api_base_url,
@@ -556,11 +573,7 @@ def format_memories_for_prompt(memories: list[dict]) -> str:
             sim_text = ""
         lines.append(f"{i}. **{mem['title']}** {sim_text}".rstrip())
         if mem.get("content"):
-            # 截断过长内容
-            content = mem["content"]
-            if len(content) > 300:
-                content = content[:300] + "..."
-            lines.append(f"   {content}")
+            lines.append(f"   {_clip_text(mem['content'], 300)}")
         lines.append("")
 
     # ⚠️ 字符串内如需引用中文名词，用直角引号「」或转义 \"，严禁直接用 ""——
