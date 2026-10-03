@@ -396,6 +396,11 @@
 .markdown-table-wrapper table {
   @apply w-full min-w-full border-collapse text-sm;
 }
+/* 日志正文比聊天气泡窄一号（text-xs），表格跟着正文走，别按 text-sm 硬撑 */
+.log-md .markdown-table-wrapper table {
+  font-size: inherit;
+  line-height: inherit;
+}
 /* 表格颜色——继承自气泡容器的 inline style CSS 变量 */
 .markdown-table-wrapper thead {
   background: rgb(var(--b-thead-r, 237) var(--b-thead-g, 233) var(--b-thead-b, 254) / var(--b-thead-a, 1));

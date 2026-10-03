@@ -258,7 +258,7 @@ function Body({ text, mono = false, names }: { text: string; mono?: boolean; nam
     )
   }
   return (
-    <div className="text-xs text-textPrimary leading-relaxed break-words">
+    <div className="log-md text-xs text-textPrimary leading-relaxed break-words">
       <MarkdownContent content={renderLine(text, names, t('logs:mentionUnknown'))} />
     </div>
   )
