@@ -38,14 +38,14 @@ const timeOf = (value: string | null | undefined) =>
   value ? new Date(value).toLocaleString('zh-CN') : ''
 
 /** 改变量里的一截：多出来的 / 没了的，各自连着那几条消息 */
-function Hunk({ label, removed, messages, names }: {
-  label: string; removed?: boolean; messages: any[]; names?: Record<string, string>
+function Hunk({ label, removed, messages, names, renderAll }: {
+  label: string; removed?: boolean; messages: any[]; names?: Record<string, string>; renderAll?: boolean
 }) {
   return (
     <div className="space-y-1.5">
       <div className={`text-3xs ${removed ? 'text-rose-400' : 'text-mint-400'}`}>{label}</div>
       <RequestBodyViewer
-        messages={messages} legend={false} mentionNames={names}
+        messages={messages} legend={false} mentionNames={names} renderAll={renderAll}
         tone={removed ? 'removed' : 'normal'}
       />
     </div>
@@ -68,6 +68,8 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
    */
   const exportRef = useRef<HTMLDivElement>(null)
   const [rawBody, setRawBody] = useState(false)
+  // 导出前先把分片渲染补完，否则克隆下来的 DOM 会缺掉还没补上的块
+  const [exportAll, setExportAll] = useState(false)
   // 「原始 JSON」按钮在这一行、开关组在正文里，两边靠这个 id 对上（见 RequestBodyViewer）
   const rawSwitchId = useId()
 
@@ -131,7 +133,12 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
   const exportHtml = () => {
     const el = exportRef.current
     if (!el || !currentId) return
-    saveElementAsHtml(el, 'log-' + currentId + '.html', '#' + currentId)
+    setExportAll(true)
+    // 两帧之后再克隆：第一帧 React 提交全部块，第二帧布局稳定
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      saveElementAsHtml(el, 'log-' + currentId + '.html', '#' + currentId)
+      setExportAll(false)
+    }))
   }
 
   if (loading) {
@@ -318,6 +325,7 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
             </div>
           ) : (
             <RequestBodyViewer
+              renderAll={exportAll}
               raw={rawBody}
               onToggleRaw={() => setRawBody(v => !v)}
               rawSwitchId={rawSwitchId}

@@ -5,7 +5,7 @@
  * 交接 / 人说的话 / AI 说的话 / 本轮工具 / 工具调用 / 工具返回 / 思考 / 收尾与报错。
  * 正文一律原样显示（不截断）：能当 Markdown 读的走 Markdown，JSON 走格式化，其余原样。
  */
-import { Fragment, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ChevronRight } from 'lucide-react'
 import MarkdownContent from './MarkdownContent'
 import { useT } from '../../i18n/I18nContext'
@@ -29,6 +29,10 @@ const STYLES: Record<Kind, { bar: string; box: string; key: string }> = {
 
 /** 等宽渲染的种类：工具入参/返回与「本轮工具」汇总行都是机器文本，等宽才看得出结构 */
 const MONO: Kind[] = ['toolCall', 'toolResult']
+
+/** 长日志分片渲染：首屏先铺满一屏，其余按片补（见 RequestBodyViewer 的 shown） */
+const FIRST_BLOCKS = 16
+const STEP_BLOCKS = 16
 
 /** removed 用于改变量里"已经没了"的那几条：压暗再加一圈红，跟留下的分得开 */
 type Tone = 'normal' | 'removed'
@@ -252,7 +256,7 @@ function Block({ index, msgIndex, kind, title, source, marks = [], tone = 'norma
   useHeightTransition(bodyElRef, open ? 'open' : 'closed', !open)
   useHeightTransition(viewElRef, showSource ? 'source' : 'rendered')
   return (
-    <div className={`flex gap-2 rounded-control border ${style.box} overflow-hidden ${
+    <div data-log-block="" className={`flex gap-2 rounded-control border ${style.box} overflow-hidden ${
       tone === 'removed' ? 'opacity-70 ring-1 ring-rose-500/30' : ''
     }`}>
       <div className={`w-1 shrink-0 ${style.bar}`} />
@@ -387,7 +391,7 @@ function Body({ text, mono = false, names }: { text: string; mono?: boolean; nam
   )
 }
 
-export default function RequestBodyViewer({ messages, className = '', legend = true, tone = 'normal', mentionNames, raw, onToggleRaw, rawSwitchId }: {
+export default function RequestBodyViewer({ messages, className = '', legend = true, tone = 'normal', mentionNames, raw, onToggleRaw, rawSwitchId, renderAll = false }: {
   messages: any[]
   className?: string
   /** 拼在改变量里时不重复摆图例和原始 JSON 开关（一屏摆好几截，图例只该出现一次） */
@@ -402,6 +406,8 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
   raw?: boolean
   onToggleRaw?: () => void
   rawSwitchId?: string
+  /** 导出前要求整篇都已渲染：分片还没补完就克隆，导出件会缺块 */
+  renderAll?: boolean
 }) {
   const t = useT()
   const list = Array.isArray(messages) ? messages : []
@@ -477,6 +483,27 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
     return out
   }, [list, mentionNames, t])
 
+  // 长日志整篇一次渲染会把主线程占满（394 块实测 2.4s、最长一次任务 1.5s）：先铺首屏，
+  // 其余按片补，片与片之间让出主线程，打开时就能滚能点，而不是整页先僵住
+  const [shown, setShown] = useState(FIRST_BLOCKS)
+  useEffect(() => { setShown(FIRST_BLOCKS) }, [list])
+  useEffect(() => {
+    if (renderAll || shown >= blocks.length) return
+    const next = () => setShown(n => n + STEP_BLOCKS)
+    // 只在浏览器空闲时补下一片：用户正在滚动或点击时先让路，别跟他抢主线程；
+    // 一直没空闲就按 timeout 兜底，保证最终整篇都会渲染出来
+    const w = window as Window & {
+      requestIdleCallback?: (cb: () => void, options?: { timeout: number }) => number
+      cancelIdleCallback?: (id: number) => void
+    }
+    if (w.requestIdleCallback) {
+      const id = w.requestIdleCallback(next, { timeout: 120 })
+      return () => w.cancelIdleCallback?.(id)
+    }
+    const id = window.setTimeout(next, 8)
+    return () => window.clearTimeout(id)
+  }, [shown, blocks.length, renderAll])
+
 
   if (list.length === 0) {
     return <p className={`text-xs text-textMuted ${className}`}>{t('logs:empty')}</p>
@@ -486,7 +513,7 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
   const switchBody = (
     <div id={viewId} ref={switchElRef} data-value={showRaw ? 'raw' : 'segments'} className="switch">
       <div data-case="segments" className="space-y-1.5">
-        {blocks.map((block, i) => (
+        {(renderAll ? blocks : blocks.slice(0, shown)).map((block, i) => (
           <Block key={i} index={i} msgIndex={block.msgIndex} kind={block.kind} title={block.title} source={block.source} marks={block.marks} tone={tone}>
             {block.body}
           </Block>
