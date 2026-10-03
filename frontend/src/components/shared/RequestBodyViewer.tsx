@@ -5,7 +5,7 @@
  * 交接 / 人说的话 / AI 说的话 / 本轮工具 / 工具调用 / 工具返回 / 思考 / 收尾与报错。
  * 正文一律原样显示（不截断）：能当 Markdown 读的走 Markdown，JSON 走格式化，其余原样。
  */
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useId, useMemo, useState } from 'react'
 import { ChevronRight } from 'lucide-react'
 import MarkdownContent from './MarkdownContent'
 import { useT } from '../../i18n/I18nContext'
@@ -243,6 +243,8 @@ function Block({ index, kind, title, source, marks = [], tone = 'normal', childr
   const [open, setOpen] = useState(true)
   const [showSource, setShowSource] = useState(false)
   const style = STYLES[kind]
+  // 折叠状态要能带出组件：导出件里没有 React，靠这两个属性把开关关系留在 DOM 上
+  const bodyId = useId()
   return (
     <div className={`flex gap-2 rounded-control border ${style.box} overflow-hidden ${
       tone === 'removed' ? 'opacity-70 ring-1 ring-rose-500/30' : ''
@@ -253,9 +255,12 @@ function Block({ index, kind, title, source, marks = [], tone = 'normal', childr
           <button
             type="button"
             onClick={() => setOpen(v => !v)}
+            aria-expanded={open}
+            aria-controls={bodyId}
+            data-collapsible={bodyId}
             className="flex items-center gap-1.5 flex-1 min-w-0 text-left group flex-wrap"
           >
-            <ChevronRight size={12} className={`shrink-0 text-textMuted transition-transform ${open ? 'rotate-90' : ''}`} />
+            <ChevronRight size={12} className="collapse-arrow shrink-0 text-textMuted" />
             <span className="text-3xs px-1.5 py-0.5 rounded-full bg-black/10 dark:bg-white/10 text-textSecondary">
               {t(style.key)}
             </span>
@@ -286,7 +291,9 @@ function Block({ index, kind, title, source, marks = [], tone = 'normal', childr
             </button>
           )}
         </div>
-        {open && <div className="mt-1.5 min-w-0">{showSource ? <Raw text={source || ''} /> : children}</div>}
+        <div id={bodyId} data-open={open} className="collapse-body">
+          <div className="pt-1.5 min-w-0">{showSource ? <Raw text={source || ''} /> : children}</div>
+        </div>
       </div>
     </div>
   )

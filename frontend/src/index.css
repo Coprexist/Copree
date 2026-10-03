@@ -363,6 +363,20 @@
     to   { opacity: 1; transform: translateY(0); }
   }
 
+  /* ── 折叠块（对话日志的每个块）──
+     内容始终留在 DOM 里：导出成静态 HTML 后没有 React，只靠 data-open 切换，
+     所以用 grid 行高过渡，而不是挂载/卸载 */
+  .collapse-body {
+    display: grid;
+    grid-template-rows: 1fr;
+    transition: grid-template-rows 0.2s ease;
+  }
+  .collapse-body[data-open="false"] { grid-template-rows: 0fr; }
+  .collapse-body > * { overflow: hidden; min-height: 0; }
+  /* 箭头跟着 aria-expanded 转：同一份 CSS 同时管站内与导出件 */
+  .collapse-arrow { transition: transform 0.2s ease; }
+  [aria-expanded="true"] .collapse-arrow { transform: rotate(90deg); }
+
   /* 预设卡片浮动层（JS sin() 驱动 transform，CSS 仅定义定位） */
   .preset-card-frame { position: relative; }
   .preset-card-inner { position: relative; }

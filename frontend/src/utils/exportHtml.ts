@@ -43,6 +43,24 @@ function collectCss(): string {
   return parts.join('\n')
 }
 
+/**
+ * 折叠块在导出件里没有 React：补一段脚本按 aria / data 属性把开关接回来，
+ * 展开收起的过渡交给页面样式表里那份 .collapse-body，不在这里另写一套动画。
+ */
+const COLLAPSE_SCRIPT = [
+  '<script>',
+  'document.querySelectorAll("[data-collapsible]").forEach(function (button) {',
+  '  button.addEventListener("click", function () {',
+  '    var body = document.getElementById(button.getAttribute("data-collapsible"))',
+  '    if (!body) return',
+  '    var open = button.getAttribute("aria-expanded") === "true"',
+  '    button.setAttribute("aria-expanded", open ? "false" : "true")',
+  '    body.setAttribute("data-open", open ? "false" : "true")',
+  '  })',
+  '})',
+  '</script>',
+].join('\n')
+
 const HTML_ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }
 const escapeHtml = (text: string) => text.replace(/[&<>"]/g, c => HTML_ESCAPES[c])
 
@@ -74,6 +92,7 @@ export function saveElementAsHtml(el: HTMLElement, filename: string, title: stri
     '</head>',
     '<body class="' + document.body.className + '">',
     clone.outerHTML,
+    COLLAPSE_SCRIPT,
     '</body>',
     '</html>',
   ].join('\n')
