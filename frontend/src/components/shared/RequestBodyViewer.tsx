@@ -245,6 +245,7 @@ function Block({ index, kind, title, source, marks = [], tone = 'normal', childr
   const style = STYLES[kind]
   // 折叠状态要能带出组件：导出件里没有 React，靠这两个属性把开关关系留在 DOM 上
   const bodyId = useId()
+  const viewId = useId()
   return (
     <div className={`flex gap-2 rounded-control border ${style.box} overflow-hidden ${
       tone === 'removed' ? 'opacity-70 ring-1 ring-rose-500/30' : ''
@@ -280,6 +281,8 @@ function Block({ index, kind, title, source, marks = [], tone = 'normal', childr
             <button
               type="button"
               onClick={() => setShowSource(v => !v)}
+              data-switch={viewId}
+              data-value={showSource ? 'source' : 'rendered'}
               title={t('logs:blockSourceHint')}
               className={`shrink-0 text-3xs px-1.5 py-0.5 rounded border transition-colors ${
                 showSource
@@ -287,12 +290,19 @@ function Block({ index, kind, title, source, marks = [], tone = 'normal', childr
                   : 'border-border text-textMuted hover:text-textSecondary'
               }`}
             >
-              {showSource ? t('logs:blockRender') : t('logs:blockRaw')}
+              <span data-when="rendered">{t('logs:blockRaw')}</span>
+              <span data-when="source">{t('logs:blockRender')}</span>
             </button>
           )}
         </div>
         <div id={bodyId} data-open={open} className="collapse-body">
-          <div className="pt-1.5 min-w-0">{showSource ? <Raw text={source || ''} /> : children}</div>
+          <div className="pt-1.5 min-w-0">
+            {/* 两份视图都在 DOM 里：导出件没有 React，切「原文 / 渲染」只能靠 data-value */}
+            <div id={viewId} data-value={showSource ? 'source' : 'rendered'} className="switch">
+              <div data-case="rendered">{children}</div>
+              {source !== undefined && <div data-case="source"><Raw text={source || ''} /></div>}
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -337,6 +347,8 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
   const t = useT()
   const list = Array.isArray(messages) ? messages : []
   const [raw, setRaw] = useState(false)
+  // 分段视图与原始 JSON 也是一组视图：关系同样留在 DOM 上，导出件才切得动
+  const viewId = useId()
 
   const blocks = useMemo(() => {
     const out: { kind: Kind; title?: string; source: string; marks: Mark[]; body: React.ReactNode }[] = []
@@ -404,34 +416,43 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
 
   return (
     <div className={`space-y-2 ${className}`}>
-      {legend && <div className="flex items-center gap-2 flex-wrap">
-        {!raw && (Object.keys(STYLES) as Kind[]).map(kind => (
+      {legend && <div className="flex items-center gap-2 flex-wrap" data-value={raw ? 'raw' : 'segments'}>
+        <div className="flex items-center gap-2 flex-wrap" data-when="segments">
+        {(Object.keys(STYLES) as Kind[]).map(kind => (
           <span key={kind} className="flex items-center gap-1 text-3xs text-textMuted">
             <span className={`w-2 h-2 rounded-full ${STYLES[kind].bar}`} />
             {t(STYLES[kind].key)}
           </span>
         ))}
+        </div>
         <button
           type="button"
           onClick={() => setRaw(v => !v)}
+          data-switch={viewId}
+          data-value={raw ? 'raw' : 'segments'}
           className="ml-auto text-3xs px-1.5 py-0.5 rounded border border-border text-textMuted hover:text-textSecondary transition-colors"
         >
-          {raw ? t('logs:viewSegments') : t('logs:viewRaw')}
+          <span data-when="segments">{t('logs:viewRaw')}</span>
+          <span data-when="raw">{t('logs:viewSegments')}</span>
         </button>
       </div>}
-      {raw ? (
-        <pre className="text-2xs font-mono text-textSecondary whitespace-pre-wrap break-words bg-canvas border border-border rounded-control p-3 max-h-[60vh] overflow-y-auto">
-          {JSON.stringify(list, null, 2) || EMPTY}
-        </pre>
-      ) : (
-        <div className="space-y-1.5">
+      {/* 两份视图都在 DOM 里：导出件没有 React，切「原始 JSON」只能靠 data-value */}
+      <div id={viewId} data-value={raw ? 'raw' : 'segments'} className="switch">
+        <div data-case="segments" className="space-y-1.5">
           {blocks.map((block, i) => (
             <Block key={i} index={i} kind={block.kind} title={block.title} source={block.source} marks={block.marks} tone={tone}>
               {block.body}
             </Block>
           ))}
         </div>
-      )}
+        {legend && (
+          <div data-case="raw">
+            <pre className="text-2xs font-mono text-textSecondary whitespace-pre-wrap break-words bg-canvas border border-border rounded-control p-3 max-h-[60vh] overflow-y-auto">
+              {JSON.stringify(list, null, 2) || EMPTY}
+            </pre>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

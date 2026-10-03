@@ -44,10 +44,10 @@ function collectCss(): string {
 }
 
 /**
- * 折叠块在导出件里没有 React：补一段脚本按 aria / data 属性把开关接回来，
- * 展开收起的过渡交给页面样式表里那份 .collapse-body，不在这里另写一套动画。
+ * 站内的折叠与视图切换是 React 状态，导出件里只剩 DOM：补一段脚本按属性把开关接回来。
+ * 动画与显示规则都在页面样式表里（.collapse-body / .switch），这里不另写一套。
  */
-const COLLAPSE_SCRIPT = [
+const EXPORT_SCRIPT = [
   '<script>',
   'document.querySelectorAll("[data-collapsible]").forEach(function (button) {',
   '  button.addEventListener("click", function () {',
@@ -56,6 +56,19 @@ const COLLAPSE_SCRIPT = [
   '    var open = button.getAttribute("aria-expanded") === "true"',
   '    button.setAttribute("aria-expanded", open ? "false" : "true")',
   '    body.setAttribute("data-open", open ? "false" : "true")',
+  '  })',
+  '})',
+  '/* 一组视图（原文/渲染、分段/原始 JSON）之间轮换：值取自组内的 data-case，按钮文案跟着同步 */',
+  'document.querySelectorAll("[data-switch]").forEach(function (button) {',
+  '  button.addEventListener("click", function () {',
+  '    var group = document.getElementById(button.getAttribute("data-switch"))',
+  '    if (!group) return',
+  '    var cases = group.querySelectorAll(":scope > [data-case]")',
+  '    if (!cases.length) return',
+  '    var values = Array.prototype.map.call(cases, function (el) { return el.getAttribute("data-case") })',
+  '    var next = values[(values.indexOf(group.getAttribute("data-value")) + 1) % values.length]',
+  '    group.setAttribute("data-value", next)',
+  '    button.setAttribute("data-value", next)',
   '  })',
   '})',
   '</script>',
@@ -92,7 +105,7 @@ export function saveElementAsHtml(el: HTMLElement, filename: string, title: stri
     '</head>',
     '<body class="' + document.body.className + '">',
     clone.outerHTML,
-    COLLAPSE_SCRIPT,
+    EXPORT_SCRIPT,
     '</body>',
     '</html>',
   ].join('\n')
