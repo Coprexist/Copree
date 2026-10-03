@@ -5,7 +5,7 @@
  * 交接 / 人说的话 / AI 说的话 / 本轮工具 / 工具调用 / 工具返回 / 思考 / 收尾与报错。
  * 正文一律原样显示（不截断）：能当 Markdown 读的走 Markdown，JSON 走格式化，其余原样。
  */
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { ChevronRight } from 'lucide-react'
 import MarkdownContent from './MarkdownContent'
 import { useT } from '../../i18n/I18nContext'
@@ -157,15 +157,16 @@ function JsonFields({ text }: { text: string }) {
   const entries = parsed ? Object.entries(parsed) : []
   // 数组、标量、空对象仍走格式化等宽：那不是"一堆参数"，拆开反而更乱
   if (entries.length === 0) return <Body text={text} mono />
+  // 用 grid 而不是每行一个 flex：第一列是共享的一列，值才对得齐（各自为政时每行各算各的宽度）
   return (
-    <div className="space-y-1.5">
+    <div className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-2 gap-y-1.5">
       {entries.map(([key, value]) => (
-        <div key={key} className="flex items-start gap-2">
-          <span className="shrink-0 text-3xs font-mono px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/10 text-textMuted">
+        <Fragment key={key}>
+          <span className="text-3xs font-mono px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/10 text-textMuted">
             {key}
           </span>
-          <div className="flex-1 min-w-0"><ArgValue value={value} /></div>
-        </div>
+          <div className="min-w-0"><ArgValue value={value} /></div>
+        </Fragment>
       ))}
     </div>
   )
