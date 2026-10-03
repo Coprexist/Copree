@@ -5,7 +5,7 @@
  * 交接 / 人说的话 / AI 说的话 / 本轮工具 / 工具调用 / 工具返回 / 思考 / 收尾与报错。
  * 正文一律原样显示（不截断）：能当 Markdown 读的走 Markdown，JSON 走格式化，其余原样。
  */
-import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ChevronRight } from 'lucide-react'
 import MarkdownContent from './MarkdownContent'
 import { useT } from '../../i18n/I18nContext'
@@ -31,9 +31,13 @@ const STYLES: Record<Kind, { bar: string; box: string; key: string }> = {
 /** 等宽渲染的种类：工具入参/返回与「本轮工具」汇总行都是机器文本，等宽才看得出结构 */
 const MONO: Kind[] = ['toolCall', 'toolResult']
 
-/** 长日志分片渲染：首屏先铺满一屏，其余按片补（见 RequestBodyViewer 的 shown） */
+/** 长日志分片渲染：首屏先铺一屏，其余在浏览器空闲时按片补 */
 const FIRST_BLOCKS = 16
+/** 补片时每片几块的起点；实际大小按上一片花的时间随时调（见 RequestBodyViewer 的 stepRef） */
 const STEP_BLOCKS = 16
+/** 一片的耗时落在这个区间里：贵了就少铺，便宜了就多铺 */
+const STEP_SLOW_MS = 120
+const STEP_FAST_MS = 40
 /** 导出时要把整篇铺完，每帧一片：比一次铺完温和，也比空闲等待快 */
 const EXPORT_STEP_BLOCKS = 64
 
@@ -239,7 +243,8 @@ function toolArgs(call: any): string {
   return typeof raw === 'string' ? raw : textOf(raw)
 }
 
-function Block({ index, msgIndex, kind, title, source, marks = [], tone = 'normal', children }: {
+/** memo：分片补渲染时只有新块要算，已铺好的那些不该被带着重算一遍（片越小、补的次数越多，这一层越值钱） */
+const Block = memo(function Block({ index, msgIndex, kind, title, source, marks = [], tone = 'normal', children }: {
   index: number; msgIndex: number; kind: Kind; title?: string; tone?: Tone; children: React.ReactNode
   /** 这一块的原始文本（那条消息本身）；给了才摆「原文 / 渲染」开关 */
   source?: string
@@ -319,7 +324,7 @@ function Block({ index, msgIndex, kind, title, source, marks = [], tone = 'norma
       </div>
     </div>
   )
-}
+})
 
 /**
  * 高度变化统一走这一条：折叠、两份视图切换都调它，不再每个交互各写一套。
@@ -523,6 +528,9 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
   // 长日志整篇一次渲染会把主线程占满（394 块实测 2.4s、最长一次任务 1.5s）：先铺首屏，
   // 其余按片补，片与片之间让出主线程，打开时就能滚能点，而不是整页先僵住
   const [shown, setShown] = useState(FIRST_BLOCKS)
+  /** 上一片开始的时刻与这一片的大小：拿上一片实际花的时间调大小，弱机与大块自动铺得少些 */
+  const lastStartRef = useRef(0)
+  const stepRef = useRef(STEP_BLOCKS)
   // 拼进改变量的那几截本来就没几块，不分片：它们始终是完整的，导出这类视图不必等
   useEffect(() => { setShown(lazy ? FIRST_BLOCKS : blocks.length) }, [list, lazy, blocks.length])
   useEffect(() => {
@@ -531,8 +539,16 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
       if (renderAll) onAllRendered?.()
       return
     }
-    const next = () => setShown(n => Math.min(blocks.length, n + (renderAll ? EXPORT_STEP_BLOCKS : STEP_BLOCKS)))
-    // 导出中：每帧补一片，快、又不像一次铺完那样把主线程按死（按死了连「正在准备」都画不出来）
+    // 上一片花得太久（大块或弱机）就减半，很轻松就加倍：每片都落在几十毫秒量级
+    const now = performance.now()
+    if (lastStartRef.current) {
+      const cost = now - lastStartRef.current
+      if (cost > STEP_SLOW_MS) stepRef.current = Math.max(4, Math.round(stepRef.current / 2))
+      else if (cost < STEP_FAST_MS) stepRef.current = Math.min(32, stepRef.current * 2)
+    }
+    lastStartRef.current = now
+    const next = () => setShown(n => Math.min(blocks.length, n + (renderAll ? EXPORT_STEP_BLOCKS : stepRef.current)))
+    // 导出：每帧补一片，快、又不像一次铺完那样把主线程按死（按死了连「正在准备」都画不出来）
     if (renderAll) {
       const id = requestAnimationFrame(next)
       return () => cancelAnimationFrame(id)
