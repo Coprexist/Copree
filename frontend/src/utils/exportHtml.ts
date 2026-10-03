@@ -6,6 +6,7 @@
  * 样式也从当前页面收集，导出件因此跟界面同一份来源，不必另写一套 CSS 跟着改。
  */
 import { saveText } from './download'
+import { FOLD_TRANSITION } from '../components/shared/collapseMotion'
 
 /** 相对地址在导出文件里会按文件所在目录解析，统一换成绝对地址（图片、附件、字体） */
 function absolutizeUrls(root: HTMLElement): void {
@@ -142,7 +143,7 @@ const EXPORT_SCRIPT = [
   '  el.style.overflow = "hidden"',
   '  el.style.height = from + "px"',
   '  void el.offsetHeight',
-  '  el.style.transition = "height 0.2s cubic-bezier(0.65, 0, 0.35, 1)"',
+  '  el.style.transition = ' + JSON.stringify(FOLD_TRANSITION),
   '  el.style.height = to + "px"',
   '  /* 等过渡真的走完再收尾：用定时器猜时间，猜早了会在动画没结束时就交还高度、看起来弹一下 */',
   '  var finish = function () {',
