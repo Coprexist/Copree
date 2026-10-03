@@ -30,7 +30,15 @@ function getApiBaseUrl(): string {
   return '/api'
 }
 
-export { getApiBaseUrl }
+/**
+ * 附件下载地址。<img>/<a> 带不上 Authorization 头，token 只能走 query；
+ * 嵌入模式与桌面端的 base 差异也在这里收敛，组件里不再手拼 /api。
+ */
+function fileDownloadUrl(fileId: number): string {
+  return `${getApiBaseUrl()}/fs/download/${fileId}?token=${localStorage.getItem('access_token') || ''}`
+}
+
+export { getApiBaseUrl, fileDownloadUrl }
 
 /** 401 统一处理：嵌入模式通知宿主（不整页跳转，避免 iframe 跳出宿主）；独立模式清 token 跳登录页 */
 function handleUnauthorized(path: string) {

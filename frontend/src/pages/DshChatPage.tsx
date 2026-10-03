@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ArrowLeft, ArrowDown, Bot, Brain, CheckCircle2, Circle, ImagePlus, Info, MessageSquare, Plus, RefreshCw, Send, Square, Terminal, XCircle } from 'lucide-react'
-import { api, getApiBaseUrl } from '../api/client'
+import { api, fileDownloadUrl, getApiBaseUrl } from '../api/client'
 import { useT } from '../i18n/I18nContext'
 import { DropMask, AttachmentChips } from '../components/AttachmentChips'
 import { IconButton, MENU_CAPTION, MenuItem, MenuPanel } from '../components/ui'
@@ -24,7 +24,7 @@ import { useElementWidth } from '../hooks/useElementWidth'
 import { useStickToBottom } from '../hooks/useStickToBottom'
 import { streamSse } from '../utils/sse'
 import {
-  attachmentUrl, imageMarker, imageRefsIn,
+  imageMarker, imageRefsIn,
   stripImageMarkers, supportsImageAttachments, type DshAttachmentRef, type DshImageRef,
 } from '../utils/dshAttachments'
 
@@ -753,11 +753,14 @@ export default function DshChatPage() {
                       <div className="text-3xs text-textMuted mb-0.5">{isUser ? t('tool:dsh.msg.me') : t('tool:dsh.msg.ai')}</div>
                       {!!line.images?.length && (
                         <div className="flex flex-wrap gap-1.5 mb-1">
-                          {line.images.map((img) => (
-                            <a key={img.file_id} href={attachmentUrl(img.file_id)} target="_blank" rel="noreferrer" title={img.name}>
-                              <img src={attachmentUrl(img.file_id)} alt={img.name} className="max-h-40 max-w-full rounded border border-border/60" />
-                            </a>
-                          ))}
+                          {line.images.map((img) => {
+                            const url = fileDownloadUrl(img.file_id)
+                            return (
+                              <a key={img.file_id} href={url} target="_blank" rel="noreferrer" title={img.name}>
+                                <img src={url} alt={img.name} className="max-h-40 max-w-full rounded border border-border/60" />
+                              </a>
+                            )
+                          })}
                         </div>
                       )}
                       {isUser ? (

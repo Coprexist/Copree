@@ -5,8 +5,6 @@
  * 链路上任何一跳（反向代理默认 1MB 等）都会先把它掐掉 —— 实测丢图就是这么丢的。
  * 现在正文只带一行人读的标记，字节交给 DSH 插件用密钥按 fileId 回取后落盘。
  */
-import { getApiBaseUrl } from '../api/client'
-
 export interface DshImageRef {
   file_id: number
   name: string
@@ -58,7 +56,3 @@ export function supportsImageAttachments(version?: string): boolean {
   return major > 0 || minor >= 3
 }
 
-/** 附件缩略图地址：与群视界对话同一条下载路径（token 走 query，img 标签带不上 header） */
-export function attachmentUrl(fileId: number): string {
-  return `${getApiBaseUrl()}/fs/download/${fileId}?token=${localStorage.getItem('access_token') || ''}`
-}

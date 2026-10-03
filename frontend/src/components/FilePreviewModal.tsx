@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Download, X, ArrowLeft, FileIcon, Loader2, AlertTriangle, ZoomIn, ZoomOut, RotateCcw, Share2, Maximize2, Minimize2 } from 'lucide-react'
 import { useT } from '../i18n/I18nContext'
+import { fileDownloadUrl } from '../api/client'
 import { formatFileSize } from '../utils/format'
 import { isTextPreviewable, getCodeLang, isMarkdownFile, resolveMimeType, EXT_LANG_MAP } from '../utils/mime'
 import MarkdownContent from './shared/MarkdownContent'
@@ -32,8 +33,7 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
   const [forwardFile, setForwardFile] = useState<{file_id:number;name:string;size:number;mime_type:string}|null>(null)
   // 富文本（md/html/代码）渲染 ↔ 原文切换：看渲染效果或源码
 
-  const token = localStorage.getItem('access_token')
-  const dlUrl = src ?? (fileId != null ? `/api/fs/download/${fileId}?token=${token || ''}` : '')
+  const dlUrl = src ?? (fileId != null ? fileDownloadUrl(fileId) : '')
 
   // 模态框尺寸状态
   const [modalWidth, setModalWidth] = useState<number | null>(null)

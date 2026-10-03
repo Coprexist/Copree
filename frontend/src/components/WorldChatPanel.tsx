@@ -8,7 +8,7 @@ import { IconButton, MenuPanel, MenuItem, INSET_CARD, confirmAsync } from './ui'
 import { useWorldChat, type Approval, type ChatMsg } from '../hooks/useWorldChat'
 import { useAttachmentUpload, isImageAttachment } from '../hooks/useAttachmentUpload'
 import { AttachmentChips, DropMask } from './AttachmentChips'
-import { api } from '../api/client'
+import { api, fileDownloadUrl } from '../api/client'
 import { useT } from '../i18n/I18nContext'
 import { useElementWidth } from '../hooks/useElementWidth'
 import ExpressionModeSwitch from './ExpressionModeSwitch'
@@ -424,7 +424,7 @@ const WorldChatPanel = memo(forwardRef<WorldChatHandle, WorldChatPanelProps>(({ 
           {m.role === 'user' && !!m.attachments?.length && (
             <div className="flex flex-wrap gap-1.5 mb-1">
               {m.attachments.map((att, ai) => {
-                const url = `/api/fs/download/${att.file_id}?token=${localStorage.getItem('access_token') || ''}`
+                const url = fileDownloadUrl(att.file_id)
                 return isImageAttachment(att) ? (
                   <a key={ai} href={url} target="_blank" rel="noreferrer" title={att.name}>
                     <img src={url} alt={att.name} className="max-h-40 max-w-full rounded border border-border/60" />

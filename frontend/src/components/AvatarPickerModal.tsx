@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Image, Upload, X, Loader2 } from 'lucide-react'
-import { api } from '../api/client'
+import { api, fileDownloadUrl } from '../api/client'
 import { useT } from '../i18n/I18nContext'
 import AvatarCropModal from './AvatarCropModal'
 
@@ -115,11 +115,7 @@ export default function AvatarPickerModal({
   // 从个人空间选择图片
   const handleSelectFromSpace = async (fileItem: FileItem) => {
     try {
-      // 通过 download endpoint 获取 Blob
-      const token = localStorage.getItem('access_token')
-      const res = await fetch(`/api/fs/download/${fileItem.id}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      })
+      const res = await fetch(fileDownloadUrl(fileItem.id))
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: t('common.loadFailed') }))
         throw new Error(err.detail || t('common.loadFailed'))
@@ -252,26 +248,16 @@ export default function AvatarPickerModal({
                       className="relative aspect-square rounded-control overflow-hidden border border-border bg-elevated hover:border-primary-400 transition-colors group"
                       title={f.path.split('/').pop() || f.path}
                     >
+                      {/* 占位图垫在图片下方：加载失败只隐藏图片，不往 DOM 里塞节点 */}
+                      <span className="absolute inset-0 flex items-center justify-center text-textMuted" aria-hidden="true">
+                        <Image size={18} />
+                      </span>
                       <img
-                        src={`/api/fs/download/${f.id}`}
+                        src={fileDownloadUrl(f.id)}
                         alt={f.path}
-                        className="w-full h-full object-cover"
+                        className="relative w-full h-full object-cover"
                         loading="lazy"
-                        onError={(e) => {
-                          // 加载失败时显示占位
-                          const target = e.currentTarget
-                          target.style.display = 'none'
-                          if (target.parentElement) {
-                            target.parentElement.classList.add(
-                              'flex',
-                              'items-center',
-                              'justify-center',
-                            )
-                            const icon = document.createElement('div')
-                            icon.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-textMuted"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`
-                            target.parentElement.appendChild(icon)
-                          }
-                        }}
+                        onError={(e) => { e.currentTarget.style.display = 'none' }}
                       />
                       <div className="absolute inset-0 bg-primary-400/0 group-hover:bg-primary-400/10 transition-colors" />
                     </button>

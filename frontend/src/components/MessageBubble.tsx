@@ -9,7 +9,7 @@ import { getChatStyle, chatStyleClasses } from '../utils/providers.tsx'
 import { scrollToInContainer } from '../utils/scroll'
 import { copyText } from '../utils/clipboard'
 import { useLang, useT } from '../i18n/I18nContext'
-import { api } from '../api/client'
+import { api, fileDownloadUrl } from '../api/client'
 import FilePreviewModal from './FilePreviewModal'
 import InvitationCard from './InvitationCard'
 import { MenuItem, MenuPanel } from './ui'
@@ -288,8 +288,7 @@ const MessageBubble = memo(function MessageBubble({
           {!revoked && fileAtts.length > 0 && (
             <div className={`${content ? 'mt-2 pt-2 border-t' : ''} flex flex-wrap gap-1.5 ${isMine ? 'border-white/20' : 'border-border'}`}>
               {fileAtts.map(att => {
-                const token = localStorage.getItem('access_token')
-                const dlUrl = `/api/fs/download/${att.file_id}?token=${token || ''}`
+                const dlUrl = fileDownloadUrl(att.file_id!)
                 const fid = att.file_id!
                 const fname = att.name!
                 const fsize = att.size!
