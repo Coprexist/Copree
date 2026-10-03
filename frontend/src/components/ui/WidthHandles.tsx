@@ -17,7 +17,7 @@ interface WidthHandlesProps {
   onReset?: () => void
 }
 
-/** 拖条本体宽度；抓取区再宽也还是它收按下事件 */
+/** 拖条本体宽度，也是高光铺满的宽度：能看到的那块，就是按得下去的那块 */
 const HANDLE_W = 40
 /** 拖条中心距内容列边缘：24 的内缩 + 半个拖条 */
 const HANDLE_CENTER = 24 + HANDLE_W / 2
@@ -25,11 +25,15 @@ const HANDLE_CENTER = 24 + HANDLE_W / 2
 const NEAR_FALLOFF_PX = 80
 /** 浓度曲线：线性看不出差别，拉陡一点近处才够亮、稍远就明显淡下去 */
 const NEAR_CURVE = 1.6
-/** 高光的宽度与浓度：只是拖条中心外裹的一层薄晕，宽了就成了色块 */
-const GLOW_W = 8
+/** 高光浓度上限：它要跟正文底色共存，太浓就成了色块 */
 const GLOW_ALPHA = 0.18
-/** 落点线的宽度 */
-const SPARK_W = 3
+/**
+ * 高光的上下过渡：实心 ±10px、到 ±28px 收干净。
+ * 过渡再拉长（试过 ±120px）整块就糊成一团柔光，边界都看不出来；
+ * 收短之后它就是一块跟着指针走的亮斑，位置一眼可辨。
+ */
+const GLOW_INNER_PX = 10
+const GLOW_OUTER_PX = 28
 /**
  * 感应区宽度（从内容列边缘起算）：24 内缩 + 40 拖条 + 一个衰减距离 80。
  * 这个宽度是算出来的而不是拍脑袋——拖条中心到区缘正好是「半个拖条 + 一个衰减距离」，
@@ -38,13 +42,10 @@ const SPARK_W = 3
  */
 const ZONE_PX = 144
 
-/**
- * 以指针 Y 为原点的上下渐隐：stops 是「距指针多远开始、多远收干净」。
- * 两层用同一个原点、同一支颜色，只是宽窄 / 长短 / 浓淡不同 —— 外层薄晕、内层亮线。
- */
-function fadeAt({ inner, outer }: { inner: number; outer: number }, alpha: number) {
+/** 以指针 Y 为原点的上下渐隐 */
+function fadeAt({ inner, outer }: { inner: number; outer: number }) {
   const y = `var(${HANDLE_Y_VAR}, 50%)`
-  const rgb = `rgb(var(--tw-primary-500) / ${alpha})`
+  const rgb = `rgb(var(--tw-primary-500) / ${GLOW_ALPHA})`
   return `linear-gradient(to bottom, transparent calc(${y} - ${outer}px), ${rgb} calc(${y} - ${inner}px), ${rgb} calc(${y} + ${inner}px), transparent calc(${y} + ${outer}px))`
 }
 
@@ -52,12 +53,13 @@ function fadeAt({ inner, outer }: { inner: number; outer: number }, alpha: numbe
  * 居中列两侧的拖条（对话列与页面内容列共用）。
  *
  * 结构是「感应区 > 拖条」两层：
- *  · 感应区落在内容列外的留白里（压不到正文），负责算鼠标的贴近度与指示线的 Y；
+ *  · 感应区落在内容列外的留白里（压不到正文），负责算鼠标的贴近度与光斑的 Y；
  *  · 拖条收按下/拖动，也是视觉所在。
  *
- * 视觉就一根竖线：中间是跟着指针上下走的落点（悬停/拖动才出现），外面薄薄一层晕
- * （浓度按鼠标到拖条的横向距离走，正文里正常阅读时不晃眼）。两者都只有几像素宽，
- * 落点才是主角。
+ * 视觉只留一块亮斑：宽度就是拖条本身（能看到的那块 = 按得下去的那块），纵向跟着指针走，
+ * 浓度按鼠标到拖条的横向距离走（正文里正常阅读时不晃眼），拖动中恒亮。
+ * 曾经在同一位置又叠过一根更亮的落点线，但两层同原点、同色、都跟着指针，
+ * 信息完全重复，松手位置本来也由这块斑自己表达，于是删掉。
  */
 export default function WidthHandles({ varName, dragging, title, onHandleDown, onHandleMove, onHandleUp, onHandleCancel, onReset }: WidthHandlesProps) {
   const frameRef = useRef<number | null>(null)
@@ -65,8 +67,8 @@ export default function WidthHandles({ varName, dragging, title, onHandleDown, o
   useEffect(() => () => { if (frameRef.current !== null) cancelAnimationFrame(frameRef.current) }, [])
 
   /**
-   * 感应区内每帧算一次：指示线的 Y（写到两侧共用的宿主上）与高光浓度。
-   * 覆盖面整个感应区而不只是拖条本身，鼠标在留白里上下移动时里面的光也跟着走。
+   * 感应区内每帧算一次：光斑的 Y（写到两侧共用的宿主上）与浓度。
+   * 覆盖面整个感应区而不只是拖条本身，鼠标在留白里上下移动时光斑也跟着走。
    */
   const onZoneMove = (side: Side) => (e: React.PointerEvent<HTMLDivElement>) => {
     const zone = e.currentTarget
@@ -91,8 +93,6 @@ export default function WidthHandles({ varName, dragging, title, onHandleDown, o
     if (frameRef.current !== null) { cancelAnimationFrame(frameRef.current); frameRef.current = null }
     e.currentTarget.style.setProperty(HANDLE_NEAR_VAR, '0')
   }
-
-  const shown = dragging ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
 
   return (
     <>
@@ -120,26 +120,20 @@ export default function WidthHandles({ varName, dragging, title, onHandleDown, o
             onPointerCancel={onHandleCancel}
             onLostPointerCapture={onHandleCancel}
             onDoubleClick={onReset}
-            className="group absolute inset-y-0 cursor-col-resize"
+            className="absolute inset-y-0 cursor-col-resize"
             style={{
               // 从内容列边缘内缩 24，余下的放拖条；留白不够时自然收成 0
               width: `max(0px, min(${HANDLE_W}px, calc(100% - 48px)))`,
               ...(side === 'left' ? { right: '24px' } : { left: '24px' }),
             }}
           >
-            {/* 薄晕：几像素宽，浓度跟鼠标的远近走 */}
+            {/* 亮斑：宽度 = 拖条（能看到的那块就是按得下去的那块），浓度跟鼠标的远近走 */}
             <span
-              className="pointer-events-none absolute left-1/2 top-0 h-full -translate-x-1/2 transition-opacity duration-150"
+              className="pointer-events-none absolute inset-0 transition-opacity duration-150"
               style={{
-                width: `${GLOW_W}px`,
                 opacity: dragging ? 1 : `var(${HANDLE_NEAR_VAR}, 0)`,
-                background: fadeAt({ inner: 40, outer: 120 }, GLOW_ALPHA),
+                background: fadeAt({ inner: GLOW_INNER_PX, outer: GLOW_OUTER_PX }),
               }}
-            />
-            {/* 落点：同一原点，更短更亮的一根线；悬停/拖动才出现 */}
-            <span
-              className={`pointer-events-none absolute left-1/2 top-0 h-full -translate-x-1/2 rounded-full transition-opacity ${shown}`}
-              style={{ width: `${SPARK_W}px`, background: fadeAt({ inner: 12, outer: 52 }, 1) }}
             />
           </div>
         </div>
