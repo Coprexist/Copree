@@ -5,7 +5,7 @@
  * 交接 / 人说的话 / AI 说的话 / 本轮工具 / 工具调用 / 工具返回 / 思考 / 收尾与报错。
  * 正文一律原样显示（不截断）：能当 Markdown 读的走 Markdown，JSON 走格式化，其余原样。
  */
-import { Fragment, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ChevronRight } from 'lucide-react'
 import MarkdownContent from './MarkdownContent'
 import { useT } from '../../i18n/I18nContext'
@@ -29,12 +29,6 @@ const STYLES: Record<Kind, { bar: string; box: string; key: string }> = {
 
 /** 等宽渲染的种类：工具入参/返回与「本轮工具」汇总行都是机器文本，等宽才看得出结构 */
 const MONO: Kind[] = ['toolCall', 'toolResult']
-
-/** 长日志分片渲染：首屏先铺满一屏，其余按片补（见 RequestBodyViewer 的 shown） */
-const FIRST_BLOCKS = 16
-const STEP_BLOCKS = 16
-/** 导出时要把整篇铺完，每帧一片：比一次铺完温和，也比空闲等待快 */
-const EXPORT_STEP_BLOCKS = 64
 
 /** removed 用于改变量里"已经没了"的那几条：压暗再加一圈红，跟留下的分得开 */
 type Tone = 'normal' | 'removed'
@@ -423,7 +417,7 @@ function Body({ text, mono = false, names }: { text: string; mono?: boolean; nam
   )
 }
 
-export default function RequestBodyViewer({ messages, className = '', legend = true, tone = 'normal', mentionNames, raw, onToggleRaw, rawSwitchId, renderAll = false, onAllRendered }: {
+export default function RequestBodyViewer({ messages, className = '', legend = true, tone = 'normal', mentionNames, raw, onToggleRaw, rawSwitchId }: {
   messages: any[]
   className?: string
   /** 拼在改变量里时不重复摆图例和原始 JSON 开关（一屏摆好几截，图例只该出现一次） */
@@ -438,10 +432,6 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
   raw?: boolean
   onToggleRaw?: () => void
   rawSwitchId?: string
-  /** 导出前要求整篇都已渲染：分片还没补完就克隆，导出件会缺块 */
-  renderAll?: boolean
-  /** 整篇都在 DOM 里了（导出据此落盘，期间主线程不被按住） */
-  onAllRendered?: () => void
 }) {
   const t = useT()
   const list = Array.isArray(messages) ? messages : []
@@ -519,33 +509,6 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
 
   // 长日志整篇一次渲染会把主线程占满（394 块实测 2.4s、最长一次任务 1.5s）：先铺首屏，
   // 其余按片补，片与片之间让出主线程，打开时就能滚能点，而不是整页先僵住
-  const [shown, setShown] = useState(FIRST_BLOCKS)
-  useEffect(() => { setShown(FIRST_BLOCKS) }, [list])
-  useEffect(() => {
-    if (shown >= blocks.length) {
-      // 补完了才算导出就绪：克隆要在整篇都在 DOM 里之后做
-      if (renderAll) onAllRendered?.()
-      return
-    }
-    const next = () => setShown(n => Math.min(blocks.length, n + (renderAll ? EXPORT_STEP_BLOCKS : STEP_BLOCKS)))
-    // 导出中：每帧补一片，快、又不像一次铺完那样把主线程按死（按死了连「正在准备」都画不出来）
-    if (renderAll) {
-      const id = requestAnimationFrame(next)
-      return () => cancelAnimationFrame(id)
-    }
-    // 平时只在浏览器空闲时补：用户正在滚动或点击时先让路；一直没空闲就按 timeout 兜底
-    const w = window as Window & {
-      requestIdleCallback?: (cb: () => void, options?: { timeout: number }) => number
-      cancelIdleCallback?: (id: number) => void
-    }
-    if (w.requestIdleCallback) {
-      const id = w.requestIdleCallback(next, { timeout: 64 })
-      return () => w.cancelIdleCallback?.(id)
-    }
-    const id = window.setTimeout(next, 8)
-    return () => window.clearTimeout(id)
-  }, [shown, blocks.length, renderAll, onAllRendered])
-
 
   if (list.length === 0) {
     return <p className={`text-xs text-textMuted ${className}`}>{t('logs:empty')}</p>
@@ -555,7 +518,7 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
   const switchBody = (
     <div id={viewId} ref={switchElRef} data-value={showRaw ? 'raw' : 'segments'} className="switch">
       <div data-case="segments" className="space-y-1.5">
-        {(renderAll ? blocks : blocks.slice(0, shown)).map((block, i) => (
+        {blocks.map((block, i) => (
           <Block key={i} index={i} msgIndex={block.msgIndex} kind={block.kind} title={block.title} source={block.source} marks={block.marks} tone={tone}>
             {block.body}
           </Block>

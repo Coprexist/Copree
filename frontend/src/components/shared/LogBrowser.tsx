@@ -5,7 +5,7 @@
  * 点进去看这段状态的最近一次完整请求体、与上一条的增量、以及这段状态的历史。
  * 「停在哪段状态、看的是哪一条」写进查询参数（state / log），刷新和后退都回到原地。
  */
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Loader2 } from 'lucide-react'
 import { api } from '../../api/client'
@@ -38,14 +38,14 @@ const timeOf = (value: string | null | undefined) =>
   value ? new Date(value).toLocaleString('zh-CN') : ''
 
 /** 改变量里的一截：多出来的 / 没了的，各自连着那几条消息 */
-function Hunk({ label, removed, messages, names, renderAll }: {
-  label: string; removed?: boolean; messages: any[]; names?: Record<string, string>; renderAll?: boolean
+function Hunk({ label, removed, messages, names }: {
+  label: string; removed?: boolean; messages: any[]; names?: Record<string, string>
 }) {
   return (
     <div className="space-y-1.5">
       <div className={`text-3xs ${removed ? 'text-rose-400' : 'text-mint-400'}`}>{label}</div>
       <RequestBodyViewer
-        messages={messages} legend={false} mentionNames={names} renderAll={renderAll}
+        messages={messages} legend={false} mentionNames={names}
         tone={removed ? 'removed' : 'normal'}
       />
     </div>
@@ -69,9 +69,6 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
   const exportRef = useRef<HTMLDivElement>(null)
   const [rawBody, setRawBody] = useState(false)
   // 导出前先把分片渲染补完，否则克隆下来的 DOM 会缺掉还没补上的块
-  // 导出要把分片补完再落盘，这段时间按钮得看得出在干活
-  const [exportAll, setExportAll] = useState(false)
-  const [exporting, setExporting] = useState(false)
   // 「原始 JSON」按钮在这一行、开关组在正文里，两边靠这个 id 对上（见 RequestBodyViewer）
   const rawSwitchId = useId()
 
@@ -133,17 +130,10 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
    * 也正因为纯前端，管理台的日志浏览器同样能用。
    */
   const exportHtml = () => {
-    if (!currentId || exporting) return
-    // 只是开口让正文把分片补完；补完的回调里才落盘，这样点下去就有「正在准备」可见
-    setExporting(true)
-  }
-
-  /** 正文整篇都在 DOM 里了：落盘并收工 */
-  const finishExport = useCallback(() => {
     const el = exportRef.current
-    if (el && currentId) saveElementAsHtml(el, 'log-' + currentId + '.html', '#' + currentId)
-    setExporting(false)
-  }, [currentId])
+    if (!el || !currentId) return
+    saveElementAsHtml(el, 'log-' + currentId + '.html', '#' + currentId)
+  }
 
   if (loading) {
     return (
@@ -272,11 +262,11 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
                 type="button"
                 data-export-skip
                 onClick={exportHtml}
-                disabled={detail === null || exporting}
+                disabled={detail === null}
                 title={t('logs:downloadHtmlHint')}
                 className="text-3xs text-textMuted hover:text-textSecondary transition-colors disabled:opacity-40"
               >
-                {exporting ? t('logs:downloadHtmlPreparing') : t('logs:downloadHtml')}
+                {t('logs:downloadHtml')}
               </button>
               {/* 原始 JSON 的开关跟下载按钮并排；改变量视图里没有整段 JSON，那条路上不摆 */}
               {!showDelta && (
@@ -329,8 +319,6 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
             </div>
           ) : (
             <RequestBodyViewer
-              renderAll={exportAll}
-              onAllRendered={finishExport}
               raw={rawBody}
               onToggleRaw={() => setRawBody(v => !v)}
               rawSwitchId={rawSwitchId}
