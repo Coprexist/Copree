@@ -132,9 +132,10 @@ function renderLine(content: string, names: MentionNames | undefined, unknown: s
   if (!speaker) return tag + renderMentionChips(rest, names || {}, unknown)
   const withId = SPEAKER_ID_RE.exec(speaker[1])
   const whoId = withId ? `<span class="log-who-id">#${withId[2]}</span>` : ''
-  const who = `<span class="log-who">${escapeHtml(withId ? withId[1] : speaker[1])}${whoId}</span>`
-  // 说话人单独一行（冒号收尾）：话在下一行起，读起来才是"谁说的 / 说了什么"
-  return `${tag}${who}:\n${renderMentionChips(speaker[2], names || {}, unknown)}`
+  // 冒号放进框里收尾（框是 inline-flex，冒号自成一项，跟名字/id 之间留出间隔）
+  const who = `<span class="log-who">${escapeHtml(withId ? withId[1] : speaker[1])}${whoId}:</span>`
+  // 说话人单独一行：话在下一行起，读起来才是"谁说的 / 说了什么"
+  return `${tag}${who}\n${renderMentionChips(speaker[2], names || {}, unknown)}`
 }
 
 function toolName(call: any): string {
