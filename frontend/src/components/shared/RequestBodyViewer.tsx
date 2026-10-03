@@ -339,14 +339,23 @@ function useHeightTransition(ref: React.RefObject<HTMLElement | null>, key: stri
     void el.offsetHeight
     el.style.transition = 'height 0.28s cubic-bezier(0.65, 0, 0.35, 1)'
     el.style.height = to + 'px'
-    const timer = window.setTimeout(() => {
+    // 等过渡真的走完再收尾：用定时器猜时间，猜早了会在动画没结束时就交还高度、看起来弹一下
+    const finish = () => {
+      el.removeEventListener('transitionend', onEnd)
+      window.clearTimeout(fallback)
       // 先落「收到底」的标记再交还高度：反过来的话网格会先弹回一行、再跳回 0
       if (collapsed) el.setAttribute('data-collapsed', 'true')
       el.style.transition = ''
       el.style.height = ''
-      el.style.overflow = ''
-    }, 320)
-    return () => window.clearTimeout(timer)
+      // overflow 留着不放：它建了 BFC，交还自动高度时才不会因外边距塌陷变一下
+    }
+    const onEnd = (event: TransitionEvent) => { if (event.propertyName === 'height') finish() }
+    el.addEventListener('transitionend', onEnd)
+    const fallback = window.setTimeout(finish, 600)
+    return () => {
+      el.removeEventListener('transitionend', onEnd)
+      window.clearTimeout(fallback)
+    }
   }, [key, collapsed, ref])
 }
 /**
