@@ -9,7 +9,7 @@ import { useMemo, useState } from 'react'
 import { ChevronRight } from 'lucide-react'
 import MarkdownContent from './MarkdownContent'
 import { useT } from '../../i18n/I18nContext'
-import { MENTION_TOKEN_RE, mentionLabel, renderMentionChips, type MentionNames } from '../../utils/mentions'
+import { escapeHtml, renderMentionChips, type MentionNames } from '../../utils/mentions'
 
 type Kind = 'system' | 'state' | 'injected' | 'user' | 'assistant' | 'roundTools' | 'toolCall' | 'toolResult' | 'reasoning' | 'error'
 
@@ -101,37 +101,33 @@ const SPEAKER_RE = /^(.{1,40}?):\s([\s\S]*)$/
 const SPEAKER_ID_RE = /^(.*)（id=(\d+)）$/
 
 
-/** 正文里 @ 了谁（`<@!id>` 是平台的规范写法，id 就是同一空间里「（id=N）」那个 N）。
- *  同一个人只留一个标签：一条消息里 @ 他十次也是"提到了他"，块头不是词频表。 */
-function mentionMarks(text: string, names: MentionNames | undefined, unknown: string): Mark[] {
-  const marks: Mark[] = []
-  const seen = new Set<string>()
-  for (const hit of text.matchAll(MENTION_TOKEN_RE)) {
-    if (seen.has(hit[1])) continue
-    seen.add(hit[1])
-    marks.push({
-      key: `at-${hit[1]}`, label: mentionLabel(hit[1], names || {}, unknown),
-      tone: 'at', hint: hit[0],
-    })
-  }
-  return marks
+/** 块头只放这条消息的 id：时间 / 谁 / @ 都在正文里就地渲染，不往块头搬 */
+function headerMarks(text: string): Mark[] {
+  const head = LINE_HEAD_RE.exec(text)
+  if (!head) return []
+  const msgId = MSG_ID_RE.exec(head[2])
+  return msgId ? [{ key: 'msg-id', label: `msg#${msgId[1]}`, tone: 'id' }] : []
 }
 
-/** 正文 → 块头标记。不是"谁: 正文"那种行（历史行）就只挑 @。 */
-function marksOf(text: string, names: MentionNames | undefined, unknown: string): Mark[] {
-  const head = LINE_HEAD_RE.exec(text)
-  if (!head) return mentionMarks(text, names, unknown)
-  const marks: Mark[] = [{ key: 'time', label: head[1], tone: 'muted' }]
+/**
+ * 历史行就地渲染：`[时间] 谁（id=N）: 正文 [msg_id=N]`
+ * → 时间标签 + 说话人标签 + 正文（msg_id 已搬到块头，正文里不再露那串标记）。
+ * 不是那种行（系统提示、JSON、工具往返…）就只把 @ 换成标签。
+ */
+function renderLine(content: string, names: MentionNames | undefined, unknown: string): string {
+  const head = LINE_HEAD_RE.exec(content)
+  if (!head) return renderMentionChips(content, names || {}, unknown)
   let rest = head[2]
   const msgId = MSG_ID_RE.exec(rest)
   if (msgId) rest = rest.slice(0, msgId.index)
+  // 首标签可能是时间，也可能是 [本轮工具] / [历史消息] 这种前缀，同一个长相（见 .log-tag）
+  const tag = `<span class="log-tag">${escapeHtml(head[1])}</span>`
   const speaker = SPEAKER_RE.exec(rest)
-  if (!speaker) return [...marks, ...mentionMarks(text, names, unknown)]
+  if (!speaker) return `${tag} ${renderMentionChips(rest, names || {}, unknown)}`
   const withId = SPEAKER_ID_RE.exec(speaker[1])
-  marks.push({ key: 'who', label: withId ? withId[1] : speaker[1], tone: 'who' })
-  if (withId) marks.push({ key: 'who-id', label: `#${withId[2]}`, tone: 'id' })
-  if (msgId) marks.push({ key: 'msg-id', label: `msg#${msgId[1]}`, tone: 'id' })
-  return [...marks, ...mentionMarks(speaker[2], names, unknown)]
+  const who = `<span class="log-who">${escapeHtml(withId ? withId[1] : speaker[1])}</span>`
+  const whoId = withId ? ` <span class="log-id">#${withId[2]}</span>` : ''
+  return `${tag} ${who}${whoId} ${renderMentionChips(speaker[2], names || {}, unknown)}`
 }
 
 function toolName(call: any): string {
@@ -224,7 +220,7 @@ function Body({ text, mono = false, names }: { text: string; mono?: boolean; nam
   }
   return (
     <div className="text-xs text-textPrimary leading-relaxed break-words">
-      <MarkdownContent content={renderMentionChips(text, names || {}, t('logs:mentionUnknown'))} />
+      <MarkdownContent content={renderLine(text, names, t('logs:mentionUnknown'))} />
     </div>
   )
 }
@@ -284,7 +280,7 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
       // 原文 = 这条消息本身（库里的字段一个不少），跟上面渲染出来的视图对得上
       out.push({
         kind, title, source: JSON.stringify(msg, null, 2),
-        marks: marksOf(content, mentionNames, t('logs:mentionUnknown')),
+        marks: headerMarks(content),
         body,
       })
     })

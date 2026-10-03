@@ -22,7 +22,7 @@ export function mentionLabel(id: string, names: MentionNames, unknown: string): 
   return '@' + (names[id] || unknown.replace('{id}', id))
 }
 
-const escapeHtml = (text: string) =>
+export const escapeHtml = (text: string) =>
   text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
 /**

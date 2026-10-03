@@ -289,9 +289,26 @@
 .bubble-content .text-gray  { color: rgb(var(--b-text-gray, 100 100 100) / 1); }
 /* AI 脉动光环 — 标志性视觉元素 */
 @layer components {
+  /* 日志正文里的行内标签：历史行的 [时间] 谁（id=N） 与 <@!id>，跟块头的小标签同族 */
+  .log-tag,
+  .log-who,
+  .log-id,
+  .mention-chip {
+    @apply inline-block px-1.5 py-0.5 rounded-full align-baseline text-3xs whitespace-nowrap;
+  }
+  .log-tag,
+  .log-id {
+    @apply bg-black/5 dark:bg-white/10 text-textMuted;
+  }
+  .log-id {
+    @apply font-mono;
+  }
+  .log-who {
+    @apply bg-primary-500/10 text-primary-400;
+  }
   /* @ 标签：正文里的 <@!id>（聊天与日志共用 .mention-chip 这个名字） */
   .mention-chip {
-    @apply inline-block px-1.5 py-0.5 rounded-full align-baseline text-3xs bg-accent-500/10 text-accent-500 whitespace-nowrap;
+    @apply bg-accent-500/10 text-accent-500;
   }
 
   .ai-pulse-active {
