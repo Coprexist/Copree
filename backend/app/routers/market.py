@@ -8,7 +8,6 @@
 """
 import logging
 import uuid
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -16,6 +15,7 @@ from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.paths import DATA_DIR, MARKET_DIR
 from app.utils.auth import get_current_user
 from app.services.world.market_github import (
     snapshot_map, load_snapshot, compute_sync_state, sync_item_to_github,
@@ -26,8 +26,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/market", tags=["世界商城"])
 
-DATA_DIR = Path("data")
-MARKET_DIR = DATA_DIR / "market"
 MAX_PACKAGE_BYTES = 20 * 1024 * 1024  # 世界包上限 20MB
 
 

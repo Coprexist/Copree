@@ -26,8 +26,7 @@
 import json
 import logging
 import os as _os
-from pathlib import Path
-from app.config import settings
+from app.paths import AGENTS_DIR, SHARED_MEMORIES_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +57,7 @@ DIRECTORY_README_TEMPLATES = {
 
 def _get_memory_dir(agent_id: int) -> str:
     """获取指定 Agent 的记忆根目录路径"""
-    return _os.path.join(settings.data_dir, "agents", str(agent_id), "memories")
+    return _os.path.join(str(AGENTS_DIR), str(agent_id), "memories")
 
 
 async def init_memory_directories(agent_id: int, ai_type: str = "resonance") -> None:
@@ -93,7 +92,7 @@ async def init_memory_directories(agent_id: int, ai_type: str = "resonance") -> 
         # cross/ — 仅共振 AI，指向全局共享目录
         if ai_type == "resonance":
             cross_path = _os.path.join(base, "cross")
-            global_shared = _os.path.join(settings.data_dir, "shared_memories")
+            global_shared = str(SHARED_MEMORIES_DIR)
             _ensure_dir(global_shared)
             if not _os.path.exists(cross_path):
                 try:

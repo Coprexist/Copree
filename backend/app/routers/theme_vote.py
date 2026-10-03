@@ -8,19 +8,15 @@
 身份：由前端负责——已登录用户调 /auth/me 拿 avatar_url 一并提交；未登录传昵称。
       后端不解析 token（保持简单，前端已可获身份信息）。
 """
-import os
-from pathlib import Path
-
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
+from app.paths import THEME_VOTES_FILE
 from app.utils.pure.json_store import JsonStore
 
 router = APIRouter(tags=["主题选色投票"])
 
-DATA_DIR = Path(os.environ.get("DATA_DIR", "data"))
-VOTE_FILE = DATA_DIR / "theme_votes.json"
-_STORE = JsonStore(VOTE_FILE)
+_STORE = JsonStore(THEME_VOTES_FILE)
 
 
 class VoteSubmit(BaseModel):

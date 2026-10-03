@@ -23,6 +23,7 @@ from pathlib import Path
 
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.paths import WORLDS_DIR
 from app.repositories.group_type_repo import SQLAlchemyGroupTypeRepository
 
 from app.models.world import World, WorldBinding, GroupAssistant
@@ -54,8 +55,8 @@ DEFAULT_GROUP_TYPES = [
 # ═══════════════════════════════════════════════════════════════
 
 def _types_path(world_id: int) -> Path:
-    # 支持环境变量覆盖根目录（可测试性；生产默认 data/worlds）
-    root = Path(os.environ.get("WORLD_TYPES_ROOT", "data/worlds"))
+    # 支持环境变量覆盖根目录（可测试性；生产默认数据根的 worlds/）
+    root = Path(os.environ.get("WORLD_TYPES_ROOT", str(WORLDS_DIR)))
     return root / str(world_id) / GROUP_TYPES_FILE
 
 

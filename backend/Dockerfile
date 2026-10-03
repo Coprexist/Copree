@@ -2,6 +2,10 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# 数据根目录的默认值：容器内它是挂载点（docker run 不带 compose 时也不会走错）。
+# 带 compose 时由 backend.environment 显式覆盖成同一个值。
+ENV DATA_DIR=/app/data
+
 # 安装系统依赖（包括 Node.js 20.x、OpenCLI、Chromium）
 # Docker 层缓存：此层仅在 apt 依赖变更时重建，日常 --build 秒过
 RUN sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list.d/debian.sources \

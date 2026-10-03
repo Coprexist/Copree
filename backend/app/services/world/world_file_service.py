@@ -9,9 +9,12 @@ import shutil
 import json
 from pathlib import Path
 
+from app.paths import WORLDS_DIR
+
 logger = logging.getLogger(__name__)
 
-WORLDS_ROOT = Path("data/worlds")
+# 世界目录：数据根的子目录，布局只在 app.paths 定义（沙箱与常驻进程同源）
+WORLDS_ROOT = WORLDS_DIR
 
 # ── 扩展名策略（单一来源：所有写入路径都过 _check_ext）────────────────
 # 允许：世界代码 / 网页资源 / 纯文本源码 / 数据 / 媒体 / 字体。

@@ -28,6 +28,7 @@ from pathlib import Path
 
 import httpx
 
+from app.paths import DATA_DIR, MARKET_DIR
 from app.repositories.infra_repo import SQLAlchemyInfraRepository
 from sqlalchemy.ext.asyncio import AsyncSession
 logger = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ def _ensure_repo(db_or_repo):
 
 GITHUB_API = "https://api.github.com"
 INDEX_PATH = "worlds/index.json"
-SNAPSHOT_PATH = "data/market/github_index_cache.json"
+SNAPSHOT_PATH = str(MARKET_DIR / "github_index_cache.json")
 
 # ─────────────────────────── 配置 ───────────────────────────
 
@@ -241,7 +242,7 @@ async def verify_github_token(token: str) -> tuple[str, int]:
 
 
 def _snapshot_file() -> Path:
-    # 支持环境变量覆盖（可测试性；生产默认 data/market/github_index_cache.json）
+    # 支持环境变量覆盖（可测试性；生产默认数据根的 market/github_index_cache.json）
     return Path(os.environ.get("GITHUB_SNAPSHOT_PATH", SNAPSHOT_PATH))
 
 
@@ -343,7 +344,7 @@ async def sync_item_to_github(db, item) -> dict:
     if not bot_priv or not bot_pub:
         raise ValueError("系统机器人签名密钥缺失")
 
-    pkg = Path("data") / item.package_path
+    pkg = DATA_DIR / item.package_path
     if not pkg.is_file():
         raise ValueError("商品包文件缺失，无法同步")
 

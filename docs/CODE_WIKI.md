@@ -412,11 +412,15 @@ async def lifespan(app: FastAPI):
 | `auto_dnd_threshold` | int | 20 | 意愿分低于此自动开 DND |
 | `default_top_k` | int | 10 | 记忆检索 top_k |
 | `credit_per_10k_tokens` | int | 10000 | 额度兑换比例 |
+| `data_dir` | str | /app/data | 数据根目录（容器内是挂载点；宿主机上由 `DATA_DIR` 指定） |
 
 **关键方法**：
 - `get_model_options()` - 返回可用模型列表（按 API 提供商自适应）
 - `is_thinking_supported_for(base_url)` - 检查是否支持 thinking 模式
 - `get_runtime_setting() / set_runtime_setting()` - 运行时动态配置覆盖
+
+**文件布局**: [app/paths.py](../backend/app/paths.py) —— 数据根下的子目录只在这一处定义
+（agents/ worlds/ world_ai_skills/ plugins/ market/ backups/ …），模块里不再各写相对路径。
 
 ### 5.3 数据库层 (app/database.py)
 
@@ -1439,7 +1443,7 @@ DB_PASSWORD=your-secure-password
 # JWT 密钥（务必修改）
 JWT_SECRET_KEY=your-jwt-secret-key
 
-# 数据目录（默认 ./data）
+# 数据目录（宿主机视角，默认 ./data；容器内的应用看到的是挂载点 /app/data）
 DATA_DIR=./data
 
 # AI API 配置

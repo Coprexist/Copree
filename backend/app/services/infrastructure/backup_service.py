@@ -21,6 +21,7 @@ from datetime import datetime
 from pathlib import Path
 
 from app.config import settings
+from app.paths import BACKUPS_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -562,7 +563,7 @@ async def restore_full_backup(tar_bytes: bytes) -> dict:
 # 7. 每日自动备份（管理员开关 + 保留份数，超出自动清除）
 # ═══════════════════════════════════════════════════════════════
 
-BACKUP_DIR = Path(settings.data_dir) / "backups"
+BACKUP_DIR = BACKUPS_DIR
 
 
 def _ensure_backup_dir() -> Path:

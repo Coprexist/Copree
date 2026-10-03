@@ -62,6 +62,18 @@
   数据根目录指向临时目录，用例不再各写一份描述符替换，测试也永不写进真实数据卷。顺带把两处手抄的模型名
   （`mimo-v2.5`）改成从预设读——厂商换名时那条用例不会再挂；待审批列表那条补上 async
   （构造条目要事件循环，走真 pytest 时没有）。
+- **插件与世界的文件会写进容器可写层，重建即丢**：数据根目录原先是各写各的——`settings.data_dir`
+  写死 `/app/data`，插件目录、安装包仓库与主题投票读环境变量 `DATA_DIR`，商城、世界目录（文件服务、
+  沙箱、常驻进程、群类型）用相对 `Path("data/...")`。而 `DATA_DIR` 在 `.env` 里是**宿主机**路径
+  （compose 拿它做挂载源），容器里那个路径并不存在：用户装的插件因此落在容器自己的可写层里，
+  `docker compose up` 重建一次就没了；世界目录更早在别处又写了一份（`backend/data/worlds`，
+  从 `backend/` 启动时才冒出来）。现在收成一处：`settings.data_dir` 是唯一入口（认 `DATA_DIR`），
+  子目录布局集中在新增的 `app/paths.py`（agents/ worlds/ world_ai_skills/ plugins/ plugin_packages/
+  market/ backups/ shared_memories/ 与两个投票文件），上面那些模块全部改成引用它，不再各写一份；
+  容器内那份由 compose 的 `backend.environment` 显式钉成 `/app/data`（`environment` 盖过
+  `env_file`，宿主路径不会再漏进来），镜像里也留了同一份默认值。测试不再替换类描述符，
+  改由 conftest 把 `DATA_DIR` 指向临时目录。
+  **已部署实例要 `docker compose up -d backend` 重建容器**——只 `restart` 不会重读环境变量。
 
 ### ⚡ 优化
 - **「可截断的长文本列」收成一条约定**：表格里要截断的列必须同时「吃掉剩余宽度 + 允许压缩」，

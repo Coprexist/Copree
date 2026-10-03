@@ -20,6 +20,8 @@ import signal
 import sys
 from pathlib import Path
 
+from app.paths import WORLDS_DIR
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_TICK_INTERVAL = 30.0   # 秒
@@ -115,7 +117,7 @@ asyncio.run(main())
 
 
 def _world_dir(world_id: int) -> Path:
-    return (Path("data/worlds") / str(world_id)).resolve()
+    return (WORLDS_DIR / str(world_id)).resolve()
 
 
 def tick_interval_for(world) -> float:

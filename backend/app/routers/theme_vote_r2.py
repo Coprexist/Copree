@@ -7,19 +7,15 @@
 存储：data/theme_votes_r2.json（与第一轮 theme_votes.json 隔离，互不影响）。
 身份：同第一轮——前端负责（登录用户调 /auth/me 拿昵称头像，未登录输昵称）。
 """
-import os
-from pathlib import Path
-
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
+from app.paths import THEME_VOTES_R2_FILE
 from app.utils.pure.json_store import JsonStore
 
 router = APIRouter(tags=["主题选色投票二轮"])
 
-DATA_DIR = Path(os.environ.get("DATA_DIR", "data"))
-VOTE_FILE = DATA_DIR / "theme_votes_r2.json"
-_STORE = JsonStore(VOTE_FILE)
+_STORE = JsonStore(THEME_VOTES_R2_FILE)
 
 
 class VoteSubmit(BaseModel):

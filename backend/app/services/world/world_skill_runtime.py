@@ -36,10 +36,9 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+from app.paths import AI_SKILLS_DIR, WORLDS_DIR
 
-AI_SKILLS_DIR = Path("data/world_ai_skills")
-WORLDS_DIR = Path("data/worlds")
+logger = logging.getLogger(__name__)
 
 # ── import 白名单（标准库安全子集：不碰文件系统/网络/进程） ──
 SAFE_IMPORTS = {

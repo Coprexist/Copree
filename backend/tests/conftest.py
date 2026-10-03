@@ -9,6 +9,7 @@ pytest 全局配置 — 测试用独立数据库 ai_group_chat_test（不碰生�
 """
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -39,23 +40,10 @@ os.environ["DATABASE_URL_SYNC"] = TEST_DATABASE_URL_SYNC
 os.environ["JWT_SECRET_KEY"] = "test-secret"
 
 
-def _isolate_data_dir() -> None:
-    """数据根目录指向临时目录。
-
-    settings.data_dir 是容器内的固定路径（/app/data，docker-compose 的挂载点），非容器
-    环境里连创建它的父目录都没权限（CI runner 上直接 PermissionError），而附件读取、
-    AI 脚本沙箱都从这里取路径。收成一个入口在导入时换掉：用例不必自己记着替换，
-    也保证测试永不写进真实数据卷。
-    """
-    import tempfile
-
-    from app.config import settings
-
-    tmp = tempfile.mkdtemp(prefix="copree-test-data-")
-    type(settings).data_dir = property(lambda self: tmp)
-
-
-_isolate_data_dir()
+# 数据根目录指向临时目录：容器里它是挂载点 /app/data，非容器环境没有那个目录（CI runner 上
+# 直接 PermissionError），而附件、脚本沙箱、插件与世界目录都从它派生。必须设在任何 app 模块
+# 导入之前 —— app.paths 在 import 时就把整套布局定下来了。
+os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="copree-test-data-")
 
 
 def _tune_test_db() -> None:

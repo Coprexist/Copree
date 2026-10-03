@@ -5,7 +5,7 @@
 - 插件 = 一个目录 + plugin.json（manifest），目录名即插件 id
 - 扫描两个位置（同名 id 后者覆盖前者）：
     1. backend/plugins/          内置插件（随代码走，git 跟踪）
-    2. DATA_DIR/plugins/         用户安装插件（持久化目录，覆盖内置同名）
+    2. <数据根>/plugins/         用户安装插件（持久化目录，覆盖内置同名）
 - category: skin | skill | emojipack | world | other
   - skin     插件 entry=skin.json   → {light:{var:hex}, dark:{var:hex}} 变量覆盖
   - skill    插件 entry=skill.json  → {skills:[{type,name,category,description,config_schema}]}
@@ -16,11 +16,11 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from app.paths import PLUGINS_DIR
 from app.repositories.plugin_repo import PluginRepository, SQLAlchemyPluginRepository
 from sqlalchemy.ext.asyncio import AsyncSession
 logger = logging.getLogger(__name__)
@@ -35,7 +35,8 @@ def _ensure_repo(db_or_repo):
 # backend/app/services/plugin/catalog.py → backend/
 BACKEND_ROOT = Path(__file__).resolve().parents[3]
 BUILTIN_PLUGIN_DIR = BACKEND_ROOT / "plugins"
-USER_PLUGIN_DIR = Path(os.environ.get("DATA_DIR", "data")) / "plugins"
+# 用户安装的插件目录：数据根的子目录，布局只在 app.paths 定义（用例可整体替换它）
+USER_PLUGIN_DIR = PLUGINS_DIR
 
 MANIFEST_NAME = "plugin.json"
 

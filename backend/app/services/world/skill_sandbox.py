@@ -19,6 +19,7 @@ import signal
 import sys
 from pathlib import Path
 
+from app.paths import AI_SKILLS_DIR, WORLDS_DIR
 from app.repositories.world_repo import SQLAlchemyWorldRepository
 from sqlalchemy.ext.asyncio import AsyncSession
 logger = logging.getLogger(__name__)
@@ -31,8 +32,6 @@ def _ensure_repo(db_or_repo):
 
 
 SKILL_RUNNER_PATH = Path(__file__).parent / "skill_runner.py"
-AI_SKILLS_DIR = Path("data/world_ai_skills")
-WORLDS_DIR = Path("data/worlds")
 
 SKILL_TIMEOUT = 30            # 单次执行墙钟超时（秒）
 SKILL_MEMORY_MB = 64          # 内存配额（RLIMIT_AS 虚拟内存口径）

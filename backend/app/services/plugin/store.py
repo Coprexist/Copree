@@ -7,10 +7,10 @@
 
 包格式（尽量宽容，宽容的部分都在这里收敛）：
 - zip；plugin.json 在包根目录，或整个插件被套在一个顶层目录里（自动下钻一层）
-- 安装目标 = catalog 扫描的用户插件目录 DATA_DIR/plugins/<id>/，安装包仓库 = DATA_DIR/plugin_packages/
+- 安装目标 = catalog 扫描的用户插件目录 <数据根>/plugins/<id>/，安装包仓库 = <数据根>/plugin_packages/
 
 安全边界（与用户约定的一致）：
-- 只写 DATA_DIR，绝不碰 backend/plugins（内置插件）；id 撞内置 → 拒绝，不允许用户目录覆盖内置
+- 只写数据根，绝不碰 backend/plugins（内置插件）；id 撞内置 → 拒绝，不允许用户目录覆盖内置
 - 拒绝绝对路径、..、符号链接、隐藏目录（.git/__pycache__）、可执行后缀
 - 限单包体积 / 解压后总体积 / 条目数 / 单文件体积
 - 覆盖安装先落到临时目录再原子替换：失败不会留下半个插件
@@ -28,12 +28,14 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from app.paths import PLUGIN_PACKAGES_DIR
 from app.services.plugin import catalog
 
 logger = logging.getLogger(__name__)
 
 MANIFEST_NAME = catalog.MANIFEST_NAME
-PACKAGE_DIR = catalog.USER_PLUGIN_DIR.parent / "plugin_packages"
+# 安装包仓库：数据根的子目录（与插件目录同源）
+PACKAGE_DIR = PLUGIN_PACKAGES_DIR
 
 MAX_PACKAGE_BYTES = 5 * 1024 * 1024            # 单个安装包上限
 MAX_TOTAL_UNCOMPRESSED = 20 * 1024 * 1024      # 解压后总体积上限（防 zip 炸弹）
@@ -278,7 +280,7 @@ def install_package(zip_bytes: bytes, *, upgrade: bool = False) -> dict[str, Any
 
 
 def uninstall_plugin(plugin_id: str) -> None:
-    """卸载用户插件：只删 DATA_DIR/plugins 下的目录，内置插件一律不动"""
+    """卸载用户插件：只删数据根 plugins/ 下的目录，内置插件一律不动"""
     if not _slug_ok(plugin_id):
         raise PackageError("插件 id 不合法：" + plugin_id)
     if is_builtin(plugin_id):

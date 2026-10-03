@@ -11,7 +11,7 @@ import json
 import logging
 from pathlib import Path
 
-from app.config import settings
+from app.paths import AGENTS_DIR
 from app.services.sandbox.runner import Policy
 from app.services.sandbox.runner import run_code as _run_sandbox_code
 
@@ -25,7 +25,7 @@ MAX_CTX_CHARS = 8000             # 事件上下文注入上限（防超长消息
 
 def agent_dir(agent_id: int) -> Path:
     """AI 文件空间（沙箱目录）——与 file_* 工具、OpenCLI 同源的唯一解析入口"""
-    return (Path(settings.agents_dir) / str(agent_id)).resolve()
+    return (AGENTS_DIR / str(agent_id)).resolve()
 
 
 def script_path(agent_id: int, rel_path: str) -> Path:

@@ -20,6 +20,7 @@ from app.services.sandbox.runner import (
     acquire_slot,
     base_env,
 )
+from app.paths import WORLDS_DIR
 from app.services.sandbox.runner import run_code as _run_sandbox_code
 
 logger = logging.getLogger(__name__)
@@ -63,8 +64,8 @@ def policy_for_world(world, background: bool = False) -> Policy:
 
 
 def _world_dir(world_id: int) -> Path:
-    """世界文件夹（与 world_file_service 同源：data/worlds/{id}/）"""
-    return (Path("data/worlds") / str(world_id)).resolve()
+    """世界文件夹（与 world_file_service 同源：数据根的 worlds/{id}/）"""
+    return (WORLDS_DIR / str(world_id)).resolve()
 
 
 def _sanitized_env(world, *, readonly: bool = False) -> dict:

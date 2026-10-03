@@ -170,8 +170,8 @@ assert doc_yaml_block.rstrip() == open(".github/workflows/test.yml").read().rstr
 沙箱起不来被吞成「执行过但没有回复」，断言看到的是 `handled=True, reply=''`，而不是一个报错。
 
 只要测试依赖**环境可写性**或**绝对路径**，就必须在 CI 上验证过才算数。
-修法是不让测试碰真实数据目录：`conftest.py` 在导入时把 `data_dir` 指向临时目录一次
-（`_isolate_data_dir`），用例与文档都不必再各自处理。
+修法是不让测试碰真实数据目录：`conftest.py` 在导入时把 `DATA_DIR` 指向临时目录一次，
+`app/paths.py` 与所有消费者都从它派生，用例与文档都不必再各自处理。
 
 #### ⑦ 忽略规则不锚定，等于把源码静默挡在仓库外
 
@@ -448,8 +448,8 @@ TEST_DATABASE_URL_SYNC = (
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ["DATABASE_URL_SYNC"] = TEST_DATABASE_URL_SYNC
 
-# 数据根目录指向临时目录：data_dir 是容器内的固定路径，非容器环境写不动
-_isolate_data_dir()
+# 数据根目录指向临时目录：容器内它是挂载点 /app/data，非容器环境写不动
+os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="copree-test-data-")
 
 
 @pytest.fixture(scope="session")

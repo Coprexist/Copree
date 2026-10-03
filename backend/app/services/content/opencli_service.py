@@ -15,6 +15,7 @@ from app.models.opencli import (
     OpenCLIDeniedCommand,
 )
 from app.config import settings
+from app.paths import AGENTS_DIR
 from app.repositories.content_repo import ContentRepository
 
 logger = logging.getLogger(__name__)
@@ -165,7 +166,7 @@ import os
 import shutil
 from pathlib import Path
 
-AGENTS_DATA_DIR = Path(settings.agents_dir)
+AGENTS_DATA_DIR = AGENTS_DIR
 
 
 def _resolve_agent_path(agent_id: int, file_path: str) -> Path:

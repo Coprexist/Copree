@@ -104,19 +104,12 @@ class Settings(BaseSettings):
         """检查某个 API base URL 是否支持 thinking/reasoning 参数"""
         return "deepseek.com" in base_url
 
-    @property
-    def data_dir(self) -> str:
-        """容器内文件存储路径（docker-compose bind mount 目标，非宿主机 DATA_DIR）"""
-        return "/app/data"
-
-    @property
-    def agents_dir(self) -> str:
-        """每个 AI 的独立文件空间根目录（也是它的代码沙箱目录）：data/agents/{agent_id}/
-
-        file_* 工具、OpenCLI 文件操作、run_script 沙箱都以此为准——同一个目录，
-        同一条边界，避免「工具能写的地方」和「脚本能跑的地方」各说各话。
-        """
-        return str(Path(self.data_dir) / "agents")
+    # ── 数据卷：数据库之外的运行时文件（上传、AI 文件空间、插件、世界、商城）──
+    # 同一个变量两种视角：宿主机上看到的是 .env 里的目录（compose 拿它做挂载源），
+    # 容器里看到的是挂载点 /app/data —— compose 的 backend.environment 把容器内那份钉死，
+    # 免得宿主路径漏进来（那样插件与世界的文件会写进容器可写层，重建即丢）。
+    # 子目录布局（agents/ worlds/ plugins/ market/ …）见 app/paths.py，别在模块里另写相对路径。
+    data_dir: str = "/app/data"
 
     # ── 文件上传 ──
     avatar_max_size_mb: int = 10

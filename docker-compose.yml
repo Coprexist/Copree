@@ -30,6 +30,10 @@ services:
       DATABASE_URL: postgresql+asyncpg://ai_chat:${DB_PASSWORD}@postgres:5432/ai_group_chat
       DATABASE_URL_SYNC: postgresql://ai_chat:${DB_PASSWORD}@postgres:5432/ai_group_chat
       JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      # 应用眼里的数据根目录 = 容器内的挂载点。.env 里的 DATA_DIR 是宿主机视角（compose 用它
+      # 做挂载源），不在这里钉死的话它会随 env_file 漏进容器，插件与世界的文件就会写进容器
+      # 可写层、重建即丢。
+      DATA_DIR: /app/data
       # 平台自带协议端（profile: napcat）时填这两项：插件据此把"地址 + token"标成托管字段，
       # 卡片上就不让用户填了。留空 = 用户自带协议端，字段照常显示。
       NAPCAT_WS_URL: ${NAPCAT_WS_URL:-}
