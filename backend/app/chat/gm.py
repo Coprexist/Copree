@@ -7,7 +7,7 @@
 import logging
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, and_, update, delete, func as sqlfunc
+from sqlalchemy import select, desc, and_, or_, update, delete, func as sqlfunc
 from app.models.group import Group, GroupMember
 from app.models.message import Message
 from app.models.agent import Agent as AgentModel
@@ -78,129 +78,198 @@ async def get_group(db: AsyncSession, group_id: int) -> Group | None:
 
 
 async def list_user_groups(db: AsyncSession, user_id: int) -> list[dict]:
-    """列出用户所属的群聊（含未读信息、公告摘要等）"""
+    """列出用户所属的群聊（含未读信息、公告摘要等）。
+
+    整批算：成员关系带群、未读数、点名、每个群最后一条、成员头像各一条查询。
+    侧栏每次刷新都要跑它，逐群查（二十几个群就是一百多条 SQL）会让列表刷新肉眼可见地卡。
+    """
     from app.models.user import User
+    from app.utils.message_serializer import make_preview, mention_names
+    from app.utils.text import mention_token, render_mention_names
 
-    result = await db.execute(
-        select(GroupMember).where(
-            GroupMember.member_type == "human",
-            GroupMember.member_id == user_id,
-        )
-    )
-    memberships = result.scalars().all()
+    # 成员关系连着群本身一起取（内连接：群没了就该跳过，与原先 db.get 取不到时 continue 一致）
+    pairs: list[tuple[GroupMember, Group]] = [
+        (m, g) for m, g in (await db.execute(
+            select(GroupMember, Group)
+            .join(Group, Group.id == GroupMember.group_id)
+            .where(GroupMember.member_type == "human", GroupMember.member_id == user_id)
+            .order_by(GroupMember.group_id)
+        )).all()
+    ]
+    if not pairs:
+        return []
+    group_ids = [g.id for _, g in pairs]
 
-    user_result = await db.execute(select(User).where(User.id == user_id))
-    user = user_result.scalar_one_or_none()
+    user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     username = user.username if user else ""
 
-    groups = []
-    for m in memberships:
-        group = await db.get(Group, m.group_id)
-        if not group:
-            continue
+    # 未读数按群分组一次算。基线是"上次读到哪"（没读过就按入群时间）：两个都为空时
+    # SQL 的 NULL 比较天然不成立，与原先"没有基线就记 0 条"同一结果
+    unread = {
+        gid: n for gid, n in (await db.execute(
+            select(Message.group_id, sqlfunc.count(Message.id))
+            .join(GroupMember, and_(
+                GroupMember.group_id == Message.group_id,
+                GroupMember.member_type == "human",
+                GroupMember.member_id == user_id,
+            ))
+            .where(Message.group_id.in_(group_ids))
+            .where(Message.created_at > sqlfunc.coalesce(GroupMember.last_read_at, GroupMember.joined_at))
+            .where(~((Message.sender_type == "human") & (Message.sender_id == user_id)))
+            .group_by(Message.group_id)
+        )).all()
+    }
 
+    # 点名只在有未读的群里找（没未读就不可能有"新消息里点了我"）。两种写法都算 @ 到我：
+    # 新的是 <@!id>（入口归一之后正文里就是它），旧的是 @名字（历史消息）
+    has_mention: set[int] = set()
+    unread_group_ids = [gid for gid, n in unread.items() if n > 0]
+    if username and unread_group_ids:
+        mention_rows = (await db.execute(
+            select(Message.group_id)
+            .join(GroupMember, and_(
+                GroupMember.group_id == Message.group_id,
+                GroupMember.member_type == "human",
+                GroupMember.member_id == user_id,
+            ))
+            .where(Message.group_id.in_(unread_group_ids))
+            .where(Message.created_at > sqlfunc.coalesce(GroupMember.last_read_at, GroupMember.joined_at))
+            .where(Message.content.contains(f"@{username}") | Message.content.contains(mention_token(user_id)))
+            .distinct()
+        )).all()
+        has_mention = {row[0] for row in mention_rows}
+
+    # 每个群最后一条：窗口函数按群排名取第一（逐群 limit 1 就是 N+1）
+    ranked = (
+        select(
+            Message.id.label("mid"),
+            sqlfunc.row_number().over(
+                partition_by=Message.group_id, order_by=Message.created_at.desc()
+            ).label("rn"),
+        )
+        .where(Message.group_id.in_(group_ids))
+        .subquery()
+    )
+    last_msgs: dict[int, Message] = {}
+    for msg in (await db.execute(
+        select(Message).join(ranked, Message.id == ranked.c.mid).where(ranked.c.rn == 1)
+    )).scalars().all():
+        last_msgs[msg.group_id] = msg
+
+    # 预览要的两样：正文里的 @ 令牌换成名字、"谁说的"换成名字。各自一条查询
+    names = await mention_names(db, [m.content for m in last_msgs.values()]) if last_msgs else {}
+    ai_sender_ids = {m.sender_id for m in last_msgs.values() if m.sender_type == "ai"}
+    human_sender_ids = {m.sender_id for m in last_msgs.values() if m.sender_type not in ("ai", "system")}
+    ai_names = {
+        r[0]: r[1] for r in (await db.execute(
+            select(AgentModel.user_id, AgentModel.name).where(AgentModel.user_id.in_(ai_sender_ids))
+        )).all()
+    } if ai_sender_ids else {}
+    human_names = {
+        r[0]: r[1] for r in (await db.execute(
+            select(User.id, User.username).where(User.id.in_(human_sender_ids))
+        )).all()
+    } if human_sender_ids else {}
+
+    # 成员头像：网格/默认模式每群最多 4 个，members 模式要全部（与原先一致）。
+    # 先一次把这批成员取回来，再各一条查询换头像——原先是一个成员一条
+    avatars_by_group: dict[int, list[str]] = {}
+    try:
+        members_all = {
+            g.id for _, g in pairs if (getattr(g, "avatar_mode", "default") or "default") == "members"
+        }
+        ranked_members = (
+            select(
+                GroupMember.group_id.label("gid"),
+                GroupMember.member_type.label("mtype"),
+                GroupMember.member_id.label("mid"),
+                sqlfunc.row_number().over(
+                    partition_by=GroupMember.group_id,
+                    order_by=(GroupMember.joined_at, GroupMember.member_id),
+                ).label("rn"),
+            )
+            .where(GroupMember.group_id.in_(group_ids))
+            .subquery()
+        )
+        avatar_cond = ranked_members.c.rn <= 4
+        if members_all:
+            avatar_cond = or_(avatar_cond, GroupMember.group_id.in_(members_all))
+        # 成员表没有单列主键，(group_id, member_type, member_id) 才是，按这三列回连
+        member_rows = (await db.execute(
+            select(GroupMember)
+            .join(ranked_members, and_(
+                GroupMember.group_id == ranked_members.c.gid,
+                GroupMember.member_type == ranked_members.c.mtype,
+                GroupMember.member_id == ranked_members.c.mid,
+            ))
+            .where(avatar_cond)
+            .order_by(GroupMember.group_id, GroupMember.member_type, GroupMember.member_id)
+        )).scalars().all()
+
+        ai_member_ids = {m.member_id for m in member_rows if m.member_type == "ai"}
+        human_member_ids = {m.member_id for m in member_rows if m.member_type != "ai"}
+        ai_avatars: dict[int, str | None] = {}
+        if ai_member_ids:
+            # 成员的 member_id 通常是 AI 的 user_id；少数历史数据存的是 agent.id，取不到再按 id 兜一次
+            for uid, url in (await db.execute(
+                select(AgentModel.user_id, AgentModel.avatar_url).where(AgentModel.user_id.in_(ai_member_ids))
+            )).all():
+                ai_avatars[uid] = url
+            missing = ai_member_ids - set(ai_avatars)
+            if missing:
+                for aid, url in (await db.execute(
+                    select(AgentModel.id, AgentModel.avatar_url).where(AgentModel.id.in_(missing))
+                )).all():
+                    ai_avatars[aid] = url
+        human_avatars: dict[int, str | None] = {}
+        if human_member_ids:
+            human_avatars = {
+                r[0]: r[1] for r in (await db.execute(
+                    select(User.id, User.avatar_url).where(User.id.in_(human_member_ids))
+                )).all()
+            }
+
+        # members 模式下按 include_ai_in_avatar 过滤（与原先逐群那套口径一致）
+        for _, g in pairs:
+            include_ai = getattr(g, "include_ai_in_avatar", True)
+            mode = getattr(g, "avatar_mode", "default") or "default"
+            urls: list[str] = []
+            for am in member_rows:
+                if am.group_id != g.id:
+                    continue
+                if mode == "members" and am.member_type == "ai" and not include_ai:
+                    continue
+                url = ai_avatars.get(am.member_id) if am.member_type == "ai" else human_avatars.get(am.member_id)
+                if url:
+                    urls.append(url)
+            avatars_by_group[g.id] = urls
+    except Exception:
+        logger.warning("批量取成员头像失败，这一批群的头像留空", exc_info=True)
+
+    groups = []
+    for m, group in pairs:
         announcement = None
         if group.announcement:
             announcement = group.announcement[:100] if len(group.announcement) > 100 else group.announcement
 
-        dnd_until = str(m.dnd_until) if m.dnd_until else None
+        unread_count = unread.get(group.id, 0)
 
-        unread_count = 0
-        has_mention = False
         last_message_preview = None
         last_message_at = None
-
-        read_baseline = m.last_read_at or m.joined_at
-        if read_baseline:
-            count_result = await db.execute(
-                select(sqlfunc.count(Message.id)).where(
-                    Message.group_id == group.id,
-                    Message.created_at > read_baseline,
-                    ~((Message.sender_type == "human") & (Message.sender_id == user_id)),
-                )
-            )
-            unread_count = count_result.scalar() or 0
-
-            if username and unread_count > 0:
-                from app.utils.text import mention_token
-
-                # 两种写法都算 @ 到我：新的是 <@!id>（入口归一之后正文里就是它），
-                # 旧的是 @名字（历史消息）
-                mention_result = await db.execute(
-                    select(Message).where(
-                        Message.group_id == group.id,
-                        Message.created_at > read_baseline,
-                        (
-                            Message.content.contains(f"@{username}")
-                            | Message.content.contains(mention_token(user_id))
-                        ),
-                    ).limit(1)
-                )
-                has_mention = mention_result.scalar_one_or_none() is not None
-
-        last_msg_result = await db.execute(
-            select(Message).where(
-                Message.group_id == group.id,
-            ).order_by(Message.created_at.desc()).limit(1)
-        )
-        last_msg = last_msg_result.scalar_one_or_none()
+        last_msg = last_msgs.get(group.id)
         if last_msg:
             last_message_at = str(last_msg.created_at) if last_msg.created_at else None
-            from app.utils.message_serializer import make_preview, mention_names
-            from app.utils.text import render_mention_names
-
             # 正文里存的是 <@!id>（聊天界面由前端渲染成名字）；这里是"顺手给人看"的地方，后端自己换
-            names = await mention_names(db, [last_msg.content])
             preview = make_preview(
                 render_mention_names(last_msg.content or "", names), last_msg.attachments, max_len=50
             )
             if last_msg.sender_type == "ai":
-                a_result = await db.execute(select(AgentModel).where(AgentModel.user_id == last_msg.sender_id))
-                a = a_result.scalar_one_or_none()
-                sender = a.name if a else "AI"
+                sender = ai_names.get(last_msg.sender_id) or "AI"
             elif last_msg.sender_type == "system":
                 sender = "系统"
             else:
-                u = await db.get(User, last_msg.sender_id)
-                sender = u.username if u else "用户"
+                sender = human_names.get(last_msg.sender_id) or "用户"
             last_message_preview = f"{sender}: {preview}"
-
-        member_avatars: list[str] = []
-        try:
-            # 仅 members 模式需要全部成员头像用于展示，其他模式取前4个做 2×2 网格
-            avatar_mode = getattr(group, 'avatar_mode', 'default') or 'default'
-            avatar_query = select(GroupMember).where(
-                GroupMember.group_id == group.id,
-            )
-            if avatar_mode != 'members':
-                avatar_query = avatar_query.limit(4)
-            avatar_result = await db.execute(avatar_query)
-            avatar_members = avatar_result.scalars().all()
-
-            # members 模式下按 include_ai_in_avatar 过滤
-            include_ai = getattr(group, 'include_ai_in_avatar', True)
-            for am in avatar_members:
-                if avatar_mode == 'members' and am.member_type == "ai" and not include_ai:
-                    continue
-                a_url = None
-                if am.member_type == "ai":
-                    a_result = await db.execute(
-                        select(AgentModel).where(AgentModel.user_id == am.member_id)
-                    )
-                    a = a_result.scalar_one_or_none()
-                    if a is None:
-                        a_result = await db.execute(
-                            select(AgentModel).where(AgentModel.id == am.member_id)
-                        )
-                        a = a_result.scalar_one_or_none()
-                    a_url = getattr(a, 'avatar_url', None) if a else None
-                else:
-                    u = await db.get(User, am.member_id)
-                    a_url = getattr(u, 'avatar_url', None) if u else None
-                if a_url:
-                    member_avatars.append(a_url)
-        except Exception:
-            logger.warning("获取群聊 %d 成员头像失败，跳过", group.id, exc_info=True)
 
         groups.append({
             "id": group.id,
@@ -213,11 +282,11 @@ async def list_user_groups(db: AsyncSession, user_id: int) -> list[dict]:
             "speak_limit_window_seconds": group.speak_limit_window_seconds or 120,
             "my_role": m.role,
             "unread_count": unread_count,
-            "has_mention": has_mention,
+            "has_mention": group.id in has_mention,
             "last_message_preview": last_message_preview,
             "last_message_at": last_message_at,
-            "dnd_until": dnd_until,
-            "member_avatars": member_avatars,
+            "dnd_until": str(m.dnd_until) if m.dnd_until else None,
+            "member_avatars": avatars_by_group.get(group.id, []),
             "avatar_mode": group.avatar_mode or "default",
             "avatar_url": group.avatar_url,
             "include_ai_in_avatar": group.include_ai_in_avatar,

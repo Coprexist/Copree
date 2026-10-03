@@ -183,7 +183,12 @@ async def get_or_create_dm_session(
 
 
 async def list_dm_sessions(db: AsyncSession, user_id: int) -> list[dict]:
-    """获取用户的所有私信会话列表"""
+    """获取用户的所有私信会话列表。
+
+    整批算：对方资料、未读数、每个会话最后一条、联邦标记各一条查询。
+    原先每个会话各查一轮（资料 + 未读 + 最后一条 + 联邦标记），一屏会话就是几十条 SQL，
+    而侧栏、未读计数、弹窗缓存都要拿它。
+    """
     result = await db.execute(
         select(DMSession).where(
             or_(
@@ -193,55 +198,74 @@ async def list_dm_sessions(db: AsyncSession, user_id: int) -> list[dict]:
         ).order_by(DMSession.last_message_at.desc().nullslast())
     )
     sessions = result.scalars().all()
+    if not sessions:
+        return []
+
+    session_ids = [s.session_id for s in sessions]
+
+    partners = await _partners_info(db, [
+        s.user2_id if s.user1_id == user_id else s.user1_id for s in sessions
+    ])
+
+    unread = {
+        sid: n for sid, n in (await db.execute(
+            select(DMMessage.session_id, func.count(DMMessage.id)).where(
+                DMMessage.session_id.in_(session_ids),
+                DMMessage.sender_id != user_id,
+                DMMessage.read_at.is_(None),
+            ).group_by(DMMessage.session_id)
+        )).all()
+    }
+
+    # 最后一条：last_message_id 本来就在会话行上，一次按 id 取回来
+    last_msgs: dict[int, DMMessage] = {}
+    names: dict[int, str] = {}
+    last_ids = [s.last_message_id for s in sessions if s.last_message_id]
+    if last_ids:
+        from app.utils.message_serializer import mention_names
+
+        last_msgs = {
+            m.id: m for m in (await db.execute(
+                select(DMMessage).where(DMMessage.id.in_(last_ids))
+            )).scalars().all()
+        }
+        names = await mention_names(db, [m.content for m in last_msgs.values()])
+
+    federated = {
+        row[0] for row in (await db.execute(
+            select(FederatedEntity.local_ref_id).where(
+                FederatedEntity.entity_type == "dm",
+                FederatedEntity.local_ref_id.in_(session_ids),
+                FederatedEntity.is_enabled == True,
+            )
+        )).all()
+    }
+
+    from app.utils.message_serializer import make_preview
+    from app.utils.text import render_mention_names
 
     dm_list = []
     for s in sessions:
         partner_id = s.user2_id if s.user1_id == user_id else s.user1_id
-        partner = await _get_partner_info(db, partner_id)
-
-        unread_result = await db.execute(
-            select(func.count(DMMessage.id)).where(
-                DMMessage.session_id == s.session_id,
-                DMMessage.sender_id != user_id,
-                DMMessage.read_at.is_(None),
-            )
-        )
-        unread_count = unread_result.scalar() or 0
-
         my_dnd_until = s.user1_dnd_until if s.user1_id == user_id else s.user2_dnd_until
 
-        last_msg = None
-        if s.last_message_id:
-            last_result = await db.execute(
-                select(DMMessage).where(DMMessage.id == s.last_message_id)
+        last_msg = last_msgs.get(s.last_message_id) if s.last_message_id else None
+        last_message_preview = None
+        if last_msg:
+            last_message_preview = make_preview(
+                render_mention_names(last_msg.content or "", names), last_msg.attachments, max_len=100
             )
-            msg = last_result.scalar_one_or_none()
-            if msg:
-                from app.utils.message_serializer import make_preview, mention_names
-                from app.utils.text import render_mention_names
-
-                names = await mention_names(db, [msg.content])
-                last_msg = make_preview(
-                    render_mention_names(msg.content or "", names), msg.attachments, max_len=100
-                )
-
-        fed_check = await db.execute(
-            select(FederatedEntity).where(
-                FederatedEntity.entity_type == "dm",
-                FederatedEntity.local_ref_id == s.session_id,
-                FederatedEntity.is_enabled == True,
-            )
-        )
-        is_federated = fed_check.first() is not None
 
         dm_list.append({
             "session_id": s.session_id,
-            "partner": partner,
-            "last_message_preview": last_msg,
+            "partner": partners.get(partner_id) or {
+                "id": partner_id, "name": f"未知:{partner_id}", "type": "unknown", "state": None,
+            },
+            "last_message_preview": last_message_preview,
             "last_message_at": str(s.last_message_at) if s.last_message_at else None,
-            "unread_count": unread_count,
+            "unread_count": unread.get(s.session_id, 0),
             "my_dnd_until": str(my_dnd_until) if my_dnd_until else None,
-            "is_federated": is_federated,
+            "is_federated": s.session_id in federated,
             "is_pinned": False,
         })
 
@@ -501,47 +525,75 @@ async def is_user_in_dm_dnd(db: AsyncSession, session_id: str, user_id: int) -> 
 # 内部工具函数
 # ============================================================
 
-async def _get_partner_info(db: AsyncSession, user_id: int) -> dict:
-    """获取用户信息（含在线状态，AI 则查 agent 表）"""
-    user_result = await db.execute(select(User).where(User.id == user_id))
-    user = user_result.scalar_one_or_none()
-    if user is None:
-        return {"id": user_id, "name": f"未知:{user_id}", "type": "unknown", "state": None}
+async def _partners_info(db: AsyncSession, user_ids) -> dict[int, dict]:
+    """一次取齐多份「对方资料」（含在线状态，AI 则取 agent 表）。
 
-    name = user.username
-    state = None
-    avatar_url = getattr(user, 'avatar_url', None)
-    status_text = getattr(user, 'status_text', None)
-    status_color = getattr(user, 'status_color', None)
-    if user.type == "ai":
-        # 顺手取 Agent.name：显示名以 agents.name 为准（users.username 只是建号快照，改名不动它）
-        agent_result = await db.execute(
-            select(Agent.name, Agent.state, Agent.avatar_url, Agent.status_text, Agent.status_color).where(Agent.user_id == user_id)
-        )
-        agent_row = agent_result.one_or_none()
-        if agent_row:
-            name = (agent_row[0] or "").strip() or name
-            state = agent_row[1]
-            avatar_url = agent_row[2] or avatar_url
-            if agent_row[3]:
-                status_text = agent_row[3]
-            if agent_row[4]:
-                status_color = agent_row[4]
-    else:
-        from app.services.infrastructure.online_tracker import get_user_online_status
-        if get_user_online_status(user_id):
-            state = "active"
+    私信列表原先每个会话都要查一轮对方资料，一屏会话就是十几条 SQL；这里两条覆盖全部。
+    """
+    ids = list({int(i) for i in user_ids})
+    if not ids:
+        return {}
 
-    return {
-        "id": user.id,
-        "name": name,
-        "type": user.type,
-        "state": state,
-        "avatar_url": avatar_url,
-        "status_text": status_text,
-        "status_color": status_color,
-        "last_active_at": getattr(user, "last_active_at", None) and str(user.last_active_at),
+    rows = {
+        r[0]: r for r in (await db.execute(
+            select(
+                User.id, User.username, User.type, User.avatar_url,
+                User.status_text, User.status_color, User.last_active_at,
+            ).where(User.id.in_(ids))
+        )).all()
     }
+
+    # 顺手取 Agent.name：显示名以 agents.name 为准（users.username 只是建号快照，改名不动它）
+    agents: dict[int, tuple] = {}
+    ai_ids = [uid for uid, r in rows.items() if r[2] == "ai"]
+    if ai_ids:
+        agents = {
+            r[0]: r for r in (await db.execute(
+                select(
+                    Agent.user_id, Agent.name, Agent.state, Agent.avatar_url,
+                    Agent.status_text, Agent.status_color,
+                ).where(Agent.user_id.in_(ai_ids))
+            )).all()
+        }
+
+    from app.services.infrastructure.online_tracker import get_user_online_status
+
+    out: dict[int, dict] = {}
+    for uid in ids:
+        row = rows.get(uid)
+        if row is None:
+            out[uid] = {"id": uid, "name": f"未知:{uid}", "type": "unknown", "state": None}
+            continue
+        name, state = row[1], None
+        avatar_url, status_text, status_color = row[3], row[4], row[5]
+        if row[2] == "ai":
+            agent_row = agents.get(uid)
+            if agent_row:
+                name = (agent_row[1] or "").strip() or name
+                state = agent_row[2]
+                avatar_url = agent_row[3] or avatar_url
+                if agent_row[4]:
+                    status_text = agent_row[4]
+                if agent_row[5]:
+                    status_color = agent_row[5]
+        elif get_user_online_status(uid):
+            state = "active"
+        out[uid] = {
+            "id": uid,
+            "name": name,
+            "type": row[2],
+            "state": state,
+            "avatar_url": avatar_url,
+            "status_text": status_text,
+            "status_color": status_color,
+            "last_active_at": row[6] and str(row[6]),
+        }
+    return out
+
+
+async def _get_partner_info(db: AsyncSession, user_id: int) -> dict:
+    """获取用户信息（单个；批量版之上的薄封装，实现只有一处）"""
+    return (await _partners_info(db, [user_id]))[user_id]
 
 
 async def _get_messages(db: AsyncSession, session_id: str, limit: int = 50,
