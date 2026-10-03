@@ -134,6 +134,10 @@ const EXPORT_SCRIPT = [
   '    var next = values[(values.indexOf(group.getAttribute("data-value")) + 1) % values.length]',
   '    group.setAttribute("data-value", next)',
   '    button.setAttribute("data-value", next)',
+  '    /* 页面上还有跟着这组状态走的元素（比如图例），一并同步 */',
+  '    document.querySelectorAll("[data-switch-mirror]").forEach(function (el) {',
+  '      if (el.getAttribute("data-switch-mirror") === group.id) el.setAttribute("data-value", next)',
+  '    })',
   '  })',
   '})',
   '</script>',
@@ -149,8 +153,10 @@ const escapeHtml = (text: string) => text.replace(/[&<>"]/g, c => HTML_ESCAPES[c
  */
 export function saveElementAsHtml(el: HTMLElement, filename: string, title: string): void {
   const clone = el.cloneNode(true) as HTMLElement
-  // 页面上这块靠布局限高滚动（max-h-[70vh] overflow-y-auto），导出件要自然展开
+  // 导出件是一整页，不再受页面里那块的高度限制
   clone.className = 'exported-log-body'
+  // 站内专有的按钮（下载 JSON / Markdown / HTML）在导出件里点了也没用，整块摘掉
+  clone.querySelectorAll('[data-export-skip]').forEach(node => node.remove())
   absolutizeUrls(clone)
 
   // 瘦身：每条的「原文」和整段「原始 JSON」不在文件里存第二遍——清空，打开时按紧凑数据现算

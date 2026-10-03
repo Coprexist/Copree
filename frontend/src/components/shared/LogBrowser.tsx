@@ -5,7 +5,7 @@
  * 点进去看这段状态的最近一次完整请求体、与上一条的增量、以及这段状态的历史。
  * 「停在哪段状态、看的是哪一条」写进查询参数（state / log），刷新和后退都回到原地。
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Loader2 } from 'lucide-react'
 import { api } from '../../api/client'
@@ -62,8 +62,14 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
   const [delta, setDelta] = useState<any>(null)
   const [bodyLoading, setBodyLoading] = useState(false)
   const [showDelta, setShowDelta] = useState(false)
-  /** 正文那块已渲染的 DOM：下载 HTML 时直接序列化它，导出件才跟所见一致 */
-  const bodyRef = useRef<HTMLDivElement>(null)
+  /**
+   * 导出用的 DOM：连按钮那一行一起序列化（导出件里「原始 JSON」的开关在那里），
+   * 站内专有的下载按钮标了 data-export-skip，导出时会被摘掉
+   */
+  const exportRef = useRef<HTMLDivElement>(null)
+  const [rawBody, setRawBody] = useState(false)
+  // 「原始 JSON」按钮在这一行、开关组在正文里，两边靠这个 id 对上（见 RequestBodyViewer）
+  const rawSwitchId = useId()
 
   const stateKey = searchParams.get('state')
   const wantedLogId = Number(searchParams.get('log')) || null
@@ -95,6 +101,7 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
     let alive = true
     setBodyLoading(true)
     setShowDelta(false)
+    setRawBody(false)
     const path = `${basePath}/agents/${agentId}/logs/${currentId}`
     Promise.all([
       api.get(path),
@@ -122,7 +129,7 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
    * 也正因为纯前端，管理台的日志浏览器同样能用。
    */
   const exportHtml = () => {
-    const el = bodyRef.current
+    const el = exportRef.current
     if (!el || !currentId) return
     saveElementAsHtml(el, 'log-' + currentId + '.html', '#' + currentId)
   }
@@ -225,7 +232,7 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
           ))}
         </aside>
 
-        <div className="flex-1 min-w-0">
+        <div ref={exportRef} className="flex-1 min-w-0">
           {currentId && (
             <div className="flex items-center gap-2 mb-2">
               <span className="text-3xs font-mono text-textMuted">#{currentId}</span>
@@ -233,6 +240,7 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
                 <>
                   <button
                     type="button"
+                    data-export-skip
                     onClick={() => exportLog(currentId, 'json')}
                     className="text-3xs text-textMuted hover:text-textSecondary transition-colors"
                   >
@@ -240,6 +248,7 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
                   </button>
                   <button
                     type="button"
+                    data-export-skip
                     onClick={() => exportLog(currentId, 'md')}
                     className="text-3xs text-textMuted hover:text-textSecondary transition-colors"
                   >
@@ -249,6 +258,7 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
               )}
               <button
                 type="button"
+                data-export-skip
                 onClick={exportHtml}
                 disabled={detail === null}
                 title={t('logs:downloadHtmlHint')}
@@ -256,10 +266,23 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
               >
                 {t('logs:downloadHtml')}
               </button>
+              {/* 原始 JSON 的开关跟下载按钮并排；改变量视图里没有整段 JSON，那条路上不摆 */}
+              {!showDelta && (
+                <button
+                  type="button"
+                  onClick={() => setRawBody(v => !v)}
+                  data-switch={rawSwitchId}
+                  data-value={rawBody ? 'raw' : 'segments'}
+                  className="ml-auto text-3xs px-1.5 py-0.5 rounded border border-border text-textMuted hover:text-textSecondary transition-colors"
+                >
+                  <span data-when="segments">{t('logs:viewRaw')}</span>
+                  <span data-when="raw">{t('logs:viewSegments')}</span>
+                </button>
+              )}
             </div>
           )}
           {/* 正文自己滚（跟左边历史一样封顶）：两栏各滑各的，整块不再拖成一条长页 */}
-          <div ref={bodyRef} className="max-h-[70vh] overflow-y-auto pr-1">
+          <div className="max-h-[70vh] overflow-y-auto pr-1">
           {bodyLoading ? (
             <div className="flex items-center gap-2 text-xs text-textMuted py-6 justify-center">
               <Loader2 size={13} className="animate-spin" /> {t('common.loading')}
@@ -292,7 +315,13 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
               ))}
             </div>
           ) : (
-            <RequestBodyViewer messages={detail?.messages || []} mentionNames={detail?.mention_names} />
+            <RequestBodyViewer
+              raw={rawBody}
+              onToggleRaw={() => setRawBody(v => !v)}
+              rawSwitchId={rawSwitchId}
+              messages={detail?.messages || []}
+              mentionNames={detail?.mention_names}
+            />
           )}
           </div>
         </div>

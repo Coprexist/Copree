@@ -338,7 +338,7 @@ function Body({ text, mono = false, names }: { text: string; mono?: boolean; nam
   )
 }
 
-export default function RequestBodyViewer({ messages, className = '', legend = true, tone = 'normal', mentionNames }: {
+export default function RequestBodyViewer({ messages, className = '', legend = true, tone = 'normal', mentionNames, raw, onToggleRaw, rawSwitchId }: {
   messages: any[]
   className?: string
   /** 拼在改变量里时不重复摆图例和原始 JSON 开关（一屏摆好几截，图例只该出现一次） */
@@ -346,12 +346,22 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
   tone?: Tone
   /** `<@!id>` → 名字（后端随日志详情给）；没有就退回 `@用户N` */
   mentionNames?: MentionNames
+  /**
+   * 受控的「原始 JSON」视图：给了 onToggleRaw 就说明按钮摆在调用方那一行
+   * （要跟下载按钮并排），这里不再自己摆一个；rawSwitchId 是两边共用的开关组 id
+   */
+  raw?: boolean
+  onToggleRaw?: () => void
+  rawSwitchId?: string
 }) {
   const t = useT()
   const list = Array.isArray(messages) ? messages : []
-  const [raw, setRaw] = useState(false)
-  // 分段视图与原始 JSON 也是一组视图：关系同样留在 DOM 上，导出件才切得动
-  const viewId = useId()
+  const [innerRaw, setInnerRaw] = useState(false)
+  const showRaw = onToggleRaw ? Boolean(raw) : innerRaw
+  // 分段视图与原始 JSON 也是一组视图：关系同样留在 DOM 上，导出件才切得动；
+  // 按钮被搬到调用方那一行时，开关组的 id 由调用方给，两边仍指向同一组
+  const autoId = useId()
+  const viewId = rawSwitchId ?? autoId
   // 导出件里「原始 JSON」与每条的「原文」都按这份紧凑数据现算，不在文件里重复存两遍；
   // 把 < 转义掉是为了内容里出现 </script> 时不会提前结束这个标签
   const logJson = useMemo(() => JSON.stringify(list).replace(/</g, '\\u003c'), [list])
@@ -424,7 +434,7 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
     <div className={`space-y-2 ${className}`}>
       {/* 数据只存一份：导出件打开时按这份紧凑 JSON 现算「原始 JSON」与每条「原文」 */}
       <script type="application/json" data-log-json dangerouslySetInnerHTML={{ __html: logJson }} />
-      {legend && <div className="flex items-center gap-2 flex-wrap" data-value={raw ? 'raw' : 'segments'}>
+      {legend && <div className="flex items-center gap-2 flex-wrap" data-value={showRaw ? 'raw' : 'segments'} data-switch-mirror={viewId}>
         <div className="flex items-center gap-2 flex-wrap" data-when="segments">
         {(Object.keys(STYLES) as Kind[]).map(kind => (
           <span key={kind} className="flex items-center gap-1 text-3xs text-textMuted">
@@ -433,19 +443,22 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
           </span>
         ))}
         </div>
-        <button
-          type="button"
-          onClick={() => setRaw(v => !v)}
-          data-switch={viewId}
-          data-value={raw ? 'raw' : 'segments'}
-          className="ml-auto text-3xs px-1.5 py-0.5 rounded border border-border text-textMuted hover:text-textSecondary transition-colors"
-        >
-          <span data-when="segments">{t('logs:viewRaw')}</span>
-          <span data-when="raw">{t('logs:viewSegments')}</span>
-        </button>
+        {/* 受控时按钮在调用方那一行（跟下载按钮并排），这里就不重复摆了 */}
+        {!onToggleRaw && (
+          <button
+            type="button"
+            onClick={() => setInnerRaw(v => !v)}
+            data-switch={viewId}
+            data-value={showRaw ? 'raw' : 'segments'}
+            className="ml-auto text-3xs px-1.5 py-0.5 rounded border border-border text-textMuted hover:text-textSecondary transition-colors"
+          >
+            <span data-when="segments">{t('logs:viewRaw')}</span>
+            <span data-when="raw">{t('logs:viewSegments')}</span>
+          </button>
+        )}
       </div>}
       {/* 两份视图都在 DOM 里：导出件没有 React，切「原始 JSON」只能靠 data-value */}
-      <div id={viewId} data-value={raw ? 'raw' : 'segments'} className="switch">
+      <div id={viewId} data-value={showRaw ? 'raw' : 'segments'} className="switch">
         <div data-case="segments" className="space-y-1.5">
           {blocks.map((block, i) => (
             <Block key={i} index={i} msgIndex={block.msgIndex} kind={block.kind} title={block.title} source={block.source} marks={block.marks} tone={tone}>
