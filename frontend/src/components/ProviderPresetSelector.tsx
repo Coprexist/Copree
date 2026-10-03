@@ -453,7 +453,7 @@ function ProviderEditForm({
               type="text" value={editGlobalWorkModel}
               onChange={e => setEditGlobalWorkModel(e.target.value)}
               className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-textPrimary text-xs focus:outline-none focus:ring-2 focus:ring-primary-500/60"
-              placeholder="例如：glm-4.7-flash"
+              placeholder="例如：glm-5.3-flash"
             />
           </div>
         </div>

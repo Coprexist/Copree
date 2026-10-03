@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
 import { useT } from '../i18n/I18nContext'
 import Toggle from '../components/Toggle'
+import ComboBox from '../components/ui/ComboBox'
 import { IN_APP_NOTIFICATION_KEY } from '../hooks/useNotificationSocket'
 import MagicVisionFilter from '../components/MagicVisionFilter.tsx'
 import ThemeCustomizer from '../components/ThemeCustomizer'
@@ -134,8 +135,10 @@ export default function SettingsPage() {
   // 当前 base_url 对应的预设 + 模型下拉候选（预设模型列表 ∪ 当前值，去重）
   const curPreset = providerPresets.find(p => p.base_url === apiBaseUrl)
   const presetModelValues = (curPreset?.models || []).map(m => m.value)
-  const allChatOptions = [...new Set([curPreset?.chat_model, ...presetModelValues, globalChatModel].filter(Boolean))]
-  const allWorkOptions = [...new Set([curPreset?.work_model, ...presetModelValues, globalWorkModel].filter(Boolean))]
+  const isName = (v: string | undefined): v is string => Boolean(v)
+  // 候选只列"清单里有的模型"：把当前值也塞进去的话，输入到一半的串会自己变成一条候选
+  const allChatOptions = [...new Set([curPreset?.chat_model, ...presetModelValues].filter(isName))]
+  const allWorkOptions = [...new Set([curPreset?.work_model, ...presetModelValues].filter(isName))]
   // 选预设：填 base_url + 自动填模型。仅当当前值为空、或值本身来自某个预设时才覆盖，
   // 用户手写的自定义模型不被冲掉。判定无状态 → 刷新页面后依然成立
   // （此前用 chatModelManual 记忆"是否手动改过"，刷新即丢失，自定义模型会被预设冲掉）
@@ -606,7 +609,9 @@ export default function SettingsPage() {
                         : 'bg-canvas border-border text-textSecondary hover:text-textPrimary hover:border-primary-500/30'
                     }`}
                   >
-                    {p.name}{p.is_default ? <Star size={10} className="fill-current text-accent-400" /> : null}
+                    {p.name}
+                    {/* 行内 SVG 默认按基线对齐，会明显低于文字：显式居中，再补一点左间距 */}
+                    {p.is_default && <Star size={10} className="relative -top-px ml-1 inline fill-current text-accent-400" />}
                   </button>
                 ))}
               </div>
@@ -685,34 +690,24 @@ export default function SettingsPage() {
               <label className="block text-xs font-medium mb-1.5 text-textSecondary">
                 全局默认聊天模型（覆盖）
               </label>
-              <input
-                type="text"
+              <ComboBox
                 value={globalChatModel}
-                onChange={(e) => setGlobalChatModel(e.target.value)}
-                list="chat-model-options"
-                className="w-full px-3.5 py-2.5 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
-                placeholder="例如：mimo-v2.5"
+                onValueChange={setGlobalChatModel}
+                options={allChatOptions}
+                placeholder="例如：mimo-v2.6-flash"
               />
-              <datalist id="chat-model-options">
-                {allChatOptions.map(m => <option key={m} value={m} />)}
-              </datalist>
               <p className="text-3xs text-textMuted mt-1">留空则使用系统全局默认</p>
             </div>
             <div>
               <label className="block text-xs font-medium mb-1.5 text-textSecondary">
                 全局默认工作模型（覆盖）
               </label>
-              <input
-                type="text"
+              <ComboBox
                 value={globalWorkModel}
-                onChange={(e) => setGlobalWorkModel(e.target.value)}
-                list="work-model-options"
-                className="w-full px-3.5 py-2.5 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
-                placeholder="例如：mimo-v2.5-pro"
+                onValueChange={setGlobalWorkModel}
+                options={allWorkOptions}
+                placeholder="例如：mimo-v2.6-pro"
               />
-              <datalist id="work-model-options">
-                {allWorkOptions.map(m => <option key={m} value={m} />)}
-              </datalist>
               <p className="text-3xs text-textMuted mt-1">留空则使用系统全局默认</p>
             </div>
           </div>
