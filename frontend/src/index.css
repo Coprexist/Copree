@@ -292,19 +292,18 @@
   /* 日志正文里的行内标签：历史行的 [时间] 谁（id=N） 与 <@!id>，跟块头的小标签同族 */
   .log-tag,
   .log-who,
-  .log-id,
   .mention-chip {
     @apply inline-block px-1.5 py-0.5 rounded-full align-baseline text-3xs whitespace-nowrap;
   }
-  .log-tag,
-  .log-id {
+  .log-tag {
     @apply bg-black/5 dark:bg-white/10 text-textMuted;
   }
-  .log-id {
-    @apply font-mono;
-  }
+  /* 说话人：名字与 id 同框，id 压成灰色等宽，念名字时不被 id 打断 */
   .log-who {
-    @apply bg-primary-500/10 text-primary-400;
+    @apply inline-flex items-baseline gap-1 bg-primary-500/10 text-primary-400;
+  }
+  .log-who-id {
+    @apply font-mono text-textMuted;
   }
   /* @ 标签：正文里的 <@!id>（聊天与日志共用 .mention-chip 这个名字） */
   .mention-chip {

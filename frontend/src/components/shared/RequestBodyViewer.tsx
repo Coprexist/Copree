@@ -125,9 +125,9 @@ function renderLine(content: string, names: MentionNames | undefined, unknown: s
   const speaker = SPEAKER_RE.exec(rest)
   if (!speaker) return `${tag} ${renderMentionChips(rest, names || {}, unknown)}`
   const withId = SPEAKER_ID_RE.exec(speaker[1])
-  const who = `<span class="log-who">${escapeHtml(withId ? withId[1] : speaker[1])}</span>`
-  const whoId = withId ? ` <span class="log-id">#${withId[2]}</span>` : ''
-  return `${tag} ${who}${whoId} ${renderMentionChips(speaker[2], names || {}, unknown)}`
+  const whoId = withId ? `<span class="log-who-id">#${withId[2]}</span>` : ''
+  const who = `<span class="log-who">${escapeHtml(withId ? withId[1] : speaker[1])}${whoId}</span>`
+  return `${tag} ${who} ${renderMentionChips(speaker[2], names || {}, unknown)}`
 }
 
 function toolName(call: any): string {
