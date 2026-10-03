@@ -369,7 +369,7 @@
   .collapse-body {
     display: grid;
     grid-template-rows: 1fr;
-    transition: grid-template-rows 0.15s ease;
+    /* 高的过渡交给 JS（见 useSmoothHeights）：折叠与切视图走同一条，不在这里各写一份 */
     /* 一份长日志里几十个块的内容都挂在文档上，收放时要重排整篇；把影响圈在这块里 */
     contain: layout paint;
   }

@@ -5,7 +5,7 @@
  * 交接 / 人说的话 / AI 说的话 / 本轮工具 / 工具调用 / 工具返回 / 思考 / 收尾与报错。
  * 正文一律原样显示（不截断）：能当 Markdown 读的走 Markdown，JSON 走格式化，其余原样。
  */
-import { Fragment, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useId, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronRight } from 'lucide-react'
 import MarkdownContent from './MarkdownContent'
 import { useT } from '../../i18n/I18nContext'
@@ -246,8 +246,6 @@ function Block({ index, msgIndex, kind, title, source, marks = [], tone = 'norma
   // 折叠状态要能带出组件：导出件里没有 React，靠这两个属性把开关关系留在 DOM 上
   const bodyId = useId()
   const viewId = useId()
-  const viewRef = useRef<HTMLDivElement>(null)
-  useSwitchHeight(viewRef, showSource ? 'source' : 'rendered')
   return (
     <div className={`flex gap-2 rounded-control border ${style.box} overflow-hidden ${
       tone === 'removed' ? 'opacity-70 ring-1 ring-rose-500/30' : ''
@@ -297,10 +295,10 @@ function Block({ index, msgIndex, kind, title, source, marks = [], tone = 'norma
             </button>
           )}
         </div>
-        <div id={bodyId} data-open={open} className="collapse-body">
+        <div id={bodyId} data-open={open} data-smooth-height className="collapse-body">
           <div className="pt-1.5 min-w-0">
             {/* 两份视图都在 DOM 里：导出件没有 React，切「原文 / 渲染」只能靠 data-value */}
-            <div id={viewId} ref={viewRef} data-value={showSource ? 'source' : 'rendered'} className="switch">
+            <div id={viewId} data-smooth-height data-value={showSource ? 'source' : 'rendered'} className="switch">
               <div data-case="rendered">{children}</div>
               {source !== undefined && <div data-case="source"><Raw text={source || ''} lazy={'msg:' + msgIndex} /></div>}
             </div>
@@ -312,30 +310,44 @@ function Block({ index, msgIndex, kind, title, source, marks = [], tone = 'norma
 }
 
 /**
- * 两份视图切换时容器高度会跳（原文和渲染不一样高、分段和原始 JSON 差得更多）。
- * display 之间没法补间，所以量一下旧高度、过渡到新高度，过渡完把 height 交还给自动。
+ * 容器高度一变就平滑过渡过去，不逐个特判「这次是折叠、那次是切视图」——
+ * 只要高度变了就当作一次高度动画，否则每加一种会改高度的交互都要再补一处。
+ * 看的是高度本身（ResizeObserver），所以内容自己长高也算。
  */
-function useSwitchHeight(ref: React.RefObject<HTMLDivElement | null>, value: string) {
-  const prev = useRef<number | null>(null)
-  useLayoutEffect(() => {
-    const el = ref.current
-    if (!el) return
-    const to = el.offsetHeight
-    const from = prev.current
-    prev.current = to
-    if (from === null || from === to) return
-    el.style.overflow = 'hidden'
-    el.style.height = from + 'px'
-    void el.offsetHeight     // 先把旧高度坐实，否则这一帧的改动会被合并、过渡不触发
-    el.style.transition = 'height 0.18s ease'
-    el.style.height = to + 'px'
-    const timer = window.setTimeout(() => {
-      el.style.transition = ''
-      el.style.height = ''
-      el.style.overflow = ''
-    }, 240)
-    return () => window.clearTimeout(timer)
-  }, [value, ref])
+function useSmoothHeights(rootRef: React.RefObject<HTMLDivElement | null>, deps: React.DependencyList) {
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+    const stop: Array<() => void> = []
+    root.querySelectorAll<HTMLElement>('[data-smooth-height]').forEach(el => {
+      let prev = el.offsetHeight
+      let timer = 0
+      const ro = new ResizeObserver(() => {
+        const to = el.offsetHeight
+        if (to === prev) return
+        const from = prev
+        prev = to
+        // 动画期间先停掉观察：我们自己改高度也会惊动它，否则会自己追自己
+        ro.disconnect()
+        el.style.overflow = 'hidden'
+        el.style.height = from + 'px'
+        void el.offsetHeight
+        el.style.transition = 'height 0.18s ease'
+        el.style.height = to + 'px'
+        window.clearTimeout(timer)
+        timer = window.setTimeout(() => {
+          el.style.transition = ''
+          el.style.height = ''
+          el.style.overflow = ''
+          prev = el.offsetHeight
+          ro.observe(el)
+        }, 220)
+      })
+      ro.observe(el)
+      stop.push(() => { ro.disconnect(); window.clearTimeout(timer) })
+    })
+    return () => stop.forEach(fn => fn())
+  }, deps)
 }
 /**
  * 等宽原文块：JSON 格式化、机器文本、逐字原文都用它，样式只写一遍。
@@ -390,8 +402,6 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
   // 按钮被搬到调用方那一行时，开关组的 id 由调用方给，两边仍指向同一组
   const autoId = useId()
   const viewId = rawSwitchId ?? autoId
-  const switchRef = useRef<HTMLDivElement>(null)
-  useSwitchHeight(switchRef, showRaw ? 'raw' : 'segments')
   // 导出件里「原始 JSON」与每条的「原文」都按这份紧凑数据现算，不在文件里重复存两遍；
   // 把 < 转义掉是为了内容里出现 </script> 时不会提前结束这个标签
   const logJson = useMemo(() => JSON.stringify(list).replace(/</g, '\\u003c'), [list])
@@ -456,12 +466,16 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
     return out
   }, [list, mentionNames, t])
 
+  const rootRef = useRef<HTMLDivElement>(null)
+  // 折叠的块、两份视图都在这一层里：谁的高度变都给一段过渡（单一机制，不再逐个特判）
+  useSmoothHeights(rootRef, [blocks])
+
   if (list.length === 0) {
     return <p className={`text-xs text-textMuted ${className}`}>{t('logs:empty')}</p>
   }
 
   return (
-    <div className={className}>
+    <div ref={rootRef} className={className}>
       {/* 数据只存一份：导出件打开时按这份紧凑 JSON 现算「原始 JSON」与每条「原文」 */}
       <script type="application/json" data-log-json dangerouslySetInnerHTML={{ __html: logJson }} />
       {legend && <div className="flex items-center gap-2 flex-wrap pt-2 pb-2 sticky top-0 z-10 bg-surface" data-value={showRaw ? 'raw' : 'segments'} data-switch-mirror={viewId} data-export-stick-legend>
@@ -488,7 +502,7 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
         )}
       </div>}
       {/* 两份视图都在 DOM 里：导出件没有 React，切「原始 JSON」只能靠 data-value */}
-      <div id={viewId} ref={switchRef} data-value={showRaw ? 'raw' : 'segments'} className="switch">
+      <div id={viewId} data-smooth-height data-value={showRaw ? 'raw' : 'segments'} className="switch">
         <div data-case="segments" className="space-y-1.5">
           {blocks.map((block, i) => (
             <Block key={i} index={i} msgIndex={block.msgIndex} kind={block.kind} title={block.title} source={block.source} marks={block.marks} tone={tone}>
