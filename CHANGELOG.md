@@ -73,6 +73,7 @@
   「某个世界的目录」「某个 AI 的文件空间」也各收成一个函数（`world_dir()` / `agent_dir()`）——
   世界目录原来有 7 处各拼各的（文件服务、沙箱、常驻进程、世界页面路由、skill 沙箱、世界技能、
   群类型），注释写着"同源"其实是各写一份，拼法一有出入就是"同一个世界两份文件、文件不见了"；
+  路径与备份/恢复的语义汇总在 `docs/dev/data_layout.md`（手册与 CODE_WIKI 都从那里指过去）；
   容器内那份由 compose 的 `backend.environment` 显式钉成 `/app/data`（`environment` 盖过
   `env_file`，宿主路径不会再漏进来），镜像里也留了同一份默认值；不配 `DATA_DIR` 时的默认值
   也改成按部署布局推（容器内 `/app/data`、宿主机 `<repo>/data`）——原先写死 `/app/data`，

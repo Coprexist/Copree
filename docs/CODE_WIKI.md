@@ -419,8 +419,9 @@ async def lifespan(app: FastAPI):
 - `is_thinking_supported_for(base_url)` - 检查是否支持 thinking 模式
 - `get_runtime_setting() / set_runtime_setting()` - 运行时动态配置覆盖
 
-**文件布局**: [app/paths.py](../backend/app/paths.py) —— 数据根下的子目录只在这一处定义
-（agents/ worlds/ world_ai_skills/ plugins/ market/ backups/ …），模块里不再各写相对路径。
+**文件布局**: [app/paths.py](../backend/app/paths.py) —— 数据根下的子目录、实体目录
+（`world_dir` / `agent_dir`）都只在这一处定义，模块里不再各写相对路径。
+详见 [数据根与目录布局](./dev/data_layout.md)。
 
 ### 5.3 数据库层 (app/database.py)
 
