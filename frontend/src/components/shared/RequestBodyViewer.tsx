@@ -138,6 +138,37 @@ function renderLine(content: string, names: MentionNames | undefined, unknown: s
   return `${tag}${who}\n${renderMentionChips(speaker[2], names || {}, unknown)}`
 }
 
+/** 参数值：字符串直接当文本读（一坨 JSON 挤一行时，转义符比正文还多）；其余保持结构化等宽 */
+function ArgValue({ value }: { value: any }) {
+  return typeof value === 'string'
+    ? <Body text={value} />
+    : <Body text={JSON.stringify(value, null, 2)} mono />
+}
+
+/** 工具入参：按参数名拆开看，一个参数一块标签 */
+function ToolArgs({ args }: { args: string }) {
+  const parsed = useMemo(() => {
+    try {
+      const value = JSON.parse(args)
+      return value && typeof value === 'object' && !Array.isArray(value) ? value : null
+    } catch { return null }
+  }, [args])
+  const entries = parsed ? Object.entries(parsed) : []
+  if (entries.length === 0) return <Body text={args} mono />
+  return (
+    <div className="space-y-1.5">
+      {entries.map(([key, value]) => (
+        <div key={key} className="flex items-start gap-2">
+          <span className="shrink-0 text-3xs font-mono px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/10 text-textMuted">
+            {key}
+          </span>
+          <div className="flex-1 min-w-0"><ArgValue value={value} /></div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function toolName(call: any): string {
   return String(call?.function?.name || call?.name || call?.type || '?')
 }
@@ -269,9 +300,12 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
                 跟单独成块的「本轮工具」一个长相，同一句话不该有两种字体 */}
             {content.trim() && <Body text={content} mono />}
             {calls.map((call: any, ci: number) => (
-              <div key={ci}>
-                <div className="text-3xs font-mono text-textSecondary mb-0.5">{toolName(call)}</div>
-                <Body text={toolArgs(call)} mono />
+              <div key={ci} className="space-y-1">
+                {/* 函数名已经在块头了；一次带多个调用时才在正文里点出每个是谁的入参 */}
+                {calls.length > 1 && (
+                  <div className="text-3xs font-mono text-textSecondary">{toolName(call)}</div>
+                )}
+                <ToolArgs args={toolArgs(call)} />
               </div>
             ))}
           </div>
