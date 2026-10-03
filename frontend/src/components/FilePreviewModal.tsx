@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Download, X, ArrowLeft, FileIcon, Loader2, AlertTriangle, ZoomIn, ZoomOut, RotateCcw, Share2, Maximize2, Minimize2 } from 'lucide-react'
+import { Download, X, ArrowLeft, FileIcon, Loader2, AlertTriangle, ZoomIn, ZoomOut, RotateCcw, Share2, Maximize2, Minimize2, Eye, Code2 } from 'lucide-react'
 import { useT } from '../i18n/I18nContext'
 import { fileDownloadUrl } from '../api/client'
 import { formatFileSize } from '../utils/format'
@@ -7,6 +7,7 @@ import { isTextPreviewable, getCodeLang, isMarkdownFile, resolveMimeType, EXT_LA
 import MarkdownContent from './shared/MarkdownContent'
 import ForwardFileModal from './ForwardFileModal'
 import { Dialog, ResizeEdges } from './ui'
+import { useImageZoom, ZOOM_MIN, ZOOM_MAX } from '../hooks/useImageZoom'
 
 // FileCodeRenderer ——已迁移到 components/shared/CodeRenderer.tsx
 
@@ -27,9 +28,8 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
   const [content, setContent] = useState<string | null>(initialContent ?? null)
   const [loading, setLoading] = useState(initialContent == null)
   const [error, setError] = useState('')
-  // 图片缩放
-  const [scale, setScale] = useState(1)
-  const imgContainerRef = useRef<HTMLDivElement>(null)
+  // 图片缩放：倍率、滑块位置、图片尺寸都由它一处推出
+  const zoom = useImageZoom()
 
   const [forwardFile, setForwardFile] = useState<{file_id:number;name:string;size:number;mime_type:string}|null>(null)
   // 富文本（md/html/代码）渲染 ↔ 原文切换：看渲染效果或源码
@@ -198,87 +198,6 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
     return () => { cancelled = true }
   }, [fileId, previewable, dlUrl, fileName, onClose, t, isImage, isPDF, isDocx, codeLang, retry])
 
-  // 缩放滑块常量
-  const ZOOM_MIN = 0.5
-  const ZOOM_MAX = 4
-
-  // 缩放控制 — +/- 按钮
-  const zoomIn = useCallback(() => setScale((s) => Math.min(s + 0.25, ZOOM_MAX)), [])
-  const zoomOut = useCallback(() => setScale((s) => Math.max(s - 0.25, ZOOM_MIN)), [])
-  const zoomReset = useCallback(() => setScale(1), [])
-
-  // 缩放滑块 — ref 直写 DOM，跟 resize 一个模式
-  const sliderTrackRef = useRef<HTMLDivElement>(null)
-  const slidering = useRef(false)
-  const sliderDisplayRef = useRef<HTMLSpanElement>(null)
-
-  // 直接操作 img 和 slider DOM，不触发 React 重渲染
-  const applyZoom = useCallback((pct: number) => {
-    const s = ZOOM_MIN * Math.pow(ZOOM_MAX / ZOOM_MIN, pct)
-    // 缩略图
-    const thumb = sliderTrackRef.current?.querySelector<HTMLElement>('[data-role=zoom-thumb]')
-    if (thumb) thumb.style.left = (pct * 100) + '%'
-    // 填充条
-    const fill = sliderTrackRef.current?.querySelector<HTMLElement>('[data-role=zoom-fill]')
-    if (fill) fill.style.width = (pct * 100) + '%'
-    // 百分比显示
-    if (sliderDisplayRef.current) {
-      sliderDisplayRef.current.textContent = Math.round(s * 100) + '%'
-    }
-    // 图片
-    const img = imgContainerRef.current?.querySelector<HTMLElement>('img')
-    if (img) {
-      img.style.transform = `scale(${s})`
-      img.style.maxWidth = s <= 1 ? '100%' : 'none'
-      img.style.maxHeight = s <= 1 ? '100%' : 'none'
-    }
-    return s
-  }, [])
-
-  const doSliderMove = useCallback((e: MouseEvent) => {
-    const track = sliderTrackRef.current
-    if (!track || !slidering.current) return
-    const rect = track.getBoundingClientRect()
-    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
-    applyZoom(pct)
-  }, [applyZoom])
-
-  const doSliderEnd = useCallback(() => {
-    slidering.current = false
-    document.removeEventListener('mousemove', doSliderMove)
-    document.removeEventListener('mouseup', doSliderEnd)
-    // 松手后同步到 React state，供下次点击 +/- 或滚轮使用
-    const s = ZOOM_MIN * Math.pow(ZOOM_MAX / ZOOM_MIN,
-      parseFloat(sliderTrackRef.current?.querySelector<HTMLElement>('[data-role=zoom-thumb]')?.style.left || '50') / 100)
-    setScale(s)
-  }, [doSliderMove])
-
-  const startSlider = useCallback((e: React.MouseEvent) => {
-    e.preventDefault()
-    slidering.current = true
-    const track = sliderTrackRef.current
-    if (!track) return
-    const rect = track.getBoundingClientRect()
-    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
-    applyZoom(pct)
-    document.addEventListener('mousemove', doSliderMove)
-    document.addEventListener('mouseup', doSliderEnd)
-  }, [applyZoom, doSliderMove, doSliderEnd])
-
-  // 滚轮缩放
-  useEffect(() => {
-    if (!isImage) return
-    const el = imgContainerRef.current
-    if (!el) return
-    const onWheel = (e: WheelEvent) => {
-      if (e.ctrlKey || e.metaKey) {
-        e.preventDefault()
-        setScale((s) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, s - e.deltaY * 0.005)))
-      }
-    }
-    el.addEventListener('wheel', onWheel, { passive: false })
-    return () => el.removeEventListener('wheel', onWheel)
-  }, [isImage])
 
   const handleDownload = useCallback(() => {
     const a = document.createElement('a')
@@ -303,7 +222,7 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
   }
 
   const headerBar = (
-    <div className="flex items-center gap-3 px-4 h-12 border-b border-border bg-surface shrink-0 rounded-t-2xl">
+    <div className="flex items-center gap-2 md:gap-3 px-4 h-12 border-b border-border bg-surface shrink-0 rounded-t-2xl">
       <button
         onClick={onClose}
         className="icon-btn-sm -ml-1 text-textSecondary"
@@ -323,26 +242,31 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
       {isRichText && content !== null && (
         <button
           onClick={() => setShowSource((v) => !v)}
-          className="px-2 py-1 rounded-control text-xs border border-border bg-elevated hover:bg-border text-textSecondary transition-colors shrink-0"
-          title={showSource ? '查看渲染效果' : '查看原文源码'}
+          className="btn btn-xs btn-outline shrink-0"
+          title={showSource ? t('filePreview.viewRenderedHint') : t('filePreview.viewSourceHint')}
         >
-          {showSource ? '👁 渲染' : '📄 原文'}
+          {showSource ? <Eye size={14} /> : <Code2 size={14} />}
+          {showSource ? t('filePreview.viewRendered') : t('filePreview.viewSource')}
         </button>
       )}
 
-      {/* 图片缩放 — 滑块 + 按钮 */}
+      {/* 图片缩放 — 滑块 + 按钮，倍率、滑块位置、百分比都从同一个 state 推出 */}
       {isImage && (
-        <div className="flex items-center gap-2">
-          <button onClick={zoomOut} disabled={scale <= ZOOM_MIN}
+        <div className="flex items-center gap-1.5 sm:gap-2">
+          <button onClick={zoom.zoomOut} disabled={zoom.scale <= ZOOM_MIN}
             className="icon-btn-sm text-textSecondary" title={t('common.zoomOut')}>
-            <ZoomOut size={16} />
+            <ZoomOut size={14} />
           </button>
 
-          {/* 可拖拽缩放滑块 */}
+          {/* h-10 + -my-2：命中区撑到 40px 而布局仍占 24px，手机上手指按得准；
+              touch-none 把手指拖动交给指针捕获，不然浏览器会当成滚动 */}
           <div
-            ref={sliderTrackRef}
-            onMouseDown={startSlider}
-            className="relative w-24 h-6 flex items-center cursor-pointer select-none"
+            ref={zoom.sliderRef}
+            onPointerDown={zoom.onSliderDown}
+            onPointerMove={zoom.onSliderMove}
+            onPointerUp={zoom.onSliderUp}
+            onPointerCancel={zoom.onSliderUp}
+            className="relative w-16 sm:w-24 h-10 -my-2 flex items-center cursor-pointer select-none touch-none"
           >
             {/* 轨道 */}
             <div className="w-full h-1 rounded-full bg-elevated" />
@@ -350,7 +274,7 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
             <div
               data-role="zoom-fill"
               className="absolute top-1/2 left-0 h-1 rounded-full bg-primary-500 -translate-y-1/2 pointer-events-none"
-              style={{ width: `${((scale - ZOOM_MIN) / (ZOOM_MAX - ZOOM_MIN)) * 100}%` }}
+              style={{ width: `${zoom.pct * 100}%` }}
             />
             {/* 拖拽滑块 */}
             <div
@@ -358,36 +282,42 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
               className="absolute top-1/2 w-3.5 h-3.5 rounded-full bg-primary-500 shadow-sm border-2 border-surface
                          -translate-x-1/2 -translate-y-1/2 pointer-events-none
                          transition-shadow duration-100 hover:shadow-md active:shadow-lg"
-              style={{ left: `${((scale - ZOOM_MIN) / (ZOOM_MAX - ZOOM_MIN)) * 100}%` }}
+              style={{ left: `${zoom.pct * 100}%` }}
             />
           </div>
 
-          <span ref={sliderDisplayRef} className="text-2xs text-textMuted w-9 text-center tabular-nums">
-            {Math.round(scale * 100)}%
+          <span className="text-2xs text-textMuted w-8 sm:w-9 text-center tabular-nums">
+            {Math.round(zoom.scale * 100)}%
           </span>
-          <button onClick={zoomIn} disabled={scale >= ZOOM_MAX}
-            className="p-1 rounded hover:bg-elevated text-textSecondary disabled:opacity-30 transition-colors" title={t('common.zoomIn')}>
-            <ZoomIn size={16} />
+          <button onClick={zoom.zoomIn} disabled={zoom.scale >= ZOOM_MAX}
+            className="icon-btn-sm text-textSecondary" title={t('common.zoomIn')}>
+            <ZoomIn size={14} />
           </button>
-          <button onClick={zoomReset}
-            className="icon-btn-sm text-textSecondary" title={t('common.resetZoom')}>
-            <RotateCcw size={14} />
-          </button>
+          <span className="hidden sm:inline-flex">
+            <button onClick={zoom.reset}
+              className="icon-btn-sm text-textSecondary" title={t('common.resetZoom')}>
+              <RotateCcw size={14} />
+            </button>
+          </span>
         </div>
       )}
 
-      {/* 全屏按钮（仅电脑版） */}
-      <button
-        onClick={toggleFullscreen}
-        className="btn btn-xs btn-outline hidden md:flex gap-1.5"
-        title={isFullscreen ? t('common.exitFullscreen') : t('common.fullscreen')}
-      >
-        {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-      </button>
+      {/* 全屏按钮（仅电脑版）；文字在窄屏收起，四个动作按钮同一套尺寸与图标大小。
+          显示与否交给外层 span：.btn 自带的 display 会盖掉按钮上的 hidden */}
+      <span className="hidden md:inline-flex">
+        <button
+          onClick={toggleFullscreen}
+          className="btn btn-xs btn-outline shrink-0"
+          title={isFullscreen ? t('common.exitFullscreen') : t('common.fullscreen')}
+        >
+          {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+          <span className="hidden lg:inline">{isFullscreen ? t('common.exitFullscreen') : t('common.fullscreen')}</span>
+        </button>
+      </span>
 
       <button
         onClick={() => setForwardFile({ file_id: fileId ?? 0, name: fileName, size: fileSize, mime_type: mimeType })}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded-control border border-border text-textSecondary hover:bg-elevated text-xs font-medium transition-colors"
+        className="btn btn-xs btn-outline shrink-0"
         title={t('forward.send')}
       >
         <Share2 size={14} />
@@ -396,7 +326,7 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
 
       <button
         onClick={handleDownload}
-        className="btn btn-xs btn-primary gap-1.5"
+        className="btn btn-xs btn-primary shrink-0"
         title={t('common.download')}
       >
         <Download size={14} />
@@ -434,18 +364,25 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
                 </button>
               </div>
             ) : isImage ? (
-              <div ref={imgContainerRef} className="w-full h-full flex items-center justify-center overflow-auto">
-                {/* 图片自带滚动：缩放走 transform，布局尺寸不变，外层接不到它的溢出 */}
+              /* 缩放是真实布局尺寸，溢出交给这一层的滚动条；m-auto 让图片「放得下居中、
+                 放不下贴左上」，否则溢出到左上角的那部分永远滚不回来。
+                 拖拽平移只认鼠标，手指留给容器自己的惯性滚动 */
+              <div
+                ref={zoom.containerRef}
+                onPointerDown={zoom.onPanDown}
+                onPointerMove={zoom.onPanMove}
+                onPointerUp={zoom.onPanUp}
+                onPointerCancel={zoom.onPanUp}
+                className={`w-full h-full flex overflow-auto ${zoom.panning ? 'cursor-grabbing' : zoom.scale > 1 ? 'cursor-grab' : ''}`}
+              >
                 <img
+                  ref={zoom.imgRef}
                   src={dlUrl + `&_=${retry}`}
                   alt={fileName}
-                  className="object-contain select-none"
-                  style={{
-                    transform: `scale(${scale})`,
-                    maxWidth: scale <= 1 ? '100%' : 'none',
-                    maxHeight: scale <= 1 ? '100%' : 'none',
-                  }}
+                  className="m-auto shrink-0 select-none"
+                  style={zoom.imgStyle}
                   draggable={false}
+                  onLoad={zoom.onImgLoad}
                   onError={() => { if (retry < RETRY_MAX) setTimeout(() => setRetry(r => r + 1), 1000) }}
                 />
               </div>

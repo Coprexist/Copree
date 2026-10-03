@@ -202,7 +202,7 @@ export default function ProviderPresetSelector() {
                     {p.name}
                     <span className="text-xs text-textMuted">({p.provider})</span>
                     {p.thinking_supported && (
-                      <span className="chip chip-primary shrink-0">🧠</span>
+                      <span className="chip chip-primary shrink-0">{t('admin.thinkingSupported')}</span>
                     )}
                   </button>
                   <div className="flex items-center gap-2">
@@ -465,7 +465,7 @@ function ProviderEditForm({
             onChange={e => setEditThinking(e.target.checked)}
             className="rounded"
           />
-          🧠 {t('admin.thinkingSupported')}
+          {t('admin.thinkingSupported')}
         </label>
         <label className="flex items-center gap-2 text-xs text-textSecondary cursor-pointer">
           <input

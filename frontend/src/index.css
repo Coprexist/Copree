@@ -139,9 +139,10 @@
 
 /* 彩色文字适配深/浅背景：加一层极细半透明描边保证可读 */
 
-/* 滚动条 */
-  --tw-scrollbar-thumb: 42 37 64;  /* #2A2540 */
-  --tw-scrollbar-thumb-hover: 61 53 96; /* #3D3560 */
+/* 滚动条 —— 深色下不能直接取 --tw-border 那一档：5px 的条压在 canvas/surface 上
+     等于看不见，得比边框再亮两档才摸得到 */
+  --tw-scrollbar-thumb: 74 66 112;  /* #4A4270 */
+  --tw-scrollbar-thumb-hover: 102 92 148; /* #665C94 */
 
   /* Markdown 表格（文档弹窗等未注入 inline 变量的场景；气泡会 inline 覆盖） */
   --b-thead-r: 55; --b-thead-g: 45; --b-thead-b: 70; --b-thead-a: 1;
@@ -846,5 +847,14 @@ textarea.field { height: auto; padding: 0.5rem 0.75rem; resize: vertical; }
   border-radius: 9999px;
   border: var(--edge-w) solid rgb(var(--edge-c));
 }
+
+/* ────────────────────────────────────────────────
+   Mermaid 图 —— 尺寸由容器说了算
+   mermaid 按图表内容算出一小块 width / max-width 写进根 svg，小图就被钉成一丁点大，
+   同一页里几张图大小不一。把这些尺寸去掉后统一按容器铺开：块内撑满宽度、按比例定高，
+   全屏撑满整屏，多余空间由 preserveAspectRatio 居中留白。
+   ──────────────────────────────────────────────── */
+.mermaid-stage > svg { display: block; width: 100%; height: auto; }
+.mermaid-stage-fill > svg { display: block; width: 100%; height: 100%; }
 
 

@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, useId, memo } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useId, memo } from 'react'
 import { Loader2, AlertTriangle, Maximize2, Minimize2, ZoomIn, ZoomOut, Download } from 'lucide-react'
 import CodeRenderer from './shared/CodeRenderer'
+import { useIsDark } from '../hooks/useIsDark'
 
 interface MermaidBlockProps {
   code: string
@@ -13,60 +14,67 @@ interface MermaidBlockProps {
 // ---------------------------------------------------------------------------
 
 /**
- * Mermaid sandbox 模式下 render() 返回的是 iframe 包裹 HTML，
- * 从 iframe 的 srcdoc/data URL 中提取纯 SVG 字符串。
+ * Mermaid sandbox 模式下 render() 返回的是 iframe 包裹的整份 HTML，
+ * 纯 SVG 藏在 data URL 里。直接按字符串取，不必等它落进 DOM 再捞。
  */
-function extractCleanSvg(container: HTMLDivElement | null): string | null {
-  const iframe = container?.querySelector('iframe')
-  if (!iframe) return null
-  const src = iframe.getAttribute('srcdoc') || iframe.src || ''
-  // base64 data URL
-  const b64 = src.match(/;base64,([^"']+)/)
+function svgFromHtml(html: string): string | null {
+  let source = html
+  const b64 = html.match(/;base64,([^"']+)/)
   if (b64) {
     try {
-      const html = decodeURIComponent(Array.from(atob(b64[1]), c => '%' + c.charCodeAt(0).toString(16).padStart(2, '0')).join(''))
-      const svgs = html.match(/<svg[\s\S]*?<\/svg>/gi)
-      return svgs ? svgs[svgs.length - 1] : html.length < 50000 ? html : null
+      source = decodeURIComponent(Array.from(atob(b64[1]), c => '%' + c.charCodeAt(0).toString(16).padStart(2, '0')).join(''))
     } catch { return null }
   }
-  const m = src.match(/<svg[\s\S]*?<\/svg>/i)
-  return m ? m[0] : null
+  const svgs = source.match(/<svg[\s\S]*?<\/svg>/gi)
+  return svgs ? svgs[svgs.length - 1] : null
 }
 
 /**
- * Mermaid sandbox 模式下返回的 SVG 自带 width="10"（甚至更小），
- * 从 viewBox 中提取实际绘图宽度并修正。
- * 同时注入 CSS 防止 CJK 字符被 foreignObject 裁剪（mermaid 已知问题）。
+ * 去掉根 svg 上的固定尺寸（width / height / style 里的 max-width）。
+ * mermaid 会按图表内容算出一小块尺寸写进属性，小图就被钉死成一丁点大，
+ * 同一页里几张图因此大小不一；尺寸交给容器的 CSS 决定。
+ * 顺手注入 CSS 防止 CJK 字符被 foreignObject 裁剪（见 mermaid#4950、#7359）。
  */
-function normalizeSvgWidth(svg: string): string {
-  const vb = svg.match(/viewBox="(\d+)\s+(\d+)\s+([\d.]+)\s+([\d.]+)"/)
-  if (!vb) return svg
-  // 先修 width
-  let result = svg.replace(/width="[^"]*"/, `width="${vb[3]}"`)
-  // 再注入 CSS：让 foreignObject 内的文字不溢出隐藏
-  // 见 mermaid-js/mermaid#4950、#7359、PR#7367
-  const styleTag = `<style>foreignObject{overflow:visible!important}</style>`
-  if (!result.includes(styleTag)) {
-    result = result.replace('</svg>', styleTag + '</svg>')
-  }
-  return result
+function normalizeSvgSize(svg: string): string {
+  const cleaned = svg.replace(/<svg\b[^>]*>/i, (tag) => tag
+    .replace(/\s+width="[^"]*"/i, '')
+    .replace(/\s+height="[^"]*"/i, '')
+    .replace(/\s+style="[^"]*"/i, ''))
+  const styleTag = '<style>foreignObject{overflow:visible!important}</style>'
+  return cleaned.includes(styleTag) ? cleaned : cleaned.replace('</svg>', styleTag + '</svg>')
 }
 
-// 模块级初始化 mermaid（一次性），所有 MermaidBlock 实例共用
-// 避免每次渲染重复 initialize 导致全局配置竞争
-const mermaidPromise = (async () => {
-  const mermaid = (await import('mermaid')).default
+/** 全屏图的缩放范围与挡位：跨 40 倍用加减法得按几十次，所以按钮走倍率 */
+const ZOOM_MIN = 0.25
+const ZOOM_MAX = 10
+const ZOOM_STEP = 1.25
+const WHEEL_RATE = 1.0015
+
+const loadMermaid = async () => (await import('mermaid')).default
+type Mermaid = Awaited<ReturnType<typeof loadMermaid>>
+/** mermaid 只加载一份，所有 MermaidBlock 实例共用 */
+const mermaidPromise = loadMermaid()
+
+/**
+ * 渲染前整体落一次配置。
+ *
+ * mermaid 的 initialize 是**整体替换**而不是合并：只传 theme 会把没提到的项
+ * 一起打回默认值 —— suppressErrorRendering 变成 false（语法错误又开始画那张
+ * "Syntax error" 炸弹图）、securityLevel 掉回 strict、字体栈也复位。
+ * 所以这几项必须一处给全，别分两次 initialize。
+ */
+function setupMermaid(mermaid: Mermaid, isDark: boolean) {
   mermaid.initialize({
     startOnLoad: false,
-    theme: 'default',
+    theme: isDark ? 'dark' : 'default',
     securityLevel: 'sandbox',
-    fontFamily: 'inherit',
-    // suppressErrorRendering 让 mermaid 在语法错误时不产生错误 SVG（v11+ 支持）
-    // 而是直接 throw，由组件的 catch 统一处理
+    // 页面真实的字体栈：写成 'inherit' 时 mermaid 拿去量文字的 canvas 会退回
+    // 默认字体，量出的字宽偏小，节点框就比字小一截，字被框切掉
+    fontFamily: getComputedStyle(document.body).fontFamily,
+    // 语法错误直接 throw，由组件的 catch 统一处理，别渲染 mermaid 自带的错误图
     suppressErrorRendering: true,
   })
-  return mermaid
-})()
+}
 
 
 
@@ -91,11 +99,17 @@ function MermaidBlock({ code, compact = false }: MermaidBlockProps) {
   const [svg, setSvg] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(false)
-  const [fullscreenSvg, setFullscreenSvg] = useState<string | null>(null)
+
   // expandLevel: 0=未展开, 1=已点击但正在渲染, 2=已显示结果
-  const [expandLevel, setExpandLevel] = useState(0)
+  // 聊天里默认折叠，等用户点；手册页那种非紧凑场景没有展开按钮，得自己开始渲染
+  const [expandLevel, setExpandLevel] = useState(compact ? 0 : 1)
   const [errorRevealed, setErrorRevealed] = useState(false)
   const uniqueId = useId().replace(/:/g, '')
+  // 渲染序号：渲好的 svg 会带着 mermaid 的 id 留在页面上，切主题要重渲时
+  // 再拿同一个 id 去 render 会和它撞，mermaid 会认错元素
+  const seqRef = useRef(0)
+  // 配色跟着应用主题走：mermaid 的线色是渲染那一刻写进 svg 的
+  const isDark = useIsDark()
 
   // 默认折叠设置（仅 compact 模式生效）
   const collapseDefault = compact && getMermaidSetting('mermaid_collapse', true)
@@ -111,21 +125,19 @@ function MermaidBlock({ code, compact = false }: MermaidBlockProps) {
     async function render() {
       try {
         const mermaid = await mermaidPromise
-        const { svg: rendered } = await mermaid.render(`mermaid-${uniqueId}`, code)
+        setupMermaid(mermaid, isDark)
+        // 字体没就绪时量出来的字宽是替补字体的，先等一等
+        if (document.fonts && document.fonts.status !== 'loaded') await document.fonts.ready
+        const { svg: rendered } = await mermaid.render(`mermaid-${uniqueId}-r${seqRef.current++}`, code)
         if (cancelled) return
 
         if (/translate\(NaN/.test(rendered)) {
           setError('渲染坐标异常（NaN），图表包含不支持的字符')
           setSvg(null)
         } else {
-          // 注入 CSS 到 iframe srcdoc 中，防止 CJK 字符被裁剪
-          // mermaid 已知问题：mermaid-js/mermaid#4950、#7359
-          const stylePatch = '<style>foreignObject{overflow:visible!important}</style>'
-          const patched = rendered.includes(stylePatch)
-            ? rendered
-            : rendered.replace(/(srcdoc="[^"]*)(<\/svg>)/, (_, before, after) => before + stylePatch + after)
-          setSvg(patched)
-          setError(null)
+          const raw = svgFromHtml(rendered)
+          setSvg(raw ? normalizeSvgSize(raw) : null)
+          setError(raw ? null : 'Mermaid 渲染结果里没有 SVG')
         }
       } catch (err: any) {
         if (!cancelled) {
@@ -137,7 +149,7 @@ function MermaidBlock({ code, compact = false }: MermaidBlockProps) {
 
     render()
     return () => { cancelled = true }
-  }, [code, uniqueId, expandLevel])
+  }, [code, uniqueId, expandLevel, isDark])
 
   // ---- 展开全屏（用 ref 存 svg，避免 StrictMode 双渲导致 useCallback 闭包过期） ----
   // 全屏缩放/拖拽 refs（与原版保持一致，不抽 hook，避免 StrictMode 下引用问题）
@@ -159,7 +171,8 @@ function MermaidBlock({ code, compact = false }: MermaidBlockProps) {
     if (!el || !expanded) return
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
-      zoomRef.current = Math.max(0.25, Math.min(10, zoomRef.current - e.deltaY * 0.005))
+      const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY
+      zoomRef.current = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoomRef.current * Math.pow(WHEEL_RATE, -dy)))
       updateTransform()
     }
     el.addEventListener('wheel', onWheel, { passive: false })
@@ -179,8 +192,8 @@ function MermaidBlock({ code, compact = false }: MermaidBlockProps) {
     updateTransform(true)
   }
 
-  const zoomIn = () => { zoomRef.current = Math.min(10, zoomRef.current + 0.25); updateTransform(true) }
-  const zoomOut = () => { zoomRef.current = Math.max(0.25, zoomRef.current - 0.25); updateTransform(true) }
+  const zoomIn = () => { zoomRef.current = Math.min(ZOOM_MAX, zoomRef.current * ZOOM_STEP); updateTransform(true) }
+  const zoomOut = () => { zoomRef.current = Math.max(ZOOM_MIN, zoomRef.current / ZOOM_STEP); updateTransform(true) }
 
   const svgRef = useRef(svg)
   svgRef.current = svg
@@ -196,14 +209,7 @@ function MermaidBlock({ code, compact = false }: MermaidBlockProps) {
     document.dispatchEvent(new CustomEvent('mermaid-error-report', { detail: { message: buildReportMsg(err) } }))
   }
 
-  const handleExpand = () => {
-    // mermaid.render 在 sandbox 模式返回 iframe 包裹 HTML，需提取纯 SVG
-    const raw = extractCleanSvg(containerRef.current)
-    if (raw) {
-      setFullscreenSvg(normalizeSvgWidth(raw))
-    }
-    setExpanded(true)
-  }
+  const handleExpand = () => setExpanded(true)
 
   const handleClose = () => {
     setExpanded(false)
@@ -301,7 +307,7 @@ function MermaidBlock({ code, compact = false }: MermaidBlockProps) {
 
 
   // 成功态
-  const displaySvg = expanded ? (fullscreenSvg || svg) : svg
+  const displaySvg = svg
   const isFullscreenClass = expanded
     ? 'w-screen h-screen flex items-center justify-center p-8 overflow-auto'
     : 'overflow-x-auto p-4' + (compact ? ' max-h-[420px] overflow-y-auto' : '')
@@ -331,7 +337,7 @@ function MermaidBlock({ code, compact = false }: MermaidBlockProps) {
         {/* SVG 内容 */}
         <div
           ref={containerRef}
-          className={isFullscreenClass}
+          className={'mermaid-stage ' + isFullscreenClass}
           dangerouslySetInnerHTML={{ __html: displaySvg ?? '' }}
         />
       </div>
@@ -339,7 +345,9 @@ function MermaidBlock({ code, compact = false }: MermaidBlockProps) {
       {/* 全屏浮层：使用宽度修正后的 SVG + 缩放/拖拽 */}
       {expanded && (
         <div
-          className="fixed inset-0 z-modal bg-black/80 backdrop-blur-sm"
+          /* 遮罩跟着主题走：图是透明底，日间的深线落在黑幕上会看不见；
+             一直半透明 + 模糊，别把底下的页面盖成一块实色 */
+          className={'fixed inset-0 z-modal backdrop-blur-sm ' + (isDark ? 'bg-black/80' : 'bg-canvas/85')}
           ref={overlayRef}
           onMouseDown={(e) => {
             dragRef.current = { startX: e.clientX, startY: e.clientY, panX: panRef.current.x, panY: panRef.current.y }
@@ -366,10 +374,7 @@ function MermaidBlock({ code, compact = false }: MermaidBlockProps) {
               </button>
               <button onClick={() => {
                 const a = document.createElement('a')
-                const raw = fullscreenSvg || (() => {
-                  const e = extractCleanSvg(containerRef.current)
-                  return e ? normalizeSvgWidth(e) : svg
-                })()
+                const raw = svg
                 a.href = 'data:image/svg+xml,' + encodeURIComponent(raw ?? '')
                 a.download = 'diagram.svg'
                 a.click()
@@ -382,7 +387,7 @@ function MermaidBlock({ code, compact = false }: MermaidBlockProps) {
             </div>
             <div
               ref={svgWrapRef}
-              className="cursor-grab active:cursor-grabbing"
+              className="mermaid-stage-fill cursor-grab active:cursor-grabbing w-full h-full"
               style={{ transition: 'transform 0.12s ease-out' }}
               dangerouslySetInnerHTML={{ __html: displaySvg ?? '' }}
             />

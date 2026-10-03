@@ -335,6 +335,10 @@ const zh: TranslationDict = {
 
   // ======================== 文件预览 / FilePreview ========================
   'filePreview.fileTooLarge': '… 文件过大，仅显示前 2MB',
+  'filePreview.viewRendered': '渲染',
+  'filePreview.viewSource': '原文',
+  'filePreview.viewRenderedHint': '查看渲染效果',
+  'filePreview.viewSourceHint': '查看原文源码',
 
   // ======================== 外部链接安全弹窗 ========================
   'externalLink.title': '即将离开本站',
@@ -2382,6 +2386,10 @@ const en: TranslationDict = {
 
   // ======================== 文件预览 / FilePreview ========================
   'filePreview.fileTooLarge': '… File too large, showing first 2MB',
+  'filePreview.viewRendered': 'Rendered',
+  'filePreview.viewSource': 'Source',
+  'filePreview.viewRenderedHint': 'View rendered',
+  'filePreview.viewSourceHint': 'View source',
 
   // ======================== External Link Safety ========================
   'externalLink.title': 'Leaving this site',
@@ -4427,6 +4435,10 @@ const ja: TranslationDict = {
 
   // ======================== 文件预览 / FilePreview ========================
   'filePreview.fileTooLarge': '… ファイルが大きすぎるため、最初の2MBのみ表示',
+  'filePreview.viewRendered': 'レンダリング',
+  'filePreview.viewSource': '原文',
+  'filePreview.viewRenderedHint': 'レンダリング表示に切り替え',
+  'filePreview.viewSourceHint': '原文を表示',
 
   // ======================== 外部リンク安全ダイアログ ========================
   'externalLink.title': 'サイトを離れます',
