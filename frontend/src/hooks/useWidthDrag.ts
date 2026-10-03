@@ -3,6 +3,8 @@ import { clampWidth } from './useResizableSidebar'
 
 /** 指示线跟着指针上下走的变量名（手柄自己写，样式里读） */
 export const HANDLE_Y_VAR = '--width-handle-y'
+/** 抓取区高光的「贴近度」0~1：按鼠标到拖条的水平距离算，越近越亮 */
+export const HANDLE_NEAR_VAR = '--width-handle-near'
 
 /**
  * 居中列宽拖拽的共用机关：对话列与页面内容列只此一份。
@@ -80,7 +82,11 @@ export function useWidthDrag(options: WidthDragOptions) {
   /** 悬停时也要更新指示线位置，所以不管有没有捕获都写变量 */
   const onHandleMove = useCallback((e: React.PointerEvent<HTMLElement>) => {
     const handle = e.currentTarget
-    handle.style.setProperty(HANDLE_Y_VAR, `${e.clientY - handle.getBoundingClientRect().top}px`)
+    // 写到定位祖先而不是手柄自己身上：左右两条读到同一个 Y，拖动时两侧高亮才在同一高度。
+    // 手柄是 absolute，offsetParent 正是它俩共同的定位包含块（中间可能隔着 display:contents 的层，
+    // 那种层没有盒子，parentElement 量不出坐标）。
+    const host = (handle.offsetParent as HTMLElement | null) ?? handle.parentElement
+    if (host) host.style.setProperty(HANDLE_Y_VAR, `${e.clientY - host.getBoundingClientRect().top}px`)
     const d = dragRef.current
     if (!d || !handle.hasPointerCapture(e.pointerId)) return
     d.latest = e.clientX
