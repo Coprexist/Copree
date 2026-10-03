@@ -86,11 +86,14 @@ function toolArgs(call: any): string {
   return typeof raw === 'string' ? raw : textOf(raw)
 }
 
-function Block({ index, kind, title, tone = 'normal', children }: {
+function Block({ index, kind, title, source, tone = 'normal', children }: {
   index: number; kind: Kind; title?: string; tone?: Tone; children: React.ReactNode
+  /** 这一块的原始文本（那条消息本身）；给了才摆「原文 / 渲染」开关 */
+  source?: string
 }) {
   const t = useT()
   const [open, setOpen] = useState(true)
+  const [showSource, setShowSource] = useState(false)
   const style = STYLES[kind]
   return (
     <div className={`flex gap-2 rounded-control border ${style.box} overflow-hidden ${
@@ -98,34 +101,53 @@ function Block({ index, kind, title, tone = 'normal', children }: {
     }`}>
       <div className={`w-1 shrink-0 ${style.bar}`} />
       <div className="flex-1 min-w-0 py-2 pr-2">
-        <button
-          type="button"
-          onClick={() => setOpen(v => !v)}
-          className="flex items-center gap-1.5 w-full text-left group"
-        >
-          <ChevronRight size={12} className={`shrink-0 text-textMuted transition-transform ${open ? 'rotate-90' : ''}`} />
-          <span className="text-3xs px-1.5 py-0.5 rounded-full bg-black/10 dark:bg-white/10 text-textSecondary">
-            {t(style.key)}
-          </span>
-          <span className="text-3xs text-textMuted">#{index}</span>
-          {title && <span className="text-3xs font-mono text-textSecondary truncate">{title}</span>}
-        </button>
-        {open && <div className="mt-1.5 min-w-0">{children}</div>}
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setOpen(v => !v)}
+            className="flex items-center gap-1.5 flex-1 min-w-0 text-left group"
+          >
+            <ChevronRight size={12} className={`shrink-0 text-textMuted transition-transform ${open ? 'rotate-90' : ''}`} />
+            <span className="text-3xs px-1.5 py-0.5 rounded-full bg-black/10 dark:bg-white/10 text-textSecondary">
+              {t(style.key)}
+            </span>
+            <span className="text-3xs text-textMuted">#{index}</span>
+            {title && <span className="text-3xs font-mono text-textSecondary truncate">{title}</span>}
+          </button>
+          {source !== undefined && (
+            <button
+              type="button"
+              onClick={() => setShowSource(v => !v)}
+              title={t('logs:blockSourceHint')}
+              className={`shrink-0 text-3xs px-1.5 py-0.5 rounded border transition-colors ${
+                showSource
+                  ? 'border-primary-500/50 bg-primary-500/10 text-primary-400'
+                  : 'border-border text-textMuted hover:text-textSecondary'
+              }`}
+            >
+              {showSource ? t('logs:blockRender') : t('logs:blockRaw')}
+            </button>
+          )}
+        </div>
+        {open && <div className="mt-1.5 min-w-0">{showSource ? <Raw text={source || ''} /> : children}</div>}
       </div>
     </div>
+  )
+}
+
+/** 等宽原文块：JSON 格式化、机器文本、逐字原文都用它，样式只写一遍 */
+function Raw({ text }: { text: string }) {
+  return (
+    <pre className="text-2xs font-mono text-textSecondary whitespace-pre-wrap break-words bg-black/5 dark:bg-black/20 rounded-control p-2 max-h-96 overflow-y-auto">
+      {text}
+    </pre>
   )
 }
 
 /** 正文：Markdown 优先，JSON 走格式化等宽块 —— 两者都不改一个字 */
 function Body({ text, mono = false }: { text: string; mono?: boolean }) {
   const json = useMemo(() => prettyJson(text), [text])
-  if (json !== null) {
-    return (
-      <pre className="text-2xs font-mono text-textSecondary whitespace-pre-wrap break-words bg-black/5 dark:bg-black/20 rounded-control p-2 max-h-96 overflow-y-auto">
-        {json}
-      </pre>
-    )
-  }
+  if (json !== null) return <Raw text={json} />
   if (mono) {
     return (
       <pre className="text-2xs font-mono text-textSecondary whitespace-pre-wrap break-words">{text}</pre>
@@ -150,10 +172,11 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
   const [raw, setRaw] = useState(false)
 
   const blocks = useMemo(() => {
-    const out: { kind: Kind; title?: string; body: React.ReactNode }[] = []
+    const out: { kind: Kind; title?: string; source: string; body: React.ReactNode }[] = []
     list.forEach((msg) => {
       if (msg?.reasoning_content) {
-        out.push({ kind: 'reasoning', title: String(msg.role || ''), body: <Body text={textOf(msg.reasoning_content)} /> })
+        const thinking = textOf(msg.reasoning_content)
+        out.push({ kind: 'reasoning', title: String(msg.role || ''), source: thinking, body: <Body text={thinking} /> })
       }
       const kind = classify(msg)
       let title: string | undefined
@@ -183,7 +206,8 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
       } else {
         body = <Body text={textOf(msg.content)} mono={MONO.includes(kind)} />
       }
-      out.push({ kind, title, body })
+      // 原文 = 这条消息本身（库里的字段一个不少），跟上面渲染出来的视图对得上
+      out.push({ kind, title, source: JSON.stringify(msg, null, 2), body })
     })
     return out
   }, [list])
@@ -216,7 +240,9 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
       ) : (
         <div className="space-y-1.5">
           {blocks.map((block, i) => (
-            <Block key={i} index={i} kind={block.kind} title={block.title} tone={tone}>{block.body}</Block>
+            <Block key={i} index={i} kind={block.kind} title={block.title} source={block.source} tone={tone}>
+              {block.body}
+            </Block>
           ))}
         </div>
       )}
