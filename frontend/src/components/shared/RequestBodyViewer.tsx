@@ -163,7 +163,9 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
         title = calls.map(toolName).join(', ')
         body = (
           <div className="space-y-1.5">
-            {textOf(msg.content).trim() && <Body text={textOf(msg.content)} />}
+            {/* 带工具调用的消息，正文也是机器拼的（要么空，要么就是那行「本轮工具」）：
+                跟单独成块的「本轮工具」一个长相，同一句话不该有两种字体 */}
+            {textOf(msg.content).trim() && <Body text={textOf(msg.content)} mono />}
             {calls.map((call: any, ci: number) => (
               <div key={ci}>
                 <div className="text-3xs font-mono text-textSecondary mb-0.5">{toolName(call)}</div>
