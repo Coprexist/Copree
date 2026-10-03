@@ -380,17 +380,23 @@
   /* ── 同一块内容的两种视图（原文 ↔ 渲染、分段 ↔ 原始 JSON）──
      两份都留在 DOM 里、由 data-value 决定显示哪一份：导出成静态 HTML 后没有 React，
      切换只能靠属性；用直接子选择器，免得嵌套的开关组互相点亮对方的视图 */
-  .switch > [data-case] { display: none; }
-  .switch[data-value="rendered"] > [data-case="rendered"],
-  .switch[data-value="source"] > [data-case="source"],
-  .switch[data-value="segments"] > [data-case="segments"],
-  .switch[data-value="raw"] > [data-case="raw"] { display: block; }
+  /* 规则写成「隐藏与当前值不符的那一份」，而不是「显示当前那份」：
+     后者会把各视图自己的 display 一并覆盖（图例是一整行 flex，被压成 inline 就竖着排了） */
+  .switch[data-value="rendered"] > [data-case]:not([data-case="rendered"]),
+  .switch[data-value="source"] > [data-case]:not([data-case="source"]),
+  .switch[data-value="segments"] > [data-case]:not([data-case="segments"]),
+  .switch[data-value="raw"] > [data-case]:not([data-case="raw"]) { display: none; }
   /* 按钮上的文案跟着自己的 data-value 走（脚本切换时同时改按钮与开关组） */
-  [data-value] > [data-when] { display: none; }
-  [data-value="rendered"] > [data-when="rendered"],
-  [data-value="source"] > [data-when="source"],
-  [data-value="segments"] > [data-when="segments"],
-  [data-value="raw"] > [data-when="raw"] { display: inline; }
+  [data-value="rendered"] > [data-when]:not([data-when="rendered"]),
+  [data-value="source"] > [data-when]:not([data-when="source"]),
+  [data-value="segments"] > [data-when]:not([data-when="segments"]),
+  [data-value="raw"] > [data-when]:not([data-when="raw"]) { display: none; }
+  /* 视图切换的平滑：display 之间没法补间，让新显示的那一份淡入 */
+  @keyframes switchIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+  .switch > [data-case] { animation: switchIn 0.18s ease; }
 
   /* 预设卡片浮动层（JS sin() 驱动 transform，CSS 仅定义定位） */
   .preset-card-frame { position: relative; }
