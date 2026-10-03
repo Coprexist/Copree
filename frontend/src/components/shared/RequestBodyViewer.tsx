@@ -138,6 +138,38 @@ function renderLine(content: string, names: MentionNames | undefined, unknown: s
   return `${tag}${who}\n${renderMentionChips(speaker[2], names || {}, unknown)}`
 }
 
+/**
+ * 本轮工具账本：`send_gm(ok)；pop_state(ok)；end_turn(ok)` → 一个工具一个标签。
+ *  前缀 [本轮工具] 就是块头那个 kind 标签，正文里不再重复；失败的工具标红。
+ */
+function ToolLedger({ text }: { text: string }) {
+  const body = text.replace(/^\s*\[本轮工具\]\s*/, '')
+  const items = body.split('；').map(part => part.trim()).filter(Boolean)
+  // 账本行是一整行；掺了别的（合成消息把话接在后面）就原样等宽，别乱拆
+  if (items.length === 0 || body.includes('\n')) return <Body text={text} mono />
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      {items.map((item, index) => {
+        const matched = /^(.+?)\(([^()]*)\)$/.exec(item)
+        const name = matched ? matched[1] : item
+        const note = matched ? matched[2] : ''
+        const failed = note.startsWith('失败')
+        return (
+          <span
+            key={`${item}-${index}`}
+            className={`text-3xs px-1.5 py-0.5 rounded-full whitespace-nowrap ${
+              failed ? 'bg-rose-500/10 text-rose-400' : 'bg-black/5 dark:bg-white/10 text-textSecondary'
+            }`}
+          >
+            <span className="font-mono">{name}</span>
+            {note && <span className={failed ? '' : 'text-textMuted'}>({note})</span>}
+          </span>
+        )
+      })}
+    </div>
+  )
+}
+
 /** 参数值：字符串直接当文本读（一坨 JSON 挤一行时，转义符比正文还多）；其余保持结构化等宽 */
 function ArgValue({ value }: { value: any }) {
   return typeof value === 'string'
@@ -324,6 +356,8 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
         // 标题用函数名（id 一长串没人认得出），对上上面那条工具调用；对不上才退回 id
         title = callNames.get(String(msg.tool_call_id)) || (msg.tool_call_id ? String(msg.tool_call_id) : undefined)
         body = <JsonFields text={content} />
+      } else if (kind === 'roundTools') {
+        body = <ToolLedger text={content} />
       } else if (kind === 'state') {
         title = stateTitle(content)
         body = <Body text={content} />
