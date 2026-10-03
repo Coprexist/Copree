@@ -33,6 +33,8 @@ const MONO: Kind[] = ['toolCall', 'toolResult']
 /** 长日志分片渲染：首屏先铺满一屏，其余按片补（见 RequestBodyViewer 的 shown） */
 const FIRST_BLOCKS = 16
 const STEP_BLOCKS = 16
+/** 导出时要把整篇铺完，每帧一片：比一次铺完温和，也比空闲等待快 */
+const EXPORT_STEP_BLOCKS = 64
 
 /** removed 用于改变量里"已经没了"的那几条：压暗再加一圈红，跟留下的分得开 */
 type Tone = 'normal' | 'removed'
@@ -421,7 +423,7 @@ function Body({ text, mono = false, names }: { text: string; mono?: boolean; nam
   )
 }
 
-export default function RequestBodyViewer({ messages, className = '', legend = true, tone = 'normal', mentionNames, raw, onToggleRaw, rawSwitchId, renderAll = false }: {
+export default function RequestBodyViewer({ messages, className = '', legend = true, tone = 'normal', mentionNames, raw, onToggleRaw, rawSwitchId, renderAll = false, onAllRendered }: {
   messages: any[]
   className?: string
   /** 拼在改变量里时不重复摆图例和原始 JSON 开关（一屏摆好几截，图例只该出现一次） */
@@ -438,6 +440,8 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
   rawSwitchId?: string
   /** 导出前要求整篇都已渲染：分片还没补完就克隆，导出件会缺块 */
   renderAll?: boolean
+  /** 整篇都在 DOM 里了（导出据此落盘，期间主线程不被按住） */
+  onAllRendered?: () => void
 }) {
   const t = useT()
   const list = Array.isArray(messages) ? messages : []
@@ -518,21 +522,29 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
   const [shown, setShown] = useState(FIRST_BLOCKS)
   useEffect(() => { setShown(FIRST_BLOCKS) }, [list])
   useEffect(() => {
-    if (renderAll || shown >= blocks.length) return
-    const next = () => setShown(n => n + STEP_BLOCKS)
-    // 只在浏览器空闲时补下一片：用户正在滚动或点击时先让路，别跟他抢主线程；
-    // 一直没空闲就按 timeout 兜底，保证最终整篇都会渲染出来
+    if (shown >= blocks.length) {
+      // 补完了才算导出就绪：克隆要在整篇都在 DOM 里之后做
+      if (renderAll) onAllRendered?.()
+      return
+    }
+    const next = () => setShown(n => Math.min(blocks.length, n + (renderAll ? EXPORT_STEP_BLOCKS : STEP_BLOCKS)))
+    // 导出中：每帧补一片，快、又不像一次铺完那样把主线程按死（按死了连「正在准备」都画不出来）
+    if (renderAll) {
+      const id = requestAnimationFrame(next)
+      return () => cancelAnimationFrame(id)
+    }
+    // 平时只在浏览器空闲时补：用户正在滚动或点击时先让路；一直没空闲就按 timeout 兜底
     const w = window as Window & {
       requestIdleCallback?: (cb: () => void, options?: { timeout: number }) => number
       cancelIdleCallback?: (id: number) => void
     }
     if (w.requestIdleCallback) {
-      const id = w.requestIdleCallback(next, { timeout: 120 })
+      const id = w.requestIdleCallback(next, { timeout: 64 })
       return () => w.cancelIdleCallback?.(id)
     }
     const id = window.setTimeout(next, 8)
     return () => window.clearTimeout(id)
-  }, [shown, blocks.length, renderAll])
+  }, [shown, blocks.length, renderAll, onAllRendered])
 
 
   if (list.length === 0) {

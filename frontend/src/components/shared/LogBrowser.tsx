@@ -5,7 +5,7 @@
  * 点进去看这段状态的最近一次完整请求体、与上一条的增量、以及这段状态的历史。
  * 「停在哪段状态、看的是哪一条」写进查询参数（state / log），刷新和后退都回到原地。
  */
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Loader2 } from 'lucide-react'
 import { api } from '../../api/client'
@@ -69,8 +69,8 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
   const exportRef = useRef<HTMLDivElement>(null)
   const [rawBody, setRawBody] = useState(false)
   // 导出前先把分片渲染补完，否则克隆下来的 DOM 会缺掉还没补上的块
-  const [exportAll, setExportAll] = useState(false)
   // 导出要把分片补完再落盘，这段时间按钮得看得出在干活
+  const [exportAll, setExportAll] = useState(false)
   const [exporting, setExporting] = useState(false)
   // 「原始 JSON」按钮在这一行、开关组在正文里，两边靠这个 id 对上（见 RequestBodyViewer）
   const rawSwitchId = useId()
@@ -133,17 +133,17 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
    * 也正因为纯前端，管理台的日志浏览器同样能用。
    */
   const exportHtml = () => {
-    const el = exportRef.current
-    if (!el || !currentId || exporting) return
+    if (!currentId || exporting) return
+    // 只是开口让正文把分片补完；补完的回调里才落盘，这样点下去就有「正在准备」可见
     setExporting(true)
-    setExportAll(true)
-    // 两帧之后再克隆：第一帧 React 提交全部块，第二帧布局稳定
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      saveElementAsHtml(el, 'log-' + currentId + '.html', '#' + currentId)
-      setExportAll(false)
-      setExporting(false)
-    }))
   }
+
+  /** 正文整篇都在 DOM 里了：落盘并收工 */
+  const finishExport = useCallback(() => {
+    const el = exportRef.current
+    if (el && currentId) saveElementAsHtml(el, 'log-' + currentId + '.html', '#' + currentId)
+    setExporting(false)
+  }, [currentId])
 
   if (loading) {
     return (
@@ -330,6 +330,7 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
           ) : (
             <RequestBodyViewer
               renderAll={exportAll}
+              onAllRendered={finishExport}
               raw={rawBody}
               onToggleRaw={() => setRawBody(v => !v)}
               rawSwitchId={rawSwitchId}
