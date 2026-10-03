@@ -374,14 +374,56 @@ function Raw({ text, lazy }: { text: string; lazy?: string }) {
   )
 }
 
+/**
+ * 行首靠空格排版的行（记忆索引那种树状清单、对齐着贴进来的输出）：
+ * Markdown 解析时会把段落里的行首空白抹掉，层级就平了，这类段必须原样渲染。
+ */
+const SPACE_ALIGNED_LINE = /^(?: {2,}|\t)(?![-*+]\s|\d+[.)]\s|>\s)/
+
+/** 段内有两行以上才算「靠空格排版」：单独一行的缩进多半是 Markdown 的续行，不跟着降级 */
+function isSpaceAligned(paragraph: string): boolean {
+  let hit = 0
+  for (const line of paragraph.split('\n')) {
+    if (SPACE_ALIGNED_LINE.test(line) && ++hit >= 2) return true
+  }
+  return false
+}
+
+/** 按空行切段并标出哪些段靠空格排版；相邻同类合并，正文顺序不变 */
+function splitSpaceAligned(text: string): { pre: boolean; body: string }[] {
+  const parts: { pre: boolean; body: string }[] = []
+  for (const paragraph of text.split(/\n{2,}/)) {
+    const pre = isSpaceAligned(paragraph)
+    const last = parts[parts.length - 1]
+    if (last && last.pre === pre) last.body += '\n\n' + paragraph
+    else parts.push({ pre, body: paragraph })
+  }
+  return parts
+}
+
 /** 正文：Markdown 优先，JSON 走格式化等宽块。机器文本一字不改，人话里只把 <@!id> 翻成人名 */
 function Body({ text, mono = false, names }: { text: string; mono?: boolean; names?: MentionNames }) {
   const t = useT()
   const json = useMemo(() => prettyJson(text), [text])
+  // 只有真出现「靠空格排版」的段才切分渲染，其余消息照旧整条走 Markdown
+  const parts = useMemo(() => splitSpaceAligned(text), [text])
   if (json !== null) return <Raw text={json} />
   if (mono) {
     return (
       <pre className="text-2xs font-mono text-textSecondary whitespace-pre-wrap break-words">{text}</pre>
+    )
+  }
+  if (parts.some(part => part.pre)) {
+    return (
+      <>
+        {parts.map((part, i) => part.pre ? (
+          <pre key={i} className="text-2xs font-mono text-textSecondary whitespace-pre-wrap break-words">{part.body}</pre>
+        ) : (
+          <div key={i} className="log-md text-xs text-textPrimary leading-relaxed break-words">
+            <MarkdownContent content={renderLine(part.body, names, t('logs:mentionUnknown'))} />
+          </div>
+        ))}
+      </>
     )
   }
   return (
