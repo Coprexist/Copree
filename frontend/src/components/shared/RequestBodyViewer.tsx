@@ -78,7 +78,13 @@ function stateTitle(content: string): string | undefined {
 }
 
 /** 块头的小标记：从正文里拆出来的时间 / 说话人 / msg_id / 提到了谁 */
-interface Mark { key: string; label: string; tone: 'muted' | 'who' | 'id' | 'at' }
+interface Mark {
+  key: string
+  label: string
+  tone: 'muted' | 'who' | 'id' | 'at'
+  /** 悬停时的逐字原文（@ 这种翻过名字的标记用得上） */
+  hint?: string
+}
 
 const MARK_CLASS: Record<Mark['tone'], string> = {
   muted: 'bg-black/5 dark:bg-white/10 text-textMuted',
@@ -94,11 +100,20 @@ const SPEAKER_RE = /^(.{1,40}?):\s([\s\S]*)$/
 const SPEAKER_ID_RE = /^(.*)（id=(\d+)）$/
 const MENTION_RE = /<@!(\d+)>/g
 
-/** 正文里 @ 了谁（`<@!id>` 是平台的规范写法，id 就是同一空间里「（id=N）」那个 N） */
+/** 正文里 @ 了谁（`<@!id>` 是平台的规范写法，id 就是同一空间里「（id=N）」那个 N）。
+ *  同一个人只留一个标签：一条消息里 @ 他十次也是"提到了他"，块头不是词频表。 */
 function mentionMarks(text: string, names: Record<string, string> | undefined, unknown: string): Mark[] {
-  return [...text.matchAll(MENTION_RE)].map((hit, i) => ({
-    key: `at-${i}`, label: nameOfMention(hit[0], names, unknown), tone: 'at' as const,
-  }))
+  const marks: Mark[] = []
+  const seen = new Set<string>()
+  for (const hit of text.matchAll(MENTION_RE)) {
+    if (seen.has(hit[1])) continue
+    seen.add(hit[1])
+    marks.push({
+      key: `at-${hit[1]}`, label: nameOfMention(hit[0], names, unknown),
+      tone: 'at', hint: hit[0],
+    })
+  }
+  return marks
 }
 
 /** 正文 → 块头标记。不是"谁: 正文"那种行（历史行）就只挑 @。 */
@@ -169,7 +184,11 @@ function Block({ index, kind, title, source, marks = [], tone = 'normal', childr
             <span className="text-3xs text-textMuted">#{index}</span>
             {title && <span className="text-3xs font-mono text-textSecondary truncate">{title}</span>}
             {marks.map(mark => (
-              <span key={mark.key} className={`text-3xs px-1.5 py-0.5 rounded-full ${MARK_CLASS[mark.tone]}`}>
+              <span
+                key={mark.key}
+                title={mark.hint}
+                className={`text-3xs px-1.5 py-0.5 rounded-full ${MARK_CLASS[mark.tone]}`}
+              >
                 {mark.label}
               </span>
             ))}
