@@ -7,7 +7,7 @@ import Toggle from '../components/Toggle'
 import { Button, Dialog, IconButton, PageHeader } from '../components/ui'
 import { useT } from '../i18n/I18nContext'
 import CreateAgentModal from '../components/CreateAgentModal'
-import { STATE_BADGE_COLORS, AI_TYPE_LABEL } from '../constants'
+import { STATE_BADGE_COLORS, AI_TYPE_LABEL, CHAT_REFRESH_EVENT } from '../constants'
 
 interface ModelOption {
   value: string
@@ -244,6 +244,8 @@ export default function AgentsPage() {
               setShowCreate(false)
               loadAgents()
               refreshUser()
+              // 后端给新 AI 落了一条私聊开场，侧栏得重拉列表才看得到这一项
+              window.dispatchEvent(new CustomEvent(CHAT_REFRESH_EVENT))
             }}
           />
         )}

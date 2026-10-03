@@ -146,8 +146,13 @@ function toItem(kind: NotificationKind, data: any, cache: SessionCache): Notific
     case 'group_invite_accepted':
     case 'group_invite_declined':
       return { ...base, place, sender: data.target_name ?? null, preview: null, to }
-    case 'friend_request':
     case 'friend_accepted':
+      // 通过了就进新好友的对话：后端随通知给了会话 id，没给才退回申请列表
+      return {
+        ...base, place: null, sender: data.actor_name ?? null, preview: data.message ?? null,
+        to: data.session_id ? `/chat/dm/${data.session_id}` : '/list?tab=requests',
+      }
+    case 'friend_request':
     case 'friend_rejected':
       return { ...base, place: null, sender: data.actor_name ?? null, preview: data.message ?? null, to: '/list?tab=requests' }
     case 'system':

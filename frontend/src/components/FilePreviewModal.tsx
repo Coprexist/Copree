@@ -416,8 +416,10 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
         >
           {headerBar}
 
-          {/* 内容区 — overflow-hidden + 圆角匹配外层，iframe/html 方角不再漏出来 */}
-          <div className="flex-1 overflow-hidden bg-canvas min-h-0 flex flex-col md:rounded-b-2xl">
+          {/* 内容区 —— 滚动只在这一层：文字类分支（Markdown / docx / 源码）都不自己写滚动条，
+              免得像之前那样漏掉一支就整块滚不动。图片与 iframe 是例外：图片靠 scale 缩放、
+              布局尺寸不变，溢出得由它自己那个容器接；iframe 则要撑满、由内部自己滚。 */}
+          <div className="flex-1 min-h-0 overflow-auto bg-canvas md:rounded-b-2xl">
             {loading ? (
               <div className="flex items-center justify-center py-20 w-full h-full">
                 <Loader2 size={24} className="animate-spin text-textMuted" />
@@ -432,6 +434,7 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
               </div>
             ) : isImage ? (
               <div ref={imgContainerRef} className="w-full h-full flex items-center justify-center overflow-auto">
+                {/* 图片自带滚动：缩放走 transform，布局尺寸不变，外层接不到它的溢出 */}
                 <img
                   src={dlUrl + `&_=${retry}`}
                   alt={fileName}
@@ -454,11 +457,11 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
                 sandbox={isHtml ? 'allow-scripts' : undefined}
               />
             ) : isRichText && showSource ? (
-              <pre className="w-full h-full p-4 md:p-5 m-0 text-xs leading-relaxed font-mono text-textPrimary whitespace-pre-wrap break-words overflow-auto bg-canvas">
+              <pre className="w-full p-4 md:p-5 m-0 text-xs leading-relaxed font-mono text-textPrimary whitespace-pre-wrap break-words bg-canvas">
                 {content}
               </pre>
             ) : (
-              <div className="w-full p-4 md:p-5 self-start">
+              <div className="w-full p-4 md:p-5">
                 {isDocx ? (
                   <div
                     className="prose prose-sm dark:prose-invert max-w-none text-textPrimary"
@@ -483,9 +486,10 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
           {/* 拖拽缩放手柄（仅电脑版且非全屏） */}
           {!isFullscreen && (
             <>
-              {/* 外发光描边 — outline 天然在元素外部，配合 offset 完全在外侧 */}
+              {/* 外发光描边 —— 用 box-shadow 的 spread 而不是 outline：outline 在圆角处会斜接，
+                  四角看着像被封成扇形，而 shadow 的圆角是跟着元素半径推出来的，正是一段弧 */}
               <div className="absolute inset-0 rounded-dialog pointer-events-none z-overlay"
-                style={{ outline: '3px solid rgba(99,102,241,0.45)', outlineOffset: '3px', boxShadow: '0 0 14px rgba(99,102,241,0.25)' }} />
+                style={{ boxShadow: '0 0 0 3px rgba(99,102,241,0.45), 0 0 14px rgba(99,102,241,0.25)' }} />
 
               {/* 四边拖拽条 — 微光可见，hover 更亮 */}
               <div

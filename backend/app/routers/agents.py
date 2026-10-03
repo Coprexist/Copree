@@ -174,6 +174,22 @@ async def list_my_agents(
     return [agent_to_dict(a) for a in agents]
 
 
+async def _open_agent_dm(db: AsyncSession, owner_id: int, agent_user_id: int) -> None:
+    """给刚建好的 AI 开一条私聊并落一条开场——会话列表里才有它的入口。
+
+    开场以 AI 的身份发出（和「好友通过时对方发来附言」同一种观感），但它是系统事件、
+    不是 AI 生成的内容，所以 message_type 标 system。建失败不影响创建本身：
+    AI 已经建好了，少一条开场比把整个创建回滚掉划算。
+    """
+    from app.chat.dm import get_or_create_dm_session, send_dm_message
+
+    try:
+        dm = await get_or_create_dm_session(db, owner_id, agent_user_id)
+        await send_dm_message(db, dm["session_id"], agent_user_id, "AI 创建成功！", message_type="system")
+    except Exception as e:
+        logger.warning(f"为新 AI 建私聊失败（agent_user_id={agent_user_id}）: {e}")
+
+
 @router.post("", response_model=AgentResponse, status_code=status.HTTP_201_CREATED)
 async def create_new_agent(
     req: AgentCreateRequest,
@@ -220,6 +236,9 @@ async def create_new_agent(
             others_chat_used=req.others_chat_used,
             disallow_mode=req.disallow_mode,
         )
+        # 让新 AI 出现在聊天列表里：与它的私聊先建好、落一条开场
+        if agent.user_id:
+            await _open_agent_dm(db, current_user["user_id"], agent.user_id)
         return agent_to_dict(agent)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))

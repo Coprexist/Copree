@@ -3,7 +3,7 @@ import {
   BookOpen, Box, FileDown, Globe, Link2, Palette, Plug, RefreshCw, RefreshCcw, Server, Wand2,
 } from 'lucide-react'
 import { api } from '../../../api/client'
-import { Button, EmptyState, Input, ListPanel, Select } from '../../../components/ui'
+import { Button, EmptyState, Input, ListPanel, LIST_CELL_FLEX, Select } from '../../../components/ui'
 import { useT } from '../../../i18n/I18nContext'
 import DocExportTab from './DocExportTab'
 import ApiDocSectionsTab from './ApiDocSectionsTab'
@@ -242,9 +242,7 @@ export default function PluginManager() {
         columns={[
           // 说明并入第一列（名称下面一行）：列表负责"认出它"，详情负责"讲清楚它"
           // w-px = "按内容给最小宽度、别撑开"，把富余宽度全留给插件列，状态/操作就不会被挤成竖排
-          // w-full + max-w-0：让这一列吃掉剩余宽度、同时允许内容被压缩，
-          // 否则 auto 布局会按最长的那行描述把整张表撑宽（truncate 也就永远不生效）
-          { key: 'name', label: t('tool:plugin.colName'), className: 'w-full max-w-0' },
+          { key: 'name', label: t('tool:plugin.colName'), className: LIST_CELL_FLEX },
           { key: 'status', label: t('tool:plugin.colStatus'), className: 'w-px whitespace-nowrap' },
           { key: 'action', label: t('tool:plugin.colAction'), className: 'w-px whitespace-nowrap' },
         ]}
@@ -290,7 +288,7 @@ export default function PluginManager() {
           const status = statusOf(entry)
           return (
             <tr key={entry.key} className="border-b border-border/50">
-                <td className="py-2 px-3 w-full max-w-0">
+                <td className={`py-2 px-3 ${LIST_CELL_FLEX}`}>
                   <div className="flex items-start gap-2.5">
                     <span className="text-textMuted shrink-0 mt-0.5">{entry.icon}</span>
                     <div className="min-w-0">

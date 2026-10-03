@@ -191,11 +191,24 @@ async def accept_request(
             user_id=current_user["user_id"],
         )
 
-        # 通知发起者：申请已被接受
+        # 通知发起者：申请已被接受。一并带上私聊会话 id —— 点通知直接进新好友的对话，
+        # 而不是又绕回申请列表；会话在这里先建好，下面的附言注入也直接复用它。
+        # 会话 id 建失败（对方已注销等）不影响通过本身，退回让前端跳申请列表
         if req_requester_id:
+            session_id = None
+            try:
+                from app.chat.dm import get_or_create_dm_session
+                dm = await get_or_create_dm_session(
+                    friend_repo.session, current_user["user_id"], req_requester_id,
+                )
+                session_id = dm["session_id"]
+            except Exception as e:
+                logger.warning(f"接受好友后建私聊会话失败: {e}")
             await _notify_friend_request("request_accepted", {
                 "request_id": request_id,
                 "accepter_name": current_user.get("username", ""),
+                "accepter_id": current_user["user_id"],
+                "session_id": session_id,
             }, req_requester_id)
 
         # 将附言注入 DM 对话（先发对方附言，再发通过通知）

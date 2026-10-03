@@ -202,11 +202,7 @@ export default function MePage() {
     } finally { setRedeeming(false) }
   }
 
-  // 存储区滚动引用
-  const storageRef = useRef<HTMLDivElement>(null)
-  const scrollToStorage = useCallback(() => {
-    storageRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }, [])
+
   useEffect(() => {
     if (bindSendCooldown <= 0) return
     const timer = setInterval(() => setBindSendCooldown(c => c - 1), 1000)
@@ -424,7 +420,7 @@ export default function MePage() {
             value={stats ? formatSize(stats.storage_used) : '...'}
             label={t('me.storageUsedCard')}
             bg="bg-accent-500/5"
-            onClick={scrollToStorage}
+            onClick={() => navigate('/me/storage')}
           />
         </div>
       </div>

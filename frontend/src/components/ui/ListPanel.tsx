@@ -68,3 +68,8 @@ export default function ListPanel({ columns, title, toolbar, children, empty, cl
 export const LIST_ROW_CLASS = 'border-b border-border/50'
 /** 单元格统一样式 */
 export const LIST_CELL_CLASS = 'py-2 px-3'
+/**
+ * 要截断的长文本列（描述、路径这类）加在 <td> 上，配合内容里的 truncate 才生效。
+ * 缺了它，auto 布局会按最长那行把整张表撑宽，truncate 永远不触发、还多出一条横向滚动。
+ */
+export const LIST_CELL_FLEX = 'w-full max-w-0'
