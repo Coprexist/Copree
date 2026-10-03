@@ -380,9 +380,9 @@
      收到底后曾经还给内容挂过 content-visibility: hidden，但展开时要重建整棵渲染树，代价比省下的更大 */
   .collapse-body > * { overflow: hidden; min-height: 0; contain: layout paint; }
   /* 块级惰性渲染：一份日志几百块，视口外的块既不布局也不绘制，收放与滚动的开销
-     就只跟看得见的几块有关。auto 会记住上次实测高度，估高只是首次滚过之前的兜底
-     （实测均值约 150px，写大了滚动条会越滚越短） */
-  [data-log-block] { content-visibility: auto; contain-intrinsic-size: auto 160px; }
+     就只跟看得见的几块有关。auto 会记住上次实测高度，估高只是首次滚过之前的兜底；
+     这个数要贴近实测均值（两份长日志 59040/394、37976/282，约 135px），写大了滚动条会越滚越短 */
+  [data-log-block] { content-visibility: auto; contain-intrinsic-size: auto 135px; }
   /* 箭头跟着 aria-expanded 转：同一份 CSS 同时管站内与导出件 */
   .collapse-arrow { transition: transform 0.2s ease; }
   [aria-expanded="true"] .collapse-arrow { transform: rotate(90deg); }
