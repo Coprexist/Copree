@@ -59,7 +59,7 @@ function loadDictFile(file) {
   return out
 }
 
-const NS_FILES = ['translations.ts', 'tool.ts', 'admin_config.ts']
+const NS_FILES = ['translations.ts', 'tool.ts', 'admin_config.ts', 'logs.ts']
 /** dicts[ns][lang] = { 'key': 'value' } */
 const dicts = {}
 for (const f of NS_FILES) {

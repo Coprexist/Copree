@@ -89,7 +89,9 @@ async function loadSessionCache(): Promise<SessionCache> {
     if (g.dnd_until) cache.mutedGroups.add(g.id)
   }
   for (const s of sessions || []) {
-    cache.dmPeers[s.session_id] = s.partner_name || s.peer_name || s.session_id
+    // 对方名字在嵌套的 partner 里（/dm/sessions 的返回形状，与侧栏同一处读法）。
+    // 读不到就留空：会话 id（12_106 这种）当名字显示，比不显示还让人困惑
+    cache.dmPeers[s.session_id] = s.partner?.name || ''
     if (s.my_dnd_until) cache.mutedDms.add(s.session_id)
   }
   return cache
@@ -124,7 +126,8 @@ function toItem(kind: NotificationKind, data: any, cache: SessionCache): Notific
     if (cache.mutedDms.has(sid)) return null
     return {
       ...base,
-      place: cache.dmPeers[sid] ?? null,
+      // 会话刚建立、缓存里还没有它时，用推送里带的说话人名字兜底（总比不显示强）
+      place: cache.dmPeers[sid] || data.message?.sender_name || null,
       sender: null,
       preview: summarize(data.message, data.preview)
         ?? (kind === 'group_invite_card' ? data.message?.attachments?.[0]?.group_name ?? null : null),
