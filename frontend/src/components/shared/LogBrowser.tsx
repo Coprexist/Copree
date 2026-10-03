@@ -234,7 +234,7 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
 
         <div ref={exportRef} className="flex-1 min-w-0">
           {currentId && (
-            <div data-export-stick-head className="flex items-center gap-2 pb-2 sticky top-0 z-20 bg-canvas">
+            <div data-export-stick-head className="flex items-center gap-2 py-1 sticky top-0 z-20 bg-surface">
               <span className="text-3xs font-mono text-textMuted">#{currentId}</span>
               {exportLog && (
                 <>
