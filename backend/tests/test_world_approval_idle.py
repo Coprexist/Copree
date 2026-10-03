@@ -98,8 +98,11 @@ def test_touch_on_unknown_approval_is_a_noop():
     assert wam.touch_approval("nope") == 0
 
 
-def test_pending_list_carries_the_countdown():
-    """刷新页面重画弹窗要靠 expires_in 接着走，而不是从头重数。"""
+async def test_pending_list_carries_the_countdown():
+    """刷新页面重画弹窗要靠 expires_in 接着走，而不是从头重数。
+
+    条目里带着 future（构造即要求有事件循环），所以这里必须和其余用例一样是 async。
+    """
     entry = _register()
     try:
         rows = wam.pending_approvals(WORLD_ID)

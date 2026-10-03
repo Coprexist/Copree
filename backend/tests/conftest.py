@@ -5,6 +5,7 @@ pytest 全局配置 — 测试用独立数据库 ai_group_chat_test（不碰生�
   已进 git 历史，口令没轮换过就等于公开）
 - fixture `test_db`：每个测试独立事务回滚（或建表）
 - 迁移测试需要真实建表：用 alembic upgrade head 到测试库
+- 数据根目录在导入时指向临时目录：用例别写真实数据卷，非容器环境也写不动
 """
 import os
 import sys
@@ -36,6 +37,25 @@ TEST_DATABASE_URL_SYNC = (
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ["DATABASE_URL_SYNC"] = TEST_DATABASE_URL_SYNC
 os.environ["JWT_SECRET_KEY"] = "test-secret"
+
+
+def _isolate_data_dir() -> None:
+    """数据根目录指向临时目录。
+
+    settings.data_dir 是容器内的固定路径（/app/data，docker-compose 的挂载点），非容器
+    环境里连创建它的父目录都没权限（CI runner 上直接 PermissionError），而附件读取、
+    AI 脚本沙箱都从这里取路径。收成一个入口在导入时换掉：用例不必自己记着替换，
+    也保证测试永不写进真实数据卷。
+    """
+    import tempfile
+
+    from app.config import settings
+
+    tmp = tempfile.mkdtemp(prefix="copree-test-data-")
+    type(settings).data_dir = property(lambda self: tmp)
+
+
+_isolate_data_dir()
 
 
 def _tune_test_db() -> None:

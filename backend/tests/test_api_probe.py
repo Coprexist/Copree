@@ -15,6 +15,17 @@ pytestmark = pytest.mark.anyio
 MIMO = "https://api.xiaomimimo.com"
 
 
+def _preset_chat_model(base_url: str) -> str:
+    """预设里的 chat_model —— 探针兜底用的就是这个值，别在这里手抄模型名"""
+    from app.services.agent.provider_presets import get_all_presets
+
+    target = base_url.rstrip("/")
+    return next(
+        str(p["chat_model"]) for p in get_all_presets()
+        if (p.get("base_url") or "").rstrip("/") == target and p.get("chat_model")
+    )
+
+
 def _client(handler) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
@@ -46,7 +57,7 @@ async def test_models_404_falls_back_to_tiny_chat():
 
     assert r.ok and r.kind == "ok"
     assert calls == ["/v1/models", "/v1/chat/completions"]
-    assert "mimo-v2.5" in r.message          # 模型名取自预设
+    assert _preset_chat_model(MIMO) in r.message     # 模型名取自预设
 
 
 async def test_chat_probe_body_is_minimal():
@@ -144,8 +155,8 @@ async def test_empty_base_url_short_circuits():
 def test_resolve_probe_model_prefers_preset():
     from app.services.agent.api_probe import resolve_probe_model
 
-    assert resolve_probe_model(MIMO) == "mimo-v2.5"
-    assert resolve_probe_model("https://api.deepseek.com") == "deepseek-flash"
+    assert resolve_probe_model(MIMO) == _preset_chat_model(MIMO)
+    assert resolve_probe_model("https://api.deepseek.com") == _preset_chat_model("https://api.deepseek.com")
     # 不认识的地址 → 平台默认模型（不抛异常）
     assert resolve_probe_model("https://not-a-real-provider.example") != ""
 

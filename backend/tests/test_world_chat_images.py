@@ -12,10 +12,7 @@
 from __future__ import annotations
 
 import base64
-import contextlib
 import os
-import shutil
-import tempfile
 
 import pytest
 
@@ -35,27 +32,6 @@ USER_ID = 9001
 PNG_1PX = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 )
-
-
-@contextlib.contextmanager
-def _temp_data_dir():
-    """把 settings.data_dir 指向临时目录。
-
-    _prepare_world_chat 从 settings.data_dir 读附件。写真实数据目录会污染生产数据，
-    且在 CI 上不可写（/app 属另一用户，PermissionError）。data_dir 是只读 property，
-    因此替换类上的描述符，退出时还原。
-    """
-    from app.config import settings
-
-    tmp = tempfile.mkdtemp(prefix="world-chat-test-")
-    settings_cls = type(settings)
-    original = settings_cls.data_dir
-    settings_cls.data_dir = property(lambda self: tmp)
-    try:
-        yield tmp
-    finally:
-        settings_cls.data_dir = original
-        shutil.rmtree(tmp, ignore_errors=True)
 
 
 async def _seed_world(db, *, with_image: bool) -> tuple[int, dict]:
@@ -117,11 +93,10 @@ async def test_plain_text_turn_survives_the_image_path(migrated_db):
     from app.database import async_session
     from app.services.world.world_chat_items import ChatItem
 
-    with _temp_data_dir():
-        async with async_session() as db:
-            world_id, _ = await _seed_world(db, with_image=False)
-            await _prepare(db, world_id, [ChatItem(text="第一轮")])
-            ctx = await _prepare(db, world_id, [ChatItem(text="你好")])
+    async with async_session() as db:
+        world_id, _ = await _seed_world(db, with_image=False)
+        await _prepare(db, world_id, [ChatItem(text="第一轮")])
+        ctx = await _prepare(db, world_id, [ChatItem(text="你好")])
 
     messages = ctx["messages"]
     assert any("第一轮" in str(m.get("content")) for m in messages), "第二轮未带上历史"
@@ -136,13 +111,12 @@ async def test_image_turn_injects_multimodal_parts_and_note(migrated_db):
     from app.database import async_session
     from app.services.world.world_chat_items import ChatItem
 
-    with _temp_data_dir():
-        async with async_session() as db:
-            world_id, attachment = await _seed_world(db, with_image=True)
-            ctx = await _prepare(
-                db, world_id,
-                [ChatItem(text="这是什么？", attachments=(attachment,))],
-            )
+    async with async_session() as db:
+        world_id, attachment = await _seed_world(db, with_image=True)
+        ctx = await _prepare(
+            db, world_id,
+            [ChatItem(text="这是什么？", attachments=(attachment,))],
+        )
 
     messages = ctx["messages"]
     body = _last_user(messages)
@@ -167,13 +141,12 @@ async def test_image_turn_persists_attachments(migrated_db):
     from app.models.world import WorldChatMessage
     from app.services.world.world_chat_items import ChatItem
 
-    with _temp_data_dir():
-        async with async_session() as db:
-            world_id, attachment = await _seed_world(db, with_image=True)
-            await _prepare(db, world_id, [ChatItem(text="看图", attachments=(attachment,))])
-            rows = (await db.execute(
-                select(WorldChatMessage).where(WorldChatMessage.world_id == world_id)
-            )).scalars().all()
+    async with async_session() as db:
+        world_id, attachment = await _seed_world(db, with_image=True)
+        await _prepare(db, world_id, [ChatItem(text="看图", attachments=(attachment,))])
+        rows = (await db.execute(
+            select(WorldChatMessage).where(WorldChatMessage.world_id == world_id)
+        )).scalars().all()
 
     stored = [r for r in rows if r.role == "user"][-1]
     assert stored.content == "看图"
@@ -185,14 +158,13 @@ async def test_history_image_degrades_to_placeholder(migrated_db):
     from app.database import async_session
     from app.services.world.world_chat_items import ChatItem
 
-    with _temp_data_dir():
-        async with async_session() as db:
-            world_id, attachment = await _seed_world(db, with_image=True)
-            await _prepare(
-                db, world_id,
-                [ChatItem(text="这是什么？", attachments=(attachment,))],
-            )
-            ctx = await _prepare(db, world_id, [ChatItem(text="谢谢")])
+    async with async_session() as db:
+        world_id, attachment = await _seed_world(db, with_image=True)
+        await _prepare(
+            db, world_id,
+            [ChatItem(text="这是什么？", attachments=(attachment,))],
+        )
+        ctx = await _prepare(db, world_id, [ChatItem(text="谢谢")])
 
     messages = ctx["messages"]
     assert any("[图片]" in str(m.get("content")) for m in messages), "历史缺少 [图片] 占位"
@@ -208,13 +180,12 @@ async def test_vision_degrade_strips_images_and_note_together(migrated_db):
     from app.database import async_session
     from app.services.world.world_chat_items import ChatItem
 
-    with _temp_data_dir():
-        async with async_session() as db:
-            world_id, attachment = await _seed_world(db, with_image=True)
-            ctx = await _prepare(
-                db, world_id,
-                [ChatItem(text="这是什么？", attachments=(attachment,))],
-            )
+    async with async_session() as db:
+        world_id, attachment = await _seed_world(db, with_image=True)
+        ctx = await _prepare(
+            db, world_id,
+            [ChatItem(text="这是什么？", attachments=(attachment,))],
+        )
 
     degraded, removed = strip_image_parts(ctx["messages"])
     assert removed == 1

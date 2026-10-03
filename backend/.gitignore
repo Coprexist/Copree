@@ -15,8 +15,9 @@ dist/
 build/
 
 # ── 本地数据与上传 ──
-data/
-uploads/
+# 锚定在 backend/ 根：不写开头斜杠的 data/ 会连 app/.../data/ 这类源码目录一起忽略
+/data/
+/uploads/
 
 # ── 日志 ──
 *.log

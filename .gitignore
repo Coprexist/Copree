@@ -11,8 +11,10 @@ token.txt
 backup_backend/
 
 # ── Docker 数据卷（数据库、上传文件） ──
-data/*
-!data/world_blocks/
+# 必须锚定在仓库根：不写开头斜杠的 data 规则会连 frontend/src/pages/console/data/
+# 这类源码目录一起忽略，文件根本没进仓库，CI 构建时才发现组件解析不到。
+/data/*
+!/data/world_blocks/
 
 # ── Python ──
 __pycache__/
@@ -81,12 +83,6 @@ Copree-Client
 
 # Python/venv
 .venv*
-
-# app data
-data/
-*.log
-__pycache__/
-frontend/dist/
 
 # 测试产物（覆盖率报告 / pytest 缓存）
 .coverage

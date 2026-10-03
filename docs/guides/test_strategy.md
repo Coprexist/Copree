@@ -165,11 +165,20 @@ assert doc_yaml_block.rstrip() == open(".github/workflows/test.yml").read().rstr
 
 #### ⑥ 本地能过不等于 CI 能过
 
-测试把图片写进 `settings.data_dir`（硬编码为 `/app/data`）：本地 `/app` 可写、全绿；
-CI runner 上 `/app` 属另一用户不可写，4 条用例直接 `PermissionError`。
+测试把附件与 AI 脚本沙箱都写在 `settings.data_dir` 下（容器内固定为 `/app/data`）：本地 `/app`
+可写、全绿；CI runner 上 `/app` 属另一用户不可写，9 条用例只在 CI 挂。其中决策层那条最隐蔽——
+沙箱起不来被吞成「执行过但没有回复」，断言看到的是 `handled=True, reply=''`，而不是一个报错。
 
 只要测试依赖**环境可写性**或**绝对路径**，就必须在 CI 上验证过才算数。
-修法是不要让测试碰真实数据目录：`data_dir` 是只读 property，测试临时替换类描述符，退出还原。
+修法是不让测试碰真实数据目录：`conftest.py` 在导入时把 `data_dir` 指向临时目录一次
+（`_isolate_data_dir`），用例与文档都不必再各自处理。
+
+#### ⑦ 忽略规则不锚定，等于把源码静默挡在仓库外
+
+`.gitignore` 里写 `data/`（没有开头斜杠）会匹配**任意层级**叫 data 的目录，
+`frontend/src/pages/console/data/` 就这么被吞了：本地文件在、类型检查过、`git status` 也不报，
+只有仓库里缺这两个组件——一直到 CI 跑构建才以「解析不到组件」暴露。
+规则要锚定到它真正指的那一层（`/data/*`），运行时数据目录各自由所属目录的 `.gitignore` 声明。
 
 ### 1.4 前端检查（两条，都在容器里跑，不需要装依赖）
 
@@ -410,13 +419,12 @@ cd /tmp/zfsv3/sata11/15228874271/data/copree && \
 # backend/tests/test_world_chat_images.py
 async def test_image_turn_injects_multimodal_parts_and_note(migrated_db):
     """带图消息生成多模态 parts，便签数量等于实际注入数。"""
-    with _temp_data_dir():
-        async with async_session() as db:
-            world_id, attachment = await _seed_world(db, with_image=True)
-            ctx = await _prepare(
-                db, world_id,
-                [ChatItem(text="这是什么？", attachments=(attachment,))],
-            )
+    async with async_session() as db:
+        world_id, attachment = await _seed_world(db, with_image=True)
+        ctx = await _prepare(
+            db, world_id,
+            [ChatItem(text="这是什么？", attachments=(attachment,))],
+        )
 
     body = _last_user(ctx["messages"])
     assert isinstance(body["content"], list), "图片被丢弃，content 应为 parts 列表"
@@ -426,8 +434,8 @@ async def test_image_turn_injects_multimodal_parts_and_note(migrated_db):
 
 ### 5.3 conftest.py
 
-集成用例共享 `backend/tests/conftest.py`。它做三件事：把 `DATABASE_URL` 指向测试库、
-提供 `migrated_db` fixture、注册 anyio backend：
+集成用例共享 `backend/tests/conftest.py`。它做四件事：把 `DATABASE_URL` 指向测试库、
+把数据根目录指向临时目录、提供 `migrated_db` fixture、注册 anyio backend：
 
 ```python
 # backend/tests/conftest.py（节选）
@@ -439,6 +447,9 @@ TEST_DATABASE_URL_SYNC = (
 )
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ["DATABASE_URL_SYNC"] = TEST_DATABASE_URL_SYNC
+
+# 数据根目录指向临时目录：data_dir 是容器内的固定路径，非容器环境写不动
+_isolate_data_dir()
 
 
 @pytest.fixture(scope="session")
@@ -464,14 +475,13 @@ async def migrated_db():
 
 | 辅助函数 | 作用 | 注意 |
 |---------|------|------|
-| `_temp_data_dir()` | 上下文管理器，把 `settings.data_dir` 指向临时目录 | `data_dir` 是只读 property，实现上替换类描述符并在退出时还原；不做这一步会污染生产数据目录，且在 CI 上不可写 |
 | `_seed_world(db, with_image=)` | 清库 → 建临时用户 + 世界 → 可选地落一张真实 1×1 PNG | 开头 `await clear(db, "worlds", "users")`；返回 `(world_id, attachment)` |
 | `_prepare(db, world_id, items)` | 走真实链路调 `_prepare_world_chat`（`stream_world_chat` 的准备阶段）| 它会**落库**用户消息，所以多轮用例天然带历史 |
 | `_last_user(messages)` | 取最后一条 user 消息 | 尾部还挂着时间/访客等 system 段，**不能取 `messages[-1]`** |
 | `_notes(messages)` | 取尾部「本轮附图」便签 | 用 `IMAGE_NOTE_PREFIX` 前缀识别 |
 
 
-每个用例都必须在 `_temp_data_dir()` 内执行 `_seed_world` 与 `_prepare`。
+数据目录不用管：`conftest.py` 在导入时已经把它指到临时目录（见 5.3），用例只管 `_seed_world` 与 `_prepare`。
 
 五条用例各自守住的不变式（加新用例时别测重了）：
 
