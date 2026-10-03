@@ -6,9 +6,9 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
-from app.paths import WORLDS_DIR
+from app.paths import agent_dir, world_dir
 from app.services.sandbox import runner
-from app.services.sandbox.agent_sandbox import agent_dir, run_agent_code
+from app.services.sandbox.agent_sandbox import run_agent_code
 from app.services.world.world_sandbox import run_world_code, run_world_trigger
 
 # 探针用不存在的编号，且数据根在 conftest 里指向临时目录：不碰任何真实 AI/世界的目录
@@ -119,7 +119,7 @@ def test_world_and_agent_share_one_execution_layer():
 
 async def test_world_code_still_locked_to_its_own_directory():
     """重构后世界沙箱行为不变：目录内可写、目录外一律拒绝"""
-    workdir = WORLDS_DIR / str(PROBE_ID)
+    workdir = world_dir(PROBE_ID)
     try:
         ok = await run_world_code(PROBE_AGENT, code=(
             "open('probe_world.txt', 'w').write('ok'); print('wrote')"
@@ -135,7 +135,7 @@ async def test_world_code_still_locked_to_its_own_directory():
 
 async def test_world_trigger_runs_entry_handle():
     """触发器协议（harness 导入入口 + stdin 喂事件 + stdout 收 JSON）重构后照旧"""
-    workdir = WORLDS_DIR / str(PROBE_ID)
+    workdir = world_dir(PROBE_ID)
     workdir.mkdir(parents=True, exist_ok=True)
     (workdir / "main.py").write_text(
         "def handle(event):\n    return {'echo': event.get('type')}\n", encoding="utf-8"

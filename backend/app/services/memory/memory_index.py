@@ -26,7 +26,7 @@
 import json
 import logging
 import os as _os
-from app.paths import AGENTS_DIR, SHARED_MEMORIES_DIR
+from app.paths import SHARED_MEMORIES_DIR, agent_dir
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ DIRECTORY_README_TEMPLATES = {
 
 def _get_memory_dir(agent_id: int) -> str:
     """获取指定 Agent 的记忆根目录路径"""
-    return _os.path.join(str(AGENTS_DIR), str(agent_id), "memories")
+    return _os.path.join(str(agent_dir(agent_id)), "memories")
 
 
 async def init_memory_directories(agent_id: int, ai_type: str = "resonance") -> None:

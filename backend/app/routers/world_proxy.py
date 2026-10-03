@@ -760,10 +760,9 @@ MIME_TYPES = {
 
 def _resolve_world_file(world_id: int, rel_path: str):
     """解析世界文件（防越界），返回 (Path, mime) 或抛 404"""
-    from pathlib import Path
-    from app.services.world.world_file_service import WORLDS_ROOT
+    from app.paths import world_dir
 
-    base = (WORLDS_ROOT / str(world_id)).resolve()
+    base = world_dir(world_id)
     rel_path = (rel_path or "").strip().lstrip("/")
     if not rel_path or ".." in rel_path.split("/"):
         raise HTTPException(status_code=404, detail="文件不存在")

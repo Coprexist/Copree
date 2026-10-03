@@ -11,7 +11,6 @@ import asyncio
 import contextlib
 import json
 import shutil
-import tempfile
 
 from app.tools.world.base import WorldToolContext
 from app.services.world import world_file_service as fs
@@ -44,15 +43,19 @@ def _raises(*exc):
 
 @contextlib.contextmanager
 def _sandbox_world_dir():
-    """把世界文件根指向临时目录（测试不碰真实 data/worlds）"""
-    tmp = tempfile.mkdtemp(prefix="world-guard-")
-    old = fs.WORLDS_ROOT
-    fs.WORLDS_ROOT = __import__("pathlib").Path(tmp)
+    """用这个世界的目录，用完清掉。
+
+    数据根在 conftest 里已经指向临时目录，这里不必再替换路径——替换反而是给
+    「路径只有一个来源」开后门。
+    """
+    from app.paths import world_dir
+
+    d = world_dir(WORLD_ID)
+    d.mkdir(parents=True, exist_ok=True)
     try:
-        yield fs._world_dir(WORLD_ID)
+        yield d
     finally:
-        fs.WORLDS_ROOT = old
-        shutil.rmtree(tmp, ignore_errors=True)
+        shutil.rmtree(d, ignore_errors=True)
 
 
 class _World:

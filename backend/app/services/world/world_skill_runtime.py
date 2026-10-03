@@ -36,7 +36,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from app.paths import AI_SKILLS_DIR, WORLDS_DIR
+from app.paths import AI_SKILLS_DIR, world_dir
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +130,7 @@ def list_ai_skills() -> list[SkillDef]:
 
 def list_world_skills(world_id: int) -> list[SkillDef]:
     """世界侧（世界颁布的居民能力）"""
-    skills_dir = WORLDS_DIR / str(world_id) / "skills"
+    skills_dir = world_dir(world_id) / "skills"
     if not skills_dir.is_dir():
         return []
     return [

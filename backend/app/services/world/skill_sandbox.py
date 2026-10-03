@@ -19,7 +19,7 @@ import signal
 import sys
 from pathlib import Path
 
-from app.paths import AI_SKILLS_DIR, WORLDS_DIR
+from app.paths import AI_SKILLS_DIR, world_dir
 from app.repositories.world_repo import SQLAlchemyWorldRepository
 from sqlalchemy.ext.asyncio import AsyncSession
 logger = logging.getLogger(__name__)
@@ -160,13 +160,13 @@ async def _handle_call(db, world, permissions: set[str], req: dict) -> dict:
 
 async def run_skill_in_sandbox(db, world, skill, args: dict) -> dict:
     """在隔离沙箱中执行 skill（返回 execute_skill 兼容的 dict）"""
-    world_dir = str(WORLDS_DIR / str(world.id)) if world is not None else None
+    world_folder = str(world_dir(world.id)) if world is not None else None
     skill_dir = str(skill.code_path.parent)
     permissions = list(skill.permissions or [])
 
     meta = {
         "name": skill.name,
-        "world_dir": world_dir,
+        "world_dir": world_folder,
         "skill_dir": skill_dir,
         "args": args,
         "permissions": permissions,

@@ -20,7 +20,7 @@ import signal
 import sys
 from pathlib import Path
 
-from app.paths import WORLDS_DIR
+from app.paths import world_dir
 
 logger = logging.getLogger(__name__)
 
@@ -116,10 +116,6 @@ asyncio.run(main())
 '''
 
 
-def _world_dir(world_id: int) -> Path:
-    return (WORLDS_DIR / str(world_id)).resolve()
-
-
 def tick_interval_for(world) -> float:
     """worlds.config.tick_interval（非法值回退默认）"""
     try:
@@ -164,7 +160,7 @@ class ResidentManager:
             await db.commit()
         except Exception as e:
             logger.warning(f"🌐 世界 #{world.id} 常驻启动：token 准备失败 {e}")
-        workdir = _world_dir(world.id)
+        workdir = world_dir(world.id)
         target = (workdir / "main.py").resolve()
         if not str(target).startswith(str(workdir)) or not target.exists():
             logger.info(f"🌐 世界 #{world.id} 常驻启动跳过：main.py 不存在")

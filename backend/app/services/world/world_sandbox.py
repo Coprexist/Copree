@@ -20,7 +20,7 @@ from app.services.sandbox.runner import (
     acquire_slot,
     base_env,
 )
-from app.paths import WORLDS_DIR
+from app.paths import world_dir
 from app.services.sandbox.runner import run_code as _run_sandbox_code
 
 logger = logging.getLogger(__name__)
@@ -63,11 +63,6 @@ def policy_for_world(world, background: bool = False) -> Policy:
     )
 
 
-def _world_dir(world_id: int) -> Path:
-    """世界文件夹（与 world_file_service 同源：数据根的 worlds/{id}/）"""
-    return (WORLDS_DIR / str(world_id)).resolve()
-
-
 def _sanitized_env(world, *, readonly: bool = False) -> dict:
     """env 白名单：不继承后端密钥（DATABASE_URL/JWT_SECRET/API Key 等），只给运行必需项。
 
@@ -84,7 +79,7 @@ def _sanitized_env(world, *, readonly: bool = False) -> dict:
     env = {
         **base_env(),                      # PATH/LANG/TZ/HOME + 隔离库目录（沙箱层给）
         "WORLD_ID": str(world.id),
-        "WORLD_DIR": str(_world_dir(world.id)),
+        "WORLD_DIR": str(world_dir(world.id)),
     }
     if readonly:
         # 子进程入口读它决定 apply_isolate 是否给世界目录写权限（隔离在子进程内施加，
@@ -173,7 +168,7 @@ async def run_world_code(
     （duration_ms = 执行耗时；queued_ms = 全局并发排队等待耗时，两者相加 = 请求总耗时）
     """
     _t0 = asyncio.get_event_loop().time()
-    workdir = _world_dir(world.id)
+    workdir = world_dir(world.id)
     before = {} if readonly else _code_snapshot(workdir)      # 只读运行不会写盘，不必快照
     async with acquire_slot():
         _result = await _run_world_code(world, code=code, entry=entry, background=background, readonly=readonly)
@@ -200,7 +195,7 @@ async def _run_world_code(
     内存/CPU/进程数仍由 Policy 与 rlimit 锁死。
     """
     return await _run_sandbox_code(
-        _world_dir(world.id),
+        world_dir(world.id),
         code=code,
         entry=entry,
         policy=policy_for_world(world, background=background),
@@ -289,7 +284,7 @@ async def _run_world_trigger(
 ) -> dict:
     """世界触发器执行：harness 导入入口的 handle(event)，stdin 喂事件、stdout 收 JSON。"""
     result = await _run_sandbox_code(
-        _world_dir(world.id),
+        world_dir(world.id),
         entry=entry,
         harness=_TRIGGER_HARNESS_TEMPLATE,
         stdin_text=json.dumps(event or {}, ensure_ascii=False),

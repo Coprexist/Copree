@@ -15,7 +15,7 @@ from app.models.opencli import (
     OpenCLIDeniedCommand,
 )
 from app.config import settings
-from app.paths import AGENTS_DIR
+from app.paths import agent_dir
 from app.repositories.content_repo import ContentRepository
 
 logger = logging.getLogger(__name__)
@@ -166,9 +166,6 @@ import os
 import shutil
 from pathlib import Path
 
-AGENTS_DATA_DIR = AGENTS_DIR
-
-
 def _resolve_agent_path(agent_id: int, file_path: str) -> Path:
     """
     将 AI 请求的文件路径解析到其沙箱目录下。
@@ -184,7 +181,7 @@ def _resolve_agent_path(agent_id: int, file_path: str) -> Path:
     Raises:
         ValueError: 路径穿越或非法路径
     """
-    workspace = AGENTS_DATA_DIR / str(agent_id)
+    workspace = agent_dir(agent_id)
     # 用 resolve() 消除 .. 和符号链接
     try:
         resolved = (workspace / file_path).resolve()

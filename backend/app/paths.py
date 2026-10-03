@@ -29,3 +29,17 @@ BACKUPS_DIR = DATA_DIR / "backups"
 SHARED_MEMORIES_DIR = DATA_DIR / "shared_memories"
 THEME_VOTES_FILE = DATA_DIR / "theme_votes.json"
 THEME_VOTES_R2_FILE = DATA_DIR / "theme_votes_r2.json"
+
+
+# ── 实体目录：根下的 {id} 目录也只在下面两个函数里拼 ──
+# 各模块自己拼（`WORLDS_DIR / str(id)`）时，只要有一处写法不同（漏 resolve、多一级目录），
+# 就会出现「同一个世界两份文件、文件不见了」，所以一律走这两个入口。
+
+def world_dir(world_id: int) -> Path:
+    """某个世界的目录（代码区 + 数据区）"""
+    return (WORLDS_DIR / str(world_id)).resolve()
+
+
+def agent_dir(agent_id: int) -> Path:
+    """某个 AI 的文件空间（同时是它的代码沙箱目录）"""
+    return (AGENTS_DIR / str(agent_id)).resolve()

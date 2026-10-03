@@ -11,7 +11,7 @@ import json
 import logging
 from pathlib import Path
 
-from app.paths import AGENTS_DIR
+from app.paths import agent_dir
 from app.services.sandbox.runner import Policy
 from app.services.sandbox.runner import run_code as _run_sandbox_code
 
@@ -21,11 +21,6 @@ AGENT_TIMEOUT_SECONDS = 10.0     # 单段脚本墙钟上限：决策技能要秒
 AGENT_MEMORY_MB = 96             # 解释器约需 ≥32MB，留出数据处理余量
 AGENT_CPU_SECONDS = 5.0
 MAX_CTX_CHARS = 8000             # 事件上下文注入上限（防超长消息把 env 撑爆）
-
-
-def agent_dir(agent_id: int) -> Path:
-    """AI 文件空间（沙箱目录）——与 file_* 工具、OpenCLI 同源的唯一解析入口"""
-    return (AGENTS_DIR / str(agent_id)).resolve()
 
 
 def script_path(agent_id: int, rel_path: str) -> Path:
