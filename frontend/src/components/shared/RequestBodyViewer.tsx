@@ -5,7 +5,7 @@
  * 交接 / 人说的话 / AI 说的话 / 本轮工具 / 工具调用 / 工具返回 / 思考 / 收尾与报错。
  * 正文一律原样显示（不截断）：能当 Markdown 读的走 Markdown，JSON 走格式化，其余原样。
  */
-import { Fragment, useId, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ChevronRight } from 'lucide-react'
 import MarkdownContent from './MarkdownContent'
 import { useT } from '../../i18n/I18nContext'
@@ -246,6 +246,11 @@ function Block({ index, msgIndex, kind, title, source, marks = [], tone = 'norma
   // 折叠状态要能带出组件：导出件里没有 React，靠这两个属性把开关关系留在 DOM 上
   const bodyId = useId()
   const viewId = useId()
+  const bodyElRef = useRef<HTMLDivElement>(null)
+  const viewElRef = useRef<HTMLDivElement>(null)
+  // 折叠与「原文 / 渲染」各自把自己的状态交进来，机制只有这一份
+  useHeightTransition(bodyElRef, open ? 'open' : 'closed', !open)
+  useHeightTransition(viewElRef, showSource ? 'source' : 'rendered')
   return (
     <div className={`flex gap-2 rounded-control border ${style.box} overflow-hidden ${
       tone === 'removed' ? 'opacity-70 ring-1 ring-rose-500/30' : ''
@@ -295,10 +300,10 @@ function Block({ index, msgIndex, kind, title, source, marks = [], tone = 'norma
             </button>
           )}
         </div>
-        <div id={bodyId} data-open={open} data-smooth-height className="collapse-body">
+        <div id={bodyId} ref={bodyElRef} data-open={open} className="collapse-body">
           <div className="pt-1.5 min-w-0">
             {/* 两份视图都在 DOM 里：导出件没有 React，切「原文 / 渲染」只能靠 data-value */}
-            <div id={viewId} data-smooth-height data-value={showSource ? 'source' : 'rendered'} className="switch">
+            <div id={viewId} ref={viewElRef} data-value={showSource ? 'source' : 'rendered'} className="switch">
               <div data-case="rendered">{children}</div>
               {source !== undefined && <div data-case="source"><Raw text={source || ''} lazy={'msg:' + msgIndex} /></div>}
             </div>
@@ -310,52 +315,39 @@ function Block({ index, msgIndex, kind, title, source, marks = [], tone = 'norma
 }
 
 /**
- * 容器高度一变就平滑过渡过去，不逐个特判「这次是折叠、那次是切视图」——
- * 只要高度变了就当作一次高度动画，否则每加一种会改高度的交互都要再补一处。
- * 看的是高度本身（ResizeObserver），所以内容自己长高也算。
+ * 高度变化统一走这一条：折叠、两份视图切换都调它，不再每个交互各写一套。
+ * 目标高度得由调用方说清楚（收起的目标是 0，量不出来），所以传的是「变化后的状态」；
+ * 上一次的高度它自己记着，调用方不用管 from。
  */
-function useSmoothHeights(rootRef: React.RefObject<HTMLDivElement | null>, deps: React.DependencyList) {
-  useEffect(() => {
-    const root = rootRef.current
-    if (!root) return
-    const stop: Array<() => void> = []
-    root.querySelectorAll<HTMLElement>('[data-smooth-height]').forEach(el => {
-      let prev = el.offsetHeight
-      let timer = 0
-      // 收到底的标记：网格 0 行高与「不用再渲染」都挂在它上面，动画期间不设，内容才完整可见
-      const markCollapsed = () => {
-        if (el.getAttribute('data-open') === 'false') el.setAttribute('data-collapsed', 'true')
-        else el.removeAttribute('data-collapsed')
-      }
-      markCollapsed()
-      const ro = new ResizeObserver(() => {
-        const to = el.offsetHeight
-        if (to === prev) return
-        const from = prev
-        prev = to
-        // 动画期间先停掉观察：我们自己改高度也会惊动它，否则会自己追自己
-        ro.disconnect()
-        el.style.overflow = 'hidden'
-        el.style.height = from + 'px'
-        void el.offsetHeight
-        el.style.transition = 'height 0.28s cubic-bezier(0.65, 0, 0.35, 1)'
-        el.style.height = to + 'px'
-        window.clearTimeout(timer)
-        timer = window.setTimeout(() => {
-          // 先落「收到底」的标记再交还高度：反过来的话网格会先弹回一行、再跳回 0
-          markCollapsed()
-          el.style.transition = ''
-          el.style.height = ''
-          el.style.overflow = ''
-          prev = el.offsetHeight
-          ro.observe(el)
-        }, 320)
-      })
-      ro.observe(el)
-      stop.push(() => { ro.disconnect(); window.clearTimeout(timer) })
-    })
-    return () => stop.forEach(fn => fn())
-  }, deps)
+function useHeightTransition(ref: React.RefObject<HTMLElement | null>, key: string, collapsed = false) {
+  const prev = useRef<number | null>(null)
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    // 展开时先松开「收到底」的标记，否则网格还停在 0 行高、量出来的目标高度会是 0
+    if (!collapsed) el.removeAttribute('data-collapsed')
+    const to = collapsed ? 0 : el.offsetHeight
+    const from = prev.current
+    prev.current = to
+    if (from === null) {
+      if (collapsed) el.setAttribute('data-collapsed', 'true')
+      return
+    }
+    if (from === to) return
+    el.style.overflow = 'hidden'
+    el.style.height = from + 'px'
+    void el.offsetHeight
+    el.style.transition = 'height 0.28s cubic-bezier(0.65, 0, 0.35, 1)'
+    el.style.height = to + 'px'
+    const timer = window.setTimeout(() => {
+      // 先落「收到底」的标记再交还高度：反过来的话网格会先弹回一行、再跳回 0
+      if (collapsed) el.setAttribute('data-collapsed', 'true')
+      el.style.transition = ''
+      el.style.height = ''
+      el.style.overflow = ''
+    }, 320)
+    return () => window.clearTimeout(timer)
+  }, [key, collapsed, ref])
 }
 /**
  * 等宽原文块：JSON 格式化、机器文本、逐字原文都用它，样式只写一遍。
@@ -410,6 +402,8 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
   // 按钮被搬到调用方那一行时，开关组的 id 由调用方给，两边仍指向同一组
   const autoId = useId()
   const viewId = rawSwitchId ?? autoId
+  const switchElRef = useRef<HTMLDivElement>(null)
+  useHeightTransition(switchElRef, showRaw ? 'raw' : 'segments')
   // 导出件里「原始 JSON」与每条的「原文」都按这份紧凑数据现算，不在文件里重复存两遍；
   // 把 < 转义掉是为了内容里出现 </script> 时不会提前结束这个标签
   const logJson = useMemo(() => JSON.stringify(list).replace(/</g, '\\u003c'), [list])
@@ -474,16 +468,13 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
     return out
   }, [list, mentionNames, t])
 
-  const rootRef = useRef<HTMLDivElement>(null)
-  // 折叠的块、两份视图都在这一层里：谁的高度变都给一段过渡（单一机制，不再逐个特判）
-  useSmoothHeights(rootRef, [blocks])
 
   if (list.length === 0) {
     return <p className={`text-xs text-textMuted ${className}`}>{t('logs:empty')}</p>
   }
 
   return (
-    <div ref={rootRef} className={className}>
+    <div className={className}>
       {/* 数据只存一份：导出件打开时按这份紧凑 JSON 现算「原始 JSON」与每条「原文」 */}
       <script type="application/json" data-log-json dangerouslySetInnerHTML={{ __html: logJson }} />
       {legend && <div className="flex items-center gap-2 flex-wrap pt-2 pb-2 sticky top-0 z-10 bg-surface" data-value={showRaw ? 'raw' : 'segments'} data-switch-mirror={viewId} data-export-stick-legend>
@@ -510,7 +501,7 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
         )}
       </div>}
       {/* 两份视图都在 DOM 里：导出件没有 React，切「原始 JSON」只能靠 data-value */}
-      <div id={viewId} data-smooth-height data-value={showRaw ? 'raw' : 'segments'} className="switch">
+      <div id={viewId} ref={switchElRef} data-value={showRaw ? 'raw' : 'segments'} className="switch">
         <div data-case="segments" className="space-y-1.5">
           {blocks.map((block, i) => (
             <Block key={i} index={i} msgIndex={block.msgIndex} kind={block.kind} title={block.title} source={block.source} marks={block.marks} tone={tone}>
