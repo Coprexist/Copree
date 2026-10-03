@@ -376,8 +376,9 @@
   /* 收到底之后才是 0 行高（标记由高度动画收尾时打，见 useSmoothHeights）：
      动画期间网格仍是一行、内容完整可见，缩的是外层高度，所以看得见它滑上去 */
   .collapse-body[data-collapsed="true"] { grid-template-rows: 0fr; }
-  .collapse-body[data-collapsed="true"] > * { content-visibility: hidden; }
-  .collapse-body > * { overflow: hidden; min-height: 0; }
+  /* 内容自成一块布局：容器高度在动画里每帧都变，不隔开的话整棵子树要跟着重排，这正是收起发卡的来源。
+     收到底后曾经还给内容挂过 content-visibility: hidden，但展开时要重建整棵渲染树，代价比省下的更大 */
+  .collapse-body > * { overflow: hidden; min-height: 0; contain: layout paint; }
   /* 箭头跟着 aria-expanded 转：同一份 CSS 同时管站内与导出件 */
   .collapse-arrow { transition: transform 0.2s ease; }
   [aria-expanded="true"] .collapse-arrow { transform: rotate(90deg); }

@@ -142,7 +142,7 @@ const EXPORT_SCRIPT = [
   '  el.style.overflow = "hidden"',
   '  el.style.height = from + "px"',
   '  void el.offsetHeight',
-  '  el.style.transition = "height 0.28s cubic-bezier(0.65, 0, 0.35, 1)"',
+  '  el.style.transition = "height 0.2s cubic-bezier(0.65, 0, 0.35, 1)"',
   '  el.style.height = to + "px"',
   '  /* 等过渡真的走完再收尾：用定时器猜时间，猜早了会在动画没结束时就交还高度、看起来弹一下 */',
   '  var finish = function () {',
