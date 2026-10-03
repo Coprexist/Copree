@@ -5,10 +5,11 @@
  * 点进去看这段状态的最近一次完整请求体、与上一条的增量、以及这段状态的历史。
  * 「停在哪段状态、看的是哪一条」写进查询参数（state / log），刷新和后退都回到原地。
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Loader2 } from 'lucide-react'
 import { api } from '../../api/client'
+import { saveElementAsHtml } from '../../utils/exportHtml'
 import { useT } from '../../i18n/I18nContext'
 import RequestBodyViewer from './RequestBodyViewer'
 import { RunStatusChip } from './RunStatus'
@@ -61,6 +62,8 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
   const [delta, setDelta] = useState<any>(null)
   const [bodyLoading, setBodyLoading] = useState(false)
   const [showDelta, setShowDelta] = useState(false)
+  /** 正文那块已渲染的 DOM：下载 HTML 时直接序列化它，导出件才跟所见一致 */
+  const bodyRef = useRef<HTMLDivElement>(null)
 
   const stateKey = searchParams.get('state')
   const wantedLogId = Number(searchParams.get('log')) || null
@@ -111,6 +114,17 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
       else next.set(key, value)
     }
     setSearchParams(next)
+  }
+
+  /**
+   * 下载 HTML：把当前渲染结果原样落盘。
+   * 这条不走后端导出接口——后端只给纯文本，markdown/公式/代码高亮是前端渲染的；
+   * 也正因为纯前端，管理台的日志浏览器同样能用。
+   */
+  const exportHtml = () => {
+    const el = bodyRef.current
+    if (!el || !currentId) return
+    saveElementAsHtml(el, 'log-' + currentId + '.html', '#' + currentId)
   }
 
   if (loading) {
@@ -212,27 +226,40 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
         </aside>
 
         <div className="flex-1 min-w-0">
-          {exportLog && currentId && (
+          {currentId && (
             <div className="flex items-center gap-2 mb-2">
               <span className="text-3xs font-mono text-textMuted">#{currentId}</span>
+              {exportLog && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => exportLog(currentId, 'json')}
+                    className="text-3xs text-textMuted hover:text-textSecondary transition-colors"
+                  >
+                    {t('logs:downloadJson')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => exportLog(currentId, 'md')}
+                    className="text-3xs text-textMuted hover:text-textSecondary transition-colors"
+                  >
+                    {t('logs:downloadMd')}
+                  </button>
+                </>
+              )}
               <button
                 type="button"
-                onClick={() => exportLog(currentId, 'json')}
-                className="text-3xs text-textMuted hover:text-textSecondary transition-colors"
+                onClick={exportHtml}
+                disabled={detail === null}
+                title={t('logs:downloadHtmlHint')}
+                className="text-3xs text-textMuted hover:text-textSecondary transition-colors disabled:opacity-40"
               >
-                {t('logs:downloadJson')}
-              </button>
-              <button
-                type="button"
-                onClick={() => exportLog(currentId, 'md')}
-                className="text-3xs text-textMuted hover:text-textSecondary transition-colors"
-              >
-                {t('logs:downloadMd')}
+                {t('logs:downloadHtml')}
               </button>
             </div>
           )}
           {/* 正文自己滚（跟左边历史一样封顶）：两栏各滑各的，整块不再拖成一条长页 */}
-          <div className="max-h-[70vh] overflow-y-auto pr-1">
+          <div ref={bodyRef} className="max-h-[70vh] overflow-y-auto pr-1">
           {bodyLoading ? (
             <div className="flex items-center gap-2 text-xs text-textMuted py-6 justify-center">
               <Loader2 size={13} className="animate-spin" /> {t('common.loading')}
