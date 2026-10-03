@@ -157,6 +157,9 @@ export function saveElementAsHtml(el: HTMLElement, filename: string, title: stri
   clone.className = 'exported-log-body'
   // 站内专有的按钮（下载 JSON / Markdown / HTML）在导出件里点了也没用，整块摘掉
   clone.querySelectorAll('[data-export-skip]').forEach(node => node.remove())
+  // 页面里正文那层自己限高滚动（两栏各自滑），导出件是一整页：这一层要平铺开，
+  // 否则整段内容被切在 70vh 里还多一条滚动条（块内代码/JSON 的小滚动条保留，跟站内一致）
+  clone.querySelectorAll('[data-export-flat]').forEach(node => { node.className = '' })
   absolutizeUrls(clone)
 
   // 瘦身：每条的「原文」和整段「原始 JSON」不在文件里存第二遍——清空，打开时按紧凑数据现算

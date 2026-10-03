@@ -281,8 +281,9 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
               )}
             </div>
           )}
-          {/* 正文自己滚（跟左边历史一样封顶）：两栏各滑各的，整块不再拖成一条长页 */}
-          <div className="max-h-[70vh] overflow-y-auto pr-1">
+          {/* 正文自己滚（跟左边历史一样封顶）：两栏各滑各的，整块不再拖成一条长页；
+              导出成整页时这一层要平铺，见 exportHtml 对 data-export-flat 的处理 */}
+          <div data-export-flat className="max-h-[70vh] overflow-y-auto pr-1">
           {bodyLoading ? (
             <div className="flex items-center gap-2 text-xs text-textMuted py-6 justify-center">
               <Loader2 size={13} className="animate-spin" /> {t('common.loading')}
