@@ -82,11 +82,14 @@ export function useWidthDrag(options: WidthDragOptions) {
   /** 悬停时也要更新指示线位置，所以不管有没有捕获都写变量 */
   const onHandleMove = useCallback((e: React.PointerEvent<HTMLElement>) => {
     const handle = e.currentTarget
-    // 写到定位祖先而不是手柄自己身上：左右两条读到同一个 Y，拖动时两侧高亮才在同一高度。
-    // 手柄是 absolute，offsetParent 正是它俩共同的定位包含块（中间可能隔着 display:contents 的层，
-    // 那种层没有盒子，parentElement 量不出坐标）。
-    const host = (handle.offsetParent as HTMLElement | null) ?? handle.parentElement
-    if (host) host.style.setProperty(HANDLE_Y_VAR, `${e.clientY - host.getBoundingClientRect().top}px`)
+    // 指示线的原点要写在左右共用的祖先上：只写在自己身上，另一侧就永远停在旧值。
+    // 手柄 → 感应区 → 定位宿主，宿主才是两侧共享的那个（手柄嵌在各自的感应区里，
+    // offsetParent 只到感应区；中间可能还隔着 display:contents 的层，那种层没有盒子，
+    // 用 parentElement 量不出坐标，offsetParent 会自己跳过）。
+    const zone = handle.offsetParent as HTMLElement | null
+    const host = (zone?.offsetParent as HTMLElement | null) ?? zone ?? handle.parentElement
+    // 值按手柄顶边算：两侧手柄同高同顶，所以这个数在两边一样，渐变落到各自的 span 上也就对齐
+    if (host) host.style.setProperty(HANDLE_Y_VAR, `${e.clientY - handle.getBoundingClientRect().top}px`)
     const d = dragRef.current
     if (!d || !handle.hasPointerCapture(e.pointerId)) return
     d.latest = e.clientX
