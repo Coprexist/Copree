@@ -594,7 +594,7 @@ class KeyFatalError(Exception):     # 402/401 → 跳过此 Key
 | `protocol` | 行为协议（chat/immersive/digital_life） | 固定段 |
 | `personality` | AI 当前人格（system_prompt） | 变动段 |
 | `tools` | 当前状态下的可用工具清单 | 变动段 |
-| `injected_skills` | 记忆注入 + Skill 引擎注入 | 变动段 |
+| `injected_skills` | 记忆索引（版本链冻结）+ Skill 引擎注入 | 变动段 |
 | `current_context` | 群名/ID/时间/DM 状态 | 变动段 |
 
 **关键函数**：
@@ -607,7 +607,7 @@ class KeyFatalError(Exception):     # 402/401 → 跳过此 Key
 | `_chat_completion_streaming()` | SSE 流式聊天补全 |
 | `_chat_completion_non_streaming()` | 非流式聊天补全 |
 | `_build_tools_segment()` | 构建工具段（按 6 段分组） |
-| `_build_injected_skills()` | 记忆+Skill 注入 |
+| `_build_skill_injection()` | Skill 引擎注入（记忆改走账本条目：`_recall_memory_ids` 只召回，投递在 `memory_delivery`） |
 
 #### 5.4.5 chat_chain.py — 聊天链尺时间
 

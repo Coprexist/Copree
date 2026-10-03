@@ -14,7 +14,7 @@ from app.config import settings
 from app.models.group import Group as GroupModel
 from app.models.context_config import ContextConfig
 from app.chat import chat_api
-from app.services.memory.memory_service import recall_relevant_memories, format_memories_for_prompt
+from app.services.memory.memory_service import recall_relevant_memories
 from app.utils.display_name import display_name
 from app.utils.pure.prompting import (
     resolve_model, build_personality_segment, format_time_shanghai,
@@ -743,54 +743,49 @@ def set_round_budget(messages: list[dict], *, round_no: int, total: int,
     return False
 
 
-async def _build_injected_skills(
+async def _recall_memory_ids(
     db: AsyncSession, agent, group_id: int,
     query_text: str,
     api_base_url: str | None, api_key: str | None,
     trigger_user_id: int | None = None,
-) -> str:
-    """
-    injected_skills 段：记忆注入 + Skill 引擎注入。
+) -> list[int]:
+    """本轮该想起哪几条记忆（只要 id）。投不投、投什么由 memory_delivery 按账本比对决定。
 
-    这是最动态的段，每次请求都可能不同。
-    记忆注入用最近消息内容作为检索查询。
+    检索词是最近几条消息、每轮都变；但"要不要投给 AI"不看检索词，看账本里这条记忆
+    是哪一版。所以这里只召回，不渲染——渲染是投递那一步的事。
 
     v0.1.3: trigger_user_id 用于通用/半通用 AI 的 per-user 记忆隔离。
     """
-    parts: list[str] = []
+    if not query_text.strip():
+        return []
+    try:
+        memories = await recall_relevant_memories(
+            db, agent.id,
+            query=query_text,
+            api_base_url=api_base_url or "https://api.deepseek.com",
+            api_key=api_key,
+            top_k=5,
+            group_id=group_id,
+            user_id=trigger_user_id,
+            ai_type=agent.ai_type or "resonance",
+            call_count=agent.llm_call_count or 0,
+        )
+        return [int(m["id"]) for m in memories if m.get("id")]
+    except Exception as e:
+        logger.warning(f"记忆召回失败（非致命）: {e}")
+        return []
 
-    # ── 记忆注入 ──
-    if query_text.strip():
-        try:
-            memories = await recall_relevant_memories(
-                db, agent.id,
-                query=query_text,
-                api_base_url=api_base_url or "https://api.deepseek.com",
-                api_key=api_key,
-                top_k=5,
-                group_id=group_id,
-                user_id=trigger_user_id,
-                ai_type=agent.ai_type or "resonance",
-                call_count=agent.llm_call_count or 0,
-            )
-            if memories:
-                parts.append(format_memories_for_prompt(memories))
-        except Exception as e:
-            logger.warning(f"记忆注入失败（非致命）: {e}")
 
-    # ── Skill 引擎注入（预留） ──
+async def _build_skill_injection(db: AsyncSession, agent, group_id: int) -> str:
+    """injected_skills 段里的 Skill 引擎注入（记忆已改走账本条目，不在这一段）。"""
     try:
         from app.services.skill.skill_engine import evaluate_inject_skills
         skill_prompts = await evaluate_inject_skills(db, agent, group_id)
         if skill_prompts:
-            parts.append(
-                "## 当前激活的思维技能\n" +
-                "\n".join(f"- {p}" for p in skill_prompts)
-            )
+            return "## 当前激活的思维技能\n" + "\n".join(f"- {p}" for p in skill_prompts)
     except Exception as e:
         logger.warning(f"Skill 注入失败（非致命）: {e}")
-
-    return "\n\n".join(parts) if parts else ""
+    return ""
 
 
 async def _build_memory_index(db, agent) -> str:
@@ -1002,13 +997,16 @@ async def build_messages(
     # 每条新消息都让它变——它一变，整个前缀从第 0 字节起全 miss（实测：插一条消息前后首差下标 = 0）。
     # 按 §3 的规矩它就是「当轮事实」，跟状态栈/任务一起沉到尾部读数。
     dynamic_readings: list[str] = []
+    recalled_memory_ids: list[int] = []
     if "injected_skills" in enabled_segments and context_config_parser.should_inject_skills(context_config):
-        # 索引（冻结）进锁定段；召回 + 技能注入（检索词是当轮消息）进尾部读数
+        # 索引（冻结）进锁定段；技能注入（检索词是当轮消息）进尾部读数
         segments["injected_skills"] = await _build_memory_index(db, agent)
-        _memory_block = await _build_injected_skills(
+        _skill_block = await _build_skill_injection(db, agent, group_id)
+        if _skill_block:
+            dynamic_readings.append(_skill_block)
+        # 记忆不走尾部读数：它是账本条目，要落在当轮新消息之前（见下方账本段）
+        recalled_memory_ids = await _recall_memory_ids(
             db, agent, group_id, query_text, api_base_url, api_key, trigger_user_id)
-        if _memory_block:
-            dynamic_readings.append(_memory_block)
 
     order = context_config_parser.parse_segment_order(context_config)
     system_prompt = assemble_system_prompt(segments, order)
@@ -1134,11 +1132,17 @@ async def build_messages(
         if max_len is None:
             max_len = FOLD_LIMIT
 
+        group_ref = context_ref(group_id=group_id)  # 会话键只在这里拼一次
+
+        # 记忆条目**必须排在当轮新消息之前**：「先想起这个人，再读他说的话」。
+        # 所以它抢在 sync 之前落账本——sync 一追加，新消息就压到它前面去了。
+        from app.services.memory.memory_delivery import deliver_memories
+        await deliver_memories(db, agent, group_ref, recalled_memory_ids)
+
         # ── 历史消息：账本（只追加 + 缺口）──
         # 旧实现每轮按「最新 N 条」重建窗口，前缀每轮前移 → 整段 miss；
         # 现在渲染即落库（条目 content 就是发给模型的最终字节），新消息只往后追加。
         ledger = await sync_group_history(db, agent, group_id, cap=max_unread, max_len=max_len)
-        group_ref = context_ref(group_id=group_id)  # 会话键只在这里拼一次
 
         # 一次性事件（能力变更通知 / 便签撤下）**落成条目**：它们属于「外界带来了什么」，
         # 必须紧跟历史——落在尾部读数之前，否则下一轮它们会从末尾跑到中间（顺序变 = 断缓存）。
@@ -1406,17 +1410,17 @@ async def build_dm_messages(
         "tools": await _build_tools_segment(db, agent, is_dm=True),
         "injected_skills": await _build_memory_index(db, agent),  # 索引（冻结）进锁定段
     }
-    # 召回 + 技能注入的检索词是「最近 5 条消息」，每轮都变 → 沉到尾部读数（§3）
+    # 技能注入的检索词是「最近 5 条消息」，每轮都变 → 沉到尾部读数（§3）。
+    # 记忆不走这里：它是账本条目，落在当轮新消息之前（见下方账本段）
     dynamic_readings: list[str] = []
-    _memory_block = await _build_injected_skills(
+    _skill_block = await _build_skill_injection(db, agent, group_id=0)
+    if _skill_block:
+        dynamic_readings.append(_skill_block)
+    recalled_memory_ids = await _recall_memory_ids(
         db, agent, group_id=0,  # group_id=0 表示非群聊上下文
-        query_text=query_text,
-        api_base_url=api_base_url,
-        api_key=api_key,
+        query_text=query_text, api_base_url=api_base_url, api_key=api_key,
         trigger_user_id=trigger_user_id,
     )
-    if _memory_block:
-        dynamic_readings.append(_memory_block)
 
     order = await _get_segment_order(db)
     system_prompt = assemble_system_prompt(segments, order)
@@ -1521,8 +1525,13 @@ async def build_dm_messages(
     from app.services.history.context_sync import append_events, context_ref, sync_dm_history
     from app.utils.pure.history import ROLE_BY_ACTOR, make_entry
 
-    ledger = await sync_dm_history(db, agent, session_id, cap=limit)
     dm_ref = context_ref(session_id=session_id)  # 会话键只在这里拼一次
+
+    # 记忆条目抢在 sync 之前落账本：位置就是"当轮新消息之前"（同群聊）
+    from app.services.memory.memory_delivery import deliver_memories
+    await deliver_memories(db, agent, dm_ref, recalled_memory_ids)
+
+    ledger = await sync_dm_history(db, agent, session_id, cap=limit)
 
     # 一次性事件（能力变更通知 / 便签撤下）落成条目：紧跟历史、排在尾部读数之前
     events: list[dict] = await _deliver_frame_notes(db, agent, dm_ref, ledger)

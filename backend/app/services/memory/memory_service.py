@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import bindparam, text
 from app.repositories.memory_repo import MemoryRepository, SQLAlchemyMemoryRepository
+from app.utils.pure.memory_entry import format_memory_body
 
 logger = logging.getLogger(__name__)
 
@@ -555,7 +556,10 @@ async def auto_extract_key_facts(
 
 def format_memories_for_prompt(memories: list[dict]) -> str:
     """
-    将检索到的记忆格式化为可注入 prompt 的文本。
+    将检索到的记忆格式化为一段可注入的文本（批量形态；单条走 memory_entry）。
+
+    相似度这类检索期的分数**不进正文**：它对模型没用，而且每轮都在变，写进请求体
+    等于把整段历史一起判成"前缀不同"——缓存全废。
 
     返回: 格式化后的记忆文本，无记忆时返回空字符串。
     """
@@ -564,16 +568,8 @@ def format_memories_for_prompt(memories: list[dict]) -> str:
 
     lines = ["## 相关记忆（来自你的长期记忆库）\n"]
     for i, mem in enumerate(memories, 1):
-        sim = mem.get("similarity")
-        if sim is not None and sim > 0:
-            sim_text = f"（相似度: {sim}）"
-        elif mem.get("source") == "text":
-            sim_text = "（关键词匹配）"
-        else:
-            sim_text = ""
-        lines.append(f"{i}. **{mem['title']}** {sim_text}".rstrip())
-        if mem.get("content"):
-            lines.append(f"   {_clip_text(mem['content'], 300)}")
+        body = format_memory_body(mem).replace("\n", "\n   ")
+        lines.append(f"{i}. {body}".rstrip())
         lines.append("")
 
     # ⚠️ 字符串内如需引用中文名词，用直角引号「」或转义 \"，严禁直接用 ""——
