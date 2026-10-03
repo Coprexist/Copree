@@ -38,7 +38,14 @@ const ROOTED = /^\s*(html|body|:root|\.dark)[\s>+~]/
 
 /** 判断不了就留：丢样式比多带几 KB 难受得多 */
 function selectorHits(rawSelector: string, scope: HTMLElement): boolean {
-  const selector = rawSelector.replace(PSEUDO, '').trim()
+  const selector = rawSelector
+    // 状态伪类（:hover 这类）代表交互后才有的样子，判断命中时先剥掉
+    .replace(PSEUDO, '')
+    // 状态属性（data-open / data-value / aria-*）同理：收起的块、没显示的那份视图在当前
+    // DOM 里根本不存在，不剥掉就会把「切换之后才生效」的规则整条丢掉（折叠动画就是这么丢的）
+    .replace(/\[[^\]]*\]/g, '')
+    .replace(/[>+~]\s*$/, '')
+    .trim()
   if (!selector || ROOTED.test(selector)) return true
   try {
     if (scope.querySelector(selector)) return true
@@ -141,12 +148,27 @@ const EXPORT_SCRIPT = [
   '    if (!cases.length) return',
   '    var values = Array.prototype.map.call(cases, function (el) { return el.getAttribute("data-case") })',
   '    var next = values[(values.indexOf(group.getAttribute("data-value")) + 1) % values.length]',
+  '    /* 两份视图高度不同，直接换会跳一下：量下旧高度，切换后过渡到新高度 */',
+  '    var from = group.offsetHeight',
   '    group.setAttribute("data-value", next)',
   '    button.setAttribute("data-value", next)',
   '    /* 页面上还有跟着这组状态走的元素（比如图例），一并同步 */',
   '    document.querySelectorAll("[data-switch-mirror]").forEach(function (el) {',
   '      if (el.getAttribute("data-switch-mirror") === group.id) el.setAttribute("data-value", next)',
   '    })',
+  '    var to = group.offsetHeight',
+  '    if (from !== to) {',
+  '      group.style.overflow = "hidden"',
+  '      group.style.height = from + "px"',
+  '      void group.offsetHeight',
+  '      group.style.transition = "height 0.18s ease"',
+  '      group.style.height = to + "px"',
+  '      setTimeout(function () {',
+  '        group.style.transition = ""',
+  '        group.style.height = ""',
+  '        group.style.overflow = ""',
+  '      }, 240)',
+  '    }',
   '  })',
   '})',
   '</script>',
