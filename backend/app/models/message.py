@@ -3,7 +3,7 @@
 """
 from sqlalchemy import (
     Column, Integer, String, Boolean, Text, DateTime, ForeignKey, func,
-    CheckConstraint,
+    CheckConstraint, Index,
 )
 from app.config import settings
 from app.db_providers import vector_column, json_column
@@ -38,6 +38,9 @@ class Message(Base):
     created_at = Column(DateTime, server_default=func.now())
 
     __table_args__ = (
+        # 群消息列表、未读计数、每个群最后一条都按 (group_id, created_at) 走；
+        # 只有主键的话每条这样的查询都是全表扫
+        Index("ix_messages_group_created", "group_id", "created_at"),
         CheckConstraint(
             "sender_type IN ('human', 'ai')",
             name="ck_message_sender_type",

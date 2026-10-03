@@ -302,6 +302,9 @@ async def check_unread(db: AsyncSession, agent_id: int) -> list[dict]:
     """
     获取各群聊的未读消息摘要（按群分组）。
     返回: [{group_id, group_name, unread_count, last_message_preview, last_message_at}, ...]
+
+    群名与每个群的最后一条各一次查完：这是 AI 每次看未读都要走的路径，逐群查等于把
+    「有几个群」乘进查询条数里。
     """
     result = await db.execute(
         select(
@@ -318,32 +321,47 @@ async def check_unread(db: AsyncSession, agent_id: int) -> list[dict]:
         )
         .group_by(PendingMessage.group_id)
     )
+    rows = result.all()
+    if not rows:
+        return []
+    group_ids = [row.group_id for row in rows]
+
+    names = {
+        gid: name for gid, name in (await db.execute(
+            select(Group.id, Group.name).where(Group.id.in_(group_ids))
+        )).all()
+    }
+    ranked = (
+        select(
+            PendingMessage.group_id.label("gid"),
+            Message.content.label("content"),
+            sqlfunc.row_number().over(
+                partition_by=PendingMessage.group_id, order_by=Message.created_at.desc()
+            ).label("rn"),
+        )
+        .join(Message, PendingMessage.message_id == Message.id)
+        .where(
+            and_(
+                PendingMessage.agent_id == agent_id,
+                PendingMessage.is_read == False,
+            )
+        )
+        .subquery()
+    )
+    previews = {
+        gid: content for gid, content in (await db.execute(
+            select(ranked.c.gid, ranked.c.content).where(ranked.c.rn == 1)
+        )).all()
+    }
 
     summaries = []
-    for row in result:
-        group_result = await db.execute(select(Group).where(Group.id == row.group_id))
-        group = group_result.scalar_one_or_none()
-        group_name = group.name if group else f"群聊#{row.group_id}"
-
-        latest = await db.execute(
-            select(Message.content)
-            .join(PendingMessage, PendingMessage.message_id == Message.id)
-            .where(
-                and_(
-                    PendingMessage.agent_id == agent_id,
-                    PendingMessage.group_id == row.group_id,
-                    PendingMessage.is_read == False,
-                )
-            )
-            .order_by(Message.created_at.desc())
-            .limit(1)
-        )
-        preview_row = latest.scalar_one_or_none()
+    for row in rows:
+        preview_row = previews.get(row.group_id)
         preview = preview_row[:100] if preview_row else "..."
 
         summaries.append({
             "group_id": row.group_id,
-            "group_name": group_name,
+            "group_name": names.get(row.group_id, f"群聊#{row.group_id}"),
             "unread_count": row.unread_count,
             "last_message_preview": preview,
             "last_message_at": str(row.last_message_at) if row.last_message_at else None,
@@ -359,9 +377,11 @@ async def check_unread_dms(db: AsyncSession, agent_id: int) -> list[dict]:
     AI 回复（send_dm_message 的"回复即阅读"）都会把它标上。pending_messages 是群聊那条
     投递链的账本，私信再记一份等于同一件事两处真相，迟早对不上。
     所以这里只做"读出来"，不加表、不加迁移。
+
+    会话行、对方名字、每个会话的最后一条各一次查完——它们都是「有几条未读会话」的倍数。
     """
     from app.models.dm import DMMessage, DMSession
-    from app.utils.display_name import display_name
+    from app.utils.display_name import display_names
 
     agent = (await db.execute(select(Agent).where(Agent.id == agent_id))).scalar_one_or_none()
     if agent is None or not agent.user_id:
@@ -382,28 +402,46 @@ async def check_unread_dms(db: AsyncSession, agent_id: int) -> list[dict]:
         )
         .group_by(DMMessage.session_id)
     )).all()
+    if not rows:
+        return []
+    session_ids = [row[0] for row in rows]
+
+    sessions = {
+        s.session_id: s for s in (await db.execute(
+            select(DMSession).where(DMSession.session_id.in_(session_ids))
+        )).scalars().all()
+    }
+    peer_ids = {
+        sid: (s.user2_id if s.user1_id == me else s.user1_id) for sid, s in sessions.items()
+    }
+    names = await display_names(db, set(peer_ids.values()))
+
+    ranked = (
+        select(
+            DMMessage.session_id.label("sid"),
+            DMMessage.content.label("content"),
+            sqlfunc.row_number().over(
+                partition_by=DMMessage.session_id, order_by=DMMessage.created_at.desc()
+            ).label("rn"),
+        )
+        .where(
+            DMMessage.session_id.in_(session_ids),
+            DMMessage.sender_id != me,
+            DMMessage.read_at.is_(None),
+        )
+        .subquery()
+    )
+    previews = {
+        sid: content for sid, content in (await db.execute(
+            select(ranked.c.sid, ranked.c.content).where(ranked.c.rn == 1)
+        )).all()
+    }
 
     summaries = []
     for session_id, unread_count, last_message_at in rows:
-        session = (await db.execute(
-            select(DMSession).where(DMSession.session_id == session_id)
-        )).scalar_one_or_none()
-        peer_id = None
-        if session is not None:
-            peer_id = session.user2_id if session.user1_id == me else session.user1_id
-        peer_name = None
-        if peer_id is not None:
-            peer_name = await display_name(db, peer_id)
-        preview = (await db.execute(
-            select(DMMessage.content)
-            .where(
-                DMMessage.session_id == session_id,
-                DMMessage.sender_id != me,
-                DMMessage.read_at.is_(None),
-            )
-            .order_by(DMMessage.created_at.desc())
-            .limit(1)
-        )).scalar_one_or_none()
+        peer_id = peer_ids.get(session_id)
+        peer_name = names.get(peer_id) if peer_id is not None else None
+        preview = previews.get(session_id)
 
         summaries.append({
             "session_id": session_id,

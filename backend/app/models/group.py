@@ -86,6 +86,9 @@ class GroupMember(Base):
 
     __table_args__ = (
         PrimaryKeyConstraint("group_id", "member_type", "member_id"),
+        # 「我加入了哪些群」（会话列表、审批权、成员判断）按 member_id 过滤，
+        # 主键是 group_id 打头，用不上
+        Index("ix_group_members_member", "member_id", "member_type"),
         CheckConstraint(
             "member_type IN ('human', 'ai')",
             name="ck_group_member_type",

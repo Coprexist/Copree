@@ -79,6 +79,16 @@
   25 个群那个账号 177→9 条 SQL。查询条数不再随会话数增长（有测试盯着）。
   顺带：取成员头像时按入群时间排序（原先没有 ORDER BY，取哪几个成员本身是不确定的），
   成员多的群头像摆位可能与以前略有不同。
+- **补齐聊天相关的索引，并把 AI 的未读聚合也收成整批查**：messages / dm_messages 过去只有主键，
+  按群/会话取消息、算未读、取每个群最后一条全是全表扫；「我加入了哪些群」「我参与的私信」
+  也各缺一条按人过滤的索引。migration 0077 补五条：`messages(group_id, created_at)`、
+  `group_members(member_id, member_type)`、`dm_sessions(user2_id)`、
+  `dm_messages(session_id, created_at)`、`dm_messages(session_id) WHERE read_at IS NULL`
+  （未读只占少数，部分索引更小）。模型里同步声明：新库 create_all 直接建、老库走迁移，
+  两条路一个结果；老库重启时 prestart 自动 upgrade，不用手动执行。
+  同族的两个 N+1 一并收掉：`check_unread`（AI 的群未读）原先每个群各查一次群名和最后一条、
+  `check_unread_dms`（AI 的私信未读）原先每条会话查三次，现在都改成各一次查完。
+  这一轮之后真实 HTTP：`/groups` 10-13ms、`/dm/sessions` 7-8ms。
 
 ### ✨ 新增功能
 - **对话日志能当「请求体可视化」看**：以前详情是一坨 `JSON.stringify(messages)`，现在按块上色——

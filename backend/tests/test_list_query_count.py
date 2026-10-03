@@ -100,3 +100,74 @@ async def test_dm_list_queries_do_not_grow_with_sessions(migrated_db):
     assert out12[0]["unread_count"] == 1 and out12[0]["last_message_preview"] == "在吗 @我"
     assert n12 == n3, f"会话从 3 条加到 12 条，SQL 从 {n3} 变成 {n12}——又写回 N+1 了"
     assert n12 <= 10, f"一轮列表跑了 {n12} 条 SQL，太多了"
+
+
+async def _seed_ai_unread(n: int) -> None:
+    """一个 AI（agent 25 / user 3）：n 个群各积压一条未读 + n 条私信未读"""
+    from app.database import async_session
+
+    async with async_session() as db:
+        from db_reset import clear
+        await clear(db, "users", "agents", "groups", "dm_sessions")
+        await db.execute(text(
+            "INSERT INTO users (id, username, password_hash, type, role, is_active) VALUES "
+            "(1, '主人', 'x', 'human', 'user', true), "
+            "(3, '某个AI', 'x', 'ai', 'user', true)"
+        ))
+        await db.execute(text(
+            "INSERT INTO agents (id, owner_id, name, user_id, discoverable) "
+            "VALUES (25, 1, '某个AI（人物志）', 3, true)"
+        ))
+        for i in range(n):
+            gid = 100 + i
+            await db.execute(text(
+                "INSERT INTO groups (id, name, owner_type, owner_id, avatar_mode, include_ai_in_avatar) "
+                "VALUES (:g, :n, 'human', 1, 'default', true)"
+            ), {"g": gid, "n": f"群{i}"})
+            await db.execute(text(
+                "INSERT INTO group_members (group_id, member_type, member_id, role, joined_at) VALUES "
+                "(:g, 'human', 1, 'owner', now()), (:g, 'ai', 3, 'member', now())"
+            ), {"g": gid})
+            mid = (await db.execute(text(
+                "INSERT INTO messages (group_id, sender_type, sender_id, content, created_at) "
+                "VALUES (:g, 'human', 1, '喂', now()) RETURNING id"
+            ), {"g": gid})).scalar()
+            await db.execute(text(
+                "INSERT INTO pending_messages (agent_id, group_id, message_id, is_read) "
+                "VALUES (25, :g, :m, false)"
+            ), {"g": gid, "m": mid})
+            uid = 10 + i
+            await db.execute(text(
+                "INSERT INTO users (id, username, password_hash, type, role, is_active) "
+                "VALUES (:i, :n, 'x', 'human', 'user', true)"
+            ), {"i": uid, "n": f"人{i}"})
+            sid = f"3_{uid}"
+            await db.execute(text(
+                "INSERT INTO dm_sessions (session_id, user1_id, user2_id, last_message_at) "
+                "VALUES (:s, 3, :u, now())"
+            ), {"s": sid, "u": uid})
+            await db.execute(text(
+                "INSERT INTO dm_messages (session_id, sender_id, content, message_type, read_at, created_at) "
+                "VALUES (:s, :u, '在吗', 'normal', NULL, now())"
+            ), {"s": sid, "u": uid})
+        await db.commit()
+
+
+async def test_ai_unread_checks_do_not_grow_with_unread(migrated_db):
+    from app.chat.delivery import check_unread, check_unread_dms
+
+    await _seed_ai_unread(2)
+    g2, groups2 = await _count_queries(check_unread, 25)
+    d2, dms2 = await _count_queries(check_unread_dms, 25)
+    await _seed_ai_unread(8)
+    g8, groups8 = await _count_queries(check_unread, 25)
+    d8, dms8 = await _count_queries(check_unread_dms, 25)
+
+    assert {s["group_name"] for s in groups8} == {f"群{i}" for i in range(8)}
+    assert all(s["unread_count"] == 1 and s["last_message_preview"] == "喂" for s in groups8)
+    assert {s["peer_name"] for s in dms8} == {f"人{i}" for i in range(8)}
+    assert all(s["unread_count"] == 1 and s["last_message_preview"] == "在吗" for s in dms8)
+    assert (g8, d8) == (g2, d2), (
+        f"未读聚合的 SQL 条数随着未读处数涨：群 {g2}→{g8}、私信 {d2}→{d8}——又写回 N+1 了"
+    )
+    assert g8 <= 8 and d8 <= 10, (g8, d8)

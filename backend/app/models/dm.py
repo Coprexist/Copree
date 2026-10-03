@@ -5,6 +5,7 @@
 """
 from sqlalchemy import (
     Column, Integer, String, Text, DateTime, ForeignKey, func, UniqueConstraint,
+    Index, text,
 )
 from app.database import Base
 
@@ -28,6 +29,9 @@ class DMSession(Base):
 
     __table_args__ = (
         UniqueConstraint("user1_id", "user2_id", name="uq_dm_session_users"),
+        # 「我参与的私信」按 user1_id=我 或 user2_id=我 取：user1 侧上面那条唯一约束的前缀
+        # 已经能用，这里补 user2 侧
+        Index("ix_dm_sessions_user2", "user2_id"),
     )
 
 
@@ -60,3 +64,11 @@ class DMMessage(Base):
     channel_ref_idx = Column(Text, nullable=True)
 
     created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        # 会话里的消息按 (session_id, created_at) 取、按 created_at 排
+        Index("ix_dm_messages_session_created", "session_id", "created_at"),
+        # 未读只占少数：部分索引只收 read_at IS NULL 的行，
+        # 未读计数与「标记已读」都走它（别的方言退化成普通索引）
+        Index("ix_dm_messages_unread", "session_id", postgresql_where=text("read_at IS NULL")),
+    )
