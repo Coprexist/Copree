@@ -14,6 +14,19 @@ from pydantic_settings import BaseSettings
 logger = logging.getLogger(__name__)
 
 
+def _default_data_dir() -> str:
+    """没显式给 DATA_DIR 时，数据根跟着部署布局推——不写死只在容器里成立的路径。
+
+    容器里 backend 目录挂在 /app（代码在 /app/app/，数据卷也在 /app/data）；
+    宿主机上同一份代码在 <repo>/backend/app/，对应的是 <repo>/data，与 compose 的
+    ${DATA_DIR:-./data} 指向同一处。若写死 /app/data：宿主机上（以有权限的用户）跑一次
+    就会在文件系统根上凭空多出一份 /app/data，与 compose 的数据卷互不可见。
+    """
+    backend_dir = Path(__file__).resolve().parents[1]
+    repo_root = backend_dir.parent if backend_dir.name == "backend" else backend_dir
+    return str(repo_root / "data")
+
+
 class Settings(BaseSettings):
     """全局应用配置 — 所有字段由 pydantic-settings 自动从环境变量读取"""
 
@@ -108,8 +121,9 @@ class Settings(BaseSettings):
     # 同一个变量两种视角：宿主机上看到的是 .env 里的目录（compose 拿它做挂载源），
     # 容器里看到的是挂载点 /app/data —— compose 的 backend.environment 把容器内那份钉死，
     # 免得宿主路径漏进来（那样插件与世界的文件会写进容器可写层，重建即丢）。
+    # 不配 DATA_DIR 时按部署布局推（见 _default_data_dir）。
     # 子目录布局（agents/ worlds/ plugins/ market/ …）见 app/paths.py，别在模块里另写相对路径。
-    data_dir: str = "/app/data"
+    data_dir: str = _default_data_dir()
 
     # ── 文件上传 ──
     avatar_max_size_mb: int = 10

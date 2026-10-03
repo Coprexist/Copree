@@ -71,7 +71,9 @@
   子目录布局集中在新增的 `app/paths.py`（agents/ worlds/ world_ai_skills/ plugins/ plugin_packages/
   market/ backups/ shared_memories/ 与两个投票文件），上面那些模块全部改成引用它，不再各写一份；
   容器内那份由 compose 的 `backend.environment` 显式钉成 `/app/data`（`environment` 盖过
-  `env_file`，宿主路径不会再漏进来），镜像里也留了同一份默认值。测试不再替换类描述符，
+  `env_file`，宿主路径不会再漏进来），镜像里也留了同一份默认值；不配 `DATA_DIR` 时的默认值
+  也改成按部署布局推（容器内 `/app/data`、宿主机 `<repo>/data`）——原先写死 `/app/data`，
+  在有权限的宿主上跑一次就会在文件系统根上多出一份谁也看不见的 `/app/data`。测试不再替换类描述符，
   改由 conftest 把 `DATA_DIR` 指向临时目录。
   **已部署实例要 `docker compose up -d backend` 重建容器**——只 `restart` 不会重读环境变量。
 

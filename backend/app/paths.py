@@ -1,7 +1,7 @@
 """运行时文件布局 —— 数据根目录与它下面的子目录只在这里定义一次。
 
-根目录取自 settings.data_dir（容器内是挂载点 /app/data，宿主机上是 .env 里的宿主路径，
-由 compose 把容器内那份钉死）。子目录名以前散落在十来个模块里各写各的（Path("data/worlds") 这种）：
+根目录取自 settings.data_dir（不配 DATA_DIR 时按部署布局推：容器内 /app/data、宿主机 <repo>/data，
+容器内那份另由 compose 钉死）。子目录名以前散落在十来个模块里各写各的（Path("data/worlds") 这种）：
 进程从别的 cwd 启动就会在别处再写一份数据（backend/data/worlds 就是这么出现的），而插件与商城
 那几处读的是宿主视角的 DATA_DIR，在容器里根本不存在。要挪数据根只改一处，要加目录也只在这里加。
 

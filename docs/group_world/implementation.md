@@ -323,9 +323,9 @@ window.WorldUI = {              // UI 桥（postMessage → 宿主 Layout）
 
 ### 13.5 世界文件路径：沙盒测试与生产现在同一套
 
-- **实现要点**：生产容器 `data/worlds/` = 宿主 `./data/worlds`（compose 挂载 `./data:/app/data`）；沙盒手动 uvicorn 也读写同一处——只要按 `.env.example` 给出 `DATA_DIR`（宿主机路径），世界目录就只由它派生（布局在 `backend/app/paths.py`）。
+- **实现要点**：生产容器 `data/worlds/` = 宿主 `./data/worlds`（compose 挂载 `./data:/app/data`）；沙盒手动 uvicorn 也读写同一处——数据根默认就按部署布局推（容器内 `/app/data`、宿主机 `<repo>/data`），世界目录只由它派生（布局在 `backend/app/paths.py`）。
 - **这么做的原因**：路径以前是各模块自己写的相对路径（`Path("data/worlds")`），沙盒从 `backend/` 启动就落到 `backend/data/worlds`，宿主 backend 看不到——世界 21 曾因此“找不到 index.html”。现在统一从 `settings.data_dir` 派生，不会再出现第二份。
-- **提示**：① 宿主机上直接跑 backend 时 `DATA_DIR` 必须显式给——默认值 `/app/data` 是容器里的挂载点，宿主上不存在，会当场报权限错，而不是悄悄写到别处；② 世界转 owner 后，旧 owner token 立刻 403（权限正常工作的体现）。
+- **提示**：① 要换数据根（比如挪到别的磁盘）才需要设 `DATA_DIR`，宿主机上正常跑不必设；② 世界转 owner 后，旧 owner token 立刻 403（权限正常工作的体现）。
 
 ---
 

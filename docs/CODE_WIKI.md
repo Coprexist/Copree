@@ -412,7 +412,7 @@ async def lifespan(app: FastAPI):
 | `auto_dnd_threshold` | int | 20 | 意愿分低于此自动开 DND |
 | `default_top_k` | int | 10 | 记忆检索 top_k |
 | `credit_per_10k_tokens` | int | 10000 | 额度兑换比例 |
-| `data_dir` | str | /app/data | 数据根目录（容器内是挂载点；宿主机上由 `DATA_DIR` 指定） |
+| `data_dir` | str | 按部署布局推 | 数据根目录（容器内 /app/data，宿主机 <repo>/data；`DATA_DIR` 可覆盖） |
 
 **关键方法**：
 - `get_model_options()` - 返回可用模型列表（按 API 提供商自适应）
