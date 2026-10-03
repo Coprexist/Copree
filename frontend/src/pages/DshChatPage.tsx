@@ -15,10 +15,10 @@ import { ArrowLeft, ArrowDown, Bot, Brain, CheckCircle2, Circle, ImagePlus, Info
 import { api, fileDownloadUrl, getApiBaseUrl } from '../api/client'
 import { useT } from '../i18n/I18nContext'
 import { DropMask, AttachmentChips } from '../components/AttachmentChips'
-import { IconButton, MENU_CAPTION, MenuItem, MenuPanel } from '../components/ui'
+import { IconButton, MENU_CAPTION, MenuItem, MenuPanel, WidthHandles } from '../components/ui'
 import { ApprovalDialog, QuestionDialog, type AskPrompt, type ChatApproval } from '../components/shared/ChatDialogs'
 import MarkdownContent from '../components/shared/MarkdownContent'
-import { CONTENT_W_VAR, ColumnWidthHandles, ToolBubble, toolIcon, useContentColumnWidth } from '../components/shared/ChatPanelAtoms'
+import { CONTENT_W_VAR, ToolBubble, toolIcon, useContentColumnWidth } from '../components/shared/ChatPanelAtoms'
 import { useAttachmentUpload, type ReadyAttachment } from '../hooks/useAttachmentUpload'
 import { useElementWidth } from '../hooks/useElementWidth'
 import { useStickToBottom } from '../hooks/useStickToBottom'
@@ -332,7 +332,7 @@ export default function DshChatPage() {
   const [measureRef, columnWidth] = useElementWidth()
   const colHostRef = useRef<HTMLDivElement | null>(null)
   const setColumnHost = useCallback((el: HTMLDivElement | null) => { colHostRef.current = el }, [])
-  const { contentWidth, dragging, onHandleDown } = useContentColumnWidth(columnWidth, colHostRef)
+  const { contentWidth, dragging, ...handleProps } = useContentColumnWidth(columnWidth, colHostRef)
 
   // 附件：与主站聊天/群视界对话共用的 hook（点选、拖拽、Ctrl+V 都走它）
   const attachments = useAttachmentUpload({ imagesOnly: true })
@@ -784,7 +784,7 @@ export default function DshChatPage() {
                 </div>
               ))}
             </div>
-            <ColumnWidthHandles dragging={dragging} onHandleDown={onHandleDown} title={t('tool:dsh.colWidth')} />
+            <WidthHandles varName={CONTENT_W_VAR} dragging={dragging} title={t('tool:dsh.colWidth')} {...handleProps} />
           </div>
           {/* 回到底部：不在底部才给入口（与群视界对话同款；在底部时它不出现） */}
           {!stick.isAtBottom && <button

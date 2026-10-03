@@ -3,6 +3,7 @@ import { Send, Plus, ChevronRight, Brain, ArrowDown, ChevronDown, Copy, RefreshC
 import MarkdownContent from './shared/MarkdownContent'
 import CodeRenderer from './shared/CodeRenderer'
 import { CONTENT_W_VAR, ToolBubble, toolIcon, useContentColumnWidth } from './shared/ChatPanelAtoms'
+import { WidthHandles } from './ui'
 import { ApprovalDialog, PendingQueuePanel } from './shared/ChatDialogs'
 import { IconButton, MenuPanel, MenuItem, INSET_CARD, confirmAsync } from './ui'
 import { useWorldChat, type Approval, type ChatMsg } from '../hooks/useWorldChat'
@@ -170,7 +171,7 @@ const WorldChatPanel = memo(forwardRef<WorldChatHandle, WorldChatPanelProps>(({ 
   // 变量宿主（display:contents 那层）只管挂 CSS 变量；列宽由消息区的量测 ref 报（= 本面板整列宽）
   const colHostRef = useRef<HTMLDivElement | null>(null)
   const setColumnHost = useCallback((el: HTMLDivElement | null) => { colHostRef.current = el }, [])
-  const { contentWidth, dragging: widthDragging, onHandleDown } = useContentColumnWidth(columnWidth, colHostRef)
+  const { contentWidth, dragging: widthDragging, ...handleProps } = useContentColumnWidth(columnWidth, colHostRef)
   // 运行模式（对话栏内切换；与设计页配置弹窗是同一个后端字段，切换后回调父组件同步）
   const [mode, setMode] = useState(aiMode || 'review')
   const [modeBusy, setModeBusy] = useState(false)
@@ -614,24 +615,13 @@ const WorldChatPanel = memo(forwardRef<WorldChatHandle, WorldChatPanelProps>(({ 
             </div>
           )}
         </div>
-        {/* 内容列宽拖条（学 DSH 的 WidthHandle）：落在两侧留白里、比内容列边缘再外 24px；
-            宽度 min(40px, 留白 - 48px)，留白不够时自然收成 0 —— 拖到头也还留得下拖回来的把手 */}
-        {(['left', 'right'] as const).map((side) => (
-          <div
-            key={side}
-            role="separator"
-            aria-orientation="vertical"
-            onMouseDown={onHandleDown(side)}
-            title={t('tool:world.chat.width')}
-            className={`absolute top-0 bottom-0 z-overlay cursor-col-resize transition-colors ${widthDragging ? 'bg-primary-500/40' : 'hover:bg-primary-500/30'}`}
-            style={{
-              width: `max(0px, min(40px, calc((100% - var(${CONTENT_W_VAR})) / 2 - 48px)))`,
-              ...(side === 'left'
-                ? { right: `calc(50% + var(${CONTENT_W_VAR}) / 2 + 24px)` }
-                : { left: `calc(50% + var(${CONTENT_W_VAR}) / 2 + 24px)` }),
-            }}
-          />
-        ))}
+        {/* 内容列宽拖条：落在两侧留白里，留白不够时自然收成 0（拖到头也还留得下拖回来的把手） */}
+        <WidthHandles
+          varName={CONTENT_W_VAR}
+          dragging={widthDragging}
+          title={t('tool:world.chat.width')}
+          {...handleProps}
+        />
       </div>
 
       {/* 输入区（图片可直接拖进来放下，与点回形针等价） */}

@@ -5,8 +5,10 @@
  * SSE 帧），但「内容列宽怎么算、工具条长什么样」是同一件事。留两份必然各自漂移，
  * 所以只把**纯展示**的零件收敛到这里：世界侧不因此多一份状态，DSH 侧也不用抄一遍。
  */
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState } from 'react'
 import { FileText, Brain, Search, Globe, Terminal, Package, Clock, Wrench, Eraser, ChevronDown } from 'lucide-react'
+import { WidthHandles } from '../ui'
+import { useWidthDrag } from '../../hooks/useWidthDrag'
 
 // ── 对话内容列宽（学 DSH ConversationRoot / WidthHandle）──
 // 内容列居中，宽度是可拖的：上下限都按"列宽"推，保证两侧永远留着放拖条的留白。
@@ -40,103 +42,22 @@ function resolveContentWidth(columnWidth: number, pref: number | null): number {
 }
 
 /**
- * 内容列宽拖拽。三件事照 DSH 的做法：
- *  1) 内容列居中，拖任一条边都是"两边各让一半"，所以宽度按 **2× 指针位移** 变，条才跟手；
- *  2) 拖动期间只写 CSS 变量，不 setState —— 消息列表每帧重渲的代价太大，松手才落库 + 回写状态；
- *  3) 上限由 resolveContentWidth 兜住（列宽 - 176），拖到贴边也留得下重拖的把手。
+ * 对话列的内容列宽。拖拽机关与拖条都在共用件里（hooks/useWidthDrag + components/ui/WidthHandles），
+ * 这里只给本场景的策略：没拖过时按列宽自适应，上限 = 列宽 - 留白预算。
  */
 export function useContentColumnWidth(columnWidth: number, hostRef: React.RefObject<HTMLDivElement | null>) {
   const [pref, setPref] = useState<number | null>(() => readContentWidthPref())
-  const [dragging, setDragging] = useState(false)
-  const dragRef = useRef<{ x: number; base: number; outward: 1 | -1; latest: number; frame: number | null } | null>(null)
-
-  const onHandleDown = useCallback((side: 'left' | 'right') => (e: React.MouseEvent) => {
-    e.preventDefault()
-    dragRef.current = {
-      x: e.clientX,
-      base: resolveContentWidth(columnWidth, pref),
-      outward: side === 'right' ? 1 : -1,
-      latest: e.clientX,
-      frame: null,
-    }
-    setDragging(true)
-    document.body.style.cursor = 'col-resize'
-    document.body.style.userSelect = 'none'
-  }, [columnWidth, pref])
-
-  useEffect(() => {
-    if (!dragging) return
-    /** 指针位置 → 内容列宽（居中列：两边各让一半，所以按 2× 位移算） */
-    const widthAt = (clientX: number, d: NonNullable<typeof dragRef.current>) =>
-      resolveContentWidth(columnWidth, d.base + (d.outward === 1 ? clientX - d.x : d.x - clientX) * 2)
-    const onMove = (e: MouseEvent) => {
-      const d = dragRef.current
-      if (!d) return
-      d.latest = e.clientX
-      // mousemove 一帧可能来好几次，每帧最多写一次变量
-      if (d.frame !== null) return
-      d.frame = requestAnimationFrame(() => {
-        const cur = dragRef.current
-        if (!cur) return
-        cur.frame = null
-        hostRef.current?.style.setProperty(CONTENT_W_VAR, `${widthAt(cur.latest, cur)}px`)
-      })
-    }
-    const onUp = () => {
-      const d = dragRef.current
-      if (d) {
-        if (d.frame !== null) cancelAnimationFrame(d.frame)
-        if (d.latest !== d.x) {
-          const final = widthAt(d.latest, d)
-          try { localStorage.setItem(CONTENT_W_KEY, String(final)) } catch { /* 隐私模式等写不了就算了 */ }
-          // 回写状态：变量交还给声明式，列宽变化时也按新偏好重新收敛
-          hostRef.current?.style.setProperty(CONTENT_W_VAR, `${final}px`)
-          setPref(final)
-        }
-      }
-      dragRef.current = null
-      setDragging(false)
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-    }
-    document.addEventListener('mousemove', onMove)
-    document.addEventListener('mouseup', onUp)
-    return () => {
-      document.removeEventListener('mousemove', onMove)
-      document.removeEventListener('mouseup', onUp)
-    }
-  }, [dragging, columnWidth, hostRef])
-
-  return { contentWidth: resolveContentWidth(columnWidth, pref), dragging, onHandleDown }
+  const { dragging, ...handleProps } = useWidthDrag({
+    storageKey: CONTENT_W_KEY,
+    min: CONTENT_MIN,
+    measure: () => resolveContentWidth(columnWidth, pref),
+    room: () => columnWidth - CONTENT_EDGE_BUDGET,
+    apply: (width) => hostRef.current?.style.setProperty(CONTENT_W_VAR, `${width}px`),
+    commit: setPref,
+  })
+  return { contentWidth: resolveContentWidth(columnWidth, pref), dragging, ...handleProps }
 }
 
-/** 内容列宽拖条：落在两侧留白里，窄列时自然收成 0（拖到头也还留得下拖回来的把手） */
-export function ColumnWidthHandles({ dragging, onHandleDown, title }: {
-  dragging: boolean
-  onHandleDown: (side: 'left' | 'right') => (e: React.MouseEvent) => void
-  title: string
-}) {
-  return (
-    <>
-      {(['left', 'right'] as const).map((side) => (
-        <div
-          key={side}
-          role="separator"
-          aria-orientation="vertical"
-          onMouseDown={onHandleDown(side)}
-          title={title}
-          className={`absolute top-0 bottom-0 z-overlay cursor-col-resize transition-colors ${dragging ? 'bg-primary-500/40' : 'hover:bg-primary-500/30'}`}
-          style={{
-            width: `max(0px, min(40px, calc((100% - var(${CONTENT_W_VAR})) / 2 - 48px)))`,
-            ...(side === 'left'
-              ? { right: `calc(50% + var(${CONTENT_W_VAR}) / 2 + 24px)` }
-              : { left: `calc(50% + var(${CONTENT_W_VAR}) / 2 + 24px)` }),
-          }}
-        />
-      ))}
-    </>
-  )
-}
 
 /** 工具气泡图标：按摘要内容关键词映射（后端文本不带 emoji，图标由前端渲染） */
 export function toolIcon(content: string) {

@@ -104,7 +104,7 @@ export const CONSOLE_WORKSPACES: ConsoleWorkspace[] = [
     items: [
       { key: 'metrics', labelKey: 'admin.systemMetrics', descKey: 'admin.metricsDesc', icon: Activity, Component: SystemMetricsTab },
       { key: 'usage', labelKey: 'admin.usage', descKey: 'admin.usageDesc', icon: BarChart3, Component: UsageDashboardTab },
-      { key: 'convlog', labelKey: 'admin.logs', descKey: 'admin.convlogDesc', icon: ScrollText, Component: ConversationLogTab },
+      { key: 'convlog', labelKey: 'admin.logs', descKey: 'admin.convlogDesc', icon: ScrollText, Component: ConversationLogTab, width: 'wider' },
       { key: 'logs', labelKey: 'admin.audit', descKey: 'admin.auditDesc', icon: FileText, Component: LogsTab },
     ],
   },

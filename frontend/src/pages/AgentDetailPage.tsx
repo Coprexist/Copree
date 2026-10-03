@@ -13,7 +13,7 @@ import {
 } from 'lucide-react'
 import AvatarPickerModal from '../components/AvatarPickerModal'
 import AgentSettingsModal from '../components/AgentSettingsModal'
-import { Dialog, EmptyState } from '../components/ui'
+import { ContentColumn, Dialog, EmptyState } from '../components/ui'
 import FilePreviewModal from '../components/FilePreviewModal'
 import ChannelCard from '../components/channels/ChannelCard'
 import LogBrowser from '../components/shared/LogBrowser'
@@ -655,7 +655,8 @@ export default function AgentDetailPage() {
 
   return (
     <div className="h-full overflow-y-auto p-4 md:p-6 bg-canvas">
-      <div className="max-w-3xl mx-auto">
+      {/* 表单页 content 够用；日志是长文加两列，给 wider 档（组件内部的 xl 断点也才够得着） */}
+      <ContentColumn width={activeTab === 'logs' ? 'wider' : 'content'}>
         {/* Header */}
         <div className="flex items-center gap-3 mb-6">
           <button onClick={() => navigate('/agents')} className="text-textMuted hover:text-textPrimary transition-colors">
@@ -1080,9 +1081,7 @@ export default function AgentDetailPage() {
 
         {/* 通道：这个 AI 对外的接线（QQ 等）。这里直接铺开，不用再开弹窗 */}
         {activeTab === 'channels' && (
-          <div className="max-w-3xl">
-            <ChannelCard agentId={agent.id} />
-          </div>
+          <ChannelCard agentId={agent.id} />
         )}
 
         {activeTab === 'storage' && (
@@ -1398,7 +1397,7 @@ export default function AgentDetailPage() {
             </pre>
           </div>
         )}
-      </div>
+      </ContentColumn>
 
       {/* Delete Confirm Modal */}
       {showDelete && (

@@ -3,6 +3,8 @@
  *
  * 全站唯一的视觉实现来源：
  *   PageShell  页面骨架（根容器 + 标题栏 + 内容宽度）
+ *   ContentColumn 居中内容列 + 拖条（宽度档位见 pageWidth.ts，所有单列页面共用）
+ *   WidthHandles  居中列两侧的拖条（对话列与内容列共用）
  *   PageHeader 页面标题栏
  *   Button / IconButton  按钮与图标按钮
  *   Input / Select       表单控件
@@ -29,6 +31,9 @@ export { default as EmptyState } from './EmptyState'
 export { default as ListPanel, LIST_ROW_CLASS, LIST_CELL_CLASS } from './ListPanel'
 export { default as ExpandPanel } from './ExpandPanel'
 export { default as PageHeader } from './PageHeader'
+export { default as ContentColumn } from './ContentColumn'
+export { default as WidthHandles } from './WidthHandles'
+export { PAGE_WIDTH, type Width } from './pageWidth'
 export { default as PageShell } from './PageShell'
 export { confirmAsync, ConfirmDialogHost } from './ConfirmDialog'
 export { MenuPanel, MenuItem, MENU_CAPTION, INSET_CARD } from './MenuPanel'

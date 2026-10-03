@@ -6,24 +6,16 @@
  *   2. 顶端 PageHeader（标题/副标题/返回/右侧操作）
  *   3. 内容区滚动 + 居中等宽（宽度档位见 WIDTH）
  *
- * 宽度档位是唯一的页面留白来源：
- *   narrow  max-w-xl   表单类（新建、发布）
- *   content max-w-3xl  单列内容（我的、用量、群视界列表）
- *   wide    max-w-4xl  卡片网格 / 表格（AI、商城、后台）
- *   full    不设上限    双栏页面（好友、设置、聊天）
+ * 宽度档位（pageWidth.ts 是唯一定义处）只给默认留白：使用者拖右缘手柄可以按自己的屏临时调宽，
+ * 双击手柄回档位默认。
  */
 import type { ReactNode } from 'react'
 import PageHeader from './PageHeader'
+import ContentColumn from './ContentColumn'
+import { PAGE_WIDTH, type Width } from './pageWidth'
 
-export type Width = 'narrow' | 'content' | 'wide' | 'full'
-
-/** 宽度档位只此一份：页面（PageShell）与控制台页签（ConsolePage）都从这里取 */
-export const PAGE_WIDTH: Record<Width, string> = {
-  narrow: 'max-w-xl',
-  content: 'max-w-3xl',
-  wide: 'max-w-4xl',
-  full: '',
-}
+// 档位表在 pageWidth.ts（内容列也要用，放这里会绕成循环依赖）；这里转出去供既有调用方取
+export { PAGE_WIDTH, type Width }
 
 interface PageShellProps {
   title: ReactNode
@@ -59,9 +51,9 @@ export default function PageShell({
         {flush ? (
           children
         ) : (
-          <div className={`${PAGE_WIDTH[width]} mx-auto px-4 py-4 md:px-6 md:py-6 pb-24 md:pb-6 ${contentClassName}`}>
+          <ContentColumn width={width} className={`px-4 py-4 md:px-6 md:py-6 pb-24 md:pb-6 ${contentClassName}`}>
             {children}
-          </div>
+          </ContentColumn>
         )}
       </div>
     </div>
