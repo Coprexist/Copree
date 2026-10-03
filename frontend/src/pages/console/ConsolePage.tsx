@@ -89,7 +89,7 @@ export default function ConsolePage() {
         )}
         <h1 className="text-sm font-semibold text-textPrimary shrink-0">{t('admin.title')}</h1>
 
-        <nav className="hidden md:flex items-center gap-0.5 ml-3 min-w-0">
+        <nav className="hidden md:flex items-center gap-0.5 ml-3 min-w-0 overflow-x-auto">
           {CONSOLE_WORKSPACES.map(w => (
             <button
               key={w.key}

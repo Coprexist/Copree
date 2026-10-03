@@ -242,7 +242,9 @@ export default function PluginManager() {
         columns={[
           // 说明并入第一列（名称下面一行）：列表负责"认出它"，详情负责"讲清楚它"
           // w-px = "按内容给最小宽度、别撑开"，把富余宽度全留给插件列，状态/操作就不会被挤成竖排
-          { key: 'name', label: t('tool:plugin.colName') },
+          // w-full + max-w-0：让这一列吃掉剩余宽度、同时允许内容被压缩，
+          // 否则 auto 布局会按最长的那行描述把整张表撑宽（truncate 也就永远不生效）
+          { key: 'name', label: t('tool:plugin.colName'), className: 'w-full max-w-0' },
           { key: 'status', label: t('tool:plugin.colStatus'), className: 'w-px whitespace-nowrap' },
           { key: 'action', label: t('tool:plugin.colAction'), className: 'w-px whitespace-nowrap' },
         ]}
@@ -288,15 +290,18 @@ export default function PluginManager() {
           const status = statusOf(entry)
           return (
             <tr key={entry.key} className="border-b border-border/50">
-                <td className="py-2 px-3">
+                <td className="py-2 px-3 w-full max-w-0">
                   <div className="flex items-start gap-2.5">
                     <span className="text-textMuted shrink-0 mt-0.5">{entry.icon}</span>
                     <div className="min-w-0">
-                      <div className="flex items-center gap-2 whitespace-nowrap">
-                        <span className="font-medium text-textPrimary">{entry.name}</span>
-                        <span className="text-3xs text-textMuted">{entry.categoryLabel}</span>
-                        {entry.version && <span className="text-3xs font-mono text-textMuted">v{entry.version}</span>}
-                        {entry.builtin && <span className="text-3xs text-textMuted">{t('tool:plugin.builtin')}</span>}
+                      {/* 名称优先显示完整、元信息在窄列里折到下一行：
+                          整行 nowrap 会把单元格撑破，整行 truncate 又会把版本/内置一起切掉，
+                          而把元信息挤在同一行则会把名称压成「QQ …」 */}
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 min-w-0">
+                        <span className="font-medium text-textPrimary truncate max-w-full">{entry.name}</span>
+                        <span className="text-3xs text-textMuted shrink-0">{entry.categoryLabel}</span>
+                        {entry.version && <span className="text-3xs font-mono text-textMuted shrink-0">v{entry.version}</span>}
+                        {entry.builtin && <span className="text-3xs text-textMuted shrink-0">{t('tool:plugin.builtin')}</span>}
                       </div>
                       {/* 只留一行，鼠标悬停给全文（截断必须留一条看全文的路） */}
                       <p className="text-xs text-textSecondary truncate" title={entry.description}>{entry.description}</p>
