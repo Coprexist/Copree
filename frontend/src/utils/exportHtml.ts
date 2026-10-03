@@ -6,7 +6,7 @@
  * 样式也从当前页面收集，导出件因此跟界面同一份来源，不必另写一套 CSS 跟着改。
  */
 import { saveText } from './download'
-import { FOLD_TRANSITION } from '../components/shared/collapseMotion'
+import { FOLD_DURATION_MS, FOLD_EASING, FOLD_MAX_DURATION_MS, FOLD_MS_PER_1000PX } from '../components/shared/collapseMotion'
 
 /** 相对地址在导出文件里会按文件所在目录解析，统一换成绝对地址（图片、附件、字体） */
 function absolutizeUrls(root: HTMLElement): void {
@@ -143,7 +143,11 @@ const EXPORT_SCRIPT = [
   '  el.style.overflow = "hidden"',
   '  el.style.height = from + "px"',
   '  void el.offsetHeight',
-  '  el.style.transition = ' + JSON.stringify(FOLD_TRANSITION),
+  '  /* 时长跟着位移走：长块和短块用同一个时长，前者会「唰」地一下 */',
+  '  var foldMs = function (distance) {',
+  '    return Math.min(' + FOLD_MAX_DURATION_MS + ', ' + FOLD_DURATION_MS + ' + Math.abs(distance) / 1000 * ' + FOLD_MS_PER_1000PX + ')',
+  '  }',
+  '  el.style.transition = "height " + foldMs(to - from) + "ms ' + FOLD_EASING + '"',
   '  el.style.height = to + "px"',
   '  /* 等过渡真的走完再收尾：用定时器猜时间，猜早了会在动画没结束时就交还高度、看起来弹一下 */',
   '  var finish = function () {',
@@ -157,7 +161,7 @@ const EXPORT_SCRIPT = [
   '  }',
   '  var onEnd = function (event) { if (event.propertyName === "height") finish() }',
   '  el.addEventListener("transitionend", onEnd)',
-  '  var fallback = setTimeout(finish, 600)',
+  '  var fallback = setTimeout(finish, foldMs(to - from) + 400)',
   '}',
   'document.querySelectorAll("[data-collapsible]").forEach(function (button) {',
   '  button.addEventListener("click", function () {',

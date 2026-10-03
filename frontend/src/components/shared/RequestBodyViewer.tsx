@@ -10,7 +10,7 @@ import { ChevronRight } from 'lucide-react'
 import MarkdownContent from './MarkdownContent'
 import { useT } from '../../i18n/I18nContext'
 import { escapeHtml, renderMentionChips, type MentionNames } from '../../utils/mentions'
-import { FOLD_DURATION_MS, FOLD_TRANSITION } from './collapseMotion'
+import { foldDuration, foldTransition } from './collapseMotion'
 
 type Kind = 'system' | 'state' | 'injected' | 'user' | 'assistant' | 'roundTools' | 'toolCall' | 'toolResult' | 'reasoning' | 'error'
 
@@ -349,7 +349,7 @@ function useHeightTransition(ref: React.RefObject<HTMLElement | null>, key: stri
     el.style.overflow = 'hidden'
     el.style.height = from + 'px'
     void el.offsetHeight
-    el.style.transition = FOLD_TRANSITION
+    el.style.transition = foldTransition(to - from)
     el.style.height = to + 'px'
     // 等过渡真的走完再收尾：用定时器猜时间，猜早了会在动画没结束时就交还高度、看起来弹一下
     const finish = () => {
@@ -363,7 +363,7 @@ function useHeightTransition(ref: React.RefObject<HTMLElement | null>, key: stri
     }
     const onEnd = (event: TransitionEvent) => { if (event.propertyName === 'height') finish() }
     el.addEventListener('transitionend', onEnd)
-    const fallback = window.setTimeout(finish, FOLD_DURATION_MS + 400)
+    const fallback = window.setTimeout(finish, foldDuration(to - from) + 400)
     return () => {
       el.removeEventListener('transitionend', onEnd)
       window.clearTimeout(fallback)
