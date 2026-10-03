@@ -376,11 +376,11 @@ function Raw({ text, lazy }: { text: string; lazy?: string }) {
 
 /**
  * 行首靠空格排版的行（记忆索引那种树状清单、对齐着贴进来的输出）：
- * Markdown 解析时会把段落里的行首空白抹掉，层级就平了，这类段必须原样渲染。
+ * Markdown 会把段落续行的行首空白当排版噪音抹掉，层级就平了。
  */
 const SPACE_ALIGNED_LINE = /^(?: {2,}|\t)(?![-*+]\s|\d+[.)]\s|>\s)/
 
-/** 段内有两行以上才算「靠空格排版」：单独一行的缩进多半是 Markdown 的续行，不跟着降级 */
+/** 段内有两行以上才算「靠空格排版」：单独一行的缩进多半是 Markdown 的续行，别动它 */
 function isSpaceAligned(paragraph: string): boolean {
   let hit = 0
   for (const line of paragraph.split('\n')) {
@@ -389,46 +389,34 @@ function isSpaceAligned(paragraph: string): boolean {
   return false
 }
 
-/** 按空行切段并标出哪些段靠空格排版；相邻同类合并，正文顺序不变 */
-function splitSpaceAligned(text: string): { pre: boolean; body: string }[] {
-  const parts: { pre: boolean; body: string }[] = []
-  for (const paragraph of text.split(/\n{2,}/)) {
-    const pre = isSpaceAligned(paragraph)
-    const last = parts[parts.length - 1]
-    if (last && last.pre === pre) last.body += '\n\n' + paragraph
-    else parts.push({ pre, body: paragraph })
-  }
-  return parts
+/**
+ * 把靠空格排版的那几段的行首空白换成不换行空格：它不再是空白，Markdown 就不会抹掉，
+ * 而段内的加粗 / 链接 / 行内代码照旧按语法渲染——整段原样渲染会把 ** 也变成字面量。
+ * 换行数按 markdown 的段间距归一（多空行在 Markdown 里本来也等价）。
+ */
+function keepIndent(text: string): string {
+  return text.split(/\n{2,}/).map(paragraph => isSpaceAligned(paragraph)
+    ? paragraph.split('\n').map(line =>
+        line.replace(/^[ \t]+/, head => '&nbsp;'.repeat(head.replace(/\t/g, '  ').length))
+      ).join('\n')
+    : paragraph,
+  ).join('\n\n')
 }
 
 /** 正文：Markdown 优先，JSON 走格式化等宽块。机器文本一字不改，人话里只把 <@!id> 翻成人名 */
 function Body({ text, mono = false, names }: { text: string; mono?: boolean; names?: MentionNames }) {
   const t = useT()
   const json = useMemo(() => prettyJson(text), [text])
-  // 只有真出现「靠空格排版」的段才切分渲染，其余消息照旧整条走 Markdown
-  const parts = useMemo(() => splitSpaceAligned(text), [text])
+  const content = useMemo(() => keepIndent(text), [text])
   if (json !== null) return <Raw text={json} />
   if (mono) {
     return (
       <pre className="text-2xs font-mono text-textSecondary whitespace-pre-wrap break-words">{text}</pre>
     )
   }
-  if (parts.some(part => part.pre)) {
-    return (
-      <>
-        {parts.map((part, i) => part.pre ? (
-          <pre key={i} className="text-2xs font-mono text-textSecondary whitespace-pre-wrap break-words">{part.body}</pre>
-        ) : (
-          <div key={i} className="log-md text-xs text-textPrimary leading-relaxed break-words">
-            <MarkdownContent content={renderLine(part.body, names, t('logs:mentionUnknown'))} />
-          </div>
-        ))}
-      </>
-    )
-  }
   return (
     <div className="log-md text-xs text-textPrimary leading-relaxed break-words">
-      <MarkdownContent content={renderLine(text, names, t('logs:mentionUnknown'))} />
+      <MarkdownContent content={renderLine(content, names, t('logs:mentionUnknown'))} />
     </div>
   )
 }

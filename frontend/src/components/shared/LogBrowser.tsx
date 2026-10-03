@@ -70,6 +70,8 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
   const [rawBody, setRawBody] = useState(false)
   // 导出前先把分片渲染补完，否则克隆下来的 DOM 会缺掉还没补上的块
   const [exportAll, setExportAll] = useState(false)
+  // 导出要把分片补完再落盘，这段时间按钮得看得出在干活
+  const [exporting, setExporting] = useState(false)
   // 「原始 JSON」按钮在这一行、开关组在正文里，两边靠这个 id 对上（见 RequestBodyViewer）
   const rawSwitchId = useId()
 
@@ -132,12 +134,14 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
    */
   const exportHtml = () => {
     const el = exportRef.current
-    if (!el || !currentId) return
+    if (!el || !currentId || exporting) return
+    setExporting(true)
     setExportAll(true)
     // 两帧之后再克隆：第一帧 React 提交全部块，第二帧布局稳定
     requestAnimationFrame(() => requestAnimationFrame(() => {
       saveElementAsHtml(el, 'log-' + currentId + '.html', '#' + currentId)
       setExportAll(false)
+      setExporting(false)
     }))
   }
 
@@ -268,11 +272,11 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
                 type="button"
                 data-export-skip
                 onClick={exportHtml}
-                disabled={detail === null}
+                disabled={detail === null || exporting}
                 title={t('logs:downloadHtmlHint')}
                 className="text-3xs text-textMuted hover:text-textSecondary transition-colors disabled:opacity-40"
               >
-                {t('logs:downloadHtml')}
+                {exporting ? t('logs:downloadHtmlPreparing') : t('logs:downloadHtml')}
               </button>
               {/* 原始 JSON 的开关跟下载按钮并排；改变量视图里没有整段 JSON，那条路上不摆 */}
               {!showDelta && (
