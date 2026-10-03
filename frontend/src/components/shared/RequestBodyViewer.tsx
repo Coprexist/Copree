@@ -170,38 +170,61 @@ function ToolLedger({ text }: { text: string }) {
   )
 }
 
-/** 参数值：字符串直接当文本读（一坨 JSON 挤一行时，转义符比正文还多）；其余保持结构化等宽 */
-function ArgValue({ value }: { value: any }) {
-  return typeof value === 'string'
-    ? <Body text={value} />
-    : <Body text={JSON.stringify(value, null, 2)} mono />
+/** 字段能拆到第几层：够看清 next_frame.tail 这种两层结构，再深就退回等宽（防病态嵌套） */
+const FIELD_DEPTH = 3
+
+/** 一个值怎么渲染：字符串当文本读、容器递归拆、数字/布尔/null 就地等宽。
+ *  只有容器吃层数——标量再把层数耗掉，emotion 那种一串数字会全变成小 JSON 块。 */
+function ArgValue({ value, names, depth }: { value: any; names?: MentionNames; depth: number }) {
+  if (typeof value === 'string') return <Body text={value} names={names} />
+  if (Array.isArray(value)) {
+    if (value.length === 0) return <Body text="[]" mono />
+    if (depth <= 0) return <Body text={JSON.stringify(value, null, 2)} mono />
+    return (
+      <div className="space-y-1">
+        {value.map((item, index) => (
+          <ArgValue key={index} value={item} names={names} depth={depth - 1} />
+        ))}
+      </div>
+    )
+  }
+  if (value && typeof value === 'object') {
+    if (depth <= 0) return <Body text={JSON.stringify(value, null, 2)} mono />
+    return <JsonObject value={value} names={names} depth={depth - 1} />
+  }
+  return <span className="text-2xs font-mono text-textSecondary">{JSON.stringify(value)}</span>
+}
+
+/** 一层字段：键一列、值一列。用 grid 而不是每行一个 flex —— 键宽窄不一，值也要从同一条线起 */
+function JsonObject({ value, names, depth }: {
+  value: Record<string, unknown>; names?: MentionNames; depth: number
+}) {
+  return (
+    <div className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-2 gap-y-1.5">
+      {Object.entries(value).map(([key, item]) => (
+        <Fragment key={key}>
+          <span className="text-3xs font-mono px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/10 text-textMuted">
+            {key}
+          </span>
+          <div className="min-w-0"><ArgValue value={item} names={names} depth={depth} /></div>
+        </Fragment>
+      ))}
+    </div>
+  )
 }
 
 /** JSON 对象 → 一行一个字段：键一个小标签，值按类型渲染。
  *  工具入参与工具返回都是这个形状（原本整坨 JSON，长文本里的转义符比正文还多），共用一套。 */
-function JsonFields({ text }: { text: string }) {
+function JsonFields({ text, names }: { text: string; names?: MentionNames }) {
   const parsed = useMemo(() => {
     try {
       const value = JSON.parse(text)
       return value && typeof value === 'object' && !Array.isArray(value) ? value : null
     } catch { return null }
   }, [text])
-  const entries = parsed ? Object.entries(parsed) : []
   // 数组、标量、空对象仍走格式化等宽：那不是"一堆参数"，拆开反而更乱
-  if (entries.length === 0) return <Body text={text} mono />
-  // 用 grid 而不是每行一个 flex：第一列是共享的一列，值才对得齐（各自为政时每行各算各的宽度）
-  return (
-    <div className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-2 gap-y-1.5">
-      {entries.map(([key, value]) => (
-        <Fragment key={key}>
-          <span className="text-3xs font-mono px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/10 text-textMuted">
-            {key}
-          </span>
-          <div className="min-w-0"><ArgValue value={value} /></div>
-        </Fragment>
-      ))}
-    </div>
-  )
+  if (!parsed || Object.keys(parsed).length === 0) return <Body text={text} mono />
+  return <JsonObject value={parsed} names={names} depth={FIELD_DEPTH} />
 }
 
 function toolName(call: any): string {
@@ -347,7 +370,7 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
                 {calls.length > 1 && (
                   <div className="text-3xs font-mono text-textSecondary">{toolName(call)}</div>
                 )}
-                <JsonFields text={toolArgs(call)} />
+                <JsonFields text={toolArgs(call)} names={mentionNames} />
               </div>
             ))}
           </div>
@@ -355,7 +378,7 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
       } else if (kind === 'toolResult') {
         // 标题用函数名（id 一长串没人认得出），对上上面那条工具调用；对不上才退回 id
         title = callNames.get(String(msg.tool_call_id)) || (msg.tool_call_id ? String(msg.tool_call_id) : undefined)
-        body = <JsonFields text={content} />
+        body = <JsonFields text={content} names={mentionNames} />
       } else if (kind === 'roundTools') {
         body = <ToolLedger text={content} />
       } else if (kind === 'state') {
