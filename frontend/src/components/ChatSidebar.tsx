@@ -1,6 +1,5 @@
 import { memo, useState, useEffect, useRef, useMemo, useCallback, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api } from '../api/client'
 import { Plus, BellOff, Menu, UserPlus, Users, Bot, Globe, ShieldAlert, MessageCircle, Inbox, Pin, ChevronDown, ChevronRight } from 'lucide-react'
 import { EmptyState, MenuPanel, MenuItem } from './ui'
 import { getStateDotColor, CHAT_REFRESH_EVENT } from '../constants'
@@ -11,6 +10,7 @@ import { useTheme } from '../context/ThemeContext'
 import EmojiText from './shared/EmojiText'
 import { useLang, useT } from '../i18n/I18nContext'
 import { conversationKey, useReadingKey } from '../hooks/useReadingConversation'
+import { refreshChatLists, updateGroup, updateSession, useChatLists } from '../hooks/useChatLists'
 
 /** URL 正则（匹配 http/https 链接） */
 const URL_RE = /(https?:\/\/[^\s<]+[^\s<.,;:!?)}\]'"])/g
@@ -181,8 +181,9 @@ const ChatSidebar = memo(function ChatSidebar({
   onMobileBack,
   mobileFullscreen,
 }: ChatSidebarProps) {
-  const [groups, setGroups] = useState<Group[]>([])
-  const [dmSessions, setDmSessions] = useState<DMSession[]>([])
+  // 会话列表来自唯一来源（hooks/useChatLists）：一条新消息就地改那一份，不重拉；
+  // 这里只负责在「列表本身可能变了」时喊它重拉（建群、进新私信、自己发过消息）
+  const { groups, sessions: dmSessions } = useChatLists()
   const [showPlusMenu, setShowPlusMenu] = useState(false)
   const [pinnedCollapsed, setPinnedCollapsed] = useState(() => getCollapsed('pinned'))
   const [groupsCollapsed, setGroupsCollapsed] = useState(() => getCollapsed('groups'))
@@ -191,43 +192,21 @@ const ChatSidebar = memo(function ChatSidebar({
   // 此刻正在读的会话（人在那个会话的底部且窗口可见）
   const reading = useReadingKey()
 
-  const loadGroups = useCallback(() => api.get('/groups').then(setGroups).catch(() => {}), [])
-  const loadDMSessions = useCallback(() => api.get('/dm/sessions').then(setDmSessions).catch(() => {}), [])
-
-  // 初始加载
+  // 初始加载（同一时刻的重复调用由 store 合并成一次往返）
   useEffect(() => {
-    loadGroups()
-    window.addEventListener('groupListRefresh', loadGroups)
-    loadDMSessions()
-    return () => window.removeEventListener('groupListRefresh', loadGroups)
-  }, [loadGroups, loadDMSessions])
-
-  // 活跃对话变化时刷新（延迟等 mark-as-read 完成）
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      loadGroups()
-      loadDMSessions()
-    }, 300)
-    return () => clearTimeout(timer)
-  }, [activeGroupId, activeSessionId, loadGroups, loadDMSessions])
-
-  // 用 ref 持有最新 active ID，避免 chat-refresh 事件监听器随对话切换而重建
-  const activeGroupIdRef = useRef(activeGroupId)
-  activeGroupIdRef.current = activeGroupId
-  const activeSessionIdRef = useRef(activeSessionId)
-  activeSessionIdRef.current = activeSessionId
+    refreshChatLists()
+    window.addEventListener('groupListRefresh', refreshChatLists)
+    return () => window.removeEventListener('groupListRefresh', refreshChatLists)
+  }, [])
 
   // 去抖 ref：防止高频 chat-refresh 导致请求风暴
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const reloadDebounced = useCallback(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
-    debounceRef.current = setTimeout(() => {
-      loadGroups()
-      loadDMSessions()
-    }, 500)
-  }, [loadGroups, loadDMSessions])
+    debounceRef.current = setTimeout(refreshChatLists, 500)
+  }, [])
 
-  // chat-refresh 事件 — 监听器只注册一次（[] 依赖），通过 ref 读取最新 ID
+  // chat-refresh：列表可能要重拉。收到新消息不走这里——那条路就地改 store，不产生请求
   useEffect(() => {
     const handler = (e: CustomEvent) => {
       const t = e.detail?.type
@@ -240,12 +219,8 @@ const ChatSidebar = memo(function ChatSidebar({
     // 置顶/取消置顶即时更新（不触发全量请求）
     const pinHandler = (e: Event) => {
       const d = (e as CustomEvent).detail
-      if (d?.groupId) {
-        setGroups(prev => prev.map(g => g.id === d.groupId ? { ...g, is_pinned: d.isPinned } : g))
-      }
-      if (d?.sessionId) {
-        setDmSessions(prev => prev.map(s => s.session_id === d.sessionId ? { ...s, is_pinned: d.isPinned } : s))
-      }
+      if (d?.groupId) updateGroup(Number(d.groupId), { is_pinned: d.isPinned })
+      if (d?.sessionId) updateSession(String(d.sessionId), { is_pinned: d.isPinned })
     }
     window.addEventListener('groupPinChanged', pinHandler)
 
@@ -253,7 +228,7 @@ const ChatSidebar = memo(function ChatSidebar({
     const avatarHandler = (e: Event) => {
       const d = (e as CustomEvent).detail
       if (d?.groupId) {
-        setGroups(prev => prev.map(g => g.id === d.groupId ? { ...g, avatar_url: d.avatar_url, avatar_mode: d.avatar_mode || 'custom' } : g))
+        updateGroup(Number(d.groupId), { avatar_url: d.avatar_url, avatar_mode: d.avatar_mode || 'custom' })
       }
     }
     window.addEventListener('groupAvatarChanged', avatarHandler)

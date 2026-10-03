@@ -32,8 +32,9 @@ export function setFollowingConversation(key: ConversationKey | null): void {
   emit()
 }
 
-/** 此刻正在读的会话。切到后台就不算：那几条本来就该记成未读（与桌面通知同一口径） */
-function readingKey(): ConversationKey | null {
+/** 此刻正在读的会话。切到后台就不算：那几条本来就该记成未读（与桌面通知同一口径）。
+ *  非组件代码（如收到推送时就地改会话列表）要判断「这条算不算已读」，用它 */
+export function readingKey(): ConversationKey | null {
   return visible ? following : null
 }
 

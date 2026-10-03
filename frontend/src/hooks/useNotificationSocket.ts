@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
-import { api } from '../api/client'
 import { getWsUrl } from '../utils/platform'
 import { safeParse } from '../utils/result'
 import { notifyRequestsChanged } from './usePendingRequests'
 import { CHAT_REFRESH_EVENT } from '../constants'
+import { applyIncomingMessage, refreshChatLists, useChatLists } from './useChatLists'
 
 /**
  * 站内新消息弹窗的全局连接（唯一实现）
@@ -68,17 +68,11 @@ interface SessionCache {
   mutedDms: Set<string>
 }
 
-const EMPTY_CACHE: SessionCache = {
-  groupNames: {}, groupAvatars: {}, mutedGroups: new Set(),
-  dmPeers: {}, mutedDms: new Set(),
-}
-
-/** 免打扰判断：群看 dnd_until，私信看我这一侧的 dnd */
-async function loadSessionCache(): Promise<SessionCache> {
-  const [groups, sessions] = await Promise.all([
-    api.get<any[]>('/groups').catch(() => []),
-    api.get<any[]>('/dm/sessions').catch(() => []),
-  ])
+/**
+ * 会话名/免打扰缓存从会话列表派生（唯一来源）：不再各拉一份，也就不会再过期。
+ * 免打扰判断：群看 dnd_until，私信看我这一侧的 dnd
+ */
+function buildSessionCache(groups: any[], sessions: any[]): SessionCache {
   const cache: SessionCache = {
     groupNames: {}, groupAvatars: {}, mutedGroups: new Set(),
     dmPeers: {}, mutedDms: new Set(),
@@ -206,7 +200,11 @@ export interface NotificationFeed {
 /** 常驻通知连接 + 待显示的弹窗队列 */
 export function useNotificationSocket(): NotificationFeed {
   const [items, setItems] = useState<NotificationItem[]>([])
-  const cacheRef = useRef<SessionCache>(EMPTY_CACHE)
+  // 名字/头像/免打扰都从会话列表派生：列表一变缓存就跟着变，不需要谁去刷它
+  const { groups, sessions } = useChatLists()
+  const cache = useMemo(() => buildSessionCache(groups, sessions), [groups, sessions])
+  const cacheRef = useRef<SessionCache>(cache)
+  cacheRef.current = cache
   const location = useLocation()
   // location 会被 onmessage 闭包捕获，用 ref 取"此刻正在看哪个会话"
   const pathRef = useRef(location.pathname)
@@ -242,27 +240,25 @@ export function useNotificationSocket(): NotificationFeed {
       }
       const kind = resolveKind(payload)
       if (!kind) return
-      // 会话消息一律通知侧栏刷新（预览、排序、红数泡都在它那儿），
-      // 跟弹不弹窗无关——免打扰、正在看这个会话、标签页在后台，都只是不弹而已。
-      // 这条常驻连接收得到**所有**会话的推送，而会话连接只收当前那一个：
-      // 只在会话连接里发事件，就会出现「看着 A，B 发来消息侧栏一动不动」
-      if (kind === 'group_message' || kind === 'dm_message' || kind === 'group_invite_card') {
-        window.dispatchEvent(new CustomEvent(CHAT_REFRESH_EVENT, { detail: {
-          type: 'unread_update',
-          conversation_type: payload.data?.conversation_type,
-          conversation_id: payload.data?.conversation_id,
-          source: 'notifications',
-        } }))
-      }
       // push 把消息裹在 data.message 里；直接推来的 message 事件消息就在 data 本身。
       // 统一成 data.message，让 toItem 只有一套读法。
       const message = payload.type === 'push' ? payload.data?.message : payload.data
+      // 会话消息落到会话列表上（预览、排序、红数泡都在它那儿），跟弹不弹窗无关——
+      // 免打扰、正在看这个会话、标签页在后台，都只是不弹而已。这条常驻连接收得到
+      // **所有**会话的推送，而会话连接只收当前那一个：只看会话连接，就会出现
+      // 「看着 A，B 发来消息侧栏一动不动」。就地改，不重拉列表
+      if (kind === 'group_message' || kind === 'dm_message' || kind === 'group_invite_card') {
+        applyIncomingMessage({
+          conversationType: payload.data?.conversation_type === 'group' ? 'group' : 'dm',
+          conversationId: payload.data?.conversation_id,
+          messageId: message?.id,
+          preview: summarize(message, payload.data?.preview),
+          at: message?.created_at ?? null,
+          mentionedMe: payload.data?.mentioned_me === true,
+        })
+      }
       const item = toItem(kind, { ...payload.data, message }, cacheRef.current)
       if (item) push(item)
-    }
-
-    const refreshCache = () => {
-      loadSessionCache().then((cache) => { cacheRef.current = cache }).catch(() => {})
     }
 
     const subscribe = () => {
@@ -280,7 +276,8 @@ export function useNotificationSocket(): NotificationFeed {
         retryTimer = setTimeout(connect, RECONNECT_MS)
         return
       }
-      ws.onopen = () => { subscribe(); refreshCache() }
+      // 重连后先重新登记通知范围，再补一次列表：断线期间的消息只有重拉才补得回来
+      ws.onopen = () => { subscribe(); refreshChatLists() }
       ws.onmessage = (event) => {
         const parsed = safeParse<any>(event.data)
         if (!parsed.ok) return
@@ -299,15 +296,11 @@ export function useNotificationSocket(): NotificationFeed {
       }
     }
 
-    refreshCache()
+    refreshChatLists()
     connect()
 
-    // 群/私信列表变了（新建群、新私信）→ 重算缓存并重新登记通知范围。
-    // 自己刚发的那条跳过：它只是让侧栏去刷新，本连接的缓存与订阅范围都没变
-    const onRefresh = (e: Event) => {
-      if ((e as CustomEvent).detail?.source === 'notifications') return
-      refreshCache(); subscribe()
-    }
+    // 群/私信列表变了（新建群、新私信）→ 重拉列表并重新登记通知范围
+    const onRefresh = () => { refreshChatLists(); subscribe() }
     window.addEventListener('groupListRefresh', onRefresh)
     window.addEventListener(CHAT_REFRESH_EVENT, onRefresh)
 

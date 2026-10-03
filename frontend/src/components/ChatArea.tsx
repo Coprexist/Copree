@@ -11,6 +11,7 @@ import SearchOverlay from './SearchOverlay'
 import { Bell, BellOff, UserPlus, Settings, ArrowLeft, Bot, User, Globe, X, Check, Users, AlertTriangle } from 'lucide-react'
 import { useT } from '../i18n/I18nContext'
 import { useResizableSidebar } from '../hooks/useResizableSidebar'
+import { refreshChatLists } from '../hooks/useChatLists'
 import { isEmbedded } from '../embed/bridge'
 import { Dialog } from './ui'
 
@@ -271,6 +272,8 @@ export default function ChatArea({ groupId, dmSessionId }: ChatAreaProps) {
           onCreated={(newGroup) => {
             setShowCreateGroup(false)
             setGroups((prev) => [...prev, newGroup])
+            // 侧栏那份列表要跟上（它平时靠事件增量更新，新群这件事只有这里知道）
+            refreshChatLists()
             navigate(`/chat/gm/${newGroup.id}`)
           }}
         />
@@ -317,6 +320,8 @@ export default function ChatArea({ groupId, dmSessionId }: ChatAreaProps) {
           onLeave={() => {
             setShowSettings(false)
             setGroups((prev) => prev.filter((g) => g.id !== currentGroup.id))
+            // 退群/解散之后侧栏那份列表要把它去掉（列表平时靠增量更新，这件事只有这里知道）
+            refreshChatLists()
             navigate('/chat')
           }}
         />

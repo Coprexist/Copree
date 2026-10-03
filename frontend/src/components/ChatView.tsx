@@ -11,6 +11,7 @@ import EmojiText from './shared/EmojiText'
 import { BOTTOM_THRESHOLD } from '../hooks/useStickToBottom'
 // 「我正在读这个会话」的唯一真相（侧边栏据此不画红数泡，本组件据此把已读落回后端）
 import { conversationKey, setFollowingConversation, useReadingKey } from '../hooks/useReadingConversation'
+import { markConversationRead } from '../hooks/useChatLists'
 import ActivityBar, { type ActivityUser } from './ActivityBar'
 import ProfileCard from './ProfileCard'
 import { EmptyState, MenuPanel, MenuItem } from './ui'
@@ -343,12 +344,8 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
       if (isAtBottomRef.current) {
         schedule(() => scrollToBottom(true), 50)
       }
-      // 新消息到达 → 通知侧栏刷新排序和未读
-      window.dispatchEvent(new CustomEvent(CHAT_REFRESH_EVENT, { detail: {
-        type: 'unread_update',
-        conversation_type: conversationType,
-        conversation_id: conversationId,
-      } }))
+      // 不做任何列表广播：能收到**所有**会话推送的是常驻通知连接，会话列表由它就地改
+      //（见 hooks/useChatLists）。在这里广播一次 = 三个消费者各拉一次列表，白费
       if (m.sender_type === 'ai' && m.sender_id) {
         removeFromMap(setThinkingAgents, m.sender_id)
         removeFromMap(setTypingAgents, m.sender_id)
@@ -931,10 +928,8 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
       ? `/groups/${conversationId}/read`
       : `/dm/${conversationId}/read`
     api.post(url)
-      .then(() => {
-        // 落库成功再喊侧栏刷新：反过来的话它会拿着旧未读数画一次红数泡
-        window.dispatchEvent(new CustomEvent(CHAT_REFRESH_EVENT, { detail: { type: 'unread_update' } }))
-      })
+      // 落库成功才清本地那一项：反过来的话，读失败时侧栏会假装读过了
+      .then(() => markConversationRead(conversationType, conversationId))
       .catch(() => {})
   }, [conversationType, conversationId])
 
