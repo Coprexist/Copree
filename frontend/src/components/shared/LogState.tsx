@@ -61,20 +61,33 @@ export function groupByState<T>(
   return groups
 }
 
-/** 状态帧身份标签：[type] label */
+/** 帧类型说人话：group_chat / dm 有对应说法，AI 自己压的帧（work 之类）照原样 */
+const STATE_TYPE_KEYS: Record<string, string> = {
+  group_chat: 'logs:stateTypeGroup',
+  dm: 'logs:stateTypeDm',
+}
+
+/** 后端把会话标签拼成「群「名字」」/「私信「名字」」；类型已经交代过这件事，名字里就不重复了 */
+function stateName(label: string): string {
+  const matched = /^(?:群|私信)「([\s\S]*)」$/.exec(label)
+  return matched ? matched[1] : label
+}
+
+/** 状态帧身份标签：类型 + 名字，一个胶囊说完 */
 export function StateChip({ frame, className = '' }: { frame: LogStateFrame | null; className?: string }) {
   const t = useT()
   if (!frame) {
     return (
-      <span className={`text-3xs px-1.5 py-0.5 rounded bg-canvas border border-border text-textMuted ${className}`}>
+      <span className={`text-3xs px-2 py-0.5 rounded-full bg-canvas border border-border text-textMuted whitespace-nowrap ${className}`}>
         {t('logs:stateNone')}
       </span>
     )
   }
+  const typeKey = STATE_TYPE_KEYS[frame.type ?? '']
   return (
-    <span className={`text-3xs px-1.5 py-0.5 rounded bg-canvas border border-border text-textSecondary inline-flex items-baseline gap-1 max-w-full ${className}`}>
-      <span className="font-mono text-textPrimary shrink-0">[{frame.type}]</span>
-      {frame.label && <span className="truncate">{frame.label}</span>}
+    <span className={`inline-flex items-baseline gap-1 max-w-full text-3xs px-2 py-0.5 rounded-full bg-primary-500/10 whitespace-nowrap ${className}`}>
+      <span className="shrink-0 font-medium text-primary-400">{typeKey ? t(typeKey) : frame.type}</span>
+      {frame.label && <span className="truncate text-textPrimary">{stateName(frame.label)}</span>}
     </span>
   )
 }
