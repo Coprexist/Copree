@@ -2,11 +2,13 @@
 管理员面板路由
 所有端点都需要 admin 权限
 """
-import os, json, asyncio, secrets
+import os, json, asyncio, secrets, shutil, tempfile
 import logging
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
-from fastapi.responses import Response
+from fastapi.responses import Response, FileResponse
+from starlette.background import BackgroundTask
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, update, delete
 from pydantic import BaseModel, Field
@@ -1351,6 +1353,19 @@ async def restore_local_backup(
     return result
 
 
+def _spool_upload(upload: UploadFile) -> Path:
+    """把上传流落到临时文件：完整备份包可能上 GB，读进内存等于把进程押上去"""
+    fd, name = tempfile.mkstemp(prefix="copree_restore_", suffix=".tar.gz")
+    path = Path(name)
+    try:
+        with os.fdopen(fd, "wb") as out:
+            shutil.copyfileobj(upload.file, out)
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+    return path
+
+
 @router.get("/backup/full/download")
 async def download_full_backup(
     admin: dict = Depends(require_admin),
@@ -1360,23 +1375,27 @@ async def download_full_backup(
     from app.services.infrastructure.backup_service import create_full_backup
 
     try:
-        tar_bytes, db_size, file_count = await create_full_backup()
+        tar_path, db_size, file_count = await create_full_backup()
     except RuntimeError as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    await _log_admin_action(
-        db, admin["user_id"],
-        "full_backup", "system", 0,
-        {"db_size": db_size, "file_count": file_count, "total_bytes": len(tar_bytes)},
-    )
+    try:
+        await _log_admin_action(
+            db, admin["user_id"],
+            "full_backup", "system", 0,
+            {"db_size": db_size, "file_count": file_count, "total_bytes": tar_path.stat().st_size},
+        )
+    except Exception:
+        tar_path.unlink(missing_ok=True)
+        raise
 
-    return Response(
-        content=tar_bytes,
+    # 归档是磁盘上的临时文件，响应发完就删
+    return FileResponse(
+        tar_path,
         media_type="application/gzip",
-        headers={
-            "Content-Disposition": f'attachment; filename="copree_full_{timestamp}.tar.gz"',
-        },
+        filename=f"copree_full_{timestamp}.tar.gz",
+        background=BackgroundTask(tar_path.unlink),
     )
 
 
@@ -1396,14 +1415,18 @@ async def upload_full_restore(
         )
 
     try:
-        content = await file.read()
-        result = await restore_full_backup(content)
+        tmp_path = await asyncio.to_thread(_spool_upload, file)
+        try:
+            size_bytes = tmp_path.stat().st_size
+            result = await restore_full_backup(tmp_path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
     except RuntimeError as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
     await _log_admin_action(
         db, admin["user_id"], "full_restore", "system", 0,
-        {"filename": file.filename, "size_bytes": len(content)},
+        {"filename": file.filename, "size_bytes": size_bytes},
     )
 
     return result

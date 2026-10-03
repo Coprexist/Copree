@@ -17,6 +17,7 @@ import shutil
 import tarfile
 import tempfile
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 
@@ -430,67 +431,94 @@ async def restore_backup(data: bytes) -> dict:
 # 6. 完整备份（数据库 + 文件）
 # ═══════════════════════════════════════════════════════════════
 
-async def create_full_backup() -> tuple[bytes, int, int]:
+# 完整备份要跳过的数据根子树（按相对路径匹配，不按目录名——
+# 世界目录里叫 postgres 的文件夹是用户内容，不该因为重名被丢掉）
+SKIP_SUBTREES = frozenset({
+    "postgres", "pgdata", "mysql", "mariadb",  # 数据库自己的存储目录：库内容已单独导出成 backup.sql
+    "backups",                                 # 本机历史备份：打进去等于备份套备份，份数一多滚雪球
+    "napcat/qq",                               # QQ 协议端用户数据（GB 级的 QQ 程序与缓存），重新登录即可重建
+})
+
+
+def _iter_backup_files(data_dir: Path) -> Iterator[tuple[Path, str]]:
+    """遍历数据根下要入包的文件，产出 (真实路径, 归档内路径)。
+
+    名字排过序再走，同一份数据每次打出的包顺序一致。
     """
-    创建完整备份（.tar.gz）：
-    - 包含数据库备份文件（.sql 或 .db）
-    - 包含 /app/data/ 目录下所有文件
-    返回 (tar_bytes, db_size, file_count)
-    """
-    backend = get_backup_backend()
-    db_ext = backend.backup_extension  # ".sql" or ".db"
-    inner_name = f"backup{db_ext}"     # "backup.sql" or "backup.db"
+    for root, dirs, files in os.walk(data_dir):
+        rel = Path(root).relative_to(data_dir).as_posix()
+        rel = "" if rel == "." else rel
+        dirs[:] = sorted(
+            d for d in dirs if (f"{rel}/{d}" if rel else d) not in SKIP_SUBTREES
+        )
+        for fname in sorted(files):
+            yield Path(root) / fname, f"data/{rel}/{fname}" if rel else f"data/{fname}"
 
-    logger.info("开始创建完整备份...")
 
-    # 1. 先备份数据库
-    db_bytes = await backend.create_backup()
-    db_size = len(db_bytes)
-    logger.info(f"数据库导出完成: {db_size} bytes ({backend.name})")
-
-    # 2. 打包为 tar.gz
-    data_dir = settings.data_dir
-    buf = io.BytesIO()
+def _pack_full_backup(db_bytes: bytes, inner_name: str) -> tuple[Path, int]:
+    """把数据库导出与数据根下的文件装进一个临时 .tar.gz（阻塞操作，交给线程跑）"""
+    fd, name = tempfile.mkstemp(prefix="copree_full_", suffix=".tar.gz")
+    os.close(fd)
+    path = Path(name)
     file_count = 0
 
     try:
-        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-            # 添加数据库备份
+        with tarfile.open(path, mode="w:gz") as tar:
             db_info = tarfile.TarInfo(name=inner_name)
             db_info.size = len(db_bytes)
             tar.addfile(db_info, io.BytesIO(db_bytes))
             logger.info(f"  ✅ {inner_name} 已打包")
 
-            # 添加 data/ 目录下用户数据文件（跳过数据库数据目录）
-            if os.path.isdir(data_dir):
-                SKIP_DIRS = {'postgres', 'pgdata', 'mysql', 'mariadb'}
-                for root, dirs, files in os.walk(data_dir):
-                    dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
-                    for fname in files:
-                        fpath = os.path.join(root, fname)
-                        try:
-                            arcname = os.path.join("data", os.path.relpath(fpath, data_dir))
-                            arcname = arcname.replace("\\", "/")
-                            tar.add(fpath, arcname=arcname)
-                            file_count += 1
-                        except FileNotFoundError:
-                            logger.warning(f"跳过已消失的文件: {fpath}")
+            data_dir = Path(settings.data_dir)
+            if data_dir.is_dir():
+                for fpath, arcname in _iter_backup_files(data_dir):
+                    try:
+                        tar.add(fpath, arcname=arcname)
+                        file_count += 1
+                    except FileNotFoundError:
+                        logger.warning(f"跳过已消失的文件: {fpath}")
             logger.info(f"  ✅ {file_count} 个文件已打包")
 
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+
+    return path, file_count
+
+
+async def create_full_backup() -> tuple[Path, int, int]:
+    """
+    创建完整备份（.tar.gz），返回 (归档路径, 数据库字节数, 文件数)。
+
+    归档落在磁盘的临时文件上而不是内存：数据根以 GB 计时，内存里再留一份完整副本
+    会把进程押上去。**调用方负责删除返回的文件**。
+    """
+    backend = get_backup_backend()
+    inner_name = f"backup{backend.backup_extension}"  # "backup.sql" / "backup.db"
+
+    logger.info("开始创建完整备份...")
+    db_bytes = await backend.create_backup()
+    db_size = len(db_bytes)
+    logger.info(f"数据库导出完成: {db_size} bytes ({backend.name})")
+
+    try:
+        tar_path, file_count = await asyncio.to_thread(_pack_full_backup, db_bytes, inner_name)
     except Exception as e:
         logger.error(f"创建完整备份失败: {e}")
         raise RuntimeError(f"打包备份失败: {str(e)}")
 
-    tar_bytes = buf.getvalue()
-    logger.info(f"完整备份创建完成: {len(tar_bytes)} bytes (DB={db_size}, files={file_count})")
-    return tar_bytes, db_size, file_count
+    logger.info(
+        f"完整备份创建完成: {tar_path} "
+        f"({tar_path.stat().st_size} bytes, DB={db_size}, files={file_count})"
+    )
+    return tar_path, db_size, file_count
 
 
-async def restore_full_backup(tar_bytes: bytes) -> dict:
+async def restore_full_backup(tar_path: str | Path) -> dict:
     """
-    从完整备份 .tar.gz 恢复：
+    从完整备份 .tar.gz 恢复（传磁盘路径，包不进内存）：
     - 从 backup.sql / backup.db 恢复数据库
-    - 将所有 data/ 下的文件还原到 /app/data/
+    - 将归档里 data/ 下的文件写回数据根
     ⚠️ 覆盖当前所有数据
     """
     data_dir = settings.data_dir
@@ -501,7 +529,7 @@ async def restore_full_backup(tar_bytes: bytes) -> dict:
     DB_INNER_NAMES = {"backup.sql", "backup.db"}
 
     try:
-        with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:gz") as tar:
+        with tarfile.open(tar_path, mode="r:gz") as tar:
             for member in tar.getmembers():
                 if member.name in DB_INNER_NAMES:
                     # 提取数据库备份
