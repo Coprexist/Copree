@@ -374,8 +374,9 @@
     contain: layout paint;
   }
   .collapse-body[data-open="false"] { grid-template-rows: 0fr; }
-  /* 收起后不参与渲染：内容仍留在 DOM（导出件要靠它展开），只是不画 */
-  .collapse-body[data-open="false"] > * { content-visibility: hidden; }
+  /* 完全收起之后才退出渲染：折叠过程中内容还得看得见（提前隐藏会看见内容凭空消失），
+     这个标记由高度动画收尾时打上（见 useSmoothHeights） */
+  .collapse-body[data-collapsed="true"][data-open="false"] > * { content-visibility: hidden; }
   .collapse-body > * { overflow: hidden; min-height: 0; }
   /* 箭头跟着 aria-expanded 转：同一份 CSS 同时管站内与导出件 */
   .collapse-arrow { transition: transform 0.2s ease; }

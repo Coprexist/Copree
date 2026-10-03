@@ -322,6 +322,12 @@ function useSmoothHeights(rootRef: React.RefObject<HTMLDivElement | null>, deps:
     root.querySelectorAll<HTMLElement>('[data-smooth-height]').forEach(el => {
       let prev = el.offsetHeight
       let timer = 0
+      // 完全收起之后才让这一块退出渲染：折叠过程中还看得见，提前隐藏会看见内容凭空消失
+      const markCollapsed = () => {
+        if (el.offsetHeight === 0) el.setAttribute('data-collapsed', 'true')
+        else el.removeAttribute('data-collapsed')
+      }
+      markCollapsed()
       const ro = new ResizeObserver(() => {
         const to = el.offsetHeight
         if (to === prev) return
@@ -332,7 +338,7 @@ function useSmoothHeights(rootRef: React.RefObject<HTMLDivElement | null>, deps:
         el.style.overflow = 'hidden'
         el.style.height = from + 'px'
         void el.offsetHeight
-        el.style.transition = 'height 0.18s ease'
+        el.style.transition = 'height 0.22s cubic-bezier(0.4, 0, 0.2, 1)'
         el.style.height = to + 'px'
         window.clearTimeout(timer)
         timer = window.setTimeout(() => {
@@ -340,8 +346,9 @@ function useSmoothHeights(rootRef: React.RefObject<HTMLDivElement | null>, deps:
           el.style.height = ''
           el.style.overflow = ''
           prev = el.offsetHeight
+          markCollapsed()
           ro.observe(el)
-        }, 220)
+        }, 260)
       })
       ro.observe(el)
       stop.push(() => { ro.disconnect(); window.clearTimeout(timer) })
