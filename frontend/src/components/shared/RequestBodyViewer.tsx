@@ -532,7 +532,7 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
       {/* 图例固定在上、正文自己滚：滚动条因此只覆盖正文区，不会从图例右侧穿上去；
           改变量视图一屏摆好几截，不给它限高滚动 */}
       {legend ? (
-        <div data-export-flat className="max-h-[70vh] min-h-0 overflow-y-auto pr-1">{switchBody}</div>
+        <div data-export-flat className="flex-1 min-h-0 overflow-y-auto pr-1">{switchBody}</div>
       ) : switchBody}
     </div>
   )

@@ -211,8 +211,9 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
       </div>
       <p className="text-3xs text-textMuted">{showDelta ? (comparable ? changeLine : t('logs:deltaFirst')) : ''}</p>
 
-      <div className="flex flex-col lg:flex-row gap-3">
-        <aside className="lg:w-60 shrink-0 max-h-[70vh] overflow-y-auto space-y-0.5">
+      {/* 两栏共用一个高度上限：各自的滚动区等高，左右才对齐（限高原先各挂各的，图例把右侧顶下去） */}
+      <div className="flex flex-col lg:flex-row gap-3 max-h-[70vh] min-h-0">
+        <aside className="lg:w-60 shrink-0 min-h-0 overflow-y-auto space-y-0.5">
           <div className="text-3xs text-textMuted px-2 pb-1">{t('logs:stateHistory')}</div>
           {items.map(log => (
             <button
@@ -232,7 +233,7 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
           ))}
         </aside>
 
-        <div ref={exportRef} className="flex-1 min-w-0">
+        <div ref={exportRef} className="flex-1 min-w-0 flex flex-col min-h-0">
           {currentId && (
             <div data-export-stick-head className="flex items-center gap-2 py-1 sticky top-0 z-20 bg-surface">
               <span className="text-3xs font-mono text-textMuted">#{currentId}</span>
