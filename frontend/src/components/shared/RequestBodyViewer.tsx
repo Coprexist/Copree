@@ -145,16 +145,18 @@ function ArgValue({ value }: { value: any }) {
     : <Body text={JSON.stringify(value, null, 2)} mono />
 }
 
-/** 工具入参：按参数名拆开看，一个参数一块标签 */
-function ToolArgs({ args }: { args: string }) {
+/** JSON 对象 → 一行一个字段：键一个小标签，值按类型渲染。
+ *  工具入参与工具返回都是这个形状（原本整坨 JSON，长文本里的转义符比正文还多），共用一套。 */
+function JsonFields({ text }: { text: string }) {
   const parsed = useMemo(() => {
     try {
-      const value = JSON.parse(args)
+      const value = JSON.parse(text)
       return value && typeof value === 'object' && !Array.isArray(value) ? value : null
     } catch { return null }
-  }, [args])
+  }, [text])
   const entries = parsed ? Object.entries(parsed) : []
-  if (entries.length === 0) return <Body text={args} mono />
+  // 数组、标量、空对象仍走格式化等宽：那不是"一堆参数"，拆开反而更乱
+  if (entries.length === 0) return <Body text={text} mono />
   return (
     <div className="space-y-1.5">
       {entries.map(([key, value]) => (
@@ -279,6 +281,13 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
 
   const blocks = useMemo(() => {
     const out: { kind: Kind; title?: string; source: string; marks: Mark[]; body: React.ReactNode }[] = []
+    // 工具返回自己不带函数名，只能拿 tool_call_id 回上面那条工具调用里认
+    const callNames = new Map<string, string>()
+    for (const msg of list) {
+      for (const call of (Array.isArray(msg?.tool_calls) ? msg.tool_calls : [])) {
+        if (call?.id) callNames.set(String(call.id), toolName(call))
+      }
+    }
     list.forEach((msg) => {
       const content = textOf(msg.content)
       if (msg?.reasoning_content) {
@@ -305,14 +314,15 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
                 {calls.length > 1 && (
                   <div className="text-3xs font-mono text-textSecondary">{toolName(call)}</div>
                 )}
-                <ToolArgs args={toolArgs(call)} />
+                <JsonFields text={toolArgs(call)} />
               </div>
             ))}
           </div>
         )
       } else if (kind === 'toolResult') {
-        title = msg.tool_call_id ? String(msg.tool_call_id) : undefined
-        body = <Body text={textOf(msg.content)} mono />
+        // 标题用函数名（id 一长串没人认得出），对上上面那条工具调用；对不上才退回 id
+        title = callNames.get(String(msg.tool_call_id)) || (msg.tool_call_id ? String(msg.tool_call_id) : undefined)
+        body = <JsonFields text={content} />
       } else if (kind === 'state') {
         title = stateTitle(content)
         body = <Body text={content} />
