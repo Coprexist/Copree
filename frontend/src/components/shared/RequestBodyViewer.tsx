@@ -434,7 +434,7 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
     <div className={`space-y-2 ${className}`}>
       {/* 数据只存一份：导出件打开时按这份紧凑 JSON 现算「原始 JSON」与每条「原文」 */}
       <script type="application/json" data-log-json dangerouslySetInnerHTML={{ __html: logJson }} />
-      {legend && <div className="flex items-center gap-2 flex-wrap" data-value={showRaw ? 'raw' : 'segments'} data-switch-mirror={viewId}>
+      {legend && <div className="flex items-center gap-2 flex-wrap pb-2 sticky top-0 z-10 bg-canvas" data-value={showRaw ? 'raw' : 'segments'} data-switch-mirror={viewId} data-export-stick-legend>
         <div className="flex items-center gap-2 flex-wrap" data-when="segments">
         {(Object.keys(STYLES) as Kind[]).map(kind => (
           <span key={kind} className="flex items-center gap-1 text-3xs text-textMuted">
