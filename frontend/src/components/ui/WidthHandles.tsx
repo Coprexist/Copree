@@ -25,8 +25,11 @@ const HANDLE_CENTER = 24 + HANDLE_W / 2
 const NEAR_FALLOFF_PX = 80
 /** 浓度曲线：线性看不出差别，拉陡一点近处才够亮、稍远就明显淡下去 */
 const NEAR_CURVE = 1.6
-/** 高光自身的不透明度：太淡的话再乘浓度也还是看不见 */
-const GLOW_ALPHA = 0.3
+/**
+ * 高光浓度上限。压得比较低是有意的：它要跟正文底色（浅灰）共存，
+ * 太浓就成了一条紫柱子，跟页面里其他颜色打架——提示「这里能抓」不需要那么强的存在感。
+ */
+const GLOW_ALPHA = 0.16
 /**
  * 感应区宽度（从内容列边缘起算）：24 内缩 + 40 拖条 + 一个衰减距离 80。
  * 这个宽度是算出来的而不是拍脑袋——拖条中心到区缘正好是「半个拖条 + 一个衰减距离」，
@@ -35,20 +38,14 @@ const GLOW_ALPHA = 0.3
  */
 const ZONE_PX = 144
 
-/** 指针 Y 为原点的横向渐隐带：stops 是「距指针多远开始、多远收干净」 */
-function glowAt(stops: { inner: number; outer: number }) {
-  const y = `var(${HANDLE_Y_VAR}, 50%)`
-  const rgb = `rgb(var(--tw-primary-500) / ${GLOW_ALPHA})`
-  return `linear-gradient(to bottom, transparent calc(${y} - ${stops.outer}px), ${rgb} calc(${y} - ${stops.inner}px), ${rgb} calc(${y} + ${stops.inner}px), transparent calc(${y} + ${stops.outer}px))`
-}
-
 /**
- * 指针为原点的椭圆光斑：横半径 x、纵半径 y。
- * 细线用它是为了横向也有亮度梯度——正中最亮，往两边迅速收干净，
- * 否则一条等宽的实心竖条会在边缘留出硬边。
+ * 指针为原点的椭圆光斑：横半径 x、纵半径 y、中心浓度 alpha。
+ * 两层都用它，是为了横向也有亮度梯度——正中最亮、往四周收干净。
+ * 矩形带在横向是硬切边，铺在正文旁边就是一根柱子；椭圆才像一团光。
  */
-function sparkAt({ x, y }: { x: number; y: number }) {
-  return `radial-gradient(ellipse ${x}px ${y}px at 50% var(${HANDLE_Y_VAR}, 50%), rgb(var(--tw-primary-500)) 0%, rgb(var(--tw-primary-500) / 0) 100%)`
+function blobAt({ x, y, alpha }: { x: number; y: number; alpha: number }) {
+  const rgb = `rgb(var(--tw-primary-500) / ${alpha})`
+  return `radial-gradient(ellipse ${x}px ${y}px at 50% var(${HANDLE_Y_VAR}, 50%), ${rgb} 0%, rgb(var(--tw-primary-500) / 0) 100%)`
 }
 
 /**
@@ -59,9 +56,9 @@ function sparkAt({ x, y }: { x: number; y: number }) {
  *  · 拖条收按下/拖动，也是视觉所在。
  *
  * 显形分两层，共用同一个原点（指针的 Y）：
- *  · 区域高光（粉）—— 一大片柔光告诉你可以抓；浓度按鼠标到拖条的横向距离走（曲线拉陡，
+ *  · 区域高光（粉）—— 一团柔光告诉你可以抓；浓度按鼠标到拖条的横向距离走（曲线拉陡，
  *    近处满、稍远就明显淡下去），所以正文里正常阅读时它不晃眼；
- *  · 落点光斑（紫）—— 一小片椭圆，正中最亮、四周收干净，告诉你松手会停在哪；
+ *  · 落点光斑（紫）—— 同形状但小而实，正中最亮、四周收干净，告诉你松手会停在哪；
  *    它只在悬停/拖动时出现，浓度不跟距离走。
  */
 export default function WidthHandles({ varName, dragging, title, onHandleDown, onHandleMove, onHandleUp, onHandleCancel, onReset }: WidthHandlesProps) {
@@ -132,15 +129,15 @@ export default function WidthHandles({ varName, dragging, title, onHandleDown, o
               ...(side === 'left' ? { right: '24px' } : { left: '24px' }),
             }}
           >
-            {/* 区域高光：跟着指针上下的一片柔光，浓度跟鼠标的远近走 */}
+            {/* 区域高光：跟着指针上下的一团柔光，浓度跟鼠标的远近走 */}
             <span
               className="pointer-events-none absolute inset-0 transition-opacity duration-150"
-              style={{ opacity: dragging ? 1 : `var(${HANDLE_NEAR_VAR}, 0)`, background: glowAt({ inner: 40, outer: 120 }) }}
+              style={{ opacity: dragging ? 1 : `var(${HANDLE_NEAR_VAR}, 0)`, background: blobAt({ x: HANDLE_W / 2, y: 120, alpha: GLOW_ALPHA }) }}
             />
-            {/* 落点光斑：同一原点，悬停/拖动才出现 */}
+            {/* 落点光斑：同一原点、同一形状，小而实；悬停/拖动才出现 */}
             <span
               className={`pointer-events-none absolute left-1/2 top-0 h-full w-[14px] -translate-x-1/2 transition-opacity ${shown}`}
-              style={{ background: sparkAt({ x: 7, y: 52 }) }}
+              style={{ background: blobAt({ x: 7, y: 52, alpha: 1 }) }}
             />
           </div>
         </div>
