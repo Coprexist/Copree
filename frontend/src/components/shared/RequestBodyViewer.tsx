@@ -28,7 +28,7 @@ const STYLES: Record<Kind, { bar: string; box: string; key: string }> = {
 }
 
 /** 等宽渲染的种类：工具入参/返回与「本轮工具」汇总行都是机器文本，等宽才看得出结构 */
-const MONO: Kind[] = ['roundTools', 'toolCall', 'toolResult']
+const MONO: Kind[] = ['toolCall', 'toolResult']
 
 /** removed 用于改变量里"已经没了"的那几条：压暗再加一圈红，跟留下的分得开 */
 type Tone = 'normal' | 'removed'
@@ -116,11 +116,35 @@ function headerMarks(text: string): Mark[] {
 }
 
 /**
+ * 本轮工具账本：`send_gm(ok)；pop_state(ok)；end_turn(ok)` → 一个工具一个标签的 HTML。
+ *  前缀 [本轮工具] 就是块头的 kind 标签，这里不再重复；工具自报的备注跟着工具名，失败标红。
+ *  掺了别的东西（合成消息把话接在后面）返回 null，交给调用方原样渲染——别把人话当工具拆。
+ */
+function renderLedger(content: string): string | null {
+  const trimmed = content.trim()
+  if (!trimmed.startsWith('[本轮工具]')) return null
+  const body = trimmed.slice('[本轮工具]'.length).trim()
+  if (!body || body.includes('\n')) return null
+  return body.split('；').map(part => part.trim()).filter(Boolean).map(item => {
+    const matched = /^(.+?)\(([^()]*)\)$/.exec(item)
+    const name = matched ? matched[1] : item
+    const note = matched ? matched[2] : ''
+    const failed = note.startsWith('失败')
+    return `<span class="log-tool${failed ? ' log-tool-fail' : ''}">` +
+      `<span class="log-tool-name">${escapeHtml(name)}</span>` +
+      (note ? `<span class="log-tool-note">(${escapeHtml(note)})</span>` : '') +
+      '</span>'
+  }).join(' ')
+}
+
+/**
  * 历史行就地渲染：`[时间] 谁（id=N）: 正文 [msg_id=N]`
  * → 说话人标签 + 正文（时间与 msg_id 已搬到块头，正文里不再露那两串标记）。
- * 不是那种行（系统提示、JSON、工具往返…）就只把 @ 换成标签。
+ * 不是那种行（系统提示、JSON、本轮工具账本…）就只把 @ 换成标签。
  */
 function renderLine(content: string, names: MentionNames | undefined, unknown: string): string {
+  const ledger = renderLedger(content)
+  if (ledger) return ledger
   const head = LINE_HEAD_RE.exec(content)
   if (!head) return renderMentionChips(content, names || {}, unknown)
   let rest = head[2]
@@ -138,40 +162,11 @@ function renderLine(content: string, names: MentionNames | undefined, unknown: s
   return `${tag}${who}\n${renderMentionChips(speaker[2], names || {}, unknown)}`
 }
 
-/**
- * 本轮工具账本：`send_gm(ok)；pop_state(ok)；end_turn(ok)` → 一个工具一个标签。
- *  前缀 [本轮工具] 就是块头那个 kind 标签，正文里不再重复；失败的工具标红。
- */
-function ToolLedger({ text }: { text: string }) {
-  const body = text.replace(/^\s*\[本轮工具\]\s*/, '')
-  const items = body.split('；').map(part => part.trim()).filter(Boolean)
-  // 账本行是一整行；掺了别的（合成消息把话接在后面）就原样等宽，别乱拆
-  if (items.length === 0 || body.includes('\n')) return <Body text={text} mono />
-  return (
-    <div className="flex flex-wrap items-center gap-1">
-      {items.map((item, index) => {
-        const matched = /^(.+?)\(([^()]*)\)$/.exec(item)
-        const name = matched ? matched[1] : item
-        const note = matched ? matched[2] : ''
-        const failed = note.startsWith('失败')
-        return (
-          <span
-            key={`${item}-${index}`}
-            className={`text-3xs px-1.5 py-0.5 rounded-full whitespace-nowrap ${
-              failed ? 'bg-rose-500/10 text-rose-400' : 'bg-black/5 dark:bg-white/10 text-textSecondary'
-            }`}
-          >
-            <span className="font-mono">{name}</span>
-            {note && <span className={failed ? '' : 'text-textMuted'}>({note})</span>}
-          </span>
-        )
-      })}
-    </div>
-  )
-}
-
 /** 字段能拆到第几层：够看清 next_frame.tail 这种两层结构，再深就退回等宽（防病态嵌套） */
 const FIELD_DEPTH = 3
+
+/** 嵌套层的容器：封顶 + 自己滚。一层 next_frame 能带几十个字段，不封顶就把整页撑长了 */
+const NESTED_BOX = 'rounded-control border border-border p-2 max-h-72 overflow-y-auto'
 
 /** 一个值怎么渲染：字符串当文本读、容器递归拆、数字/布尔/null 就地等宽。
  *  只有容器吃层数——标量再把层数耗掉，emotion 那种一串数字会全变成小 JSON 块。 */
@@ -180,17 +175,18 @@ function ArgValue({ value, names, depth }: { value: any; names?: MentionNames; d
   if (Array.isArray(value)) {
     if (value.length === 0) return <Body text="[]" mono />
     if (depth <= 0) return <Body text={JSON.stringify(value, null, 2)} mono />
-    return (
-      <div className="space-y-1">
-        {value.map((item, index) => (
-          <ArgValue key={index} value={item} names={names} depth={depth - 1} />
-        ))}
-      </div>
-    )
+    const items = value.map((item, index) => (
+      <ArgValue key={index} value={item} names={names} depth={depth - 1} />
+    ))
+    // 顶层（depth == FIELD_DEPTH）就在块里摊开；更深一层套容器
+    return depth >= FIELD_DEPTH
+      ? <div className="space-y-1">{items}</div>
+      : <div className={`${NESTED_BOX} space-y-1`}>{items}</div>
   }
   if (value && typeof value === 'object') {
     if (depth <= 0) return <Body text={JSON.stringify(value, null, 2)} mono />
-    return <JsonObject value={value} names={names} depth={depth - 1} />
+    const nested = <JsonObject value={value} names={names} depth={depth - 1} />
+    return depth >= FIELD_DEPTH ? nested : <div className={NESTED_BOX}>{nested}</div>
   }
   return <span className="text-2xs font-mono text-textSecondary">{JSON.stringify(value)}</span>
 }
@@ -361,9 +357,9 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
         title = calls.map(toolName).join(', ')
         body = (
           <div className="space-y-1.5">
-            {/* 带工具调用的消息，正文也是机器拼的（要么空，要么就是那行「本轮工具」）：
-                跟单独成块的「本轮工具」一个长相，同一句话不该有两种字体 */}
-            {content.trim() && <Body text={content} mono />}
+            {/* 带工具调用的消息，正文要么空、要么就是那行「本轮工具」：跟单独成块的账本
+                走同一条渲染路（renderLine 认账本），同一句话不该两种长相 */}
+            {content.trim() && <Body text={content} names={mentionNames} />}
             {calls.map((call: any, ci: number) => (
               <div key={ci} className="space-y-1">
                 {/* 函数名已经在块头了；一次带多个调用时才在正文里点出每个是谁的入参 */}
@@ -379,8 +375,6 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
         // 标题用函数名（id 一长串没人认得出），对上上面那条工具调用；对不上才退回 id
         title = callNames.get(String(msg.tool_call_id)) || (msg.tool_call_id ? String(msg.tool_call_id) : undefined)
         body = <JsonFields text={content} names={mentionNames} />
-      } else if (kind === 'roundTools') {
-        body = <ToolLedger text={content} />
       } else if (kind === 'state') {
         title = stateTitle(content)
         body = <Body text={content} />

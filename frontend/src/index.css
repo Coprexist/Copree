@@ -309,6 +309,22 @@
   .mention-chip {
     @apply bg-accent-500/10 text-accent-500;
   }
+  /* 本轮工具账本：一个工具一个标签，工具自报的备注跟着工具名，失败整块标红 */
+  .log-tool {
+    @apply inline-block px-1.5 py-0.5 rounded-full align-baseline text-3xs whitespace-nowrap bg-black/5 dark:bg-white/10 text-textSecondary;
+  }
+  .log-tool-name {
+    @apply font-mono;
+  }
+  .log-tool-note {
+    @apply text-textMuted;
+  }
+  .log-tool-fail {
+    @apply bg-rose-500/10 text-rose-400;
+  }
+  .log-tool-fail .log-tool-note {
+    @apply text-rose-400;
+  }
 
   .ai-pulse-active {
     animation: pulseRing 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
