@@ -482,8 +482,28 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
     return <p className={`text-xs text-textMuted ${className}`}>{t('logs:empty')}</p>
   }
 
+  // 两份视图都在 DOM 里：导出件没有 React，切「原始 JSON」只能靠 data-value
+  const switchBody = (
+    <div id={viewId} ref={switchElRef} data-value={showRaw ? 'raw' : 'segments'} className="switch">
+      <div data-case="segments" className="space-y-1.5">
+        {blocks.map((block, i) => (
+          <Block key={i} index={i} msgIndex={block.msgIndex} kind={block.kind} title={block.title} source={block.source} marks={block.marks} tone={tone}>
+            {block.body}
+          </Block>
+        ))}
+      </div>
+      {legend && (
+        <div data-case="raw">
+          <pre data-lazy-json="raw" className="text-2xs font-mono text-textSecondary whitespace-pre-wrap break-words bg-canvas border border-border rounded-control p-3 max-h-[60vh] overflow-y-auto">
+            {JSON.stringify(list, null, 2) || EMPTY}
+          </pre>
+        </div>
+      )}
+    </div>
+  )
+
   return (
-    <div className={className}>
+    <div className={"flex flex-col min-h-0 " + className}>
       {/* 数据只存一份：导出件打开时按这份紧凑 JSON 现算「原始 JSON」与每条「原文」 */}
       <script type="application/json" data-log-json dangerouslySetInnerHTML={{ __html: logJson }} />
       {legend && <div className="flex items-center gap-2 flex-wrap pt-2 pb-2 sticky top-0 z-10 bg-surface" data-value={showRaw ? 'raw' : 'segments'} data-switch-mirror={viewId} data-export-stick-legend>
@@ -509,23 +529,11 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
           </button>
         )}
       </div>}
-      {/* 两份视图都在 DOM 里：导出件没有 React，切「原始 JSON」只能靠 data-value */}
-      <div id={viewId} ref={switchElRef} data-value={showRaw ? 'raw' : 'segments'} className="switch">
-        <div data-case="segments" className="space-y-1.5">
-          {blocks.map((block, i) => (
-            <Block key={i} index={i} msgIndex={block.msgIndex} kind={block.kind} title={block.title} source={block.source} marks={block.marks} tone={tone}>
-              {block.body}
-            </Block>
-          ))}
-        </div>
-        {legend && (
-          <div data-case="raw">
-            <pre data-lazy-json="raw" className="text-2xs font-mono text-textSecondary whitespace-pre-wrap break-words bg-canvas border border-border rounded-control p-3 max-h-[60vh] overflow-y-auto">
-              {JSON.stringify(list, null, 2) || EMPTY}
-            </pre>
-          </div>
-        )}
-      </div>
+      {/* 图例固定在上、正文自己滚：滚动条因此只覆盖正文区，不会从图例右侧穿上去；
+          改变量视图一屏摆好几截，不给它限高滚动 */}
+      {legend ? (
+        <div data-export-flat className="max-h-[70vh] min-h-0 overflow-y-auto pr-1">{switchBody}</div>
+      ) : switchBody}
     </div>
   )
 }
