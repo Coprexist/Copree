@@ -66,6 +66,9 @@ export default function ChatArea({ groupId, dmSessionId }: ChatAreaProps) {
   const { openDrawer } = useOutletContext<{ openDrawer: () => void }>()
 
   const sidebarRef = useRef<HTMLDivElement>(null)
+  // 世界门要盖住整个群聊面板（含面板顶部的标题栏），所以把面板节点交给 ChatView 当浮层宿主。
+  // 用 state 而不是 ref：首次渲染时 ref.current 还是空，浮层拿不到宿主
+  const [groupPanelEl, setGroupPanelEl] = useState<HTMLDivElement | null>(null)
   const { sidebarWidth, handleResizeStart } = useResizableSidebar('chat_sidebar_width', sidebarRef)
 
   // 加载群聊列表
@@ -164,7 +167,7 @@ export default function ChatArea({ groupId, dmSessionId }: ChatAreaProps) {
         </div>
       ) : groupId ? (
         /* ── 群聊 ── */
-        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        <div ref={setGroupPanelEl} className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
           <div className="px-4 h-14 border-b border-border bg-surface flex items-center gap-2 shrink-0">
             <button
               onClick={() => navigate('/chat')}
@@ -228,7 +231,7 @@ export default function ChatArea({ groupId, dmSessionId }: ChatAreaProps) {
               </button>
             )}
           </div>
-          <ChatView conversationType="group" conversationId={groupId} myRole={currentGroup?.my_role} />
+          <ChatView conversationType="group" conversationId={groupId} myRole={currentGroup?.my_role} overlayHost={groupPanelEl} />
         </div>
       ) : (
         /* ── 私信 ── */

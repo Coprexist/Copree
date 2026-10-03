@@ -1,4 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react'
+import { createPortal } from 'react-dom'
 import { useWebSocket, type WebSocketMessage } from '../hooks/useWebSocket'
 import { api } from '../api/client'
 import { useAuth } from '../context/AuthContext'
@@ -72,6 +73,8 @@ interface ChatViewProps {
   conversationId: number | string
   /** 我在这个群里的角色（owner/admin 才能撤别人的消息；私信没有这个） */
   myRole?: string
+  /** 群聊面板容器：世界门要盖住整个面板（含面板顶部标题栏），本组件自己的 absolute 只到消息区 */
+  overlayHost?: HTMLElement | null
 }
 
 const PAGE_SIZE = 20
@@ -155,7 +158,7 @@ function addToMap<K, V>(
   })
 }
 
-export default function ChatView({ conversationType, conversationId, myRole }: ChatViewProps) {
+export default function ChatView({ conversationType, conversationId, myRole, overlayHost }: ChatViewProps) {
   // ── 群视界：群聊绑定的世界（全屏入口弹窗，先不加载消息） ──
   const [boundWorldId, setBoundWorldId] = useState<number | null>(null)
   const [worldModalOpen, setWorldModalOpen] = useState(false)
@@ -792,6 +795,10 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
     isAutoScrolling.current = false
     prevScrollHeight.current = 0
     immersivePending.current = false
+    // 世界门属于「当前这个群」：上一屏的绑定状态与弹窗不带进新对话，
+    // 否则切到未绑定世界的群，遮罩还盖着、按钮指向的还是上一个世界
+    setBoundWorldId(null)
+    setWorldModalOpen(false)
     setLoadingState('initial')
     // 进入对话时查询当前 AI 思考/输入中状态（组件重建后恢复活动指示器）
     const activityUrl = conversationType === 'group'
@@ -1049,6 +1056,29 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
   // 渲染
   // ============================================================
 
+  // 世界门是「群聊面板」级浮层：本组件里的 absolute 只到消息区，面板顶部标题栏会露在遮罩外面，
+  // 所以整块交给 ChatArea 的面板容器渲染；宿主还没就绪时就地渲染，避免门没出现而消息也不加载
+  const worldGate = worldModalOpen && boundWorldId != null && conversationType === 'group' ? (
+    <div className="absolute inset-0 z-toast flex items-center justify-center bg-black/70 backdrop-blur-sm">
+      <div className="w-full max-w-md mx-4 max-h-full overflow-y-auto bg-surface rounded-dialog border border-primary-500/30 shadow-2xl p-8 text-center">
+        <div className="mb-4"><Globe size={48} className="mx-auto text-primary-400" /></div>
+        <h2 className="text-lg font-semibold text-textPrimary">{t('chat.worldGateTitle')}</h2>
+        <p className="text-sm text-textMuted mt-2 mb-7">{t('chat.worldGateSubtitle')}</p>
+        <div className="space-y-2.5">
+          <button onClick={openImmersive} className="btn btn-md btn-primary w-full gap-1.5">
+            <Gamepad2 size={14} /> {t('chat.worldGateImmersive')}
+          </button>
+          <button
+            onClick={closeWorldModal}
+            className="w-full inline-flex items-center justify-center gap-1.5 py-3 bg-elevated hover:bg-border text-textPrimary rounded-card font-medium transition-colors"
+          >
+            <Settings size={12} /> {t('chat.worldGateStandard')}
+          </button>
+        </div>
+      </div>
+    </div>
+  ) : null
+
   return (
     <div className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
       {/* 重连提示条 */}
@@ -1057,6 +1087,16 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
           <Loader2 size={12} className="animate-spin" />
           {t('chat.reconnecting')}
         </div>
+      )}
+
+      {/* 沉浸入口：从世界门选了标准界面之后，进群这一次就再也找不到入口，所以顶部常驻一条 */}
+      {conversationType === 'group' && boundWorldId != null && !worldModalOpen && (
+        <button
+          onClick={openImmersive}
+          className="shrink-0 flex items-center justify-center gap-1.5 px-4 py-1.5 text-xs font-medium text-primary-400 bg-primary-500/10 border-b border-primary-500/20 hover:bg-primary-500/15 transition-colors"
+        >
+          <Gamepad2 size={12} /> {t('chat.worldEnterImmersive')}
+        </button>
       )}
 
       {/* 隐藏的文件输入（附件按钮触发） */}
@@ -1110,30 +1150,8 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
         </button>
       )}
 
-      {/* 群视界全屏入口：群聊绑定世界时先弹窗、不加载消息；选「标准界面」才关并加载 */}
-      {worldModalOpen && boundWorldId && conversationType === 'group' && (
-        <div className="absolute inset-0 z-toast flex items-center justify-center bg-black/70 backdrop-blur-sm">
-          <div className="w-full max-w-md mx-4 bg-surface rounded-dialog border border-primary-500/30 shadow-2xl p-8 text-center">
-            <div className="mb-4"><Globe size={48} className="mx-auto text-primary-400" /></div>
-            <h2 className="text-lg font-semibold text-textPrimary">这个群聊绑定了群视界</h2>
-            <p className="text-sm text-textMuted mt-2 mb-7">世界已就绪，选择一种方式进入</p>
-            <div className="space-y-2.5">
-              <button
-                onClick={openImmersive}
-                className="btn btn-md btn-primary w-full gap-1.5"
-              >
-                <Gamepad2 size={14} /> 在沉浸界面打开
-              </button>
-              <button
-                onClick={closeWorldModal}
-                className="w-full inline-flex items-center justify-center gap-1.5 py-3 bg-elevated hover:bg-border text-textPrimary rounded-card font-medium transition-colors"
-              >
-                <Settings size={12} /> 在此标准界面打开
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 群视界全屏入口：渲染进群聊面板（见 worldGate），先弹窗、不加载消息；选「标准界面」才关并加载 */}
+      {worldGate && (overlayHost ? createPortal(worldGate, overlayHost) : worldGate)}
 
       {/* 消息列表：外层不滚动，专门用来挂拖拽蒙版（放进滚动容器会随内容滚走）；
           containerRef 必须留在内层——虚拟列表靠它读 scrollTop */}
