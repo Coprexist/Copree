@@ -1948,24 +1948,36 @@ async def reset_email_templates(
 # 文件清理
 # ════════════════════════════════════════════════════════════
 
+# 无引用头像的"反悔期"：这段时间内不搬、搬走的也留着。头像变无引用常是瞬时状态，
+# 而人像原图删了就没了；留够时间，误判还能捞回来。
+TRASH_KEEP_DAYS = 7
+
 
 @router.post("/cleanup/files")
 async def cleanup_files(
     admin: dict = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """扫描并清理：1) 已无引用的头像文件  2) 物理文件已丢失的 metadata 记录"""
+    """扫描并清理：1) 已无引用的头像文件（搬进回收站，不直接删）  2) 物理文件已丢失的 metadata 记录"""
 
+    import time
     from app.models.file import FileMetadata as FMD, FileReference as FR, FileCollaborator as FC
     from app.models.system_settings import SystemSettings as SS
     from app.services.content.file_service import _get_physical_path
 
     avatar_dir = settings.avatars_dir
+    trash_dir = avatar_dir.rstrip('/') + '_trash'
     cleaned_files = 0
     cleaned_refs = 0
     orphan_cleaned = 0
+    trash_purged = 0
 
-    # 1. 清理无引用的头像文件
+    # 1. 无引用的头像文件搬进回收站
+    #
+    # 为什么不直接删：一张头像变"无引用"往往只是一个瞬间的状态——上传失败的中间态、
+    # 指针被清空但原图还在、三个入口各写一遍时漏了一处。真删掉就再也捞不回来
+    # （曾发生过：旧上传路径先删旧文件再校验，解码失败时原图已经没了）。
+    # 刚动过的文件先不动（可能那边正在写），回收站也定期清，免得越堆越多。
     if os.path.isdir(avatar_dir):
         active_avatars = set()
         for model in [User, Agent, Group]:
@@ -1975,14 +1987,41 @@ async def cleanup_files(
                 if url and '/download-avatar/' in url:
                     active_avatars.add(url.rsplit('/', 1)[-1])
 
+        now = time.time()
         for f in os.listdir(avatar_dir):
             filepath = os.path.join(avatar_dir, f)
             if not os.path.isfile(filepath):
                 continue
-            if f not in active_avatars:
+            # 缩略图 thumb_x.png 不被任何 avatar_url 引用，但它属于 x.png 那份头像：
+            # 只认主文件名的话，第一次点清理就会把所有缩略图搬走
+            owner_name = f[len('thumb_'):] if f.startswith('thumb_') else f
+            if owner_name in active_avatars:
+                continue
+            if now - os.path.getmtime(filepath) < TRASH_KEEP_DAYS * 86400:
+                continue
+            try:
+                os.makedirs(trash_dir, exist_ok=True)
+                stamp = datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')
+                target = os.path.join(trash_dir, f"{stamp}_{f}")
+                os.replace(filepath, target)
+                # 入回收站的时间从现在算：os.replace 会保留原 mtime，否则刚搬进来的旧文件
+                # 会在同一轮的"回收站过期清理"里立刻被删掉（反悔期等于没有）
+                os.utime(target, None)
+                cleaned_files += 1
+            except OSError:
+                pass
+
+        # 回收站只留 TRASH_KEEP_DAYS 天：留够反悔期就够，不是长期仓库
+        if os.path.isdir(trash_dir):
+            for f in os.listdir(trash_dir):
+                filepath = os.path.join(trash_dir, f)
+                if not os.path.isfile(filepath):
+                    continue
+                if now - os.path.getmtime(filepath) < TRASH_KEEP_DAYS * 86400:
+                    continue
                 try:
                     os.remove(filepath)
-                    cleaned_files += 1
+                    trash_purged += 1
                 except OSError:
                     pass
 
@@ -2004,16 +2043,19 @@ async def cleanup_files(
     await db.flush()
 
     stats = {
+        # cleaned_files 现在指"搬进回收站"的数量（键名不动，管理台照着它展示）
         "cleaned_files": cleaned_files,
         "cleaned_refs": cleaned_refs,
         "orphan_cleaned": orphan_cleaned,
+        "trash_purged": trash_purged,
         "run_at": datetime.now(timezone.utc).isoformat(),
     }
 
-    settings_result = await db.execute(select(SS).where(SS.id == 1))
-    settings = settings_result.scalar_one_or_none()
-    if settings:
-        settings.last_cleanup_stats = stats
+    # 变量名不能叫 settings：那会遮蔽模块级的 settings，函数开头的 settings.avatars_dir 直接
+    # UnboundLocalError（这个接口因此一直是 500，从没真正跑过——正是它让"清理误删"没发生过）
+    settings_row = (await db.execute(select(SS).where(SS.id == 1))).scalar_one_or_none()
+    if settings_row:
+        settings_row.last_cleanup_stats = stats
     await db.flush()
 
     return stats
