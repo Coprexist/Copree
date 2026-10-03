@@ -62,7 +62,8 @@ export default function MarkdownContent({ content, isMine = false }: { content: 
           ...defaultSchema.attributes,
           a: [...(defaultSchema.attributes?.a || ['href']), 'class', 'target', 'rel'],
           code: [...(defaultSchema.attributes?.code || []), 'class'],
-          span: [...(defaultSchema.attributes?.span || []), 'style'],
+          // 属性名要用 hast 的写法（className 不是 class）：写 class 等于没放行，实测过
+          span: [...(defaultSchema.attributes?.span || []), 'style', 'className'],
           img: [...(defaultSchema.attributes?.img || ['src', 'alt']), 'class'],
           div: [...(defaultSchema.attributes?.div || []), 'class'],
         },

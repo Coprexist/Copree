@@ -9,6 +9,7 @@ import { useMemo, useState } from 'react'
 import { ChevronRight } from 'lucide-react'
 import MarkdownContent from './MarkdownContent'
 import { useT } from '../../i18n/I18nContext'
+import { MENTION_TOKEN_RE, mentionLabel, renderMentionChips, type MentionNames } from '../../utils/mentions'
 
 type Kind = 'system' | 'state' | 'injected' | 'user' | 'assistant' | 'roundTools' | 'toolCall' | 'toolResult' | 'reasoning' | 'error'
 
@@ -98,18 +99,18 @@ const LINE_HEAD_RE = /^\[([^\]]+)\]\s+([\s\S]+)$/
 const MSG_ID_RE = /\s*\[msg_id=(\d+)\]\s*$/
 const SPEAKER_RE = /^(.{1,40}?):\s([\s\S]*)$/
 const SPEAKER_ID_RE = /^(.*)（id=(\d+)）$/
-const MENTION_RE = /<@!(\d+)>/g
+
 
 /** 正文里 @ 了谁（`<@!id>` 是平台的规范写法，id 就是同一空间里「（id=N）」那个 N）。
  *  同一个人只留一个标签：一条消息里 @ 他十次也是"提到了他"，块头不是词频表。 */
-function mentionMarks(text: string, names: Record<string, string> | undefined, unknown: string): Mark[] {
+function mentionMarks(text: string, names: MentionNames | undefined, unknown: string): Mark[] {
   const marks: Mark[] = []
   const seen = new Set<string>()
-  for (const hit of text.matchAll(MENTION_RE)) {
+  for (const hit of text.matchAll(MENTION_TOKEN_RE)) {
     if (seen.has(hit[1])) continue
     seen.add(hit[1])
     marks.push({
-      key: `at-${hit[1]}`, label: nameOfMention(hit[0], names, unknown),
+      key: `at-${hit[1]}`, label: mentionLabel(hit[1], names || {}, unknown),
       tone: 'at', hint: hit[0],
     })
   }
@@ -117,7 +118,7 @@ function mentionMarks(text: string, names: Record<string, string> | undefined, u
 }
 
 /** 正文 → 块头标记。不是"谁: 正文"那种行（历史行）就只挑 @。 */
-function marksOf(text: string, names: Record<string, string> | undefined, unknown: string): Mark[] {
+function marksOf(text: string, names: MentionNames | undefined, unknown: string): Mark[] {
   const head = LINE_HEAD_RE.exec(text)
   if (!head) return mentionMarks(text, names, unknown)
   const marks: Mark[] = [{ key: 'time', label: head[1], tone: 'muted' }]
@@ -131,18 +132,6 @@ function marksOf(text: string, names: Record<string, string> | undefined, unknow
   if (withId) marks.push({ key: 'who-id', label: `#${withId[2]}`, tone: 'id' })
   if (msgId) marks.push({ key: 'msg-id', label: `msg#${msgId[1]}`, tone: 'id' })
   return [...marks, ...mentionMarks(speaker[2], names, unknown)]
-}
-
-/** <@!41> → @名字（查不到就按 unknown 模板退成 @用户41：宁可看得见，也别把令牌露在人眼前） */
-function nameOfMention(token: string, names: Record<string, string> | undefined, unknown: string): string {
-  const id = token.slice(3, -1)
-  return `@${names?.[id] || unknown.replace('{id}', id)}`
-}
-
-/** 人话里的机器令牌换成名字；机器文本（JSON / 等宽）保持逐字原样 */
-function readableMentions(text: string, names: Record<string, string> | undefined, unknown: string): string {
-  if (!text.includes('<@!')) return text
-  return text.replace(MENTION_RE, token => nameOfMention(token, names, unknown))
 }
 
 function toolName(call: any): string {
@@ -224,7 +213,7 @@ function Raw({ text }: { text: string }) {
 }
 
 /** 正文：Markdown 优先，JSON 走格式化等宽块。机器文本一字不改，人话里只把 <@!id> 翻成人名 */
-function Body({ text, mono = false, names }: { text: string; mono?: boolean; names?: Record<string, string> }) {
+function Body({ text, mono = false, names }: { text: string; mono?: boolean; names?: MentionNames }) {
   const t = useT()
   const json = useMemo(() => prettyJson(text), [text])
   if (json !== null) return <Raw text={json} />
@@ -235,7 +224,7 @@ function Body({ text, mono = false, names }: { text: string; mono?: boolean; nam
   }
   return (
     <div className="text-xs text-textPrimary leading-relaxed break-words">
-      <MarkdownContent content={readableMentions(text, names, t('logs:mentionUnknown'))} />
+      <MarkdownContent content={renderMentionChips(text, names || {}, t('logs:mentionUnknown'))} />
     </div>
   )
 }
@@ -247,7 +236,7 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
   legend?: boolean
   tone?: Tone
   /** `<@!id>` → 名字（后端随日志详情给）；没有就退回 `@用户N` */
-  mentionNames?: Record<string, string>
+  mentionNames?: MentionNames
 }) {
   const t = useT()
   const list = Array.isArray(messages) ? messages : []

@@ -289,6 +289,11 @@
 .bubble-content .text-gray  { color: rgb(var(--b-text-gray, 100 100 100) / 1); }
 /* AI 脉动光环 — 标志性视觉元素 */
 @layer components {
+  /* @ 标签：正文里的 <@!id>（聊天与日志共用 .mention-chip 这个名字） */
+  .mention-chip {
+    @apply inline-block px-1.5 py-0.5 rounded-full align-baseline text-3xs bg-accent-500/10 text-accent-500 whitespace-nowrap;
+  }
+
   .ai-pulse-active {
     animation: pulseRing 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   }
