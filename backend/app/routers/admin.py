@@ -2851,12 +2851,13 @@ async def get_agent_conv_log_detail(
     db: AsyncSession = Depends(get_db),
 ):
     """获取单条对话日志详情（含完整 messages）"""
-    from app.services.content.conversation_log_service import get_log_detail
+    from app.services.content.conversation_log_service import get_log_detail, attach_mention_names
     try:
-        detail = await get_log_detail(SQLAlchemyContentRepository(db), log_id, is_admin=True)
+        repo = SQLAlchemyContentRepository(db)
+        detail = await get_log_detail(repo, log_id, is_admin=True)
         if detail is None:
             raise HTTPException(status_code=404, detail="日志不存在")
-        return detail
+        return await attach_mention_names(repo, detail)
     except ValueError as e:
         raise HTTPException(status_code=403, detail=str(e))
 

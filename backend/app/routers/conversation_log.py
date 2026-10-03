@@ -83,7 +83,7 @@ async def get_agent_log_detail_user(
     content_repo: ContentRepository = Depends(get_content_repo),
 ):
     """查看单条对话日志详情（需授权）"""
-    from app.services.content.conversation_log_service import get_log_detail
+    from app.services.content.conversation_log_service import get_log_detail, attach_mention_names
     user_result = await db.execute(select(User.role).where(User.id == current_user["user_id"]))
     db_role = user_result.scalar_one_or_none()
     is_admin = db_role == "admin"
@@ -95,7 +95,7 @@ async def get_agent_log_detail_user(
         )
         if detail is None:
             raise HTTPException(status_code=404, detail="日志不存在")
-        return detail
+        return await attach_mention_names(content_repo, detail)
     except ValueError as e:
         raise HTTPException(status_code=403, detail=str(e))
 

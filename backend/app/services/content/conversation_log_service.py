@@ -382,6 +382,22 @@ async def get_log_delta(
     return {"prev_log_id": prev.id, **_diff_messages(prev.messages or [], log.messages or [])}
 
 
+async def attach_mention_names(repo, detail: dict) -> dict:
+    """给日志详情补一张「<@!id> → 名字」的表，前端把机器令牌显示成人名。
+
+    只查真正出现过的 id（一般 0~2 个）：导出那条路一直这么干，详情这边漏了，
+    于是同一个 <@!41> 在导出里是「@浮生」，在详情里还是原始令牌。
+    """
+    from app.utils.message_serializer import mention_names
+
+    contents = [
+        msg["content"] for msg in (detail.get("messages") or [])
+        if isinstance(msg, dict) and isinstance(msg.get("content"), str)
+    ]
+    detail["mention_names"] = await mention_names(repo, contents)
+    return detail
+
+
 async def get_agent_log_stats(content_repo: ContentRepository, agent_id: int) -> dict:
     """获取 AI 日志统计"""
     result = await content_repo.execute(

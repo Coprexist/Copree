@@ -77,6 +77,59 @@ function stateTitle(content: string): string | undefined {
   return line ? line.replace(/^[▸▶]+\s*/, '') : undefined
 }
 
+/** 块头的小标记：从正文里拆出来的时间 / 说话人 / msg_id / 提到了谁 */
+interface Mark { key: string; label: string; tone: 'muted' | 'who' | 'id' | 'at' }
+
+const MARK_CLASS: Record<Mark['tone'], string> = {
+  muted: 'bg-black/5 dark:bg-white/10 text-textMuted',
+  who:   'bg-primary-500/10 text-primary-400',
+  id:    'bg-black/5 dark:bg-white/10 text-textMuted font-mono',
+  at:    'bg-accent-500/10 text-accent-500',
+}
+
+/** 会话历史行的行头：`[Shanghai 09-26 13:36] 谁（id=96）: 正文 [msg_id=1443]`（prompting.format_message 拼的） */
+const LINE_HEAD_RE = /^\[([^\]]+)\]\s+([\s\S]+)$/
+const MSG_ID_RE = /\s*\[msg_id=(\d+)\]\s*$/
+const SPEAKER_RE = /^(.{1,40}?):\s([\s\S]*)$/
+const SPEAKER_ID_RE = /^(.*)（id=(\d+)）$/
+const MENTION_RE = /<@!(\d+)>/g
+
+/** 正文里 @ 了谁（`<@!id>` 是平台的规范写法，id 就是同一空间里「（id=N）」那个 N） */
+function mentionMarks(text: string, names: Record<string, string> | undefined, unknown: string): Mark[] {
+  return [...text.matchAll(MENTION_RE)].map((hit, i) => ({
+    key: `at-${i}`, label: nameOfMention(hit[0], names, unknown), tone: 'at' as const,
+  }))
+}
+
+/** 正文 → 块头标记。不是"谁: 正文"那种行（历史行）就只挑 @。 */
+function marksOf(text: string, names: Record<string, string> | undefined, unknown: string): Mark[] {
+  const head = LINE_HEAD_RE.exec(text)
+  if (!head) return mentionMarks(text, names, unknown)
+  const marks: Mark[] = [{ key: 'time', label: head[1], tone: 'muted' }]
+  let rest = head[2]
+  const msgId = MSG_ID_RE.exec(rest)
+  if (msgId) rest = rest.slice(0, msgId.index)
+  const speaker = SPEAKER_RE.exec(rest)
+  if (!speaker) return [...marks, ...mentionMarks(text, names, unknown)]
+  const withId = SPEAKER_ID_RE.exec(speaker[1])
+  marks.push({ key: 'who', label: withId ? withId[1] : speaker[1], tone: 'who' })
+  if (withId) marks.push({ key: 'who-id', label: `#${withId[2]}`, tone: 'id' })
+  if (msgId) marks.push({ key: 'msg-id', label: `msg#${msgId[1]}`, tone: 'id' })
+  return [...marks, ...mentionMarks(speaker[2], names, unknown)]
+}
+
+/** <@!41> → @名字（查不到就按 unknown 模板退成 @用户41：宁可看得见，也别把令牌露在人眼前） */
+function nameOfMention(token: string, names: Record<string, string> | undefined, unknown: string): string {
+  const id = token.slice(3, -1)
+  return `@${names?.[id] || unknown.replace('{id}', id)}`
+}
+
+/** 人话里的机器令牌换成名字；机器文本（JSON / 等宽）保持逐字原样 */
+function readableMentions(text: string, names: Record<string, string> | undefined, unknown: string): string {
+  if (!text.includes('<@!')) return text
+  return text.replace(MENTION_RE, token => nameOfMention(token, names, unknown))
+}
+
 function toolName(call: any): string {
   return String(call?.function?.name || call?.name || call?.type || '?')
 }
@@ -86,10 +139,12 @@ function toolArgs(call: any): string {
   return typeof raw === 'string' ? raw : textOf(raw)
 }
 
-function Block({ index, kind, title, source, tone = 'normal', children }: {
+function Block({ index, kind, title, source, marks = [], tone = 'normal', children }: {
   index: number; kind: Kind; title?: string; tone?: Tone; children: React.ReactNode
   /** 这一块的原始文本（那条消息本身）；给了才摆「原文 / 渲染」开关 */
   source?: string
+  /** 从正文里拆出来的标记（时间 / 谁 / msg_id / @了谁），摆在块头供扫读 */
+  marks?: Mark[]
 }) {
   const t = useT()
   const [open, setOpen] = useState(true)
@@ -105,7 +160,7 @@ function Block({ index, kind, title, source, tone = 'normal', children }: {
           <button
             type="button"
             onClick={() => setOpen(v => !v)}
-            className="flex items-center gap-1.5 flex-1 min-w-0 text-left group"
+            className="flex items-center gap-1.5 flex-1 min-w-0 text-left group flex-wrap"
           >
             <ChevronRight size={12} className={`shrink-0 text-textMuted transition-transform ${open ? 'rotate-90' : ''}`} />
             <span className="text-3xs px-1.5 py-0.5 rounded-full bg-black/10 dark:bg-white/10 text-textSecondary">
@@ -113,6 +168,11 @@ function Block({ index, kind, title, source, tone = 'normal', children }: {
             </span>
             <span className="text-3xs text-textMuted">#{index}</span>
             {title && <span className="text-3xs font-mono text-textSecondary truncate">{title}</span>}
+            {marks.map(mark => (
+              <span key={mark.key} className={`text-3xs px-1.5 py-0.5 rounded-full ${MARK_CLASS[mark.tone]}`}>
+                {mark.label}
+              </span>
+            ))}
           </button>
           {source !== undefined && (
             <button
@@ -144,8 +204,9 @@ function Raw({ text }: { text: string }) {
   )
 }
 
-/** 正文：Markdown 优先，JSON 走格式化等宽块 —— 两者都不改一个字 */
-function Body({ text, mono = false }: { text: string; mono?: boolean }) {
+/** 正文：Markdown 优先，JSON 走格式化等宽块。机器文本一字不改，人话里只把 <@!id> 翻成人名 */
+function Body({ text, mono = false, names }: { text: string; mono?: boolean; names?: Record<string, string> }) {
+  const t = useT()
   const json = useMemo(() => prettyJson(text), [text])
   if (json !== null) return <Raw text={json} />
   if (mono) {
@@ -155,28 +216,34 @@ function Body({ text, mono = false }: { text: string; mono?: boolean }) {
   }
   return (
     <div className="text-xs text-textPrimary leading-relaxed break-words">
-      <MarkdownContent content={text} />
+      <MarkdownContent content={readableMentions(text, names, t('logs:mentionUnknown'))} />
     </div>
   )
 }
 
-export default function RequestBodyViewer({ messages, className = '', legend = true, tone = 'normal' }: {
+export default function RequestBodyViewer({ messages, className = '', legend = true, tone = 'normal', mentionNames }: {
   messages: any[]
   className?: string
   /** 拼在改变量里时不重复摆图例和原始 JSON 开关（一屏摆好几截，图例只该出现一次） */
   legend?: boolean
   tone?: Tone
+  /** `<@!id>` → 名字（后端随日志详情给）；没有就退回 `@用户N` */
+  mentionNames?: Record<string, string>
 }) {
   const t = useT()
   const list = Array.isArray(messages) ? messages : []
   const [raw, setRaw] = useState(false)
 
   const blocks = useMemo(() => {
-    const out: { kind: Kind; title?: string; source: string; body: React.ReactNode }[] = []
+    const out: { kind: Kind; title?: string; source: string; marks: Mark[]; body: React.ReactNode }[] = []
     list.forEach((msg) => {
+      const content = textOf(msg.content)
       if (msg?.reasoning_content) {
         const thinking = textOf(msg.reasoning_content)
-        out.push({ kind: 'reasoning', title: String(msg.role || ''), source: thinking, body: <Body text={thinking} /> })
+        out.push({
+          kind: 'reasoning', title: String(msg.role || ''), source: thinking, marks: [],
+          body: <Body text={thinking} names={mentionNames} />,
+        })
       }
       const kind = classify(msg)
       let title: string | undefined
@@ -188,7 +255,7 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
           <div className="space-y-1.5">
             {/* 带工具调用的消息，正文也是机器拼的（要么空，要么就是那行「本轮工具」）：
                 跟单独成块的「本轮工具」一个长相，同一句话不该有两种字体 */}
-            {textOf(msg.content).trim() && <Body text={textOf(msg.content)} mono />}
+            {content.trim() && <Body text={content} mono />}
             {calls.map((call: any, ci: number) => (
               <div key={ci}>
                 <div className="text-3xs font-mono text-textSecondary mb-0.5">{toolName(call)}</div>
@@ -201,16 +268,20 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
         title = msg.tool_call_id ? String(msg.tool_call_id) : undefined
         body = <Body text={textOf(msg.content)} mono />
       } else if (kind === 'state') {
-        title = stateTitle(textOf(msg.content))
-        body = <Body text={textOf(msg.content)} />
+        title = stateTitle(content)
+        body = <Body text={content} />
       } else {
-        body = <Body text={textOf(msg.content)} mono={MONO.includes(kind)} />
+        body = <Body text={content} mono={MONO.includes(kind)} names={mentionNames} />
       }
       // 原文 = 这条消息本身（库里的字段一个不少），跟上面渲染出来的视图对得上
-      out.push({ kind, title, source: JSON.stringify(msg, null, 2), body })
+      out.push({
+        kind, title, source: JSON.stringify(msg, null, 2),
+        marks: marksOf(content, mentionNames, t('logs:mentionUnknown')),
+        body,
+      })
     })
     return out
-  }, [list])
+  }, [list, mentionNames, t])
 
   if (list.length === 0) {
     return <p className={`text-xs text-textMuted ${className}`}>{t('logs:empty')}</p>
@@ -240,7 +311,7 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
       ) : (
         <div className="space-y-1.5">
           {blocks.map((block, i) => (
-            <Block key={i} index={i} kind={block.kind} title={block.title} source={block.source} tone={tone}>
+            <Block key={i} index={i} kind={block.kind} title={block.title} source={block.source} marks={block.marks} tone={tone}>
               {block.body}
             </Block>
           ))}

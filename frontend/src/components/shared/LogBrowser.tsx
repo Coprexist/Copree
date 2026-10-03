@@ -37,11 +37,16 @@ const timeOf = (value: string | null | undefined) =>
   value ? new Date(value).toLocaleString('zh-CN') : ''
 
 /** 改变量里的一截：多出来的 / 没了的，各自连着那几条消息 */
-function Hunk({ label, removed, messages }: { label: string; removed?: boolean; messages: any[] }) {
+function Hunk({ label, removed, messages, names }: {
+  label: string; removed?: boolean; messages: any[]; names?: Record<string, string>
+}) {
   return (
     <div className="space-y-1.5">
       <div className={`text-3xs ${removed ? 'text-rose-400' : 'text-mint-400'}`}>{label}</div>
-      <RequestBodyViewer messages={messages} legend={false} tone={removed ? 'removed' : 'normal'} />
+      <RequestBodyViewer
+        messages={messages} legend={false} mentionNames={names}
+        tone={removed ? 'removed' : 'normal'}
+      />
     </div>
   )
 }
@@ -246,19 +251,21 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
                       removed
                       label={t('logs:hunkRemoved').replace('{n}', String((op.removed || op.messages || []).length))}
                       messages={op.tag === 'replace' ? op.removed : op.messages}
+                      names={detail?.mention_names}
                     />
                   )}
                   {op.tag !== 'delete' && (
                     <Hunk
                       label={t('logs:hunkAdded').replace('{n}', String((op.added || op.messages || []).length))}
                       messages={op.tag === 'replace' ? op.added : op.messages}
+                      names={detail?.mention_names}
                     />
                   )}
                 </div>
               ))}
             </div>
           ) : (
-            <RequestBodyViewer messages={detail?.messages || []} />
+            <RequestBodyViewer messages={detail?.messages || []} mentionNames={detail?.mention_names} />
           )}
           </div>
         </div>
