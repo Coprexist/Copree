@@ -67,4 +67,6 @@ export interface ChatRefreshDetail {
   type: ChatRefreshEventType
   conversation_type?: 'group' | 'dm'
   conversation_id?: number | string
+  /** 谁发的：常驻通知连接收到会话推送时补发的那条，它自己不用跟着再刷一遍 */
+  source?: 'notifications'
 }

@@ -10,6 +10,7 @@ import { getStatusTextStyle, BG_SURFACE_LIGHT, BG_SURFACE_DARK } from '../utils/
 import { useTheme } from '../context/ThemeContext'
 import EmojiText from './shared/EmojiText'
 import { useLang, useT } from '../i18n/I18nContext'
+import { conversationKey, useReadingKey } from '../hooks/useReadingConversation'
 
 /** URL 正则（匹配 http/https 链接） */
 const URL_RE = /(https?:\/\/[^\s<]+[^\s<.,;:!?)}\]'"])/g
@@ -187,6 +188,8 @@ const ChatSidebar = memo(function ChatSidebar({
   const [groupsCollapsed, setGroupsCollapsed] = useState(() => getCollapsed('groups'))
   const [dmCollapsed, setDmCollapsed] = useState(() => getCollapsed('dm'))
   const navigate = useNavigate()
+  // 此刻正在读的会话（人在那个会话的底部且窗口可见）
+  const reading = useReadingKey()
 
   const loadGroups = useCallback(() => api.get('/groups').then(setGroups).catch(() => {}), [])
   const loadDMSessions = useCallback(() => api.get('/dm/sessions').then(setDmSessions).catch(() => {}), [])
@@ -270,12 +273,22 @@ const ChatSidebar = memo(function ChatSidebar({
 
   // ── 分组数据 ──
 
+  // 正在读的那一项按「已读」呈现：贴底就是看了，不必等后端把已读回传再抹——
+  // 等回传就会闪一下红数泡。在派生列表这一步做，置顶区/未读合计/条目渲染一并生效
   const regularGroups = useMemo(() => groups
     .filter((g: any) => !g.name?.startsWith('DM:'))
+    .map((g: Group) => conversationKey('group', g.id) === reading
+      ? { ...g, unread_count: 0, has_mention: false }
+      : g)
     .sort(sortByTime)
-  , [groups])
+  , [groups, reading])
 
-  const sortedDMSessions = useMemo(() => [...dmSessions].sort(sortByTime), [dmSessions])
+  const sortedDMSessions = useMemo(() => [...dmSessions]
+    .map((s: DMSession) => conversationKey('dm', s.session_id) === reading
+      ? { ...s, unread_count: 0 }
+      : s)
+    .sort(sortByTime)
+  , [dmSessions, reading])
 
   // 置顶区：混合群聊和私信中 is_pinned 的项目，按时间排序
   const pinnedItems = useMemo(() => {

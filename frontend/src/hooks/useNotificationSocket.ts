@@ -242,6 +242,18 @@ export function useNotificationSocket(): NotificationFeed {
       }
       const kind = resolveKind(payload)
       if (!kind) return
+      // 会话消息一律通知侧栏刷新（预览、排序、红数泡都在它那儿），
+      // 跟弹不弹窗无关——免打扰、正在看这个会话、标签页在后台，都只是不弹而已。
+      // 这条常驻连接收得到**所有**会话的推送，而会话连接只收当前那一个：
+      // 只在会话连接里发事件，就会出现「看着 A，B 发来消息侧栏一动不动」
+      if (kind === 'group_message' || kind === 'dm_message' || kind === 'group_invite_card') {
+        window.dispatchEvent(new CustomEvent(CHAT_REFRESH_EVENT, { detail: {
+          type: 'unread_update',
+          conversation_type: payload.data?.conversation_type,
+          conversation_id: payload.data?.conversation_id,
+          source: 'notifications',
+        } }))
+      }
       // push 把消息裹在 data.message 里；直接推来的 message 事件消息就在 data 本身。
       // 统一成 data.message，让 toItem 只有一套读法。
       const message = payload.type === 'push' ? payload.data?.message : payload.data
@@ -290,8 +302,12 @@ export function useNotificationSocket(): NotificationFeed {
     refreshCache()
     connect()
 
-    // 群/私信列表变了（新建群、新私信）→ 重算缓存并重新登记通知范围
-    const onRefresh = () => { refreshCache(); subscribe() }
+    // 群/私信列表变了（新建群、新私信）→ 重算缓存并重新登记通知范围。
+    // 自己刚发的那条跳过：它只是让侧栏去刷新，本连接的缓存与订阅范围都没变
+    const onRefresh = (e: Event) => {
+      if ((e as CustomEvent).detail?.source === 'notifications') return
+      refreshCache(); subscribe()
+    }
     window.addEventListener('groupListRefresh', onRefresh)
     window.addEventListener(CHAT_REFRESH_EVENT, onRefresh)
 

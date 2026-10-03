@@ -94,13 +94,6 @@ export default function ChatArea({ groupId, dmSessionId }: ChatAreaProps) {
     return () => window.removeEventListener('online-count-change', handler)
   }, [])
 
-  // 群聊选中变化时刷新未读
-  useEffect(() => {
-    if (groupId) {
-      api.post(`/groups/${groupId}/read`).catch(() => {})
-    }
-  }, [groupId])
-
   const currentGroup = groups.find((g) => g.id === groupId)
 
   const hasActiveConversation = !!(groupId || dmSessionId)

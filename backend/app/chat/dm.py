@@ -248,9 +248,8 @@ async def list_dm_sessions(db: AsyncSession, user_id: int) -> list[dict]:
     return dm_list
 
 
-async def get_dm_session(db: AsyncSession, session_id: str, user_id: int,
-                          message_limit: int = 50, summary: bool = False) -> dict:
-    """获取会话详情（summary=True 时跳过消息加载，仅返回元数据）"""
+async def _require_session(db: AsyncSession, session_id: str, user_id: int) -> DMSession:
+    """取会话并校验 user_id 是其中一方（私信的唯一准入判据）"""
     result = await db.execute(
         select(DMSession).where(DMSession.session_id == session_id)
     )
@@ -259,6 +258,32 @@ async def get_dm_session(db: AsyncSession, session_id: str, user_id: int,
         raise ValueError("会话不存在")
     if user_id not in (session.user1_id, session.user2_id):
         raise ValueError("无权访问此会话")
+    return session
+
+
+async def mark_dm_read(db: AsyncSession, session_id: str, user_id: int) -> int:
+    """把"对方发来、我还没读"的消息标成已读，返回标记条数。
+
+    读的三条路径——拉消息、拉会话详情、贴在会话底部时的主动同步——共用一个 UPDATE。
+    私信不另存未读账，dm_messages.read_at 就是唯一真相（见 chat/delivery.py 的说明）。
+    """
+    await _require_session(db, session_id, user_id)
+    result = await db.execute(
+        update(DMMessage)
+        .where(
+            DMMessage.session_id == session_id,
+            DMMessage.sender_id != user_id,
+            DMMessage.read_at.is_(None),
+        )
+        .values(read_at=datetime.now(timezone.utc).replace(tzinfo=None))
+    )
+    return result.rowcount or 0
+
+
+async def get_dm_session(db: AsyncSession, session_id: str, user_id: int,
+                          message_limit: int = 50, summary: bool = False) -> dict:
+    """获取会话详情（summary=True 时跳过消息加载，仅返回元数据）"""
+    session = await _require_session(db, session_id, user_id)
 
     partner_id = session.user2_id if session.user1_id == user_id else session.user1_id
     partner = await _get_partner_info(db, partner_id)
@@ -266,15 +291,7 @@ async def get_dm_session(db: AsyncSession, session_id: str, user_id: int,
     if summary:
         messages = []
     else:
-        await db.execute(
-            update(DMMessage)
-            .where(
-                DMMessage.session_id == session_id,
-                DMMessage.sender_id != user_id,
-                DMMessage.read_at.is_(None),
-            )
-            .values(read_at=datetime.now(timezone.utc).replace(tzinfo=None))
-        )
+        await mark_dm_read(db, session_id, user_id)
         messages = await _get_messages(db, session_id, limit=message_limit)
 
     my_dnd_until = session.user1_dnd_until if session.user1_id == user_id else session.user2_dnd_until
@@ -301,24 +318,7 @@ async def get_dm_messages(db: AsyncSession, session_id: str, user_id: int,
                            limit: int = 50, before_id: int | None = None,
                            after_id: int | None = None) -> list[dict]:
     """获取私信消息列表（游标分页），同时标记已读"""
-    result = await db.execute(
-        select(DMSession).where(DMSession.session_id == session_id)
-    )
-    session = result.scalar_one_or_none()
-    if session is None:
-        raise ValueError("会话不存在")
-    if user_id not in (session.user1_id, session.user2_id):
-        raise ValueError("无权访问此会话")
-
-    await db.execute(
-        update(DMMessage)
-        .where(
-            DMMessage.session_id == session_id,
-            DMMessage.sender_id != user_id,
-            DMMessage.read_at.is_(None),
-        )
-        .values(read_at=datetime.now(timezone.utc).replace(tzinfo=None))
-    )
+    await mark_dm_read(db, session_id, user_id)
 
     return await _get_messages(db, session_id, limit=limit, before_id=before_id, after_id=after_id)
 

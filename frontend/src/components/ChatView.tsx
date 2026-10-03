@@ -9,6 +9,8 @@ import ChatInput, { CHAT_INPUT_MIN_H } from './ChatInput'
 import EmojiText from './shared/EmojiText'
 // 阈值（距底多少算「在底部」）与群视界/DSH 对话同一份来源；本组件有自己的虚拟列表机器，不套整个 hook
 import { BOTTOM_THRESHOLD } from '../hooks/useStickToBottom'
+// 「我正在读这个会话」的唯一真相（侧边栏据此不画红数泡，本组件据此把已读落回后端）
+import { conversationKey, setFollowingConversation, useReadingKey } from '../hooks/useReadingConversation'
 import ActivityBar, { type ActivityUser } from './ActivityBar'
 import ProfileCard from './ProfileCard'
 import { EmptyState, MenuPanel, MenuItem } from './ui'
@@ -225,6 +227,12 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
   const isAutoScrolling = useRef(false)
   const prevScrollHeight = useRef(0)
   const isAtBottomRef = useRef(true)
+  // 贴底状态只有这一个写入口：state 给渲染用，ref 给 rAF 节流之外要同步读的地方用
+  //（滚动监听、ws 回调）。两处各写各的会打架——「看着在底部」和「其实翻走了」同时成立
+  const setAtBottom = useCallback((value: boolean) => {
+    isAtBottomRef.current = value
+    setIsAtBottom(value)
+  }, [])
   const newestIdRef = useRef<number | null>(null)       // 离开时保存已读位置
   const oldestIdRef = useRef<number | null>(null)        // 供哨兵读取，避免 messages 依赖
   const typingRef = useRef(false)                       // 当前是否正在输入中，避免重复发送 typing 消息
@@ -684,8 +692,11 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
     const el = containerRef.current
     if (!el) return
     markAutoScrolling()
+    // 程序化滚动期间滚动监听闭嘴（见 markAutoScrolling），"到没到底"得自己说。
+    // 不说的话：点完"回到底部"状态还停在"翻着往上看"，未读就清不掉
+    setAtBottom(true)
     el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'instant' })
-  }, [markAutoScrolling])
+  }, [markAutoScrolling, setAtBottom])
 
   const scrollToMessage = useCallback((messageId: number) => {
     const el = containerRef.current
@@ -721,19 +732,10 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
   const loadInitialMessages = useCallback(async () => {
     if (!conversationId) return
     if (conversationType === 'group') {
-      api.post(`/groups/${conversationId}/read`)
-        .then(() => {
-          window.dispatchEvent(new CustomEvent(CHAT_REFRESH_EVENT, { detail: { type: 'unread_update' } }))
-        })
-        .catch(() => {})
       const membersData = await api.get(`/groups/${conversationId}/members`)
       setGroupMembers(membersData)
     }
     await loadMessages({ mode: 'initial' })
-    // DM 消息加载同时标记已读，触发 sidebar 刷新未读计数
-    if (conversationType === 'dm') {
-      window.dispatchEvent(new CustomEvent(CHAT_REFRESH_EVENT, { detail: { type: 'unread_update' } }))
-    }
   }, [conversationId, conversationType, loadMessages])
 
   // Tauri 那条"3 秒窗口没开成 → 整页兜底跳转"的待定标记：用户改选标准界面、切走对话后作废
@@ -786,7 +788,7 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
     setHasMoreAfter(false)
     setFirstUnreadId(null)
     setShowJumpToUnread(false)
-    setIsAtBottom(true)
+    setAtBottom(true)
     prevMessageCount.current = 0
     // 上一屏没走完的收尾动作不能带进新对话：pendingTimers 清了定时器，但"正在自动滚动"这个
     // 布尔标记得在这里归零——滚动监听看到它为真就整段 return，留着会让新对话的底部状态不再更新
@@ -829,7 +831,7 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
     }
     init()
     return () => { cancelled = true }
-  }, [conversationId, conversationType, loadInitialMessages])
+  }, [conversationId, conversationType, loadInitialMessages, setAtBottom])
 
   // 初始加载后定位 + 立即保存已读位置（不等卸载，防止刷新时红线残留）
   useLayoutEffect(() => {
@@ -885,8 +887,7 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
         setViewportH(clientHeight)
         setScrollTop(prev => (Math.abs(prev - st) > 1 ? st : prev))
         const atBottom = scrollHeight - st - clientHeight < BOTTOM_THRESHOLD
-        setIsAtBottom(atBottom)
-        isAtBottomRef.current = atBottom
+        setAtBottom(atBottom)
 
         if (firstUnreadId) {
           const msgEl = container.querySelector(`[data-message-id="${firstUnreadId}"]`)
@@ -907,6 +908,43 @@ export default function ChatView({ conversationType, conversationId, myRole }: C
       if (rafId) cancelAnimationFrame(rafId)
     }
   }, [firstUnreadId])
+
+  // ============================================================
+  // 未读：贴底 = 正在读
+  // ============================================================
+
+  // 上报「我贴在这个会话底部」：侧边栏据此不画红数泡——是判定，不是等后端回传再抹掉
+  useEffect(() => {
+    if (!conversationId || !isAtBottom) {
+      setFollowingConversation(null)
+      return
+    }
+    setFollowingConversation(conversationKey(conversationType, conversationId))
+    return () => setFollowingConversation(null)
+  }, [conversationType, conversationId, isAtBottom])
+
+  const reading = useReadingKey() === conversationKey(conversationType, conversationId)
+
+  const syncRead = useCallback(() => {
+    if (!conversationId) return
+    const url = conversationType === 'group'
+      ? `/groups/${conversationId}/read`
+      : `/dm/${conversationId}/read`
+    api.post(url)
+      .then(() => {
+        // 落库成功再喊侧栏刷新：反过来的话它会拿着旧未读数画一次红数泡
+        window.dispatchEvent(new CustomEvent(CHAT_REFRESH_EVENT, { detail: { type: 'unread_update' } }))
+      })
+      .catch(() => {})
+  }, [conversationType, conversationId])
+
+  // 正在读，就把这一屏的已读落回后端。触发它的四件事——进会话（贴底初始为真）、
+  // 滚回底部、收到新消息、标签页切回前台——都落在 reading 或「最新一条」的变化上
+  const newestId = messages.length > 0 ? messages[messages.length - 1].id : null
+  useEffect(() => {
+    if (!reading) return
+    syncRead()
+  }, [reading, newestId, syncRead])
 
   // ============================================================
   // Mermaid 错误报告

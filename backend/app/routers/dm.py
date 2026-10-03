@@ -15,6 +15,7 @@ from app.chat.dm import (
     list_dm_sessions,
     get_dm_session,
     get_dm_messages,
+    mark_dm_read,
     send_dm_message,
     set_dm_dnd,
     cancel_dm_dnd,
@@ -145,6 +146,24 @@ async def get_dm_message_list(
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post("/dm/{session_id}/read")
+async def mark_dm_read_endpoint(
+    session_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """标记该私信已读（与群聊 /groups/{id}/read 对称）。
+
+    消息在"对方发来的那一刻"才成为未读，所以不拉消息也要能标：
+    人贴在会话底部时前端收到推送就调这里，把已读同步回后端。
+    """
+    try:
+        read_count = await mark_dm_read(db, session_id, current_user["user_id"])
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    return {"ok": True, "read_count": read_count}
 
 
 @router.post("/dm/{session_id}/messages", status_code=status.HTTP_201_CREATED)
