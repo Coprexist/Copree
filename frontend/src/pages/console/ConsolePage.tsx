@@ -4,7 +4,7 @@ import { ArrowLeft, BookOpen, ChevronRight, PanelLeftClose, PanelLeftOpen } from
 import { MANUAL_URL, ADMIN_MANUAL_URL } from '../../constants'
 import { useT } from '../../i18n/I18nContext'
 import { useResizableSidebar } from '../../hooks/useResizableSidebar'
-import { PAGE_WIDTH } from '../../components/ui/PageShell'
+import { ContentColumn } from '../../components/ui'
 import { CONSOLE_WORKSPACES, findConsoleItem, workspaceOf } from './workspaces'
 import { rememberTab } from './recentTabs'
 
@@ -53,8 +53,8 @@ export default function ConsolePage() {
   const activeItem = findConsoleItem(activeKey)
   const ActiveTab = activeItem.Component
   // 内容宽度档位由页签自己声明（workspaces.tsx）：表格铺满，表单居中收窄。
-  // 档位表只有 PageShell 那一份，这里不另写宽度值。
-  const widthCls = PAGE_WIDTH[activeItem.width ?? 'wide']
+  // 档位表与拖条都只有 components/ui 那一份，这里不另写宽度值。
+  const contentWidth = activeItem.width ?? 'wide'
 
   const openItem = (key: string) => {
     setActiveKey(key)
@@ -177,9 +177,9 @@ export default function ConsolePage() {
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 xl:p-6 min-w-0">
-          <div className={`${widthCls} mx-auto`}>
+          <ContentColumn width={contentWidth}>
             <ActiveTab />
-          </div>
+          </ContentColumn>
         </div>
       </div>
 
@@ -214,9 +214,9 @@ export default function ConsolePage() {
 
       {/* 移动端：详情内容区 */}
       <div className={'md:hidden flex-1 overflow-y-auto p-4 pb-[var(--safe-bottom)] bg-canvas ' + (mobileView === 'list' ? 'hidden' : '')}>
-        <div className={`${widthCls} mx-auto`}>
+        <ContentColumn width={contentWidth}>
           <ActiveTab />
-        </div>
+        </ContentColumn>
       </div>
     </div>
   )
