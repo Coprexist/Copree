@@ -31,6 +31,8 @@ class GroupUpdateRequest(BaseModel):
     searchable: bool | None = None
     auto_approve_join: bool | None = None
     approve_invites: bool | None = None
+    # 群名跟随外部通道：打开后由通道在拉到群名时对齐（群主/管理员可改）
+    name_from_channel: bool | None = None
 
 
 class GroupJoinRequestCreate(BaseModel):
@@ -67,6 +69,9 @@ class GroupResponse(BaseModel):
     searchable: bool = False
     auto_approve_join: bool = True
     approve_invites: bool = False
+    # 群名是否跟随外部通道，以及这个群接没接通道（没接就不显示那个开关）
+    name_from_channel: bool = False
+    channel_bound: bool = False
 
 
 class GroupMemberResponse(BaseModel):

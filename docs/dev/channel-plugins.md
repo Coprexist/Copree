@@ -172,6 +172,21 @@ wake_dm_ai(session_id, payload, sender_id=发消息的人, sender_type="human")
 **状态上报**：实现 `get_status()`，返回 `running` 与 `detail`（卡片会渲染），
 出错时写 `self.last_error` —— 用户看到的「最后一条错误」就是它。
 
+**落点规则只有一份**（`app/utils/pure/channel_landing.py`）：一个通道侧群落到哪个 Copree 群 =
+先查映射表（配置键 `group_map`，通道侧群标识 → Copree 群 id），没有就落到实例的默认落点
+（`copree_group_id`）。插件决定落库去哪、平台判断「这个群接没接通道」（`group_brief`）都用
+`landing_group` / `serves_group`，两边各写一遍就会出现「消息落在这个群、平台却说这个群没接通道」。
+
+**通道侧的群名**（可选，但用户很需要）：通道消息载荷里通常只有群标识，没有群名——一个 AI 接两个群时，
+两个落点群默认同名，界面和 AI 都只能靠 id 分辨。有查询接口的通道（QQ：`GET /v2/groups/{openid}/info`）
+应当**按天懒拉一次**（今天第一条群消息时问，进程内缓存；群名是低频事实，每条都问等于拿限流换个不变的答案），
+然后：
+
+- `get_status()["recent_groups"]` 带上 `name` / `member_num`，让卡片能显示真名；
+- 提供 `facts_for_group(group_id)`，平台据此把真名与人数写进给 AI 的通道说明；
+- 群名回写**只在群设置里打开了 `groups.name_from_channel` 的群上做**——群名是用户的，通道不能自己往上写；
+  平台在开关打开与 `create_landing_group`（没起名时）负责这个字段。
+
 ## 4.1 出站出口：三条，按需注册
 
 `app/chat/outbound.py` 是出口注册表。注册名用 **`ServicePlugin.key`**（带实例），不要用插件 id ——

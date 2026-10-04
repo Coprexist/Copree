@@ -100,6 +100,11 @@ async def list_user_groups(db: AsyncSession, user_id: int) -> list[dict]:
         return []
     group_ids = [g.id for _, g in pairs]
 
+    # 哪些群接进了外部通道：群设置面板据此决定显不显示"群名跟随通道"那个开关
+    from app.services.plugin import channel as channel_service
+
+    channel_bound = await channel_service.channel_bound_group_ids(db)
+
     user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     username = user.username if user else ""
 
@@ -294,6 +299,8 @@ async def list_user_groups(db: AsyncSession, user_id: int) -> list[dict]:
             "searchable": bool(group.searchable),
             "auto_approve_join": bool(group.auto_approve_join),
             "approve_invites": bool(group.approve_invites),
+            "name_from_channel": bool(group.name_from_channel),
+            "channel_bound": group.id in channel_bound,
             "is_pinned": False,
             "created_at": str(group.created_at) if group.created_at else None,
         })
@@ -743,6 +750,8 @@ async def update_group_settings(db: AsyncSession, group_id: int, operator_id: in
         "avatar_mode", "avatar_url", "include_ai_in_avatar",
         # 发现与入群三开关
         "searchable", "auto_approve_join", "approve_invites",
+        # 群名跟随外部通道
+        "name_from_channel",
     }
     for key, value in updates.items():
         if key not in allowed_fields:
@@ -753,10 +762,24 @@ async def update_group_settings(db: AsyncSession, group_id: int, operator_id: in
         elif hasattr(group, key):
             setattr(group, key, value)
 
+    if "name" in updates and "name_from_channel" not in updates:
+        # 手动改群名 = 收回所有权：名字不再跟着通道走，否则下一条消息就被覆盖回去
+        group.name_from_channel = False
+
     await db.flush()
-    if "name" in updates:
+    renamed = str(updates.get("name") or "").strip()
+    if updates.get("name_from_channel"):
+        # 打开"跟随通道群名"要立刻见效：通道那边已经拉到过群名就直接抄过来，不必等下一条消息
+        from app.services.plugin import channel as channel_service
+
+        channel_name = await channel_service.channel_group_name(db, group_id)
+        if channel_name and channel_name != group.name:
+            group.name = channel_name
+            renamed = channel_name
+            await db.flush()
+    if renamed:
         from app.services.federation.federation_service import enqueue_profile_update
-        await enqueue_profile_update(db, "group", group_id, "display_name", updates["name"])
+        await enqueue_profile_update(db, "group", group_id, "display_name", renamed)
     logger.info(f"群聊 {group_id} 设置已更新: {list(updates.keys())}")
     return group
 

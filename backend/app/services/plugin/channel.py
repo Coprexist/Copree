@@ -123,13 +123,114 @@ async def create_landing_group(db: AsyncSession, *, agent_id: int, user_id: int,
     agent = await db.get(Agent, agent_id)
     if agent is None:
         raise ValueError("AI 不存在")
-    clean = (name or "").strip()[:60] or (str(agent.name) + " 的群")
+    typed = (name or "").strip()
+    clean = typed[:60] or (str(agent.name) + " 的群")
     group = await create_group(
         db, clean, "human", user_id, initial_members=[{"type": "ai", "id": agent.user_id}]
     )
+    # 没起名＝接受兜底名：这种群的名字交给通道维护，通道侧群名有了就对齐（群设置里可关）
+    group.name_from_channel = not typed
     await db.commit()
     logger.info("为 AI #%s 建了落点群 #%s（%s）", agent_id, group.id, clean)
     return {"id": int(group.id), "name": group.name}
+
+
+async def _channel_landings(db: AsyncSession) -> dict[tuple[str, str], dict[str, Any]]:
+    """每个"属于某个 AI 的通道实例"的落点：默认落点群 + 群映射表（group_map）
+
+    两个键一起取：一个群可能是实例的默认落点，也可能是某个通道群单独指定的落点。
+    只看默认落点会漏掉后者——那个群里的 AI 就不知道通道的规矩了。
+    """
+    from sqlalchemy import select
+
+    from app.models.plugin import PluginConfig
+    from app.utils.pure.channel_landing import parse_group_map
+
+    rows = (await db.execute(
+        select(PluginConfig.plugin_id, PluginConfig.instance, PluginConfig.key, PluginConfig.value).where(
+            PluginConfig.key.in_(("copree_group_id", "group_map"))
+        )
+    )).all()
+    landings: dict[tuple[str, str], dict[str, Any]] = {}
+    for plugin_id, instance, key, value in rows:
+        if agent_id_of(str(instance)) is None:
+            continue                      # 不是"某个 AI 的通道"就不是任何群的出口
+        slot = landings.setdefault((str(plugin_id), str(instance)), {"default": 0, "map": {}})
+        if key == "group_map":
+            slot["map"] = parse_group_map(value)[0]
+        else:
+            try:
+                slot["default"] = int(str(value or 0))
+            except ValueError:
+                slot["default"] = 0
+    return landings
+
+
+async def served_instances(db: AsyncSession, group_id: int) -> list[tuple[str, str, dict[str, Any]]]:
+    """哪些通道实例接着这个群 → [(plugin_id, instance, 通道声明)]
+
+    落点规则与插件落消息时是同一份（app.utils.pure.channel_landing）：两边各写一遍，
+    迟早会出现"消息落在这个群、平台却说这个群没接通道"。
+    """
+    from app.utils.pure.channel_landing import serves_group
+
+    out: list[tuple[str, str, dict[str, Any]]] = []
+    for (plugin_id, instance), slot in (await _channel_landings(db)).items():
+        if not serves_group(group_map=slot["map"], default_group_id=slot["default"], group_id=group_id):
+            continue
+        found = catalog.channel_plugin(plugin_id)
+        if found:
+            out.append((plugin_id, instance, found))
+    return out
+
+
+async def channel_bound_group_ids(db: AsyncSession) -> set[int]:
+    """所有被外部通道接着的 Copree 群：群列表/群设置据此决定显不显示通道相关的开关
+
+    只算还声明着的通道（插件可能已被卸载）：按钮点了没反应的开关比没有开关更糟。
+    """
+    ids: set[int] = set()
+    for (plugin_id, _instance), slot in (await _channel_landings(db)).items():
+        if not catalog.channel_plugin(plugin_id):
+            continue
+        if slot["default"]:
+            ids.add(int(slot["default"]))
+        ids.update(int(v) for v in slot["map"].values() if int(v or 0))
+    return ids
+
+
+async def channel_group_name(db: AsyncSession, group_id: int) -> str:
+    """这个群在通道那边的真名：打开"跟随通道群名"要立刻见效，所以手上有就用、没有就问一次
+
+    拿不到就返回空串——通道侧没有群名这个概念（或还不知道是哪个通道群）时，群名保持原样，
+    等下一条通道消息来了自然会补上。
+    """
+    for plugin_id, instance, _found in await served_instances(db, group_id):
+        facts = _live_group_facts(plugin_id, instance, group_id)
+        if not facts:
+            facts = await _refresh_live_group_facts(plugin_id, instance, group_id)
+        name = str((facts or {}).get("name") or "").strip()
+        if name:
+            return name
+    return ""
+
+
+async def _refresh_live_group_facts(plugin_id: str, instance: str, group_id: int) -> dict[str, Any] | None:
+    """让活着的实例现拉一次通道侧群名（用户正等着看结果）；失败当作"还没有名字"
+
+    这是唯一一处"不是收到消息也去问通道"的地方，触发点是用户按开关，代价一次接口调用。
+    """
+    from app.services.infrastructure.plugin_registry import PluginRegistry, registry_key
+
+    plugin = PluginRegistry.get(registry_key(plugin_id, instance))
+    probe = getattr(plugin, "refresh_group_facts", None)
+    if not callable(probe):
+        return None
+    try:
+        return await probe(group_id)
+    except Exception as e:
+        logger.warning(f"现拉通道群名失败（非致命）: {type(e).__name__}: {e}")
+        return None
 
 
 async def group_brief(db: AsyncSession, group_id: int) -> str:
@@ -142,25 +243,15 @@ async def group_brief(db: AsyncSession, group_id: int) -> str:
     「@其他成员」那条规矩**随群的实际模式变**（全量开着时正文是完整的）：模式由插件观测
     事件类型得到，这里问活着的实例；问不到就两句话都讲，不猜——猜错了 AI 会当事实用。
     """
-    from sqlalchemy import select
-
-    from app.models.plugin import PluginConfig
-
-    rows = (await db.execute(
-        select(PluginConfig.plugin_id, PluginConfig.instance).where(
-            PluginConfig.key == "copree_group_id", PluginConfig.value == str(group_id)
-        )
-    )).all()
     found_channels: list[dict[str, Any]] = []
     qq_modes: list[bool | None] = []
-    for plugin_id, instance in rows:
-        if agent_id_of(str(instance)) is None:
-            continue                      # 不是"某个 AI 的通道"就不是这个群的出口
-        found = catalog.channel_plugin(str(plugin_id))
-        if not found:
-            continue
+    qq_facts: list[dict[str, Any]] = []
+    for plugin_id, instance, found in await served_instances(db, group_id):
         if found["kind"] == "qq":
-            qq_modes.append(_live_full_mode(str(plugin_id), str(instance)))
+            qq_modes.append(_live_full_mode(plugin_id, instance))
+            facts = _live_group_facts(plugin_id, instance, group_id)
+            if facts:
+                qq_facts.append(facts)
         # 同一个插件有多个实例（多条通道）时，说明里只列一次
         if found["plugin_id"] not in [c["plugin_id"] for c in found_channels]:
             found_channels.append(found)
@@ -174,6 +265,9 @@ async def group_brief(db: AsyncSession, group_id: int) -> str:
         "## 这个群接进了外部聊天软件（" + labels + "）",
         "- 群里你只能**被动回复**：别人 @ 你（或回复你）时才轮到你说话；不要承诺「我待会儿在群里发」「稍后提醒你」这类主动开口。",
     ]
+    identity = _qq_group_identity(qq_facts)
+    if identity:
+        lines.append(identity)
     if "qq" in kinds:
         lines.append(
             "- 官方 QQ 机器人：腾讯自 2025-04-21 起下线了主动推送；被动回复的有效窗口是"
@@ -194,6 +288,40 @@ async def group_brief(db: AsyncSession, group_id: int) -> str:
             "并且富文本能不能渲染取决于 QQ 客户端。"
         )
     return "\n".join(lines)
+
+
+def _live_group_facts(plugin_id: str, instance: str, group_id: int) -> dict[str, Any] | None:
+    """问活着的插件实例：这个 Copree 群对应的通道侧群叫什么、多大（拿不到就 None）
+
+    与推送模式同一口径：这是运行期观测（今天拉到的群信息），不落库；重启后第一条群消息重新拉。
+    """
+    from app.services.infrastructure.plugin_registry import PluginRegistry, registry_key
+
+    plugin = PluginRegistry.get(registry_key(plugin_id, instance))
+    probe = getattr(plugin, "facts_for_group", None)
+    return probe(group_id) if callable(probe) else None
+
+
+def _qq_group_identity(facts: list[dict[str, Any]]) -> str:
+    """这个群在 QQ 那边叫什么、多大：同一个 AI 可能同时在好几个群，它得分得清自己在哪个
+
+    只说今天真的拉到过群信息的（拿不到就不说，别让它把 openid 尾号当群名用）；
+    简介有就带上，那是群主写的"这个群是干什么的"。
+    """
+    parts: list[str] = []
+    for facts_of_one in facts:
+        name = str(facts_of_one.get("name") or "").strip()
+        if not name:
+            continue
+        num = int(facts_of_one.get("member_num") or 0)
+        memo = str(facts_of_one.get("memo") or "").strip()
+        line = f"「{name}」" + (f"（{num} 人）" if num else "")
+        if memo:
+            line += f"，群简介：{memo[:60]}"
+        parts.append(line)
+    if not parts:
+        return ""
+    return "- 这个群在 QQ 那边叫 " + "、".join(parts) + "。"
 
 
 def _live_full_mode(plugin_id: str, instance: str) -> bool | None:

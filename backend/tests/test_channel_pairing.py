@@ -27,6 +27,7 @@ from app.services.plugin.api import ServicePlugin, service
         "target_agent": {"type": "string", "title": "AI", "required": True},
         "copree_group_id": {"type": "string", "title": "接入的 Copree 群"},
         "qq_group_allowlist": {"type": "string", "title": "QQ 群白名单"},
+        "group_map": {"type": "string", "title": "QQ 群 → Copree 群"},
         "dm_policy": {"type": "string", "title": "私聊策略"},
     },
 )
@@ -379,6 +380,119 @@ async def test_group_binding_must_be_owned_and_joined(migrated_db):
             assert cfg["copree_group_id"] == str(mine.id)
             view = (await channel.views(db, agent_id, owner_id))[0]
             assert [g["id"] for g in view["group_options"]] == [mine.id]
+
+            for plugin_id in list(skill_bridge._loaded):
+                await skill_bridge._unload_plugin(plugin_id)
+
+
+async def test_group_brief_reaches_groups_mapped_by_group_map(migrated_db):
+    """给单个 QQ 群单独指定了落点的群，也要拿到通道规矩
+
+    落点有两个来源：实例的默认落点群，和 group_map 里"这个 QQ 群去哪个 Copree 群"。
+    只认前者的话，被单独指定的群（一个机器人接多个群时的常态）里的 AI 完全不知道自己在 QQ 上，
+    就会答应"我待会儿在群里提醒你"——腾讯那边根本发不出去。
+    """
+    from app.database import async_session
+    from app.services.plugin import channel, config as plugin_config, skill_bridge
+
+    with _FakePluginDir():
+        async with async_session() as db:
+            _owner_id, _other, agent_id = await _seed(db)
+            skill_bridge.ensure_declared("qq-channel")
+            await plugin_config.set_config(
+                "qq-channel",
+                {"app_id": "1", "client_secret": "2", "copree_group_id": "7",
+                 "group_map": '{"QQGROUP-X": 8}'},
+                channel.instance_of(agent_id), db=db,
+            )
+            assert "被动回复" in await channel.group_brief(db, 7)
+            assert "被动回复" in await channel.group_brief(db, 8), "映射落点的群也要有通道规矩"
+            assert await channel.group_brief(db, 999) == ""
+
+            for plugin_id in list(skill_bridge._loaded):
+                await skill_bridge._unload_plugin(plugin_id)
+
+
+async def test_group_brief_names_the_channel_group(migrated_db):
+    """通道那边拉到过群名时，群名要进通道说明：同一个 AI 接着好几个群，它得分得清自己在哪个"""
+    from app.database import async_session
+    from app.services.infrastructure.plugin_registry import PluginRegistry, registry_key
+    from app.services.plugin import channel, config as plugin_config, skill_bridge
+
+    class _LiveChannel:
+        """顶替真插件实例：只回答"这个群的群信息"（真实现里是今天从通道拉到的）"""
+
+        def __init__(self, key: str) -> None:
+            self.key = key
+            self.name = "测试通道"
+
+        def facts_for_group(self, group_id: int) -> dict | None:
+            if group_id != 7:
+                return None
+            return {"name": "合欢宗藏经阁", "member_num": 115, "memo": "只聊养猫"}
+
+    with _FakePluginDir():
+        async with async_session() as db:
+            _owner_id, _other, agent_id = await _seed(db)
+            skill_bridge.ensure_declared("qq-channel")
+            instance = channel.instance_of(agent_id)
+            await plugin_config.set_config(
+                "qq-channel",
+                {"app_id": "1", "client_secret": "2", "copree_group_id": "7"},
+                instance, db=db,
+            )
+            key = registry_key("qq-channel", instance)
+            PluginRegistry.register(_LiveChannel(key))
+            try:
+                brief = await channel.group_brief(db, 7)
+                assert "合欢宗藏经阁" in brief and "115 人" in brief and "只聊养猫" in brief, brief
+                assert await channel.channel_group_name(db, 7) == "合欢宗藏经阁"
+                # 没接通道的群：既没有说明，也没有"通道那边的群名"
+                assert await channel.channel_group_name(db, 999) == ""
+            finally:
+                PluginRegistry.unregister(key)
+
+            for plugin_id in list(skill_bridge._loaded):
+                await skill_bridge._unload_plugin(plugin_id)
+
+
+async def test_channel_group_name_asks_the_live_channel_once(migrated_db):
+    """打开"跟随通道群名"时手上一无所知，就现问一次通道：用户正看着界面，等不到下一条消息"""
+    from app.database import async_session
+    from app.services.infrastructure.plugin_registry import PluginRegistry, registry_key
+    from app.services.plugin import channel, config as plugin_config, skill_bridge
+
+    class _LiveChannel:
+        def __init__(self, key: str) -> None:
+            self.key = key
+            self.name = "测试通道"
+            self.asked: list[int] = []
+
+        def facts_for_group(self, group_id: int) -> dict | None:
+            return None                     # 还没收到过消息：缓存里什么都没有
+
+        async def refresh_group_facts(self, group_id: int) -> dict | None:
+            self.asked.append(group_id)
+            return {"name": "合欢宗藏经阁", "member_num": 115}
+
+    with _FakePluginDir():
+        async with async_session() as db:
+            _owner_id, _other, agent_id = await _seed(db)
+            skill_bridge.ensure_declared("qq-channel")
+            instance = channel.instance_of(agent_id)
+            await plugin_config.set_config(
+                "qq-channel",
+                {"app_id": "1", "client_secret": "2", "copree_group_id": "7"},
+                instance, db=db,
+            )
+            key = registry_key("qq-channel", instance)
+            live = _LiveChannel(key)
+            PluginRegistry.register(live)
+            try:
+                assert await channel.channel_group_name(db, 7) == "合欢宗藏经阁"
+                assert live.asked == [7], "手上没有就该现问一次"
+            finally:
+                PluginRegistry.unregister(key)
 
             for plugin_id in list(skill_bridge._loaded):
                 await skill_bridge._unload_plugin(plugin_id)

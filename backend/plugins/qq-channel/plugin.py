@@ -78,6 +78,7 @@ PAIR_NOTIFY_INTERVAL = 60           # 陌生人反复私聊时，配对码最多
 PAIR_NOTIFY_CACHE_MAX = 256         # 通知表涨到这么大才清一次过期条目
 DM_ROUTE_MAX = 500                  # 私信路由上限：按会话记，只随配对人数增长
 DEDUP_SIZE = 500                   # 相同 msg_id 可能重复推送，按 id 去重
+GROUP_FACTS_MAX = 50                # 记住群信息的群数上限：只随"机器人在几个群"增长
 BACKOFF_MAX = 60.0
 
 
@@ -260,26 +261,35 @@ class QqClient:
             raise RuntimeError(f"取群成员信息失败（HTTP {res.status_code}）：{data}")
         return data
 
+    async def group_info(self, group_openid: str) -> dict:
+        """群基本信息（官方：群名、群简介、群分类、群标签、群人数）。
+
+        调用方自己决定多久问一次：这些是低频变化的事实，每条消息都问等于拿限流换个不变的答案。
+        需要机器人在该群、且接口权限正常（无权限/异常时抛错，由调用方降级）。
+        """
+        http = await self._client()
+        res = await http.get(
+            f"/v2/groups/{group_openid}/info",
+            headers={"Authorization": f"QQBot {await self.token()}"},
+        )
+        try:
+            data = res.json() if res.content else {}
+        except Exception:
+            data = {}
+        if res.status_code >= 400 or data.get("code"):
+            raise RuntimeError(f"取群信息失败（HTTP {res.status_code}）：{data}")
+        return data
+
 
 def _parse_group_map(raw: Any) -> dict[str, int]:
-    """解析 group_map（QQ 群 openid → Copree 群 id）。
+    """解析 group_map（QQ 群 openid → Copree 群 id）：规则在 app.utils.pure.channel_landing 一处，
+    这里只负责把坏项记成日志（平台侧判断"这个群接没接通道"要用同一份规则）。"""
+    from app.utils.pure.channel_landing import parse_group_map
 
-    坏项只丢那一项并记警告：一处手写错误不该让整份映射失效，否则表现是"某个群突然不接消息了"。
-    """
-    if not raw:
-        return {}
-    try:
-        data = json.loads(raw) if isinstance(raw, str) else dict(raw)
-    except Exception:
-        logger.warning("group_map 不是合法 JSON，按空映射处理")
-        return {}
-    out: dict[str, int] = {}
-    for key, value in (data or {}).items():
-        try:
-            out[str(key).strip()] = int(value)
-        except (TypeError, ValueError):
-            logger.warning("group_map 里有一项的群 ID 不是数字，已忽略该项")
-    return out
+    data, problems = parse_group_map(raw)
+    for problem in problems:
+        logger.warning(f"group_map {problem}")
+    return data
 
 
 def format_channel_origin(kind: str, instance: str, conversation: str) -> str:
@@ -470,6 +480,9 @@ class QqChannelPlugin(ServicePlugin):
         self._delivered_order: deque[str] = deque()
         # 最近见到过的 QQ 群（诊断用，内存态）：卡片上要能看见群 openid 才好填白名单
         self._seen_groups: dict[str, dict[str, Any]] = {}
+        # 今天拉到的群信息（QQ 群 openid → 群名/简介/分类/标签/人数）：群名要用来对齐落点群名、
+        # 也得给卡片和 AI 看，但它是低频变化的事实——按"今天第一条群消息"问一次，见 _group_facts_of
+        self._group_facts: dict[str, dict[str, Any]] = {}
         # "这条发不到 QQ"的站内提示上次时间（按目标）：失败要看得见，但不能刷屏
         self._fail_notice: dict[str, float] = {}
         # 补拉到的 union_openid（群:成员 → (时刻, union)）：成员接口只有 30 QPM，不能每条消息都问
@@ -504,12 +517,19 @@ class QqChannelPlugin(ServicePlugin):
             "target_agent": self._target_agent or None,
             "copree_group_id": self._copree_group_id or None,
             "dm_policy": self._dm_policy,
-            # 最近收到过消息的 QQ 群：openid + 时间 + 条数 + 白名单 + 落在哪个 Copree 群
+            # 最近收到过消息的 QQ 群：openid + 时间 + 条数 + 白名单 + 落在哪个 Copree 群 + 今天的群名
             "recent_groups": [
                 {
                     **row,
                     "copree_group_id": self._landing_group(str(row.get("origin") or "")) or None,
                     "mapped": str(row.get("origin") or "") in self._group_map,
+                    # 今天拉到的群信息（没拉到就是空串/0）：卡片靠它显示真名、预填新建落点群的名字
+                    "name": str(
+                        (self._group_facts.get(str(row.get("origin") or "")) or {}).get("name") or ""
+                    ),
+                    "member_num": int(
+                        (self._group_facts.get(str(row.get("origin") or "")) or {}).get("member_num") or 0
+                    ),
                 }
                 for row in sorted(
                     self._seen_groups.values(), key=lambda r: float(r.get("last_at") or 0), reverse=True
@@ -761,6 +781,64 @@ class QqChannelPlugin(ServicePlugin):
         if len(self._seen_groups) > 20:
             oldest = min(self._seen_groups.values(), key=lambda r: float(r.get("last_at") or 0))
             self._seen_groups.pop(str(oldest.get("origin")), None)
+
+    async def _group_facts_of(self, qq_group: str, *, force: bool = False) -> dict[str, Any] | None:
+        """这个 QQ 群的群信息：按"今天的第一条群消息"问一次。
+
+        为什么按天：群名/简介/人数都是低频变化的事实，而收消息是高频的——每条都问等于拿限流
+        换一个不变的答案。"今天"按服务端本地日期算，够用且不用跟时区较劲。
+        问不到就用手里的旧值（可能没有）：群名拿不到不该挡这条消息。
+        force 给"用户刚打开跟随通道群名"这种一次性动作：他正看着界面，等不到下一条消息。
+        """
+        today = time.strftime("%Y-%m-%d")
+        cached = self._group_facts.get(qq_group)
+        if cached and cached.get("day") == today and not force:
+            return cached
+        client = self._client
+        if client is None:
+            return cached
+        try:
+            data = await client.group_info(qq_group)
+        except Exception as e:
+            logger.info(f"取 QQ 群信息失败（不挡消息，下一条再试）：{type(e).__name__}: {e}")
+            return cached
+        facts = {
+            "day": today,
+            "at": time.time(),
+            "name": str(data.get("group_name") or "").strip(),
+            "memo": str(data.get("group_finger_memo") or "").strip(),
+            "class_text": str(data.get("group_class_text") or "").strip(),
+            "tags": [str(t).strip() for t in (data.get("group_tags") or []) if str(t).strip()],
+            "member_num": int(data.get("group_member_num") or 0),
+        }
+        self._group_facts[qq_group] = facts
+        if len(self._group_facts) > GROUP_FACTS_MAX:
+            oldest = min(self._group_facts, key=lambda k: float(self._group_facts[k].get("at") or 0))
+            self._group_facts.pop(oldest, None)
+        return facts
+
+    async def refresh_group_facts(self, group_id: int) -> dict[str, Any] | None:
+        """现去通道问一次这个群的群信息（用户刚打开"跟随通道群名"时用）
+
+        只在知道通道侧群标识时才问得了：映射表里有它，或它以前来过消息（默认落点群要知道是哪个群）。
+        都没见过就返回 None——那说明这个群还没收到过通道消息，等下一条来自然就有了。
+        """
+        origins = [o for o in self._group_map if self._landing_group(o) == int(group_id)]
+        if not origins:
+            origins = [o for o in self._seen_groups if self._landing_group(o) == int(group_id)]
+        for origin in origins:
+            facts = await self._group_facts_of(origin, force=True)
+            if facts:
+                return facts
+        return None
+
+    def facts_for_group(self, group_id: int) -> dict[str, Any] | None:
+        """这个 Copree 群对应的 QQ 群信息（今天拉到的）：平台给 AI 讲通道规矩时要说明"你在哪个群"
+
+        多个 QQ 群共用一个落点群时取最近问到的那个——同一条消息只回最近来消息的群，口径一致。
+        """
+        hit = [f for origin, f in self._group_facts.items() if self._landing_group(origin) == int(group_id)]
+        return max(hit, key=lambda f: float(f.get("at") or 0)) if hit else None
 
     def _seen_before(self, msg_id: str) -> bool:
         """相同 msg_id 可能重复推送（官方明说），不去重就会重复回答"""
@@ -1038,9 +1116,12 @@ class QqChannelPlugin(ServicePlugin):
 
         # 事件里的 union_openid 常常是空的（官方也写了"可能为空"），跨机器人认人只能按需补拉一次
         await self._fill_union(qq_group, author)
+        # 群信息（群名/人数…）：今天第一条群消息时才真去问一次（见 _group_facts_of）
+        facts = await self._group_facts_of(qq_group)
         try:
             delivered = await self._deliver_to_group(
-                landing, qq_group, author, content, msg_id, str(ext.get("msg_idx") or ""), quoted_ref
+                landing, qq_group, author, content, msg_id, str(ext.get("msg_idx") or ""), quoted_ref,
+                qq_facts=facts,
             )
             peer_user_id, peer_name, copree_msg_id = delivered or (0, "", 0)
             self._remember_delivered(msg_id, copree_msg_id, content)
@@ -1350,9 +1431,30 @@ class QqChannelPlugin(ServicePlugin):
         )
         return int(twin.sender_id), str(name or "")
 
+    async def _sync_group_name(self, db: Any, group_id: int, qq_facts: dict[str, Any] | None) -> None:
+        """落点群的名字对齐成 QQ 那边的真名——只在群设置里打开"跟随通道群名"的群上做。
+
+        一个 AI 接两个 QQ 群时，两个落点群默认都叫「<AI 名> 的群」，界面和 AI 都只能靠 id 分辨；
+        对齐真名把"哪个是哪个"还回来。开关由群主在群设置里决定：群名是他的东西，
+        通道不能自己往上写（打开时平台那边也会立刻对齐一次，这里只管之后通道侧改名的情况）。
+        """
+        name = str((qq_facts or {}).get("name") or "").strip()
+        if not name:
+            return
+        from app.models.group import Group
+
+        group = await db.get(Group, group_id)
+        if group is None or not bool(getattr(group, "name_from_channel", False)):
+            return
+        clean = name[:100]
+        if clean == str(group.name or "").strip():
+            return
+        group.name = clean
+        logger.info(f"落点群 #{group_id} 的名字对齐成 QQ 群名")
+
     async def _deliver_to_group(
         self, group_id: int, qq_group: str, author: dict, content: str, channel_msg_id: str = "",
-        channel_ref_idx: str = "", quote_ref: str = "",
+        channel_ref_idx: str = "", quote_ref: str = "", qq_facts: dict[str, Any] | None = None,
     ) -> tuple[int, str, int] | None:
         """把 QQ 群消息当作一次正常的群发言落库，并走与网页端完全相同的投递链路。
 
@@ -1381,6 +1483,7 @@ class QqChannelPlugin(ServicePlugin):
             if ensured is None:
                 return None
             sender_id, peer_name = ensured
+            await self._sync_group_name(db, group_id, qq_facts)
             reply_to = await self._resolve_quoted(db, group_id, quote_ref)
             message = await send_gm_message(
                 db,
@@ -1466,7 +1569,11 @@ class QqChannelPlugin(ServicePlugin):
     # ── 落点与路由 ─────────────────────────────────────────────
     def _landing_group(self, qq_group: str) -> int:
         """这个 QQ 群落到哪个 Copree 群：先查映射表，没有就落到实例的默认落点群"""
-        return int(self._group_map.get(qq_group) or self._copree_group_id or 0)
+        from app.utils.pure.channel_landing import landing_group
+
+        return landing_group(
+            group_map=self._group_map, default_group_id=self._copree_group_id, origin=qq_group
+        )
 
     async def _message_origin(self, db: Any, message: Any) -> tuple[str, str] | None:
         """这条消息来自哪个通道会话 → (实例, 会话)。
@@ -1507,9 +1614,11 @@ class QqChannelPlugin(ServicePlugin):
 
     def _serves_group(self, group_id: int) -> bool:
         """这个实例接不接这个 Copree 群：默认落点，或映射表里任何一个群指向它"""
-        if self._copree_group_id and int(group_id) == int(self._copree_group_id):
-            return True
-        return any(int(v or 0) == int(group_id) for v in self._group_map.values())
+        from app.utils.pure.channel_landing import serves_group
+
+        return serves_group(
+            group_map=self._group_map, default_group_id=self._copree_group_id, group_id=group_id
+        )
 
     @staticmethod
     def _alive(plugin: Any) -> bool:

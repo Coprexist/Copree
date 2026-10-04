@@ -36,6 +36,11 @@ class FakeClient:
         self.closed = False
         # 群成员信息接口（补拉 union_openid 用）
         self.member_calls: list = []
+        # 群信息接口（群名/简介/人数）
+        self.group_calls: list = []
+        self.group_name = "测试真群名"
+        self.group_member_num = 12
+        self.group_error = ""
         # 模拟平台的单条长度上限（0 = 不限）
         self.length_limit = 0
         self.member_union = "UNION-FROM-API"
@@ -63,6 +68,17 @@ class FakeClient:
         if self.member_error:
             raise RuntimeError(self.member_error)
         return {"member_openid": member_openid, "union_openid": self.member_union}
+
+    async def group_info(self, group_openid):
+        self.group_calls.append(group_openid)
+        if self.group_error:
+            raise RuntimeError(self.group_error)
+        return {
+            "group_openid": group_openid,
+            "group_name": self.group_name,
+            "group_finger_memo": "", "group_class_text": "", "group_tags": [],
+            "group_member_num": self.group_member_num,
+        }
 
     async def aclose(self):
         # 停止流程会在在飞回复之后调它：顺序错了请求就打到已关闭的客户端上
@@ -150,6 +166,28 @@ async def _messages(group_id: int):
             "WHERE m.group_id = :g ORDER BY m.id"
         ), {"g": group_id})).all()
     return rows
+
+
+async def _group_name(group_id: int) -> str:
+    from app.database import async_session
+
+    async with async_session() as db:
+        return str((await db.execute(
+            text("SELECT name FROM groups WHERE id = :g"), {"g": group_id}
+        )).scalar() or "")
+
+
+async def _set_group_name(group_id: int, name: str, *, from_channel: bool | None = None) -> None:
+    from app.database import async_session
+
+    async with async_session() as db:
+        await db.execute(text("UPDATE groups SET name = :n WHERE id = :g"), {"n": name, "g": group_id})
+        if from_channel is not None:
+            await db.execute(
+                text("UPDATE groups SET name_from_channel = :f WHERE id = :g"),
+                {"f": from_channel, "g": group_id},
+            )
+        await db.commit()
 
 
 async def _ledger(agent_id: int) -> list[dict]:
@@ -244,6 +282,101 @@ async def test_group_round_trip(migrated_db):
                 break
             await asyncio.sleep(0.01)
         assert plugin._client.sent[1]["seq"] == 2, plugin._client.sent
+    finally:
+        _cleanup(plugin)
+
+
+async def test_group_info_is_pulled_once_a_day(migrated_db):
+    """群信息（群名/人数）按「今天第一条群消息」拉一次
+
+    收消息是高频的、群名是低频的：每条都问等于拿限流换一个不变的答案。
+    界面靠它显示真名（新加的 QQ 群默认会撞出两个同名 Copree 群，只能靠 id 分辨）。
+    """
+    await _seed()
+    plugin = await _make_plugin()
+    try:
+        await plugin._on_group_at({**GROUP_EVENT, "id": "MSG-1"})
+        assert plugin._client.group_calls == ["QQGROUP-AAA"], "第一条群消息要拉群信息"
+        status = await plugin.get_status()
+        assert status["recent_groups"][0]["name"] == "测试真群名", status["recent_groups"]
+        assert status["recent_groups"][0]["member_num"] == 12
+
+        # 同一天的第二条：不再问
+        await plugin._on_group_at({**GROUP_EVENT, "id": "MSG-2", "content": "再说一句"})
+        assert plugin._client.group_calls == ["QQGROUP-AAA"], "同一天不该问第二次"
+
+        # 第二天：重新问一次（进程内按日期过期）
+        plugin._group_facts["QQGROUP-AAA"]["day"] = "2000-01-01"
+        await plugin._on_group_at({**GROUP_EVENT, "id": "MSG-3", "content": "第二天"})
+        assert len(plugin._client.group_calls) == 2, plugin._client.group_calls
+    finally:
+        _cleanup(plugin)
+
+
+async def test_refresh_group_facts_answers_for_a_known_group(migrated_db):
+    """用户刚打开"跟随通道群名"时要现问得到：映射表里有这个群，就知道该问哪个通道群
+
+    通道侧标识只有两条来源：映射表，或它以前来过消息（默认落点群）。都没见过就只能等消息。
+    """
+    await _seed()
+    plugin = await _make_plugin()
+    plugin._group_map = {"QQGROUP-AAA": GROUP_ID}
+    try:
+        facts = await plugin.refresh_group_facts(GROUP_ID)
+        assert facts and facts["name"] == "测试真群名", facts
+        assert plugin._client.group_calls == ["QQGROUP-AAA"]
+        # 不认识的群：不瞎猜通道侧标识
+        assert await plugin.refresh_group_facts(GROUP_ID + 999) is None
+    finally:
+        _cleanup(plugin)
+
+
+async def test_group_info_failure_does_not_block_messages(migrated_db):
+    """取群信息失败只是"没有名字"：消息照进 Copree（降级不能反过来挡人说话）"""
+    await _seed()
+    plugin = await _make_plugin()
+    plugin._client.group_error = "取群信息失败（HTTP 400）：{'code': 11253}"
+    try:
+        await plugin._on_group_at({**GROUP_EVENT, "id": "MSG-1"})
+        assert len(await _messages(GROUP_ID)) == 1, "群信息拿不到不能挡消息"
+        status = await plugin.get_status()
+        assert status["recent_groups"][0]["name"] == ""
+        assert status["recent_groups"][0]["member_num"] == 0
+    finally:
+        _cleanup(plugin)
+
+
+async def test_group_name_follows_the_qq_name_only_when_asked(migrated_db):
+    """群设置里打开"跟随通道群名"，群名才对齐 QQ 真名；没打开的群，名字是用户的
+
+    一个 AI 接两个 QQ 群时两个落点群默认同名，界面和 AI 都只能靠 id 分辨——
+    对齐真名把"哪个是哪个"还回来；但通道不能自己往群名上写，得群主在群设置里交权。
+    """
+    await _seed()
+    plugin = await _make_plugin()
+    try:
+        # 默认关：哪怕名字还是兜底名也不动
+        await _set_group_name(GROUP_ID, "浮生 的群")
+        await plugin._on_group_at({**GROUP_EVENT, "id": "MSG-1"})
+        assert await _group_name(GROUP_ID) == "浮生 的群", "没打开开关就不该改名"
+
+        # 打开：之后收到群消息就对齐
+        await _set_group_name(GROUP_ID, "浮生 的群", from_channel=True)
+        plugin._group_facts.clear()
+        await plugin._on_group_at({**GROUP_EVENT, "id": "MSG-2", "content": "再一句"})
+        assert await _group_name(GROUP_ID) == "测试真群名"
+
+        # 通道侧改了名：打开的群跟着改
+        plugin._client.group_name = "QQ 那边改成了别的"
+        plugin._group_facts.clear()
+        await plugin._on_group_at({**GROUP_EVENT, "id": "MSG-3", "content": "又一句"})
+        assert await _group_name(GROUP_ID) == "QQ 那边改成了别的"
+
+        # 关掉：名字是用户的，不再被覆盖
+        await _set_group_name(GROUP_ID, "我自己起的名字", from_channel=False)
+        plugin._group_facts.clear()
+        await plugin._on_group_at({**GROUP_EVENT, "id": "MSG-4", "content": "最后一句"})
+        assert await _group_name(GROUP_ID) == "我自己起的名字"
     finally:
         _cleanup(plugin)
 

@@ -34,6 +34,9 @@ class Group(Base):
                                comment="加群是否自动通过；关＝需要群主/管理员审批")
     approve_invites = Column(Boolean, nullable=False, default=False, server_default=text("false"),
                              comment="群成员邀请是否需要审批；群主/管理员的邀请免审")
+    # 群名由外部通道维护：打开后通道拉到群名就对齐（一个 AI 接多个 QQ 群时靠它分辨"哪个是哪个"）
+    name_from_channel = Column(Boolean, nullable=False, default=False, server_default=text("false"),
+                               comment="群名跟随外部通道的群名")
     created_at = Column(DateTime, server_default=func.now())
 
     __table_args__ = (

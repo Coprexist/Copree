@@ -185,6 +185,11 @@ async def get_group_detail(
     member_count = len(members)
     online_count = sum(1 for m in members if get_user_online_status(m.member_id))
 
+    # 这个群接没接外部通道：群设置据此决定显不显示"群名跟随通道"
+    from app.services.plugin import channel as channel_service
+
+    channel_bound = len(await channel_service.served_instances(db, group_id)) > 0
+
     return {
         "id": group.id,
         "name": group.name,
@@ -198,6 +203,8 @@ async def get_group_detail(
         "searchable": bool(group.searchable),
         "auto_approve_join": bool(group.auto_approve_join),
         "approve_invites": bool(group.approve_invites),
+        "name_from_channel": bool(group.name_from_channel),
+        "channel_bound": channel_bound,
         "created_at": str(group.created_at) if group.created_at else None,
         "member_count": member_count,
         "online_count": online_count,
@@ -430,6 +437,7 @@ async def update_group(
             "searchable": bool(group.searchable),
             "auto_approve_join": bool(group.auto_approve_join),
             "approve_invites": bool(group.approve_invites),
+            "name_from_channel": bool(group.name_from_channel),
             "created_at": str(group.created_at) if group.created_at else None,
         }
     except ValueError as e:
