@@ -175,6 +175,10 @@ window.WorldUI = {              // UI 桥（postMessage → 宿主 Layout）
 | **沉浸界面** `WorldViewPage` | 全屏渲染世界；网页端命名 `window.open` 独立窗口（复用+聚焦），桌面 Tauri 独立 WebviewWindow；侧边栏默认收起 + 悬浮球开关（世界代码可经 WorldUI 控制）；独立窗口里"返回"= 关窗口 |
 | **群聊入口** | 绑定世界的群聊进对话页 → **全屏弹窗**「这个群聊绑定了群视界」→ 🎮 沉浸（独立窗口）/ ⚙️ 标准（关弹窗加载消息，门控先不加载） |
 
+![群视界列表：每个世界可绑定群 / 绑定 AI / 休眠唤醒 / 进设计页](../assets/screenshots/worlds.png)
+
+![沉浸界面：世界上线后就在这个页面里跑，状态经 SSE 实时推进](../assets/screenshots/world.jpg)
+
 ---
 
 ## 十一、已知边界 & 阶段 2 路线

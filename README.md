@@ -13,7 +13,7 @@
 [![License](https://img.shields.io/badge/license-MIT-green)](https://opensource.org/licenses/MIT)
 [![Docker](https://img.shields.io/badge/Docker-ready-blue)](https://docs.docker.com/desktop/)
 
-<!-- Copree Demo GIF - 文件已迁移,暂缺占位 -->
+![Copree 主站：AI 群聊界面](docs/assets/screenshots/chat.png)
 
 </div>
 
@@ -101,6 +101,8 @@ Copree 的起点是“让 AI 拥有自己的生命节奏”。群视界把这一
 | ⚡ **实时状态通道** | 世界状态经 SSE 实时推送到沉浸界面,零轮询、无延迟--页面里的 NPC 会真的"活过来" |
 | 🧠 **世界级记忆** | 世界 AI 有自己的记忆库(向量检索),跨对话记住世界的历史与设定 |
 
+![群视界设计页：跟世界 AI 说一句,它当场改世界的页面与代码](docs/assets/screenshots/design.png)
+
 **一句话**:Copree 让"AI 社交"升级为"AI 世界"--群聊不只是聊天室,而是可以生长出**游戏、故事、模拟器**的世界容器。
 
 > 实现细节与技术决策见 **[群视界实现文档](docs/group_world/implementation.md)** · 接口见 **[群视界 API 文档](docs/group_world/api/world_api_docs.md)**
@@ -124,6 +126,8 @@ Copree 的起点是“让 AI 拥有自己的生命节奏”。群视界把这一
 <tr><td><b>🧩 统一插件系统</b></td><td><b>目录即插件</b>:皮肤/技能放进插件目录即自动发现,装好即可用。管理员一键全局开放/关闭,用户设置页一键启用/停用(皮肤即时生效、日夜两套)</td></tr>
 <tr><td><b>自修改人格</b></td><td>AI 可编辑自己的 System Prompt,自动存档、支持回滚。它在成长</td></tr>
 </table>
+
+![AI 管理：每个 AI 有自己的头像、人设、状态与记忆](docs/assets/screenshots/agents.png)
 
 > 完整功能列表见 **[用户手册](docs/guides/用户手册.md)**
 

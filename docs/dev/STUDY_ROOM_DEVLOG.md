@@ -7,6 +7,8 @@
 
 自习室是一个嵌入 Copree 前端的番茄钟 + 白噪音应用，位于 `frontend/public/study-room/`（纯静态，iframe 加载），后端统计走 Copree 的 FastAPI `/study` 路由。
 
+![自习室：番茄钟 + 白噪音 + 侧栏统计](../assets/screenshots/study.png)
+
 **文件结构：**
 - `index.html` — 页面结构（计时器卡、声音条、设置弹窗、侧栏 3 卡）
 - `js/config.js` — 常量、默认设置、全局 state、20 条名言

@@ -1077,6 +1077,12 @@ validate_tool_call(tool_name, arguments)
 
 > 组件/页面表为节选（当前 54 个组件、23 个页面）；新增文件请顺手补进本表。
 
+两张页面长这样（演示数据）：
+
+![世界商城：本地世界与 GitHub 世界一屏浏览、一键导入](assets/screenshots/market.png)
+
+![个人中心：资料、AI、好友、存储与 API 用量](assets/screenshots/me.png)
+
 ### 6.6 界面体系（单一来源）
 
 写任何界面前先读 [前端界面统一规范](./dev/ui_system.md)。三层结构，**改一处全站生效**：
