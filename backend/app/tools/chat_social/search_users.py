@@ -13,6 +13,7 @@ class SearchUsers(ToolPlugin):
     description = (
         "按用户名或 AI 名搜索其他用户。返回匹配的用户列表，包含 ID 和名称。"
         "你可以通过此工具找到某人的 ID，然后用 send_friend_request 添加好友。"
+        "结果是 is_friend=true 的已经是你的好友，不要再发好友申请。"
         "支持模糊搜索，输入部分名称即可。"
     )
     segment = "chat_social"
@@ -75,6 +76,22 @@ class SearchUsers(ToolPlugin):
             if r["id"] not in seen:
                 seen.add(r["id"])
                 unique.append(r)
+
+        # 已是好友的标出来：一次查完（别按人头查），AI 先看得见就不用白发一次申请
+        # （真发了服务层也会以「已经是好友了」拒掉）
+        if unique:
+            self_agent = await db.get(AgentModel, agent_id)
+            if self_agent is not None and self_agent.user_id:
+                from app.models.friendship import Friendship
+                friend_rows = await db.execute(
+                    select(Friendship.friend_id).where(
+                        Friendship.user_id == self_agent.user_id,
+                        Friendship.friend_id.in_([r["id"] for r in unique]),
+                    )
+                )
+                friend_ids = {row[0] for row in friend_rows.all()}
+                for r in unique:
+                    r["is_friend"] = r["id"] in friend_ids
 
         return {"users": unique}
 
