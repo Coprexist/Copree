@@ -68,3 +68,20 @@ export interface ChatRefreshDetail {
   conversation_type?: 'group' | 'dm'
   conversation_id?: number | string
 }
+
+// ============================================================
+// 官方头像素材（团队自绘，随站点分发）
+// ============================================================
+
+/** 素材目录：Vite 把 frontend/public 原样拷到站点根，dev 与打包后路径一致 */
+export const OFFICIAL_AVATAR_BASE = '/official-avatars/'
+
+/** 换头像时「官方素材」那一档可选的图（顺序即展示顺序） */
+export const OFFICIAL_AVATARS = [
+  'hanwulong.png',
+  'shiguang.jpg',
+  'aland.jpg',
+  'bailu.jpg',
+  'qinghe.jpg',
+  'luo.webp',
+]

@@ -23,6 +23,18 @@ const scrollBottom = '(() => {' +
   'const els = [...document.querySelectorAll("*")].filter(e => e.scrollHeight > e.clientHeight + 40);' +
   'els.forEach(e => { e.scrollTop = e.scrollHeight }); return els.length })()'
 
+/** 换头像弹窗的入口藏在「编辑资料」弹窗里，两步之间得等 React 渲染完 */
+const openAvatarPicker = '(async () => {' +
+  'const click = (text) => {' +
+  'const hits = [...document.querySelectorAll("button, li, a, span, div")]' +
+  '.filter(e => e.textContent.trim() === text);' +
+  'const el = hits[hits.length - 1]; if (!el) return false;' +
+  '(el.closest("button") || el).click(); return true };' +
+  'if (!click("编辑资料")) return false;' +
+  'await new Promise(r => setTimeout(r, 600));' +
+  'if (!click("更换头像")) return false;' +
+  'await new Promise(r => setTimeout(r, 500)); return true })()'
+
 /** 世界页面会带上内部调试标记，截图里不出现 */
 const hideWorldDebug = '(() => {' +
   'const kill = (doc) => { doc.querySelectorAll("*").forEach(el => {' +
@@ -137,4 +149,5 @@ const showGallery = '(() => {' +
 export const UI_SHOTS = [
   { name: 'ui-components', path: '/market', settle: 3500, prepare: showGallery, clip: '#ui-gallery-box', out: 'ui' },
   { name: 'ui-convlog', path: '/admin?tab=convlog', settle: 5000, clip: '.mx-auto.w-full', out: 'ui', rawApi: true },
+  { name: 'ui-avatar-picker', path: '/me', settle: 4500, prepare: [openAvatarPicker], clip: '.shadow-2xl.w-80', out: 'ui' },
 ];

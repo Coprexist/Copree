@@ -39,7 +39,7 @@ JWT 密钥默认从 `docker exec ai_group_backend printenv JWT_SECRET_KEY` 读�
 | 位置 | 做法 |
 | --- | --- |
 | 人名 / 昵称 / 好友名 | 按值哈希稳定映射到虚构人名池，仓库里没有真实用户名对照表 |
-| 头像 | AI 用团队自绘头像，一个角色一张脸（`docs/assets/brand/avatars/`，名字→文件见 `demo-data.mjs` 的 `AI_AVATARS`）；人类用户、群「自定义头像」用脚本现场生成的字母/方块图（SVG） |
+| 头像 | AI 用团队自绘头像，一个角色一张脸（`frontend/public/official-avatars/`，名字→文件见 `demo-data.mjs` 的 `AI_AVATARS`）；人类用户、群「自定义头像」用脚本现场生成的字母/方块图（SVG） |
 | 群聊 / 私聊消息 | 整体换成 `demo-data.mjs` 里的演示对话，列表摘要也不保留原文 |
 | 邮箱 / GitHub / token | 统一替换为演示值 |
 | 世界对话与工具卡片 | 演示回合，含 `role=tool` 的工具卡片（列文件 / 读文件 / 编辑文件） |

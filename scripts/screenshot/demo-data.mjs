@@ -11,7 +11,8 @@
 const minutesAgo = (m) => new Date(Date.now() - m * 60_000).toISOString()
 
 /**
- * AI 角色各自的头像：名字 → docs/assets/brand/avatars/ 下的文件名（团队自绘）。
+ * AI 角色各自的头像：名字 → frontend/public/official-avatars/ 下的文件名（团队自绘，
+ * 同一批图也是站内换头像时「官方素材」那一档）。
  * 换脸只改这张表 —— 脚本两边（演示数据与拦截层）都从这里取，不再各写一份。
  */
 export const AI_AVATARS = {

@@ -7,7 +7,7 @@
  *
  * 前提：后端 + 前端在跑（默认 http://127.0.0.1:5227）。
  * 数据：所有接口响应在浏览器侧被换成 scripts/screenshot/demo-data.mjs 里的演示数据，
- *       AI 头像发 docs/assets/brand/avatars/ 下对应的那张（名字→文件见 demo-data.mjs 的
+ *       AI 头像发 frontend/public/official-avatars/ 下对应的那张（名字→文件见 demo-data.mjs 的
  *       AI_AVATARS），人类用户发现场生成的字母头像；不写数据库、不改业务代码。
  */
 import { execFileSync } from 'node:child_process'
@@ -23,7 +23,7 @@ import { SHOTS, UI_SHOTS, VIEWPORT } from './shots.mjs'
 const ROOT = path.resolve(import.meta.dirname, '../..')
 const DEFAULT_URL = 'http://127.0.0.1:5227'
 const DEFAULT_OUT = path.join(ROOT, 'docs/assets/screenshots')
-const AVATAR_DIR = path.join(ROOT, 'docs/assets/brand/avatars')
+const AVATAR_DIR = path.join(ROOT, 'frontend/public/official-avatars')
 const AVATAR_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' }
 
 /** 演示数据给的文件名 → 图片字节。认不出的头像一律兜底到「我」那张，跟以前一张脸时代的行为一致 */

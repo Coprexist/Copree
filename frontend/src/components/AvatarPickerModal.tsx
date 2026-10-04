@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Image, Upload, X, Loader2 } from 'lucide-react'
+import { Image, Upload, X, Loader2, Palette } from 'lucide-react'
 import { api, fileDownloadUrl } from '../api/client'
+import { OFFICIAL_AVATARS, OFFICIAL_AVATAR_BASE } from '../constants'
 import { useT } from '../i18n/I18nContext'
 import AvatarCropModal from './AvatarCropModal'
 
@@ -46,7 +47,7 @@ export default function AvatarPickerModal({
   const [uploading, setUploading] = useState(false)
 
   // 第一步：选择模式
-  const [step, setStep] = useState<'pick' | 'select-file'>('pick')
+  const [step, setStep] = useState<'pick' | 'select-file' | 'select-official'>('pick')
 
   // 加载个人空间文件
   const loadFiles = useCallback(async () => {
@@ -129,6 +130,22 @@ export default function AvatarPickerModal({
       setCropFile(file)
     } catch (e: any) {
       setFileError(e?.message || t('common:loadFailed'))
+    }
+  }
+
+  // 从官方素材选择：取站点自带的图当上传内容，跟「上传新图片」走同一条上传链路，
+  // 下游（缩略图、QQ 通道推送、联邦）一处都不用改
+  const handleSelectOfficial = async (name: string) => {
+    setUploading(true)
+    setFileError('')
+    try {
+      const res = await fetch(OFFICIAL_AVATAR_BASE + name)
+      if (!res.ok) throw new Error(t('common:loadFailed'))
+      await onUpload(await res.blob())
+      onClose()
+    } catch (e: any) {
+      setFileError(e?.detail || e?.message || t('error:uploadFailed'))
+      setUploading(false)
     }
   }
 
@@ -216,6 +233,24 @@ export default function AvatarPickerModal({
                   {t('groupSettings:avatarPickerUploadNewDesc')}
                 </span>
               </button>
+
+              {/* 选项3：从官方素材选择（横跨两列：它是"现成的"，跟上面两条"自己的"不是一个来路） */}
+              <button
+                onClick={() => setStep('select-official')}
+                className="card card-interactive col-span-2 flex items-center gap-3 p-3 text-left"
+              >
+                <div className="w-10 h-10 rounded-card bg-accent-400/10 dark:bg-accent-900/30 flex items-center justify-center shrink-0">
+                  <Palette size={20} className="text-accent-400" />
+                </div>
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-textPrimary">
+                    {t('groupSettings:avatarPickerOfficial')}
+                  </div>
+                  <div className="text-3xs text-textMuted">
+                    {t('groupSettings:avatarPickerOfficialDesc')}
+                  </div>
+                </div>
+              </button>
             </div>
           )}
 
@@ -264,6 +299,35 @@ export default function AvatarPickerModal({
                   ))}
                 </div>
               )}
+            </div>
+          )}
+
+          {/* 第二步（另一条）：从官方素材里挑 */}
+          {step === 'select-official' && (
+            <div>
+              <button
+                onClick={() => setStep('pick')}
+                className="mb-3 text-xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 transition-colors"
+              >
+                ← {t('common:back')}
+              </button>
+              <div className="grid grid-cols-3 gap-2">
+                {OFFICIAL_AVATARS.map((name) => (
+                  <button
+                    key={name}
+                    onClick={() => handleSelectOfficial(name)}
+                    disabled={uploading}
+                    className="relative aspect-square rounded-control overflow-hidden border border-border bg-elevated hover:border-primary-400 transition-colors disabled:opacity-60"
+                  >
+                    <img
+                      src={OFFICIAL_AVATAR_BASE + name}
+                      alt=""
+                      className="w-full h-full object-cover"
+                      loading="lazy"
+                    />
+                  </button>
+                ))}
+              </div>
             </div>
           )}
 
