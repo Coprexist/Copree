@@ -283,6 +283,7 @@ async def list_user_groups(db: AsyncSession, user_id: int) -> list[dict]:
             "owner_id": group.owner_id,
             "is_vector_accelerated": group.is_vector_accelerated,
             "announcement": announcement,
+            "bio": group.bio,
             "speak_limit_per_minute": group.speak_limit_per_minute or 0,
             "speak_limit_window_seconds": group.speak_limit_window_seconds or 120,
             "my_role": m.role,
@@ -745,7 +746,7 @@ async def update_group_settings(db: AsyncSession, group_id: int, operator_id: in
         raise ValueError("仅群主或管理员可修改群设置")
 
     allowed_fields = {
-        "name", "announcement",
+        "name", "announcement", "bio",
         "speak_limit_per_minute", "speak_limit_window_seconds",
         "is_vector_accelerated",
         "avatar_mode", "avatar_url", "include_ai_in_avatar",
@@ -786,9 +787,10 @@ async def update_group_settings(db: AsyncSession, group_id: int, operator_id: in
 
 
 async def refresh_group_channel_info(db: AsyncSession, group_id: int, operator_id: int) -> dict:
-    """手动拉一次通道那边这个群的信息（群主/管理员）：群设置里那个"同步"按钮
+    """手动拉一次通道那边这个群的信息（群主/管理员）：群设置里的「刷新」
 
-    打开的群顺手把群名对齐——按钮的语义就是"现在就同步一次"，不然用户按完看不出发生了什么。
+    按钮的语义是「现在就按通道那边的来」，所以拉到的**群名与群简介**当场写到这个群上：
+    名字与跟随开关无关（开关管的是以后要不要自动跟），群简介只在通道侧那份非空时才覆盖。
     通道那边还没消息进来、或通道没实现群信息接口时返回空列表（按钮照旧不报错，界面说"没拉到"）。
     """
     group = await db.get(Group, group_id)
@@ -801,15 +803,29 @@ async def refresh_group_channel_info(db: AsyncSession, group_id: int, operator_i
     from app.services.plugin import channel as channel_service
 
     channels = await channel_service.describe_group(db, group_id, refresh=True)
-    name = next((str(c.get("name") or "").strip() for c in channels if str(c.get("name") or "").strip()), "")
-    if name and bool(getattr(group, "name_from_channel", False)) and name[:100] != group.name:
+    info = channels[0] if channels else {}
+    name = str(info.get("name") or "").strip()
+    memo = str(info.get("memo") or "").strip()
+
+    if name and name[:100] != group.name:
         group.name = name[:100]
         await db.flush()
         from app.services.federation.federation_service import enqueue_profile_update
 
         await enqueue_profile_update(db, "group", group_id, "display_name", group.name)
         logger.info(f"群聊 {group_id} 群名对齐通道群名（手动同步）")
-    return {"id": group.id, "name": group.name, "channels": channels}
+    if memo and memo[:300] != (group.bio or ""):
+        group.bio = memo[:300]
+        await db.flush()
+        logger.info(f"群聊 {group_id} 群简介对齐通道群简介（手动同步）")
+
+    return {
+        "id": group.id,
+        "name": group.name,
+        "bio": group.bio,
+        "name_from_channel": bool(group.name_from_channel),
+        "channels": channels,
+    }
 
 
 async def change_member_role(db: AsyncSession, group_id: int, operator_id: int,

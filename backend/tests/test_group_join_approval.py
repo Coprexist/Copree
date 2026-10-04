@@ -277,7 +277,9 @@ async def test_group_settings_accept_discovery_flags(migrated_db):
 
         group = await update_group_settings(db, GROUP_ID, 5, {
             "searchable": True, "auto_approve_join": False, "approve_invites": True,
+            "bio": "测试群简介",
         })
         assert (group.searchable, group.auto_approve_join, group.approve_invites) == (True, False, True)
+        assert group.bio == "测试群简介", "群简介也要进白名单"
         await db.rollback()
 

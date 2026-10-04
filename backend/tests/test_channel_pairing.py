@@ -533,7 +533,8 @@ async def test_manual_channel_sync_pulls_group_info(migrated_db):
                 db, "小明 的群", "human", owner_id,
                 initial_members=[{"type": "ai", "id": agent.user_id}],
             )
-            group.name_from_channel = True
+            # 跟随开关先关着：手动同步照样要生效（开关管的是"以后要不要自动跟"）
+            group.name_from_channel = False
             await db.commit()
 
             skill_bridge.ensure_declared("qq-channel")
@@ -553,6 +554,10 @@ async def test_manual_channel_sync_pulls_group_info(migrated_db):
                 # 打开的群顺手对齐：按钮按完要看得见效果
                 assert result["name"] == "合欢宗藏经阁", result
                 assert str(group.name) == "合欢宗藏经阁"
+                assert result["name_from_channel"] is False, "手动同步不该顺手把跟随开关打开"
+                # 群简介一起拉过来（QQ 群的「群简介」）——不然资料卡那句介绍永远空着
+                assert result["bio"] == "只聊养猫", result
+                assert str(group.bio) == "只聊养猫"
 
                 try:
                     await gm.refresh_group_channel_info(db, group.id, other_id)

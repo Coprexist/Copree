@@ -210,6 +210,9 @@ async def get_group_detail(
         "channel_bound": bool(served),
         "channel_labels": channel_labels,
         "channels": channels,
+        # 资料卡要显示的：群简介与群公告（列表里不带，详情里给）
+        "bio": group.bio,
+        "announcement": group.announcement,
         "created_at": str(group.created_at) if group.created_at else None,
         "member_count": member_count,
         "online_count": online_count,

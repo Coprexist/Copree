@@ -21,6 +21,7 @@ class GroupUpdateRequest(BaseModel):
     """更新群聊设置请求"""
     name: str | None = Field(default=None, min_length=1, max_length=100)
     announcement: str | None = None
+    bio: str | None = Field(default=None, max_length=300)
     speak_limit_per_minute: int | None = Field(default=None, ge=-1, le=60)
     speak_limit_window_seconds: int | None = Field(default=None, ge=30, le=600)
     is_vector_accelerated: bool | None = None
@@ -49,6 +50,7 @@ class GroupResponse(BaseModel):
     is_vector_accelerated: bool
     is_paused: bool = False
     announcement: str | None = None
+    bio: str | None = None
     speak_limit_per_minute: int = 0
     speak_limit_window_seconds: int = 120
     my_role: str | None = None

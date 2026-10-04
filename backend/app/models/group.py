@@ -18,6 +18,8 @@ class Group(Base):
     is_vector_accelerated = Column(Boolean, default=False)
     announcement = Column(Text, nullable=True)
     announcement_updated_at = Column(DateTime, nullable=True)
+    # 群简介：一句话介绍（资料卡上那句「空空如也」的位置；没有就退回通道侧的群简介）
+    bio = Column(String(300), nullable=True)
     speak_limit_per_minute = Column(Integer, default=0)  # 0 = 不限制
     speak_limit_window_seconds = Column(Integer, default=120)  # 时间窗口（秒）
     concurrent_ai_limit = Column(Integer, default=3)  # 同群同时 LLM 调用上限，NULL/0=默认3
