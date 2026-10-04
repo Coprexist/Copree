@@ -71,7 +71,8 @@ _FRAME_FIELDS = (
     "notes",
     # semantic_focus：这段会话当前的语义焦段（焦段本体存在 agents.foci）
     "semantic_focus",
-    # env_locked：写进前缀的那份环境（解锁点对齐现值）；env_notified：已告知 AI 的那份（判定基准）。
+    # env_locked：写进前缀的那份环境（含平台的通道规矩；解锁点对齐现值）；
+    # env_notified：已告知 AI 的那份（判定基准）。
     # 两者分开是必需的——值变过去又变回来时，现值可能等于 locked 却不等于 notified。
     "env_locked",
     "env_notified",

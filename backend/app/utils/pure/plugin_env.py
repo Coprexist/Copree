@@ -4,7 +4,8 @@
 契约见 docs/plugin-dev/environment-api.md。三条不变式决定了这里只有一个分支：
 - 判定只做等值比较、不认识字段语义，所以插件可以自由加维度而不改平台；
 - text 在比较层是普通键（参与 canonical），在渲染层是覆盖键；
-- 渲染只认公共键，私有键忽略——插件要说自己的话就写进 text。
+- 渲染只认公共键，私有键忽略——插件要说自己的话就写进 text；
+- 通道规矩（ENV_RULES_KEY）是平台自己塞的键：比较层同 text，渲染层单独成段（见 render_channel_rules）。
 """
 from __future__ import annotations
 
@@ -13,6 +14,11 @@ from typing import Any, Callable
 
 # 覆盖键：非空即整句采用，此时公共键不参与渲染（仍参与比较）
 ENV_TEXT_KEY = "text"
+
+# 平台自己塞的一条环境事实：这个群的通道规矩。它跟 text 一样参与比较（canonical），
+# 但不进 _ENV_RENDERERS——那段话太长，自己成一段并列在环境行后面。
+# 插件写同名键会被平台覆盖：这个键是平台的，不是插件契约的一部分。
+ENV_RULES_KEY = "channel_rules"
 
 # 公共键的渲染规则：新增一个公共键只加一行。平台只渲染这里的键，
 # 其余键只参与比较——「平台不认识也能判定」正是插件可以自由扩维度的前提。
@@ -96,6 +102,12 @@ def render_environment(value: dict[str, Any] | None) -> str:
         return _clip(text)
     parts = [render(value[k]) for k, render in _ENV_RENDERERS.items() if value.get(k) is not None]
     return _clip(" ".join(part for part in parts if part) or ENV_FALLBACK_TEXT)
+
+
+def render_channel_rules(value: dict[str, Any] | None) -> str:
+    """通道规矩那一段（没有就返回空串）——与 render_environment 同一份取值的第二个渲染出口"""
+    text = (value or {}).get(ENV_RULES_KEY)
+    return text.strip() if isinstance(text, str) and text.strip() else ""
 
 
 def _clip(text: str) -> str:

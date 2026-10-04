@@ -98,6 +98,88 @@ async def test_run_script_says_what_stdout_says(migrated_db):
         assert dec["handled"] is True and dec["reply"] == "脚本说的", dec
 
 
+async def test_a_reply_survives_a_trailing_log_line(migrated_db):
+    """脚本在结果后面又 print 一句给人看的日志：要说的话不能被吃掉"""
+    from app.database import async_session
+    from app.services.world.decision_skill import run_decision_engine
+
+    async with async_session() as db:
+        await _seed(db)
+        await _save(db, {
+            "name": "签到", "when": {"event": "group_message"},
+            "do": {"action": "run_script",
+                   "code": "import json\nprint(json.dumps({'reply': '收到了'}))\nprint('已记好')"},
+            "notify": False,
+        })
+        dec = await run_decision_engine(db, "agent", 24, None, "group_message", _incoming())
+        assert dec["handled"] is True and dec["reply"] == "收到了", dec
+
+
+async def test_a_broken_script_hands_the_event_back_with_the_reason(migrated_db):
+    """脚本崩了不能当成「办完了」：事件交回本体，note 说清原因（吞掉就是这件事没人管）"""
+    from app.database import async_session
+    from app.services.world.decision_skill import run_decision_engine
+
+    async with async_session() as db:
+        await _seed(db)
+        await _save(db, {
+            "name": "签到", "when": {"event": "group_message"},
+            "do": {"action": "run_script", "code": "raise RuntimeError('台账坏了')"},
+            "notify": False,
+        })
+        dec = await run_decision_engine(db, "agent", 24, None, "group_message", _incoming())
+        assert dec["hit"] is True and dec["handled"] is False, dec
+        assert "没办成" in dec["note"] and "台账坏了" in dec["note"], dec["note"]
+
+
+async def test_a_script_that_prints_no_json_is_not_silence(migrated_db):
+    """print 了却没有可代发的 JSON = 格式写错了，要报出来；什么都不 print 才是正当的静默"""
+    from app.database import async_session
+    from app.services.world.decision_skill import run_decision_engine
+
+    async with async_session() as db:
+        await _seed(db)
+        await _save(db, {
+            "name": "记账", "when": {"event": "group_message"},
+            "do": {"action": "run_script", "code": "print('已记好')"}, "notify": False,
+        })
+        dec = await run_decision_engine(db, "agent", 24, None, "group_message", _incoming())
+        assert dec["handled"] is False and "没办成" in dec["note"], dec
+        assert "reply" in dec["note"], dec["note"]
+
+        await _save(db, {
+            "name": "记账", "when": {"event": "group_message"},
+            "do": {"action": "run_script", "code": "pass"}, "notify": False,
+        })
+        quiet = await run_decision_engine(db, "agent", 24, None, "group_message", _incoming())
+        assert quiet["handled"] is True and quiet["reply"] == "", quiet
+
+
+async def test_engine_failure_says_so_instead_of_looking_like_a_miss(migrated_db):
+    """引擎自己出错 ≠ 没命中：调用方照常唤醒，note 说明是技能瞎了（不是没人找它）"""
+    from app.database import async_session
+    from app.services.world import decision_skill
+
+    async with async_session() as db:
+        await _seed(db)
+        await _save(db, {
+            "name": "签到", "when": {"event": "group_message"},
+            "do": {"action": "reply_template", "reply": "已记录"}, "notify": False,
+        })
+
+        def _boom(*args, **kwargs):   # find_hit 是同步的（条件求值不碰 IO）
+            raise RuntimeError("条件求值炸了")
+
+        original, decision_skill.find_hit = decision_skill.find_hit, _boom
+        try:
+            dec = await decision_skill.run_decision_engine(
+                db, "agent", 24, None, "group_message", _incoming())
+        finally:
+            decision_skill.find_hit = original
+        assert dec["hit"] is False and not dec.get("handled"), dec
+        assert "没能判定" in dec["note"] and "条件求值炸了" in dec["note"], dec["note"]
+
+
 async def test_unknown_event_is_rejected_with_the_scenario_list(migrated_db):
     """事件名写错当场拒绝并列出可选值——否则规则会安静地永远不触发"""
     from app.database import async_session
@@ -270,3 +352,104 @@ async def test_reply_template_names_the_sender(migrated_db):
         assert ok, err
         dec = await run_decision_engine(db, "agent", 24, None, "group_message", _incoming())
         assert dec["reply"] == "小明 已记录，{unknown} 原样", dec
+
+# ── 试跑（test_decision_skill）：把「拿真人当探针」换成自己先算一遍 ──
+
+_DRAFT = {
+    "name": "草稿签到", "when": {"event": "group_message", "conditions": {"content_clean": "签到"}},
+    "do": {"action": "reply_template", "reply": "{sender_name} ok"}, "notify": False,
+}
+
+
+async def test_preview_explains_why_a_rule_did_not_fire(migrated_db):
+    """没命中要说清是哪条、为什么——古河渚当初只能靠真人反复发「签到」来试"""
+    from app.database import async_session
+    from app.services.world.decision_skill import preview_decision
+
+    async with async_session() as db:
+        await _seed(db)
+        ok, err = await _save(db, _DRAFT)
+        assert ok, err
+        out = await preview_decision(db, "agent", 24, None, "group_message",
+                                     {"content": "在？", "sender_name": "小明", "sender_id": 1})
+        assert out["success"] and out["hit"] is None, out
+        assert out["checked"][0]["reason"] == "conditions_false", out["checked"]
+        assert out["why"] == "没有规则命中这条样例", out
+        # ctx 就是脚本能读到的全部字段（content 原样 / content_clean 已去 @ 令牌 / 发送者）
+        assert out["ctx"]["content_clean"] == "在？" and out["ctx"]["sender_name"] == "小明", out["ctx"]
+
+
+async def test_preview_event_mismatch_is_explained(migrated_db):
+    """情景写错（最常见的"永远不触发"）当场说清，而不是安静地不命中"""
+    from app.database import async_session
+    from app.services.world.decision_skill import preview_decision
+
+    async with async_session() as db:
+        await _seed(db)
+        await _save(db, {
+            "name": "定时版", "when": {"event": "scheduled", "conditions": None},
+            "do": {"action": "reply_template", "reply": "到点了"}, "notify": False,
+        })
+        out = await preview_decision(db, "agent", 24, None, "group_message", {"content": "签到"})
+        assert out["checked"][0]["reason"] == "event_not_matching", out["checked"]
+        assert "event" in out["checked"][0]["why"], out["checked"]
+
+
+async def test_preview_hit_renders_reply_and_leaves_nothing_behind(migrated_db):
+    """命中：回复渲染出来、标明唤不唤醒本体，但一条消息都不发、账本一行不写"""
+    from sqlalchemy import func, select
+
+    from app.database import async_session
+    from app.models.agent import AgentHistoryEntry
+    from app.models.message import Message
+    from app.services.world.decision_skill import preview_decision
+
+    async with async_session() as db:
+        await _seed(db)
+        await _save(db, {
+            "name": "签到", "when": {"event": "group_message", "conditions": {"content_clean_contains": "签到"}},
+            "do": {"action": "reply_template", "reply": "{sender_name} 已记录"}, "notify": False,
+        })
+        out = await preview_decision(db, "agent", 24, None, "group_message",
+                                     {"content": "签到", "sender_name": "小明"})
+        assert out["would"] == "reply" and out["reply"] == "小明 已记录", out
+        assert out["hit"]["name"] == "签到" and out["wakes_owner"] is False, out
+        msgs = (await db.execute(select(func.count(Message.id)))).scalar() or 0
+        entries = (await db.execute(select(func.count(AgentHistoryEntry.id)))).scalar() or 0
+        assert (msgs, entries) == (0, 0), (msgs, entries)
+
+
+async def test_preview_takes_a_draft_rule_without_saving_it(migrated_db):
+    """草稿可以直接试：不落库也能看会不会命中（先自证，再写下去）"""
+    from app.database import async_session
+    from app.services.world.decision_skill import get_decision_rules, preview_decision
+
+    async with async_session() as db:
+        await _seed(db)
+        out = await preview_decision(db, "agent", 24, None, "group_message",
+                                     {"content": "签到", "sender_name": "小明"}, rule=dict(_DRAFT))
+        assert out["hit"] and out["hit"]["name"] == "草稿签到", out
+        assert out["reply"] == "小明 ok", out
+        assert await get_decision_rules(db, "agent", 24) == [], "试跑不能把草稿存下来"
+
+
+async def test_script_preview_runs_only_when_asked(migrated_db):
+    """默认只回显不执行（否则"试跑"就真记账了）；execute=true 才跑，且脚本看得到 DRY_RUN=1"""
+    from app.database import async_session
+    from app.services.world.decision_skill import preview_decision
+
+    code = 'import os, json\nprint(json.dumps({"reply": "dry=" + os.environ.get("DRY_RUN", "unset")}))'
+    async with async_session() as db:
+        await _seed(db)
+        await _save(db, {
+            "name": "脚本版", "when": {"event": "group_message", "conditions": {"content_clean": "签到"}},
+            "do": {"action": "run_script", "code": code}, "notify": False,
+        })
+        out = await preview_decision(db, "agent", 24, None, "group_message", {"content": "签到"})
+        assert out["would"] == "run_script", out
+        assert out["script"]["executed"] is False and out["reply"] == "", out
+
+        ran = await preview_decision(db, "agent", 24, None, "group_message",
+                                     {"content": "签到"}, execute=True)
+        assert ran["script"]["executed"] is True, ran["script"]
+        assert ran["reply"] == "dry=1", ran

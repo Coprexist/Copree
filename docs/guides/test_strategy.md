@@ -167,7 +167,11 @@ assert doc_yaml_block.rstrip() == open(".github/workflows/test.yml").read().rstr
 
 测试把附件与 AI 脚本沙箱都写在 `settings.data_dir` 下（容器内固定为 `/app/data`）：本地 `/app`
 可写、全绿；CI runner 上 `/app` 属另一用户不可写，9 条用例只在 CI 挂。其中决策层那条最隐蔽——
-沙箱起不来被吞成「执行过但没有回复」，断言看到的是 `handled=True, reply=''`，而不是一个报错。
+当时沙箱起不来被吞成「执行过但没有回复」，断言看到的是 `handled=True, reply=''`，而不是一个报错。
+现在这类失败不再被吞：脚本起不来 / 排不上队时 `do` 返回 `success=False`，事件交回本体
+（`handled=False` + `failure_note`），用例见
+`backend/tests/test_decision_layer.py::test_a_broken_script_hands_the_event_back_with_the_reason`
+与 `backend/tests/test_sandbox_layers.py::test_script_that_never_gets_its_turn_fails_loudly`。
 
 只要测试依赖**环境可写性**或**绝对路径**，就必须在 CI 上验证过才算数。
 修法是不让测试碰真实数据目录：`conftest.py` 在导入时把 `DATA_DIR` 指向临时目录一次，

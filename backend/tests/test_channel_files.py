@@ -26,24 +26,24 @@ async def _seed(db, *, group_id: int = 64):
 
 async def test_declared_channel_without_file_exit(migrated_db):
     from app.database import async_session
-    from app.services.plugin.channel import files_supported, group_brief
+    from app.services.plugin.channel import channel_rules, files_supported
 
     async with async_session() as db:
         await _seed(db)
         assert await files_supported(db, 64) is False          # qq-channel 声明 supports_files=false
-        brief = await group_brief(db, 64)
+        brief = await channel_rules(db, 64)
         assert "发不了文件" in brief, brief
 
 
 async def test_group_without_channel_can_carry_files(migrated_db):
     """站内群没有通道：附件随便发，也不该多出一段通道规矩"""
     from app.database import async_session
-    from app.services.plugin.channel import files_supported, group_brief
+    from app.services.plugin.channel import channel_rules, files_supported
 
     async with async_session() as db:
         await _seed(db)
         assert await files_supported(db, 999) is True
-        assert await group_brief(db, 999) == ""
+        assert await channel_rules(db, 999) == ""
 
 
 async def test_send_file_tells_the_ai_that_qq_will_not_get_it(migrated_db):

@@ -51,18 +51,26 @@ AI 不该被每条消息唤醒。事件先过一层决策：**AI 自己写的规
 - 工具描述与 schema 说明只有**一处**（`decision_skill.rule_schema_desc()`），
   平台工具与世界链路共用同一份文案，避免加情景时漏改一处。
 
-## 4. 三态返回与 notify
+## 4. 返回与 notify 语义
 
 `run_decision_engine` 返回：
 
 | 情况 | 返回 | 调用方动作 |
 |------|------|-----------|
 | 未命中 | `{hit: False}` | 按原流程（唤醒判定/意愿评分） |
-| 命中，`notify=false` | `{hit: True, handled: True, reply}` | `reply` 非空则代发，**不唤醒** |
+| 判定阶段就出错 | `{hit: False, error, note}` | 同上；`note` 顺带说明"这不是没命中，是技能瞎了" |
+| 命中，`notify=false`，办成了 | `{hit: True, handled: True, reply}` | `reply` 非空则代发，**不唤醒** |
 | 命中，`notify=true` | `{hit: True, handled: False, name, result, note}` | **继续唤醒**，把 `note` 注入本轮上下文 |
+| 命中但**没办成** | `{hit: True, handled: False, name, result, note}` | 同上：事件交回本体，`note` 说清哪一步没成 |
 
-`note` 文案由 `decision_skill.notify_note` 唯一给出（"你的决策技能「X」已命中并执行，结果：…。
-这条消息仍需你亲自判断"），群消息链路注入到 `build_messages` 之后，闹钟链路注入到系统提示里。
+「没办成」= `do` 的返回里 `success=False`（脚本崩了、工具报错、脚本排队没轮上）。
+它**不**按"办完了"静默跳过：那样等于把这个事件吃掉——人还在等回应、申请还挂着，本体永远不知道。
+翻回 `handled=False` 就走原来的唤醒路径，由 `note` 说明是技能挂了，不是没人找它。
+
+`note` 文案有三处出口，都在 `decision_skill` 里各管一种情况：`notify_note`（要本体判断）、
+`failure_note`（没办成）、`engine_error_note`（判定出错）。群消息链路注入到 `build_messages` 之后，
+闹钟链路注入到系统提示里；**没人被唤醒的那些**（`mention_only` 拦下的群消息、入群退群这类没有唤醒
+链路的情景）由 `leave_ledger_notice` 记进账本——账本才是它一定会看到的地方。
 
 入群/退群这类情景**没有唤醒链路**（平台本来不为它叫 AI）：`notify=true` 只是把执行结果
 以账本通知（`notice`）留给那个 AI 下一轮看到，不会有人被立刻唤醒。
@@ -73,10 +81,13 @@ AI 不该被每条消息唤醒。事件先过一层决策：**AI 自己写的规
 |--------|------------------|---------------------------|
 | `reply_template` | 返回文本，由调用方代发（群消息/入群等群级情景发到群） | 同左 |
 | `call_tool` | `ToolRegistry.dispatch` —— 平台工具，**AI 自己的身份** | `run_world_tool` —— 世界工具，世界身份 |
-| `run_script` | `sandbox/agent_sandbox.run_agent_code` —— 在**自己的文件空间**里跑，禁网络/禁 fork | 世界沙箱（`skill_sandbox`，世界配额） |
+| `run_script` | `sandbox/agent_sandbox.run_agent_code` —— 在**自己的文件空间**里跑，禁网络/禁 fork；同一 AI 的脚本在这一层**串行**（一把锁只包执行段，等不到按失败算，于是翻回 `handled=False`） | 世界沙箱（`skill_sandbox`，世界配额）；世界侧不走那把 per-agent 锁 |
 | `silent` | 到此为止：`reply` 为空，调用方不代发、不唤醒本体（与 `notify=true` 互斥，校验时拒绝） | 同左 |
 
-脚本的返回值即"要说什么"：`stdout` 最后一行是 JSON 时取 `{"reply": "..."}`，由宿主代发。
+脚本的返回值即"要说什么"：从 `stdout` **最后一行往回找**第一个 JSON 对象，取 `{"reply": "..."}`，由宿主代发
+（脚本常在结果后头再 print 一句给人看的日志，只认最后一行会把要说的话吃掉）。
+什么都不 print = 这次只想改账本，正当的静默；print 了却给不出 `{"reply": ...}` 则按失败报回本体——
+格式写错了要让人看见，不能让它以为"说了但没人收到"。
 脚本的**事件上下文**走 `DECISION_CTX`（JSON 环境变量）：`json.loads(os.environ["DECISION_CTX"])`
 就是本次情景的全部字段（含 `sender_id` 与公共时间字段）——"按人分开记账"这类玩法靠的就是它
 （工具描述里写着这条，否则 AI 只会在脚本里把 sender_id 写死）。
@@ -89,7 +100,20 @@ AI 不该被每条消息唤醒。事件先过一层决策：**AI 自己写的规
 代发一律经 `decision_skill.send_group_reply`：标 `source="world"`（不回灌世界程序钩子），
 且 AI 唤醒队列只收人类消息，因此不存在"自己说一句又把自己叫醒"的环。
 
-## 6. 触发链路上的位置
+## 6. 试跑工具（`test_decision_skill`）
+
+`app/tools/decision.py` 的 `test_decision_skill`（描述来自 `decision_skill.test_rule_desc()`）能**不落库**地试一条规则——
+草稿规则或已存规则都行，省得“规则写完、等真事件来了才知道命中没有”。
+
+- 返回 `checked[{name, hit, reason, why}]`（每条规则为什么命中/没命中），外加 `hit` / `would`（真触发的话会做什么）/
+  `reply` / `wakes_owner`（会不会唤醒本体）。
+- `execute=false` 时 `run_script` 只回显不真跑：沙箱里置 `DRY_RUN=1`（`agent_sandbox.run_agent_code(dry_run=True)`），
+  真跑也不落外部效果。
+- 试跑不落库、不代发、不唤醒——只回答“这条规则在这么一条事件上会怎么样”。
+- 规则描述里教两种口诀（`rule_schema_desc()`）：整句才触发 `{"content_clean":"签到"}`；
+  提到就触发且不通知你（慎用，可能误触）`{"content_clean_contains":"签到"}`。
+
+## 7. 触发链路上的位置
 
 - **群消息**：决策层在 `mention_only` 拦截**之前**（AI 自写规则优先于平台默认兜底）。
 - **性能**：一条消息要给群里所有 AI 过一遍，规则按消息**批量预取**（`load_rules_map`，一条 in 查询），
@@ -97,7 +121,7 @@ AI 不该被每条消息唤醒。事件先过一层决策：**AI 自己写的规
   预取时把映射一并取出。
 - **不绑世界**：引擎不再要求 AI/群绑定世界。`world` 参数只服务群助手的 `call_tool`/`run_script`。
 
-## 7. 作用域（待落地）
+## 8. 作用域（待落地）
 
 技能挂在**实体**上（AI / 群助手），存储里没有群字段：现状是**一处配置、处处生效**——在哪个群 @ 它、
 说中关键词都会命中，`run_script` 的账本（AI 自己的文件空间）也共用同一份。要限定范围，现在只能靠条件
@@ -111,7 +135,7 @@ DSL 里的 `group_id`：由 AI 自己写，写漏了就是到处生效。
 
 原生作用域字段（引擎在命中前按帧 / 焦段过滤）尚未实现；在此之前 `group_id` 条件仍是唯一手段。
 
-## 8. 未落地
+## 9. 未落地
 
 | 情景 | 卡在哪 |
 |------|--------|
@@ -121,7 +145,7 @@ DSL 里的 `group_id`：由 AI 自己写，写漏了就是到处生效。
 > 日志或实际私信，取决于执行 do 之后两人是否已是好友（通过申请即成为好友，拒绝则发不出）。
 > 后者一律唤醒本体，唤醒链路见 `ai/alarm._process_world_event`。
 
-## 9. 验证
+## 10. 验证
 
 ```
 docker exec ai_group_backend bash -c 'export TEST_DATABASE_URL="${DATABASE_URL%/*}/${DATABASE_URL##*/}_test"; \
@@ -133,3 +157,9 @@ docker exec ai_group_backend bash -c 'export TEST_DATABASE_URL="${DATABASE_URL%/
 `silent`+`notify` 被拒、`notify=true` 带 note 继续唤醒、未知事件被拒、批量预取与逐个读同源、
 入群情景端到端代发、定时情景匹配、关键词三态（全等/相似/长度）与 `content_clean` 收令牌、
 相似阈值写错被拒、公共时间字段、`reply_template` 占位。
+本批新增：`test_a_reply_survives_a_trailing_log_line`（末行日志别把要说的话吃掉）、
+`test_a_broken_script_hands_the_event_back_with_the_reason`（脚本崩了交回本体）、
+`test_a_script_that_prints_no_json_is_not_silence`（print 了却给不出 reply 算失败）、
+`test_engine_failure_says_so_instead_of_looking_like_a_miss`（判定出错不是“没命中”）；
+另有 `test_sandbox_layers` 的 `test_same_agent_scripts_never_overlap` 与
+`test_script_that_never_gets_its_turn_fails_loudly`（per-agent 串行锁，见 `docs/dev/code_sandbox.md` §6）。

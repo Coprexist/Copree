@@ -94,7 +94,7 @@
 | `command` | 世界命令 | `{command, args}` |
 
 > 现状：除 `command` 外均已接入（`command` 不做——群消息链路没有斜杠命令入口，见
-> [决策层](../../dev/decision_layer.md) §7）；字段以该文 §2 为准，上表是设计时的列举。
+> [决策层](../../dev/decision_layer.md) §9）；字段以该文 §2 为准，上表是设计时的列举。
 
 ### 4.2 决策技能结构（Decision Skill）
 
@@ -152,6 +152,10 @@
 2. `when` 命中 → 执行 `do`：
    - `notify=false` → 程序处理完即止（`reply` 非空则代发，不唤醒本体）；
    - `notify=true` → 执行 `do` 后**继续唤醒本体**（结果作为 `note` 注入本轮上下文）；
+   - `notify=false` 但 `do` 没办成（`success=False`：脚本崩了、工具报错、脚本排队没轮上）→ 同样**唤醒本体**，
+     `note` 说清哪一步没成——事件不会被程序静默吃掉（现行口径见 [决策层](../../dev/decision_layer.md) §4）；
+   - 沙箱归属：AI 的 `run_script` 走 `agent_sandbox`（同一 AI 的脚本**串行**，一把锁只包执行段，等不到按失败算）；
+     群助手/世界侧走世界沙箱 `skill_sandbox`，**不走那把 per-agent 锁**。
 3. 全部未命中 → 走阶段一触发模式判定（`group_trigger_mode`）→ 决定是否唤醒本体。
 
 ### 4.4 安全与防循环

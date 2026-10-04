@@ -794,6 +794,11 @@ async def _maybe_trigger_ai_reply(
     # 群视界触发模式拦截：mention_only 时非 @ 消息不唤醒 LLM 本体
     # （会话帧维护已在上方完成，「有人找过」照常记录；世界程序感知通道不受影响）
     if world_trigger_mode == "mention_only" and not is_mentioned and not is_at_all and not is_announcement:
+        if decision_note:
+            # 技能没办成（或 notify=true）而这条又唤不醒它：账本是它一定会看到的地方，
+            # 不进账本它就永远以为技能还在替它看着
+            from app.services.world.decision_skill import leave_ledger_notice
+            await leave_ledger_notice(db, resolved_agent_id, group_id, decision_note)
         logger.info(f"🔕 群 {group_id} 群视界 mention_only，非 @ 消息不触发 {agent.name}(id={resolved_agent_id})")
         return
     # v2.0.6: 检查发送者是否为特别关心好友

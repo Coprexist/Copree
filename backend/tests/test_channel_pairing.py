@@ -385,7 +385,7 @@ async def test_group_binding_must_be_owned_and_joined(migrated_db):
                 await skill_bridge._unload_plugin(plugin_id)
 
 
-async def test_group_brief_reaches_groups_mapped_by_group_map(migrated_db):
+async def test_channel_rules_reach_groups_mapped_by_group_map(migrated_db):
     """给单个 QQ 群单独指定了落点的群，也要拿到通道规矩
 
     落点有两个来源：实例的默认落点群，和 group_map 里"这个 QQ 群去哪个 Copree 群"。
@@ -405,16 +405,16 @@ async def test_group_brief_reaches_groups_mapped_by_group_map(migrated_db):
                  "group_map": '{"QQGROUP-X": 8}'},
                 channel.instance_of(agent_id), db=db,
             )
-            assert "被动回复" in await channel.group_brief(db, 7)
-            assert "被动回复" in await channel.group_brief(db, 8), "映射落点的群也要有通道规矩"
-            assert await channel.group_brief(db, 999) == ""
+            assert "被动回复" in await channel.channel_rules(db, 7)
+            assert "被动回复" in await channel.channel_rules(db, 8), "映射落点的群也要有通道规矩"
+            assert await channel.channel_rules(db, 999) == ""
 
             for plugin_id in list(skill_bridge._loaded):
                 await skill_bridge._unload_plugin(plugin_id)
 
 
-async def test_group_brief_leaves_channel_facts_to_the_environment(migrated_db):
-    """群名/人数/简介只由环境段讲一次：brief 只讲规矩，不再重复第二遍"""
+async def test_channel_rules_leave_channel_facts_to_the_environment(migrated_db):
+    """群名/人数/简介只由环境段讲一次：规矩段只讲规矩，不再重复第二遍"""
     from app.database import async_session
     from app.services.infrastructure.plugin_registry import PluginRegistry, registry_key
     from app.services.plugin import channel, config as plugin_config, skill_bridge
@@ -444,7 +444,7 @@ async def test_group_brief_leaves_channel_facts_to_the_environment(migrated_db):
             key = registry_key("qq-channel", instance)
             PluginRegistry.register(_LiveChannel(key))
             try:
-                brief = await channel.group_brief(db, 7)
+                brief = await channel.channel_rules(db, 7)
                 assert "合欢宗藏经阁" not in brief and "115" not in brief and "只聊养猫" not in brief, brief
                 assert "被动回复" in brief, brief
                 assert await channel.channel_group_name(db, 7) == "合欢宗藏经阁"
@@ -612,7 +612,7 @@ async def test_channel_registry_is_manifest_driven():
     assert real["qq-napcat"]["kind"] == "qq-napcat"
     assert real["qq-napcat"]["label"] != real["qq-channel"]["label"]
 
-async def test_group_brief_tells_ai_the_channel_rules(migrated_db):
+async def test_channel_rules_tell_ai_the_channel_rules(migrated_db):
     """接了通道的群：AI 上下文里要有「我在群里只能被动回复」这句话
 
     不然它会答应「我待会儿在群里提醒你」，而腾讯自 2025-04-21 起下线了主动推送——
@@ -624,7 +624,7 @@ async def test_group_brief_tells_ai_the_channel_rules(migrated_db):
     with _FakePluginDir():
         async with async_session() as db:
             owner_id, _other, agent_id = await _seed(db)
-            assert await channel.group_brief(db, 999) == "", "没接通道的群不该多话"
+            assert await channel.channel_rules(db, 999) == "", "没接通道的群不该多话"
 
             skill_bridge.ensure_declared("qq-channel")
             await plugin_config.set_config(
@@ -632,17 +632,68 @@ async def test_group_brief_tells_ai_the_channel_rules(migrated_db):
                 {"app_id": "1", "client_secret": "2", "copree_group_id": "7"},
                 channel.instance_of(agent_id), db=db,
             )
-            brief = await channel.group_brief(db, 7)
+            brief = await channel.channel_rules(db, 7)
             assert "被动回复" in brief, brief
             assert "2025-04-21" in brief and "2 条" in brief, brief
-            # 两条通道限制也要讲清：@其他成员的内容不转发；QQ 里别人撤回我们收不到
-            assert "@其他成员" in brief and "撤回" in brief, brief
+            assert "撤回" in brief, brief
+            # 「@其他成员」是运行期观测（模式随时会变），只在尾部读数里，不进这段锁定文本：
+            # 锁进去就等于让每个群的前缀随时可能整份重算
+            assert "@其他成员" not in brief, brief
+            assert "@其他成员" in await channel.live_mention_rule(db, 7)
 
             for plugin_id in list(skill_bridge._loaded):
                 await skill_bridge._unload_plugin(plugin_id)
 
 
-async def test_group_brief_follows_the_observed_push_mode(migrated_db):
+async def test_channel_rules_ride_the_locked_environment(migrated_db):
+    """通道规矩并进环境快照：锁定态只落通知，管理员改绑那一刻**前缀字节不动**
+
+    这段话写进 message 0，改绑若当场重写它，从它往后整份上下文（含整个账本）都要按未命中重算。
+    所以跟插件报的环境同一条口径：先落一条通知，解锁点（apply_environment）才对位。
+    """
+    from app.database import async_session
+    from app.models.agent import Agent
+    from app.services.agent.state_stack_service import ensure_active_frame
+    from app.services.history.context_sync import context_ref
+    from app.services.plugin import channel, config as plugin_config, skill_bridge
+    from app.services.plugin.environment import environment_turn
+    from app.utils.pure.plugin_env import render_channel_rules
+
+    with _FakePluginDir():
+        async with async_session() as db:
+            _owner_id, _other, agent_id = await _seed(db)
+            agent = await db.get(Agent, agent_id)
+            skill_bridge.ensure_declared("qq-channel")
+            instance = channel.instance_of(agent_id)
+            await plugin_config.set_config(
+                "qq-channel",
+                {"app_id": "1", "client_secret": "2", "copree_group_id": "7"},
+                instance, db=db,
+            )
+            await ensure_active_frame(db, agent_id, "group_chat", context_ref(group_id=7),
+                                      title="测试群", actor_name="某人")
+
+            locked, note = await environment_turn(db, agent, 7)
+            assert note is None, "首次只建立基线，不发通知"
+            assert "被动回复" in render_channel_rules(locked), locked
+            again, unchanged = await environment_turn(db, agent, 7)
+            assert unchanged is None and again == locked, "没变就必须是同一份字节，前缀才命中"
+
+            # 管理员改绑：这个群不再落到那条通道上
+            await plugin_config.set_config(
+                "qq-channel",
+                {"app_id": "1", "client_secret": "2", "copree_group_id": "999"},
+                instance, db=db,
+            )
+            kept, moved = await environment_turn(db, agent, 7)
+            assert kept == locked, "锁定态那份不能变"
+            assert moved and "【通道变化】" in moved["content"], moved
+
+            for plugin_id in list(skill_bridge._loaded):
+                await skill_bridge._unload_plugin(plugin_id)
+
+
+async def test_live_mention_rule_follows_the_observed_push_mode(migrated_db):
     """「@其他成员」那条规矩跟着群的实际模式走：观测到就直说，观测不到两句都讲（不能猜）
 
     2026-09-26 真机：全量模式开着时正文是完整的、@ 会显示成 <@!id>；插件靠事件类型判，
@@ -681,7 +732,7 @@ async def test_group_brief_follows_the_observed_push_mode(migrated_db):
             ):
                 PluginRegistry.register(_LiveChannel(key, "测试通道", mode))
                 try:
-                    brief = await channel.group_brief(db, 7)
+                    brief = await channel.live_mention_rule(db, 7)
                 finally:
                     PluginRegistry.unregister(key)
                 assert must_have in brief, (mode, brief)

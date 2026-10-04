@@ -74,55 +74,6 @@ async def mark_interrupted(
         logger.info(f"📋 AI({agent_id}) 任务被中断: 「{ws.current_task[:50]}」→ 原因: {reason}")
 
 
-async def get_recovery_context(
-    db: AsyncSession,
-    agent_id: int,
-) -> str | None:
-    """
-    获取"恢复上下文"——如果 AI 之前被打断且还在恢复窗口内，
-    返回一段提示文字，系统会注入到 AI 的对话上下文中。
-    同时清除中断标记（因为 AI 现在要处理新消息了）。
-    """
-    db = _ensure_repo(db)
-    result = await db.execute(
-        select(AgentWorkspace).where(AgentWorkspace.agent_id == agent_id)
-    )
-    ws = result.scalar_one_or_none()
-
-    if ws is None or ws.current_task is None or ws.interrupted_at is None:
-        return None
-
-    # 检查是否在恢复窗口内
-    now = utc_now()
-    if now - ws.interrupted_at > timedelta(minutes=RECOVERY_WINDOW_MINUTES):
-        # 太久远了，清除旧任务
-        ws.current_task = None
-        ws.current_task_at = None
-        ws.interrupted_at = None
-        ws.interruption_reason = None
-        await db.flush()
-        return None
-
-    task = ws.current_task
-    reason = ws.interruption_reason or "未知原因"
-
-    # 清除中断标记（但保留 current_task，AI 可能还要继续）
-    ws.interrupted_at = None
-    ws.interruption_reason = None
-    ws.updated_at = now
-    await db.flush()
-
-    return (
-        f"\n\n## ⚠️ 中断恢复提醒\n"
-        f"你之前在忙一件事，被「{reason}」打断了：\n"
-        f"**「{task}」**\n\n"
-        f"现在你处理完了打断你的事。如果之前的事还需要继续，你可以：\n"
-        f"- 调用 set_alarm 设一个闹钟提醒自己回头继续\n"
-        f"- 调用 store_memory 记下当前进度（以免下次忘了）\n"
-        f"- 如果不需要继续了，忽略这条提醒即可\n"
-    )
-
-
 async def get_workspace_status(db: AsyncSession, agent_id: int) -> dict:
     """获取 AI 的当前工作区状态"""
     db = _ensure_repo(db)

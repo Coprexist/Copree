@@ -36,8 +36,9 @@ async def environment(self, *, origin: str | int) -> dict[str, str | int | bool]
   数据的插件应先缓存再返回（例如 QQ 插件读它自己的日缓存）。平台对此有强制上限：超过
   `ENV_TIMEOUT_SECONDS` 即按「丢弃本次」处理（与异常同路径），卡住不会拖住消息链路；每个实例
   每轮只问一次。
-- 长文本不要进环境段：环境段每轮进前缀，渲染结果整体有长度上限（`ENV_RENDER_MAX`），超出截断。
-  群简介这类长内容留在资料卡与能力说明里，不进这里。
+- 长文本不要进环境段：环境段每轮进前缀，**插件渲染的**结果整体有长度上限（`ENV_RENDER_MAX`），超出截断。
+  群简介这类长内容留在资料卡与能力说明里，不进这里。（平台自己塞的 `channel_rules` 是另一段，
+  不受这条上限约束，见 §4.1。）
 
 ## 3. 保留键 `text`
 
@@ -73,6 +74,22 @@ async def environment(self, *, origin: str | int) -> dict[str, str | int | bool]
 
 `full_mode` 由插件观测消息类型得到，因此**缺失 → 有值会被判定为一次环境变更**（观测到的那一刻才
 算数）。通知晚一拍是正常的，不是平台漏判。
+
+## 4.1 平台填入的保留键 `channel_rules`
+
+环境快照里除插件上报的环境，还有**平台自己塞的一条**：`channel_rules`（`ENV_RULES_KEY`）——这个群接没接
+外部通道的那段规矩（只能被动回复、接口窗口、撤回不同步、看不到 Copree 侧 ID、发不了文件…）。
+**插件不要写这个键**，写了会被平台覆盖。
+
+它在两层里的身份与 `text` 不同：
+
+- **比较层**：普通键——和别的键一起规范化、一起比，`canonical` / `changed` 判定照常算它；
+- **渲染层**：平台自己单独成段（`render_channel_rules`），**不进** `_ENV_RENDERERS`、**不受** `ENV_RENDER_MAX`
+  约束（那条上限管的是插件渲染的那一行）。
+
+因此它只装**不变的事实**：插件改自己的声明、或管理员在控制台改绑通道 → 只落一条账本通知
+（【环境变化】… 和/或【通道变化】…），写进 message 0 的那份**帧内字节不动**；到**解锁点**（compact /
+超时压缩）才对齐。
 
 ## 5. 判定（一条路径）
 
@@ -128,6 +145,6 @@ canonical(v) = json.dumps(
 | 契约方法 `ServicePlugin.environment` | 已落地（默认返回 `None` = 不提供环境） |
 | `api.py` 统一导出 `ENV_TEXT_KEY` / `ENV_PUBLIC_KEYS` | 已落地 |
 | 校验 / 规范化 / 判定 / 渲染（`utils/pure/plugin_env.py`） | 已落地，契约见 `tests/test_plugin_environment_api.py` |
-| 取值与判定（`services/plugin/environment.py`）、帧落点 `env_locked` / `env_notified` | 已落地，见 `tests/test_plugin_environment_sync.py` |
+| 取值与判定（`services/plugin/environment.py`）、帧落点 `env_locked` / `env_notified`（快照含平台那条通道规矩 `channel_rules`） | 已落地，见 `tests/test_plugin_environment_sync.py` |
 | 锁定段接线（`ai/llm.py` 群聊路径）与解锁点（`UNLOCK_STEPS` 的 `apply_environment`） | 已落地 |
 | 插件实现 `environment()`（QQ 插件为首个，走接入与收敛） | 未落地 |

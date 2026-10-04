@@ -539,7 +539,37 @@ async def _collect_injection_events(db, agent, context_ref: str, entries: list[d
         events.append(make_entry("notice", cap_notice, flags={"drop_on_unlock": True}))
     events += await _deliver_handover(db, agent, entries)
     events += await _deliver_focus_notices(db, agent)
+    events += await _deliver_friend_requests(db, agent, entries)
     return events
+
+
+async def _deliver_friend_requests(db, agent, entries: list[dict]) -> list[dict]:
+    """待处理好友申请：**投递 = 落一条 notice**（带申请 id），处理掉/撤回后补一条作废。
+
+    为什么不是每轮在尾部念一遍：申请可能挂好几天，尾部块每轮重拼就是每轮都付一次钱；
+    它是"有人来敲过门"这件事，不是一份读数。幂等与撤下都借账本自己的 ref（同 _deliver_handover），
+    不另立游标表——多一份状态就多一处漂移。
+    """
+    if getattr(agent, "ai_type", None) not in ("resonance", "general", "semi_general"):
+        return []
+    try:
+        from app.repositories.friend_repo import SQLAlchemyFriendRepository
+        from app.services.social.friend_service import get_pending_friend_requests_for_ai
+        from app.utils.pure.friend_request import (
+            delivered_request_ids, delivery_entry, retired_entry,
+        )
+
+        reqs = await get_pending_friend_requests_for_ai(
+            friend_repo=SQLAlchemyFriendRepository(db), agent_user_id=agent.user_id)
+        delivered = delivered_request_ids(entries)
+        live = {int(r["id"]) for r in reqs if r.get("id") is not None}
+        out = [delivery_entry(r) for r in reqs
+               if r.get("id") is not None and int(r["id"]) not in delivered]
+        out += [retired_entry(i) for i in sorted(delivered - live)]
+        return out
+    except Exception as e:
+        logger.warning(f"好友申请投递失败（非致命）: {e}")
+        return []
 
 
 async def _deliver_focus_notices(db, agent) -> list[dict]:
@@ -777,30 +807,9 @@ async def _build_current_context(
     now = datetime.now(tz)
     now_str = now.strftime(f"%Y-%m-%d %H:%M {tz.key}")
     context = f"## 当前时间\n{now_str}\n"
-    if is_dm:
-        context += (
-            "- **重要**：当前在 DM 中，回复请用 send_dm 或 send_gm 发送内容。\n"
-        )
-        context += (
-            "- **注意**：你的推理/思考过程对方看不见，"
-            "必须调 send_dm 或 send_gm 才能把内容发出去（除非你不想发）！\n"
-        )
-        context += (
-            "- **支持**：消息中可用 Markdown，含表格、数学公式 (\(LaTeX\))、"
-            "Mermaid 图表 (\`\`\`mermaid)、任务列表、删除线等。\n"
-        )
-    else:
-        context += (
-            f"- **重要**：当前在群聊中，回复请用 send_gm 或 send_dm 发送内容。\n"
-        )
-        context += (
-            "- **注意**：你的推理/思考过程群成员看不见，"
-            "必须调 send_gm 或 send_dm 才能把内容发出去（除非你不想发）！\n"
-        )
-        context += (
-            "- **支持**：消息中可用 Markdown，含表格、数学公式 (\(LaTeX\))、"
-            "Mermaid 图表 (\`\`\`mermaid)、任务列表、删除线等。\n"
-        )
+    # 这三条曾经在这里各写一份（怎么发、思考看不见、支持 Markdown）：怎么发与"思考看不见"
+    # 是锁定前缀里「认知模型」同一件事（消息只认工具），这里只留时间；Markdown 是能力声明，
+    # 已挪进 core_identity 的消息格式段——尾部每轮按未命中计价，永不变的话别放这儿。
     # Federation context
     if is_federated:
         context += (
@@ -1124,11 +1133,16 @@ async def build_messages(
     # 本轮的环境判定一并在这里做掉：一次读帧、一次问通道，渲染与通知共用这一次取值。
     from app.services.plugin.channel import served_instances as _served_instances
     from app.services.plugin.environment import environment_turn
-    from app.utils.pure.plugin_env import render_environment
+    from app.utils.pure.plugin_env import render_channel_rules, render_environment
     _served = await _served_instances(db, group_id)   # 一轮取一次：通道规矩与环境共用
     _env_locked, _env_entry = await environment_turn(db, agent, group_id, served=_served)
     if _env_locked:
         system_prompt = f"{system_prompt}\n\n{render_environment(_env_locked)}"
+        # 通道规矩是同一份快照里的第二条（平台自己那条）：它跟着环境一起锁定、一起只落通知，
+        # 所以这里只是同一份取值的第二个渲染出口。随群播报模式变的那条 @ 规矩是运行期读数，沉在尾部
+        _rules = render_channel_rules(_env_locked)
+        if _rules:
+            system_prompt = f"{system_prompt}\n\n{_rules}"
 
     # ✨ 人格锚点注入（只读，始终在最前面 — 设计文档 6.2）
     system_prompt = await _inject_personality_anchor(db, agent, system_prompt, language)
@@ -1162,32 +1176,15 @@ async def build_messages(
         except Exception as e:
             logger.warning(f"状态栈摘要注入失败（非致命）: {e}")
 
-    # 📡 外部通道的规矩（这个群接没接 QQ、接了哪条）：让 AI 知道"我在群里只能被动回复"
+    # 📡 通道规矩里唯一随运行期变的一条（@其他成员会不会断在中间）：其余在锁定段里
     if group_id:
         try:
             from app.services.plugin import channel as channel_service
-            brief = await channel_service.group_brief(db, group_id, served=_served)
-            if brief:
-                tail_blocks.append(brief)
+            mention_rule = await channel_service.live_mention_rule(db, group_id, served=_served)
+            if mention_rule:
+                tail_blocks.append(mention_rule)
         except Exception as e:
-            logger.warning(f"通道能力说明注入失败（非致命）: {e}")
-
-    # 📨 待处理好友申请（AI 感知；动态内容沉底，缓存友好）
-    if getattr(agent, "ai_type", None) in ("resonance", "general", "semi_general"):
-        try:
-            from app.services.social.friend_service import get_pending_friend_requests_for_ai
-            from app.repositories.friend_repo import SQLAlchemyFriendRepository
-            reqs = await get_pending_friend_requests_for_ai(
-                friend_repo=SQLAlchemyFriendRepository(db), agent_user_id=agent.user_id,
-            )
-            if reqs:
-                lines = ["\n\n## 📨 待处理好友申请（有人申请加你为好友）"]
-                for r in reqs:
-                    lines.append(f"- 来自「{r['name']}」：{r['message']}（申请 id: {r['id']}，可调 handle_friend_request 处理）")
-                lines.append("你可以回复对方，或视情况处理（是否通过由你与用户沟通后决定）。")
-                tail_blocks.append("\n".join(lines))
-        except Exception as e:
-            logger.warning(f"好友申请注入失败（非致命）: {e}")
+            logger.warning(f"通道播报模式说明注入失败（非致命）: {e}")
 
     # message 0 之后直接进对话历史：这里曾经有个"当轮注入区"（dynamic_readings），
     # 每轮重算的块放在历史之前会把后面整段前缀缓存打掉——能力索引已冻结进 message 0，
@@ -1204,7 +1201,9 @@ async def build_messages(
             logger.info(f"  AI {agent.name}: 加入 {len(cross_msgs)} 条多会话上下文")
 
     # ── 当前群聊（最后一个会话标题，位置即语义）──
-    messages.append({"role": "system", "content": f"在群聊「{group_name}」(id={group_id})中："})
+    # 「点名环境」就点在这一行：哪个会话 + 这个会话该用哪个工具。它是每轮同样的字节（缓存里），
+    # 也是全请求唯一能说清"你现在在哪"的地方——message 0 是静态段，不可能知道这次是群还是私信。
+    messages.append({"role": "system", "content": f"在群聊「{group_name}」(id={group_id})中：发言用 send_gm。"})
 
     # ── 获取 AI 的 last_read_at（取未读消息用）──
     last_read_at = None
@@ -1329,38 +1328,8 @@ async def build_messages(
     if last_read_at is not None:
         await chat_api.update_last_read(db, group_id, "ai", agent.user_id or 0)
 
-    # ── 注入上一轮工具调用中的错误记录（同 DM 逻辑） ──
-    try:
-        from app.models.conversation_log import ConversationLog as ConvLog
-        import json as _json
-        last_log = await db.execute(
-            select(ConvLog)
-            .where(ConvLog.agent_id == agent.id, ConvLog.group_id == group_id, ConvLog.conversation_type == "group")
-            .order_by(ConvLog.created_at.desc())
-            .limit(1)
-        )
-        log_entry = last_log.scalar_one_or_none()
-        if log_entry and log_entry.messages:
-            tc_id_to_name = {}
-            for m in log_entry.messages:
-                if m.get("role") == "assistant" and m.get("tool_calls"):
-                    for tc in m["tool_calls"]:
-                        tc_id_to_name[tc["id"]] = tc.get("function", {}).get("name", "?")
-            errors = []
-            for m in log_entry.messages:
-                if m.get("role") == "tool":
-                    result = _json.loads(m.get("content", "{}")) if isinstance(m.get("content"), str) else m.get("content", {})
-                    if result.get("error"):
-                        tc_name = tc_id_to_name.get(m.get("tool_call_id", ""), "?")
-                        err_msg = result.get("message", "")[:120]
-                        errors.append(f"- {tc_name}: {err_msg}")
-            if errors:
-                messages.append({
-                    "role": "system",
-                    "content": "## 上一轮工具调用失败记录\n以下工具在上一轮调用中返回了错误，请参考修复：\n" + "\n".join(errors),
-                })
-    except Exception as e:
-        logger.warning(f"注入工具错误记录失败（非致命）: {e}")
+    # 上一轮工具失败不再当轮 append：账本的 [本轮工具] 条目已记了同一笔（含失败原因，
+    # 见 utils/pure/history.tool_ledger_note）。同一件事两处说，而且它在尾部——每轮按未命中计价。
 
     # 尾部动态块（顺序即语义：先「我该干什么」，再「这里的规矩」，与上一段对话的尾巴分开放）
     for block in tail_blocks:
@@ -1610,22 +1579,6 @@ async def build_dm_messages(
     except Exception as e:
         logger.warning(f"DM 会话列表注入失败（非致命）: {e}")
 
-    # 📨 待处理好友申请（AI 感知；动态内容沉底）
-    try:
-        from app.services.social.friend_service import get_pending_friend_requests_for_ai
-        from app.repositories.friend_repo import SQLAlchemyFriendRepository
-        reqs = await get_pending_friend_requests_for_ai(
-            friend_repo=SQLAlchemyFriendRepository(db), agent_user_id=agent.user_id,
-        )
-        if reqs:
-            lines = ["\n\n## 📨 待处理好友申请（有人申请加你为好友）"]
-            for r in reqs:
-                lines.append(f"- 来自「{r['name']}」：{r['message']}（申请 id: {r['id']}，可调 handle_friend_request 处理）")
-            lines.append("你可以回复对方，或视情况处理（是否通过由你与用户沟通后决定）。")
-            tail_blocks.append("\n".join(lines))
-    except Exception as e:
-        logger.warning(f"DM 好友申请注入失败（非致命）: {e}")
-
     # message 0 之后直接进对话历史：这里曾经有个"当轮注入区"（dynamic_readings），
     # 每轮重算的块放在历史之前会把后面整段前缀缓存打掉——能力索引已冻结进 message 0，
     # 其余当轮事实（技能、任务、状态、时间）一律沉到尾部读数或账本条目
@@ -1679,43 +1632,8 @@ async def build_dm_messages(
     if _n_img:
         messages.append({"role": "system", "content": image_note(_n_img)})
 
-    # ── 注入上一轮工具调用中的错误记录 ──
-    # AI 的工具调用结果存在 ConversationLog 表中，DMMessage 只存了通过 send_dm 发出去的内容。
-    # 如果工具报错了，AI 可能没有把错误信息发出去，下轮上下文就丢了。
-    # 这里补上最近的工具错误，让 AI 知道自己上一轮干了什么。
-    try:
-        from app.models.conversation_log import ConversationLog as ConvLog
-        import json as _json
-        last_log = await db.execute(
-            sa_select(ConvLog)
-            .where(ConvLog.agent_id == agent.id, ConvLog.session_id == session_id)
-            .order_by(ConvLog.created_at.desc())
-            .limit(1)
-        )
-        log_entry = last_log.scalar_one_or_none()
-        if log_entry and log_entry.messages:
-            # 建立 tool_call_id → tool_name 的映射
-            tc_id_to_name = {}
-            for m in log_entry.messages:
-                if m.get("role") == "assistant" and m.get("tool_calls"):
-                    for tc in m["tool_calls"]:
-                        tc_id_to_name[tc["id"]] = tc.get("function", {}).get("name", "?")
-            # 提取错误信息
-            errors = []
-            for m in log_entry.messages:
-                if m.get("role") == "tool":
-                    result = _json.loads(m.get("content", "{}")) if isinstance(m.get("content"), str) else m.get("content", {})
-                    if result.get("error"):
-                        tc_name = tc_id_to_name.get(m.get("tool_call_id", ""), "?")
-                        err_msg = result.get("message", "")[:120]
-                        errors.append(f"- {tc_name}: {err_msg}")
-            if errors:
-                messages.append({
-                    "role": "system",
-                    "content": "## 上一轮工具调用失败记录\n以下工具在上一轮调用中返回了错误，请参考修复：\n" + "\n".join(errors),
-                })
-    except Exception as e:
-        logger.warning(f"注入工具错误记录失败（非致命）: {e}")
+    # 上一轮工具失败不再当轮 append：账本的 [本轮工具] 条目已记了同一笔（含失败原因，
+    # 见 utils/pure/history.tool_ledger_note）。同一件事两处说，而且它在尾部——每轮按未命中计价。
 
     # 能力变更通知已在上面的历史段落成账本条目了（b-2：DM 与群聊同一套）
 

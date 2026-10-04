@@ -12,7 +12,15 @@ import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.utils.pure.plugin_env import EnvContractError, changed, normalize, render_environment
+from app.utils.pure.plugin_env import (
+    ENV_RULES_KEY,
+    EnvContractError,
+    canonical,
+    changed,
+    normalize,
+    render_channel_rules,
+    render_environment,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +70,43 @@ async def current_environment(db: AsyncSession, group_id: int, *, served: list |
     return merged or None
 
 
+async def environment_snapshot(db: AsyncSession, group_id: int, *, served: list | None = None) -> dict | None:
+    """这个会话当前的环境快照 = 插件报的环境 + 平台自己那条（通道规矩）。
+
+    两处取值——每轮的 environment_turn 与解锁点的 apply_environment——必须拿到同一份：
+    解锁点直接问 current_environment 的话，对齐时会把通道规矩这条平台自己的事实抹掉。
+    """
+    from app.services.plugin.channel import channel_rules
+
+    env = await current_environment(db, group_id, served=served)
+    rules = await channel_rules(db, group_id, served=served)
+    if not rules:
+        return env
+    return {**(env or {}), ENV_RULES_KEY: rules}
+
+
+def _change_text(locked: dict | None, current: dict | None) -> str:
+    """变更通知：说清到底变了什么。
+
+    为什么要把通道规矩整段带上：写进前缀的那份锁定态不变，AI 若只看到"环境有变化"，
+    就不知道是群名人数在动还是"这个群不再接 QQ 了"这种要改行为的事。通知是账本条目，只付一次。
+    """
+
+    def facts(value: dict | None) -> dict | None:
+        return {k: v for k, v in (value or {}).items() if k != ENV_RULES_KEY} or None
+
+    lines: list[str] = []
+    if canonical(facts(locked)) != canonical(facts(current)):
+        lines.append(f"【环境变化】{render_environment(facts(current))}")
+    rules_before, rules_now = render_channel_rules(locked), render_channel_rules(current)
+    if rules_before != rules_now:
+        lines.append("【通道变化】" + (
+            f"这个群的通道规矩变了，以这条为准：\n{rules_now}" if rules_now
+            else "这个群不再接外部通道了，之前那些通道规矩不用再管。"
+        ))
+    return "\n".join(lines) or f"【环境变化】{render_environment(current)}"
+
+
 async def environment_turn(
     db: AsyncSession, agent, group_id: int | None, *, served: list | None = None,
 ) -> tuple[dict | None, dict | None]:
@@ -69,6 +114,7 @@ async def environment_turn(
 
     一次读帧、一次问通道，两处用途（渲染前缀段、判定要不要通知）共用这一次取值——
     分成两个函数各自读一遍状态栈，每轮就多一次 DB 往返，而这是每轮都付的钱。
+    快照里除了插件报的环境，还有平台自己那条通道规矩（见 environment_snapshot）。
 
     会话帧首次取值只建立基线、不发通知（见 read_frame_env）。发生变更时先推进已告知值
     （去重依据），写进前缀的那一份保持不变——锁定态只落通知，解锁点
@@ -82,7 +128,7 @@ async def environment_turn(
     from app.utils.pure.history import make_entry
 
     ref = context_ref(group_id=group_id)
-    current = await current_environment(db, group_id, served=served)
+    current = await environment_snapshot(db, group_id, served=served)
     established, locked, notified = await read_frame_env(db, agent.id, ref)
     if not established:
         await write_frame_env(db, agent.id, ref, locked=current, notified=current)
@@ -90,5 +136,4 @@ async def environment_turn(
     if not changed(notified, current):
         return locked, None
     await write_frame_env(db, agent.id, ref, locked=locked, notified=current)
-    text = f"【环境变化】{render_environment(current)}"
-    return locked, make_entry("notice", text, flags={"drop_on_unlock": True})
+    return locked, make_entry("notice", _change_text(locked, current), flags={"drop_on_unlock": True})

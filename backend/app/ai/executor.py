@@ -849,15 +849,13 @@ async def _tool_call_loop(
                                 await chat_api.broadcast_to_group(group_id, _typing_event)
                         except Exception:
                             pass
-                    # 任务摘要追踪（通过 ToolRegistry 获取，找不到时回退到通用摘要）
+                    # 任务摘要：只有工具自己声明了"这轮在干什么"才算任务（get_task_summary）。
+                    # 曾经用工具名兜底，于是线上留下了「当前任务：调用工具 pop_state」这种幻影任务：
+                    # 它会一直挂着，每来一条消息就把"被打断"的时间戳刷新一遍，而 AI 什么也没接。
                     task_summary = _get_tool_task_summary(tool_name, arguments)
-                    if not task_summary:
-                        task_summary = f"调用工具 {tool_name}"
                     result = await dispatch_tool_call(db, agent.id, group_id, tool_name, arguments, context)
                     if task_summary:
                         last_task = task_summary
-                        if isinstance(result, dict):
-                            result["__task"] = task_summary
                     _pending_results.append({"tc_id": tc_id, "result": result})
                     # 工具总账：工具名 + 失败原因或工具自报的摘要——轮末封存为一条 tool 条目
                     _tool_log.append({"name": tool_name, "note": tool_ledger_note(result)})
@@ -1146,7 +1144,8 @@ async def _tool_call_loop(
                 )
                 _self_ended = True
                 await _seal(response.get("reasoning_content") or "")
-                if last_task:
+                # 与另外三个出口同一条口径：没说出口的轮次不该留下"任务"（见文件末尾那条注释）
+                if last_task and _has_sent_message:
                     try:
                         from app.services.agent.workspace_service import save_current_task
                         from app.services.agent.state_stack_service import persist_last_task_as_state
@@ -1541,8 +1540,8 @@ async def _unlock_context(db, agent, *, group_id, session_id, conversation_type,
         # 环境：解锁点把写进前缀的那份对齐到现值。锁定态只落通知、字节不动；这里上下文
         # 本来就重建了，换新零成本。DM 没有环境来源（通道按群服务），传 None 即清空。
         from app.services.agent.state_stack_service import write_frame_env
-        from app.services.plugin.environment import current_environment
-        current = await current_environment(db, group_id) if group_id else None
+        from app.services.plugin.environment import environment_snapshot
+        current = await environment_snapshot(db, group_id) if group_id else None
         await write_frame_env(db, agent.id, ref, locked=current, notified=current)
 
     runners = {

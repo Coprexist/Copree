@@ -41,12 +41,13 @@
    时效刻度是 `agents.llm_call_count`（这个 AI 所有状态帧加起来烧掉的调用数），
    不是墙上时间——时间量不出"它还记不记得"（三天没被叫醒 vs 一小时烧 40 次调用）。
    过期只决定**还能不能投递**（清除过时便签：AI 一直忙工作时就不会再收到它）。
-2. **投递副本**：会话状态帧的 `notes` 字段（`note_copy`）。投递时抄一份进帧，
-   此后每轮由 `format_frame_notes` 渲染出**字节完全相同**的块。
+2. **投递副本**：会话状态帧的 `notes` 字段（`note_copy`）是「该会话投过没有」的锚点。
+   投递本身由 `app/ai/llm.py: _deliver_frame_notes` 落成**账本里的一次性条目**
+   （`ref=note:<id>`，账本里有了就不再投），撤下补一条同批通知。
 
-**进上下文的姿势（关键，对齐锁）**：便签块固定在 **message 0 之后、会话头之前**
-（`app/ai/llm.py: _frame_notes_prefix`）。位置固定 + 内容固定 → 每轮前缀完全一致 →
-缓存命中；它就这样"躺在上下文里"，不重复花 token。
+**进上下文的姿势（关键，对齐锁）**：便签不再是 **message 0 之后、会话头之前**的**前缀块**
+（`_frame_notes_prefix` 已退场），而是账本条目——历史属于前缀，位置固定 + 内容固定 →
+每轮前缀完全一致 → 缓存命中；带 `drop_on_unlock`，只活到解锁点。
 
 - **只渲染一次**：状态帧是便签的"抽屉"，不是第二个出口——`format_state_stack_summary`
   只读 doing/todo/plan/情感/handoff，从不读 `notes`（回归测试
@@ -108,5 +109,10 @@
 - `app/utils/pure/cross_state_note.py` / `app/services/agent/cross_state_note_service.py`：
   便签纯逻辑与投递
 - `app/tools/self_management/cross_state_note.py`：AI 侧工具
-- `app/ai/llm.py`：`_inject_cross_state_context`（尾巴，尾部）、`_frame_notes_prefix`（便签，前缀）
+- `app/ai/llm.py`：`_inject_cross_state_context`（尾巴，尾部）、`_deliver_frame_notes`（便签，账本一次性条目）、
+  `_deliver_friend_requests`（好友申请，挂在 `_collect_injection_events` 里）
+- **待处理好友申请**（本批新增，`_collect_injection_events` 的一个来源）：`_deliver_friend_requests` 群聊与私信
+  两条链路共用；一条申请 = 账本里一条 notice（ref `friend_request:<id>`，带申请 id 与留言），只投一次；
+  处理掉 / 对方撤回后补一条作废通知（`drop_on_unlock`，只活到解锁）；幂等依据是账本自己的 ref，
+  不另立游标表。文案与幂等键的唯一出处是 `backend/app/utils/pure/friend_request.py`。
 - 测试：`tests/test_state_handoff.py` / `tests/test_cross_state_note.py`

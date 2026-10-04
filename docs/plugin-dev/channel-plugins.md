@@ -176,8 +176,13 @@ wake_dm_ai(session_id, payload, sender_id=发消息的人, sender_type="human")
 
 **落点规则只有一份**（`app/utils/pure/channel_landing.py`）：一个通道侧群落到哪个 Copree 群 =
 先查映射表（配置键 `group_map`，通道侧群标识 → Copree 群 id），没有就落到实例的默认落点
-（`copree_group_id`）。插件决定落库去哪、平台判断「这个群接没接通道」（`group_brief`）都用
+（`copree_group_id`）。插件决定落库去哪、平台判断「这个群接没接通道」（`channel_rules`）都用
 `landing_group` / `serves_group`，两边各写一遍就会出现「消息落在这个群、平台却说这个群没接通道」。
+
+**给 AI 的通道规矩分两段，作者要分清谁定**：`channel_rules`（这个群接没接通道、只能被动回复、接口窗口、
+撤回不同步、发不了文件…）只由**你的声明 + 管理员在控制台的绑定**算出，进**锁定前缀**——声明变了就是
+前缀变了。唯一随运行期变、走**尾部读数**的是 `live_mention_rule`（「@其他成员会不会断在中间」，问活着的
+实例的 `observed_full_mode`）——问不到就把两种情形都讲清，不猜。
 
 **通道侧的群名**（可选，但用户很需要）：通道消息载荷里通常只有群标识，没有群名——一个 AI 接两个群时，
 两个落点群默认同名，界面和 AI 都只能靠 id 分辨。有查询接口的通道（QQ：`GET /v2/groups/{openid}/info`）

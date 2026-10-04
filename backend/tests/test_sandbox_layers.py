@@ -3,6 +3,7 @@
 任一条隔离松掉都等于把宿主暴露给 AI 写的脚本。设计见 docs/dev/code_sandbox.md。
 """
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -149,6 +150,51 @@ async def test_world_trigger_runs_entry_handle():
         assert not missing["success"] and "不存在" in missing["reason"], missing
     finally:
         _cleanup(workdir, ["main.py", "__pycache__"])
+
+async def test_same_agent_scripts_never_overlap():
+    """同一个 AI 的脚本串行：读-改-写不串行就是两份脚本各读旧账本再各写一遍，账直接丢一次
+
+    决策技能、本体的 run_script、闹钟情景能从不同群/不同事件同时起同一个 AI 的脚本，
+    接话判定只按 (AI × 群) 串行，挡不住这种并发——所以锁加在沙箱这一层。
+    """
+    workdir = agent_dir(PROBE_ID)
+    code = (
+        "import json, os, time\n"
+        "p = os.path.join(os.environ['AGENT_DIR'], 'probe_counter.json')\n"
+        "try:\n"
+        "    n = json.load(open(p))['n']\n"
+        "except Exception:\n"
+        "    n = 0\n"
+        "time.sleep(0.5)\n"          # 不加锁时两边都在睡眠前读到同一个 n
+        "json.dump({'n': n + 1}, open(p, 'w'))\n"
+        "print(json.dumps({'reply': str(n + 1)}))\n"
+    )
+    try:
+        results = await asyncio.gather(
+            run_agent_code(PROBE_ID, code=code),
+            run_agent_code(PROBE_ID, code=code),
+        )
+        assert all(r["success"] for r in results), results
+        assert json.loads((workdir / "probe_counter.json").read_text())["n"] == 2, results
+    finally:
+        _cleanup(workdir, ["probe_counter.json"])
+
+
+async def test_script_that_never_gets_its_turn_fails_loudly():
+    """等不到文件空间就说等不到：宁可这次不跑，也不能让调用方以为脚本跑过了"""
+    from app.services.sandbox import agent_sandbox
+
+    lock = agent_sandbox.agent_lock(PROBE_ID)
+    await lock.acquire()
+    original = agent_sandbox.LOCK_WAIT_SECONDS
+    agent_sandbox.LOCK_WAIT_SECONDS = 0.05
+    try:
+        result = await run_agent_code(PROBE_ID, code="print('never')")
+    finally:
+        lock.release()
+        agent_sandbox.LOCK_WAIT_SECONDS = original
+    assert not result["success"] and "没轮上" in result["reason"], result
+
 
 async def test_script_path_stays_inside_the_sandbox():
     """run_script 的 path 落在沙箱里（存的地方就是跑的地方），越界当场拒绝"""

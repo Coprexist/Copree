@@ -1,2 +1,2 @@
 ## 你的平台
-你所在的平台是 Copree（开源项目：github.com/Coprexist/copree）。有人问起就照实说。
+你所在的平台是 Copree（开源项目：github.com/Coprexist/copree）。

@@ -65,15 +65,26 @@ AI 原本就有独立目录 `data/agents/{agent_id}/`（代码里一直叫它"AI
 AI 脚本禁网络是刻意的：要联网有 `web_search`/`web_fetch` 等平台工具，不该从脚本里开洞；
 要发消息也没有句柄——脚本把要说的话 `print` 成 JSON，由宿主代发（见决策层文档）。
 
-## 6. 结果与失败文案
+## 6. 同一个 AI 的脚本串行
+
+`agent_sandbox.agent_lock(agent_id)` 给**每个 AI 一把 `asyncio.Lock`**，只包住 `run_agent_code` 的**执行段**。
+等 `LOCK_WAIT_SECONDS = 20.0`（两倍单脚本墙钟 10s）还拿不到，就返回**如实失败**，不让调用方以为脚本跑过了。
+
+为什么要在这一层串行：AI 的文件空间**只有一个目录**，脚本惯用「读 JSON → 改 → 写回」；而接话判定只按
+**(AI × 群)** 串行（`ai/chat_chain.py:388` 的 `try_claim`），跨群、跨情景（本体 `run_script`、各群决策技能、
+闹钟情景）不串——两份脚本各读旧账本再各写一遍，就是 lost update。
+
+## 7. 结果与失败文案
 
 统一返回 `{success, stdout, stderr, exit_code, duration_ms, timed_out, reason}`。
+失败结果的统一形状由 `runner.fail_result()` 给出（本轮从内部 `_fail` 提为公开）：调用方在起进程之前就失败
+（例如等不到上面那把锁）也用它，不必各写一份。
 
 `reason` 必须是人话：被信号杀掉时 stderr 往往是空的，只留一个负数退出码，写脚本的 AI
 只能靠猜。`runner.exit_reason` 把常见信号翻译成"CPU 时间超限（本次配额 CPU 5s / 内存 96MB）"
 这类可行动的原因（实测：`while True: pass` 在 5s 处收 SIGXCPU）。
 
-## 7. 入口清单
+## 8. 入口清单
 
 - `run_world_code(world, code|entry, background, readonly)` —— 世界代码（工具 `run_world_code` 调用）
 - `run_world_trigger(world, event, entry, ...)` —— 世界 `main.py:handle(event)`（事件钩子调用）
@@ -84,13 +95,13 @@ AI 脚本禁网络是刻意的：要联网有 `web_search`/`web_fetch` 等平台
 - 例外：`world/skill_sandbox.py` 走 stdin/stdout JSON 行协议（世界 skill 的 ctx 能力转发），
   自己起进程但复用同一套隔离库与 rlimit
 
-## 8. 新增一个 owner（例如"世界外的某类实体"）
+## 9. 新增一个 owner（例如"世界外的某类实体"）
 
 1. 定目录：在 `config` 里给出唯一来源，别在业务代码里拼字面量。
 2. 写适配层：`Policy` + `base_env()` 补自己的变量 → 调 `runner.run_code`。
 3. 加档位选择与一条用例：越界读被拒、网络按档位、超时能收回。
 
-## 9. 实测（容器内，2026-09-26）
+## 10. 实测（容器内，2026-09-26）
 
 | 场景 | 结果 |
 |------|------|

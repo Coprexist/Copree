@@ -147,8 +147,9 @@ _main()
 '''
 
 
-def _fail(reason: str, *, exit_code: int = -1, duration_ms: int = 0,
-          timed_out: bool = False, stdout: str = "") -> dict:
+def fail_result(reason: str, *, exit_code: int = -1, duration_ms: int = 0,
+                timed_out: bool = False, stdout: str = "") -> dict:
+    """失败结果的统一形状（唯一出处）：调用方在起进程之前就失败时（越界、排队没轮到）也用它。"""
     return {"success": False, "stdout": stdout, "stderr": "", "exit_code": exit_code,
             "duration_ms": duration_ms, "timed_out": timed_out, "reason": reason}
 
@@ -181,12 +182,12 @@ async def run_code(
     try:
         if harness:
             if not entry:
-                return _fail("harness 模式必须给 entry")
+                return fail_result("harness 模式必须给 entry")
             target = (workdir / entry).resolve()
             if not str(target).startswith(str(workdir)):
-                return _fail(f"入口文件越界: {entry}")
+                return fail_result(f"入口文件越界: {entry}")
             if not target.exists():
-                return _fail(f"入口文件不存在: {entry}")
+                return fail_result(f"入口文件不存在: {entry}")
             tmp_file = workdir / f".sandbox_{uuid.uuid4().hex[:8]}.py"
             tmp_file.write_text(harness.replace("__ENTRY__", target.stem), encoding="utf-8")
             target = tmp_file
@@ -194,15 +195,15 @@ async def run_code(
             target = (workdir / entry).resolve()
             # 防越界：入口必须在工作目录内
             if not str(target).startswith(str(workdir)):
-                return _fail(f"入口文件越界: {entry}")
+                return fail_result(f"入口文件越界: {entry}")
             if not target.exists():
-                return _fail(f"入口文件不存在: {entry}")
+                return fail_result(f"入口文件不存在: {entry}")
         elif code:
             tmp_file = workdir / f".sandbox_{uuid.uuid4().hex[:8]}.py"
             tmp_file.write_text(code, encoding="utf-8")
             target = tmp_file
         else:
-            return _fail("code 和 entry 至少给一个")
+            return fail_result("code 和 entry 至少给一个")
 
         cmd = [sys.executable, "-I", "-X", "utf8", "-c", _RUNNER_TEMPLATE, str(target)]
         if readonly:
@@ -256,7 +257,7 @@ async def run_code(
         }
     except Exception as e:  # noqa: BLE001 —— 沙箱自身故障不拖垮调用方
         logger.warning(f"🛡️ {tag}执行异常: {e}")
-        return _fail(f"沙箱异常: {str(e)[:200]}")
+        return fail_result(f"沙箱异常: {str(e)[:200]}")
     finally:
         if tmp_file is not None:
             try:

@@ -1,8 +1,8 @@
 """
 handle_friend_request 工具 — AI 处理好友申请（有人申请加你时）
 
-接受或拒绝一条好友申请。待处理申请列表会注入你的上下文（📨 待处理好友申请），
-里面有每条申请的 id 和申请人；你决定通过与否后调用本工具。
+接受或拒绝一条好友申请。申请进账本时是一条「【好友申请】…」通知，里面有申请 id 与留言；
+你决定通过与否后调用本工具。
 """
 import logging
 from sqlalchemy import select
@@ -16,9 +16,9 @@ class HandleFriendRequest(ToolPlugin):
     name = "handle_friend_request"
     description = (
         "处理好友申请（有人申请加你为好友时）：接受或拒绝。\n"
-        "在你上下文的「📨 待处理好友申请」里有每条申请的 id 和申请人留言。\n"
+        "账本里「【好友申请】…」那条通知带着申请 id 和对方留言。\n"
         "通过 = 成为好友（对方会收到通知）；拒绝 = 拒绝对方。\n"
-        "也可以选择暂不处理（申请保持待处理）。"
+        "也可以选择暂不处理（申请保持待处理，通知一直在）。"
     )
     segment = "chat_social"
     parameters = {
@@ -28,7 +28,7 @@ class HandleFriendRequest(ToolPlugin):
         },
         "request_id": {
             "type": "integer",
-            "description": "申请的 id（来自「待处理好友申请」列表）",
+            "description": "申请的 id（来自账本里「【好友申请】…」那条通知）",
         },
     }
     required = ["action", "request_id"]

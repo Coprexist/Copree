@@ -15,7 +15,7 @@ from app.tools.base import ToolPlugin, ToolRegistry
 
 logger = logging.getLogger(__name__)
 
-from app.services.world.decision_skill import rule_schema_desc  # noqa: E402
+from app.services.world.decision_skill import rule_schema_desc, test_rule_desc  # noqa: E402
 
 
 class ListDecisionSkills(ToolPlugin):
@@ -70,6 +70,32 @@ class DeleteDecisionSkill(ToolPlugin):
         return {"success": True}
 
 
+class TestDecisionSkill(ToolPlugin):
+    name = "test_decision_skill"
+    description = test_rule_desc()
+    parameters: dict = {
+        "event": {"type": "string", "description": "情景，默认 group_message"},
+        "content": {"type": "string", "description": "样例消息正文"},
+        "sender_name": {"type": "string", "description": "样例发送者的名字"},
+        "sender_id": {"type": "integer", "description": "样例发送者的 id"},
+        "is_mention": {"type": "boolean", "description": "样例算不算 @ 了你"},
+        "rule": {"type": "object", "description": "要试的草稿规则；不传就按已存的规则逐条试"},
+        "execute": {"type": "boolean", "description": "run_script 是否真跑（默认 false 只回显）"},
+    }
+    required: list = []
+
+    async def execute(
+        self, db: AsyncSession, agent_id: int, group_id: int | None,
+        arguments: dict, context: dict,
+    ) -> dict:
+        from app.services.world.decision_skill import preview_decision
+        return await preview_decision(
+            db, "agent", agent_id, None, arguments.get("event") or "group_message",
+            arguments, rule=arguments.get("rule"), execute=bool(arguments.get("execute")),
+            group_id=group_id,
+        )
+
+
 async def handle_decision_tool(
     db, kind: str, entity_id: int, name: str, arguments_json: str,
 ) -> dict:
@@ -91,4 +117,10 @@ async def handle_decision_tool(
     if name == "delete_decision_skill":
         await delete_decision_rule(db, kind, entity_id, str(args.get("name") or ""))
         return {"success": True}
+    if name == "test_decision_skill":
+        from app.services.world.decision_skill import preview_decision
+        return await preview_decision(
+            db, kind, entity_id, None, args.get("event") or "group_message",
+            args, rule=args.get("rule"), execute=bool(args.get("execute")),
+        )
     return {"success": False, "error": f"未知决策工具 {name}"}

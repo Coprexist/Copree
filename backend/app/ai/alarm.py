@@ -391,6 +391,9 @@ async def _process_alarm_event(db, event: dict):
     decision = await decide_action(db, agent, ctx)
     if not decision.should_act:
         logger.info(f"⏰ 闹钟 #{alarm_id}: {decision.reason}")
+        if decision_note:
+            # 闹钟这一轮不进账本（它本来就是一次性会话），没人接的 note 只能落在日志里
+            logger.warning(f"⏰ 闹钟 #{alarm_id}: 决策技能的话没人接 → {decision_note[:200]}")
         return
 
     # 如果 AI 处于 offline/dnd，先唤醒为 active

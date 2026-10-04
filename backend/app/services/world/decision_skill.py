@@ -32,7 +32,7 @@ def _ensure_repo(db_or_repo):
 
 # 求值器只有一份（utils/pure/conditions.py）：触发组合规则与决策技能共用同一套条件语义。
 # 这里保留同名导入，决策层内外沿用 match_conditions 这个名字，不必知道它搬去了哪。
-from app.utils.pure.conditions import match_conditions  # noqa: E402
+from app.utils.pure.conditions import explain_conditions, match_conditions  # noqa: E402
 
 
 # ═══════════════════════════════════════════════════════════
@@ -62,22 +62,29 @@ def rule_schema_desc() -> str:
         "配置你自己的决策技能：声明「遇到什么情景我干什么、是否必须唤醒我本体」。"
         f"结构：{{name, when:{{event, conditions}}, do:{{action,...}}, notify}}。event 支持：{events}。"
         "所有情景都能读到的公共字段：now（HH:MM）/ today / weekday / hour。"
-        "conditions 是递归条件树：{\"and\":[...]}/{\"or\":[...]}/{\"not\":{...}} 自由嵌套（可多选、可非与或）；"
-        "叶子 {\"字段\":值} = 全等（整条消息就等于它；建议判 content_clean，@ 令牌已去掉）、"
-        "{\"字段_contains\":\"子串\"}、{\"字段_starts_with\":\"前缀\"}、{\"字段_matches\":\"正则\"}、"
-        "{\"字段_gt/gte/lt/lte\":数值}（长度限制：{\"content_len_lte\":20}）、"
-        "{\"field\":\"content_clean\",\"op\":\"similar\",\"value\":\"签到\"} = 相似命中"
-        "（默认阈值 0.8，也可写 {\"text\":\"签到\",\"ratio\":0.75}；错别字、多几个字都认）。"
+        "触发条件两种最常用写法（content_clean = 去掉 @ 令牌后的正文）："
+        "「整句才触发」= {\"content_clean\":\"签到\"}；"
+        "「提到就触发且不通知你」= {\"content_clean_contains\":\"签到\"}（慎用，可能会误触正常聊天）。"
+        "更细可写 {field, op, value}（op 可 eq/contains/starts_with/matches/similar/gt/lte/in 等；"
+        "similar 认错别字，长度用 content_len），并可 and/or/not 自由嵌套；拿不准先 test_decision_skill 试跑一条样例。"
         "do 四选一：reply_template（{action, reply} 固定回复，零成本；可用占位 "
         "{sender_name} {sender_id} {group_id} {content} {now}）/ call_tool（{action, name, arguments} 调平台工具）/ "
         "run_script（{action, code} 沙箱脚本：在你自己的文件空间里跑，不能联网。本次事件的全部字段由"
-        "环境变量 DECISION_CTX 给到（JSON）：json.loads(os.environ[\"DECISION_CTX\"]) 里就有 sender_id / "
-        "sender_name / group_id / content_clean / now 等，按人分开记账靠的就是它；要说的话 print 成 JSON {\"reply\":\"...\"}）/ "
+        "环境变量 DECISION_CTX 给到（JSON，字段见 test_decision_skill 的返回；要说的话 print 成 JSON {\"reply\":\"...\"}））/ "
         "silent（{action} 静默：这条消息不回、也不唤醒你本体，用来声明「这种消息不值得理」）。"
         "notify=true = 命中后仍唤醒本体（执行结果会作为一条系统提示给你）；false = 程序处理完即止。"
-        "同名覆盖更新，上限 20 条。示例：签到自动回复（零唤醒、按人回名字）= "
-        "{\"name\":\"签到\",\"when\":{\"event\":\"group_message\",\"conditions\":{\"and\":[{\"content_clean_contains\":\"签到\"},{\"not\":{\"is_mention\":true}}]}},"
-        "\"do\":{\"action\":\"reply_template\",\"reply\":\"{sender_name} 已记录签到\"},\"notify\":false}"
+        "未 @ 你的消息到不到得了你，取决于这个群/通道的消息覆盖面。"
+        "同名覆盖更新，上限 20 条。"
+    )
+
+
+def test_rule_desc() -> str:
+    """试跑工具的描述 —— 与写规则共用同一段说明，别再手抄一份"""
+    return (
+        "试跑一条决策技能：给一条样例消息，回「会不会命中、没中的原因、脚本收到什么、会回什么」。"
+        "不发消息、不落库、不唤醒你本体。不传 rule 就按你已存的规则逐条试（草稿可以只传 rule 不存）。"
+        "run_script 默认只回显不执行，execute=true 才真跑（脚本里能读到 DRY_RUN=1）。"
+        "返回里的 ctx 就是脚本环境变量 DECISION_CTX 的全部字段。"
     )
 
 
@@ -235,7 +242,8 @@ async def run_decision_engine(
     """高层决策入口：取规则 → 匹配 → 执行 do。
 
     rules：调用方批量预取的规则（全量消息下每条消息要给一群 AI 过一遍，逐个查库不划算）。
-    三态返回、notify 语义与分派表见 docs/dev/decision_layer.md。
+    返回的四种情况（未命中 / 办成了 / 要本体判断 / 没办成）、notify 语义与分派表见
+    docs/dev/decision_layer.md。
 
     ctx 在这里补上公共的时间字段（now/today/weekday/hour）：六个情景各写一遍迟早漏一个，
     调用方自己给了同名字段就以调用方为准。条件与脚本读的是同一份 ctx。
@@ -251,13 +259,18 @@ async def run_decision_engine(
             return {"hit": False}
         do = rule.get("do") or {}
         result = await execute_do(db, world, do, ctx, kind=kind, entity_id=entity_id)
+        if result.get("success") is False:
+            # 没办成也要让本体知道：脚本崩了、工具报错、排队没轮到，都不能当成"办完了"咽下去
+            return {"hit": True, "handled": False, "name": str(rule.get("name") or ""),
+                    "result": result, "note": failure_note(rule, result)}
         if bool(rule.get("notify")):
             return {"hit": True, "handled": False, "name": str(rule.get("name") or ""),
                     "result": result, "note": notify_note(rule, result)}
         return {"hit": True, "handled": True, "reply": result.get("reply") or ""}
     except Exception as e:
         logger.warning(f"🎲 决策引擎异常（{kind} {entity_id}）: {e}")
-        return {"hit": False}
+        # 判定都没做成就等于这个技能瞎了；调用方据此照常唤醒本体，note 顺带说明原因
+        return {"hit": False, "error": str(e)[:200], "note": engine_error_note(e)}
 
 
 async def send_dm_reply(db, sender_user_id: int, target_user_id: int, content: str) -> dict:
@@ -325,22 +338,24 @@ async def emit_member_event(db, group_id: int, event_type: str, member_id: int,
         for agent_id, user_id in rows:
             dec = await run_decision_engine(db, "agent", agent_id, None, event_type, ctx,
                                            rules=rules_by_agent.get(agent_id))
-            if not dec.get("hit"):
-                continue
             if dec.get("handled"):
                 if dec.get("reply"):
                     await send_group_reply(db, group_id, user_id, dec["reply"])
                 logger.info(f"🎲 AI #{agent_id} 决策技能命中 {event_type}，程序化处理（不唤醒）")
             elif dec.get("note"):
-                await _leave_ledger_notice(db, agent_id, group_id, dec["note"])
+                # notify=true 或没办成：这个情景本来没人叫它，只能把话记进账本留给下一轮
+                await leave_ledger_notice(db, agent_id, group_id, dec["note"])
     except Exception as e:  # noqa: BLE001 —— 决策层故障不影响成员变更本身
         logger.warning(f"🎲 决策技能 {event_type} 派发异常（group={group_id}）: {e}")
 
 
-async def _leave_ledger_notice(db, agent_id: int, group_id: int, note: str) -> None:
-    """把 notify=true 的执行结果记进该 AI 的账本（这类情景没有唤醒链路，只能留给下一轮）"""
+async def leave_ledger_notice(db, agent_id: int, group_id: int, note: str) -> None:
+    """把决策层的这句话记进该 AI 的账本，留给它下一轮看到（唯一出处）。
+
+    两种来源：notify=true 的执行结果；以及"没人叫它"的失败——入群退群没有唤醒链路，
+    群消息被触发模式拦下时同样没有，不记进账本它就永远不会知道技能没办成。
+    """
     from app.models.agent import Agent
-    from app.services.history import history_service as hs  # noqa: F401 —— 账本读取由 append_events 负责
     from app.services.history.context_sync import append_events, context_ref
     from app.utils.pure.history import make_entry
 
@@ -357,6 +372,24 @@ def notify_note(rule: dict, result: dict) -> str:
     detail = (result or {}).get("reply") or (result or {}).get("result") or (result or {}).get("error") or "（无返回）"
     return (f"- 你的决策技能「{str((rule or {}).get('name') or '')}」已命中并执行，结果：{str(detail)[:300]}。"
             "这条消息仍需你亲自判断（技能已经做完的事不必重复）。")
+
+
+def failure_note(rule: dict, result: dict) -> str:
+    """技能没办成时给本体的提示（唯一出处，五个调用点共用一句文案）。
+
+    为什么 handled 翻回 false 而不是静默跳过：技能说好要办这件事，结果脚本崩了/工具报错——
+    再当成"办完了"就是把这个事件吃掉（人还在等回应、申请还挂着），本体永远不知道。
+    交回本体走原来的唤醒路径，note 说清是技能挂了，不是没人找它。
+    """
+    why = str((result or {}).get("error") or "没有返回可代发的内容")[:300]
+    return (f"- 你的决策技能「{str((rule or {}).get('name') or '')}」命中了，但没办成：{why}。"
+            "这件事还没有处理，你自己判断要不要接上（不想管也可以不管）。")
+
+
+def engine_error_note(exc: Exception) -> str:
+    """判定阶段就出错时给本体的提示：这不是"没命中"（唯一出处）"""
+    return (f"- 你的决策技能这次没能判定（{str(exc)[:200]}）。"
+            "这不是没命中，是执行出错——需要的话检查一下规则是不是写坏了。")
 
 
 async def load_rules_map(db, kind: str, entity_ids) -> dict[int, list[dict]]:
@@ -531,18 +564,153 @@ def _script_result(raw: dict) -> dict:
     """沙箱结果 → do 结果：脚本 print 的 JSON {"reply": "..."} 就是要代发的话。
 
     脚本没有联网与平台句柄，「说什么」只能从返回值走——能力边界保持在「算」。
+    三种情况分得开：跑挂（error）、什么都没 print（正当的静默）、print 了却没有能当话用的
+    JSON（格式写错了）——最后这种以前是静音的，写脚本的那个自己只会以为"说了但没人收到"。
     """
     stdout = (raw.get("stdout") or "").strip()
     if not raw.get("success"):
-        return {"success": False, "error": raw.get("reason") or "脚本执行失败", "stdout": stdout}
-    reply = ""
-    try:
-        payload = json.loads(stdout.splitlines()[-1]) if stdout else {}
+        return {"success": False, "error": _failure_reason(raw), "stdout": stdout}
+    payload = _last_json_object(stdout)
+    if payload is None and stdout:
+        return {"success": False, "stdout": stdout[:2000],
+                "error": '脚本跑完了，但输出里没有可代发的 JSON（要说话就 print {"reply": "..."}）'}
+    return {"success": True, "reply": str((payload or {}).get("reply") or ""),
+            "result": {"stdout": stdout[:2000]}}
+
+
+def _failure_reason(raw: dict) -> str:
+    """失败原因里"到底哪儿错了"的那一句。
+
+    沙箱的 reason 取的是 stderr 开头 200 字符——那是 traceback 的样板（File/runpy 那几行），
+    真正的原因在最后一行。本体只看到样板字，等于没说。
+    """
+    lines = [ln.strip() for ln in (raw.get("stderr") or "").splitlines() if ln.strip()]
+    return (lines[-1] if lines else str(raw.get("reason") or ""))[:200] or "脚本执行失败"
+
+
+def _last_json_object(stdout: str) -> dict | None:
+    """从最后一行往回找第一个 JSON 对象。
+
+    为什么不在最后一行上认死：脚本常在结果后面再 print 一句给人看的日志（"已记好"），
+    只认最后一行会把要说的话吃掉。
+    """
+    for line in reversed(stdout.splitlines()):
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
         if isinstance(payload, dict):
-            reply = str(payload.get("reply") or "")
-    except (json.JSONDecodeError, IndexError):
-        pass
-    return {"success": True, "reply": reply, "result": {"stdout": stdout[:2000]}}
+            return payload
+    return None
+
+
+# ═══════════════════════════════════════════════════════════
+# 试跑：这条规则在这条样例上会怎么走
+# ═══════════════════════════════════════════════════════════
+
+# explain_conditions 的原因码 → 给 AI 看的一句话（码是机器口径，这里是文案口径）
+_REASON_TEXT = {
+    "event_not_matching": "when.event 不是这个情景",
+    "conditions_false": "条件不成立",
+    "pattern_rejected": "正则被拒（过长或含灾难性回溯形状）",
+    "conditions_too_large": "条件树超过规模上限（层数/节点数）",
+    "op_unknown": "引用了未注册的运算或判词",
+    "rule_invalid": "规则结构不合法",
+}
+
+# 试跑样例里属于"工具参数"而不是"事件字段"的键
+_SAMPLE_CONTROL_KEYS = ("rule", "execute")
+
+
+def preview_sample_ctx(event_type: str, sample: dict, group_id: int | None = None) -> dict:
+    """样例 → 事件上下文。group_message 走真实链路的同一个构造器，别的门类按字段直给。"""
+    sample = {k: v for k, v in dict(sample or {}).items() if k not in _SAMPLE_CONTROL_KEYS}
+    if str(event_type or "") == "group_message":
+        return build_group_message_ctx(
+            sample.get("content") or "", sample.get("sender_id"),
+            sample.get("sender_name") or "群成员", sample.get("sender_type") or "human",
+            sample.get("group_id") or group_id,
+            is_mention=bool(sample.get("is_mention")), is_at_all=bool(sample.get("is_at_all")),
+        )
+    ctx = {"event": event_type, **sample}
+    if group_id is not None:
+        ctx.setdefault("group_id", group_id)
+    return ctx
+
+
+async def preview_decision(
+    db, kind: str, entity_id: int, world, event_type: str, sample: dict, *,
+    rule: dict | None = None, execute: bool = False, group_id: int | None = None,
+) -> dict:
+    """试跑：返回「这条样例会怎么走」——不产生任何外部效果。
+
+    匹配与渲染都走真跑那条路（find_hit / explain_conditions / render_reply_template），
+    所以试跑结果就是真跑结果；差别只在 do 不落外部效果：run_script 默认不执行
+    （execute=True 才跑，并给脚本 DRY_RUN=1），call_tool 永不执行。
+    """
+    event_type = str(event_type or "group_message")
+    if event_type not in SCENARIOS:
+        return {"success": False, "error": f"event 只能是 {list(SCENARIOS)} 之一"}
+    ctx = {**local_time_fields(settings.display_timezone),
+           **preview_sample_ctx(event_type, sample, group_id)}
+    rules = [rule] if isinstance(rule, dict) else await get_decision_rules(db, kind, entity_id)
+
+    checked: list[dict] = []
+    hit: dict | None = None
+    for item in rules:
+        when = (item or {}).get("when") or {}
+        name = str((item or {}).get("name") or "")
+        if str(when.get("event") or "") != event_type:
+            checked.append({"name": name, "hit": False, "reason": "event_not_matching",
+                            "why": _REASON_TEXT["event_not_matching"]})
+            continue
+        conditions = when.get("conditions")
+        ok, reason = (True, "") if conditions is None else explain_conditions(conditions, ctx)
+        checked.append({"name": name, "hit": bool(ok), "reason": reason,
+                        "why": "" if ok else _REASON_TEXT.get(reason, "条件不成立")})
+        if ok:
+            hit = item
+            break
+
+    out: dict = {"success": True, "event": event_type, "ctx": ctx, "checked": checked,
+                 "hit": None, "wakes_owner": False, "would": "none", "reply": ""}
+    if hit is None:
+        out["why"] = "没有规则命中这条样例" if rules else "你还没有决策技能"
+        return out
+
+    do = hit.get("do") or {}
+    action = str(do.get("action") or "")
+    out["hit"] = {"name": str(hit.get("name") or ""), "do": do, "notify": bool(hit.get("notify"))}
+    out["wakes_owner"] = bool(hit.get("notify"))
+    if action == "reply_template":
+        out["would"], out["reply"] = "reply", render_reply_template(do.get("reply"), ctx).strip()
+        if not out["reply"]:
+            out["why"] = "渲染结果是空串——真跑时不会有消息发出，也不会唤醒你"
+    elif action == "silent":
+        out["would"], out["why"] = "silent", "静默：这条消息不回、也不唤醒你本体"
+    elif action == "call_tool":
+        out["would"] = "call_tool"
+        out["call"] = {"name": str(do.get("name") or ""), "arguments": do.get("arguments") or {}}
+        out["why"] = "试跑不执行 call_tool（避免真改数据）；要验证就让它在真实事件上跑一次"
+    elif action == "run_script":
+        out["would"] = "run_script"
+        code = str(do.get("code") or "")
+        if not execute:
+            out["script"] = {"executed": False, "code_len": len(code),
+                             "note": "未执行；execute=true 才真跑（脚本会看到 DRY_RUN=1）"}
+        elif kind == "agent":
+            from app.services.sandbox.agent_sandbox import run_agent_code
+            out["script"] = {"executed": True,
+                             **_script_result(await run_agent_code(entity_id, code=code, ctx=ctx, dry_run=True))}
+            out["reply"] = str(out["script"].get("reply") or "")
+        else:
+            out["script"] = {"executed": False, "note": "群助手的脚本请在真实事件上验证"}
+    else:
+        out["why"] = f"未知动作 {action}"
+    return out
 
 
 # ═══════════════════════════════════════════════════════════
@@ -583,6 +751,25 @@ DECISION_TOOLS = [
                     "name": {"type": "string", "description": "要删除的技能名"},
                 },
                 "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "test_decision_skill",
+            "description": test_rule_desc(),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "event": {"type": "string", "description": "情景，默认 group_message"},
+                    "content": {"type": "string", "description": "样例消息正文"},
+                    "sender_name": {"type": "string", "description": "样例发送者的名字"},
+                    "sender_id": {"type": "integer", "description": "样例发送者的 id"},
+                    "is_mention": {"type": "boolean", "description": "样例算不算 @ 了你"},
+                    "rule": {"type": "object", "description": "要试的草稿规则；不传就按已存的规则逐条试"},
+                    "execute": {"type": "boolean", "description": "run_script 是否真跑（默认 false 只回显）"},
+                },
             },
         },
     },

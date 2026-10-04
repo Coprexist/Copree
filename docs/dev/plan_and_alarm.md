@@ -8,6 +8,9 @@
 
 - **计划从来没有进过 AI 的视野**：`agent_workspace.plan` / `todo`（AI 的规划与待办）在任何一条提示词路径里都不注入，
   正常回合只注 `current_task`（`get_current_task_text`），AI 只能自己想起来调 `check_workspace` 才看得到。
+  而它此前是**伪造的**：没有任何工具实现 `get_task_summary`，`ai/executor.py` 就用 `f"调用工具 {tool_name}"` 兜底，
+  于是 message 0 里的任务块长期是「调用工具 pop_state」，只有时间戳每轮刷新。现已删掉兜底（`last_task` 只认工具
+  自报的 `get_task_summary`）并补上 `end_turn` 出口缺失的 `_has_sent_message` 守卫：任务块只在闹钟真的派了任务时才出现。
 - **`force_alarm_on_end` 是死开关**：模型、schema、三档预设（chat/immersive=False、digital_life=True）、
   `merge_preset_values` 的强布尔名单、自改工具 `update_self_config`、`get_effective_config` 的返回全都有它，
   但整个 backend 里没有一处读它来做事——「对话结束强制闹钟」从未生效过。
@@ -139,7 +142,7 @@
 | `backend/app/services/history/context_sync.py` | `sync_group_history`(131) / `sync_dm_history` / `append_events`(40) / `rewrite_context`(52) |
 | `backend/app/utils/pure/history.py` | `KINDS` / `NEVER_COMPRESSIBLE` / `make_entry` / `entries_to_messages` / `latest_message_ref` |
 | `backend/app/utils/pure/memory_entry.py`、`services/memory/memory_delivery.py` | 记忆那一半（指纹 + id 去重）；计划的形状更薄：会话键 + 文本比对 |
-| `backend/app/services/agent/workspace_service.py` | `get_current_task_text` / `set_workspace_file`（写 plan/todo 的地方） |
+| `backend/app/services/agent/workspace_service.py` | `get_current_task_text` / `set_workspace_file`（写 plan/todo 的地方）；零调用的 `get_recovery_context`（“中断恢复提醒”那条路）已删除，任务块仍走尾部读数、被中断只在尾部块里如实呈现 |
 | `backend/app/tools/self_management/` | `set_alarm` / `list_alarms` / `update_alarm` / `cancel_alarm` / `check_workspace` / `manage_workspace` |
 
 ## 七、可选前置与后续（不做也能上）

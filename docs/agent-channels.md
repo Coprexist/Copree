@@ -126,9 +126,10 @@ app/chat/group_delivery.py 与 dm_delivery.py，和网页端完全同路。
 （同一个目标最多 5 分钟一条）。通知只能走系统会话——群消息表的 `sender_type` 约束只认 human/ai，
 插一条"系统"会被拒；冒充人说话又会惊动群里的 AI。
 
-这些规矩会**同时告诉 AI**：平台在 AI 的上下文里注入一段「这个群接了外部通道」的说明
-（app/ai/llm.py 注入，文案在 app/services/plugin/channel.py 的 group_brief），
-包括"只能被动回复"、"@其他成员的内容不转发"、"别人撤回我们收不到"三条。
+这些规矩会**同时告诉 AI**：锁定的那份随**环境快照**进 message 0（文案在
+`app/services/plugin/channel.py` 的 `channel_rules`），包括"只能被动回复"、"接口窗口"、"别人撤回我们收不到"
+这些**不变事实**，帧内字节不动、到解锁点才对齐；「@其他成员的内容会不会断在中间」由
+`live_mention_rule` 单独走**尾部读数**（问活着的实例，每轮会变）。
 
 ## 8. 与主站功能的衔接
 

@@ -265,27 +265,25 @@ async def files_supported(db: AsyncSession, group_id: int, *, served: list | Non
 
     没有通道 = 站内群，附件随便发。有通道时看插件自己声明的 supports_files：任一还在接着
     这个群的通道报 false，就按"发出去对面也收不到"算——多通道并存时取最保守的那个，
-    理由同 group_brief：说错了 AI 会拿它当事实用。
+    理由同 channel_rules：说错了 AI 会拿它当事实用。
     """
     found = served if served is not None else await served_instances(db, group_id)
     return all(bool(declared.get("supports_files", True)) for _, _, declared in found)
 
 
-async def group_brief(db: AsyncSession, group_id: int, *, served: list | None = None) -> str:
+async def channel_rules(db: AsyncSession, group_id: int, *, served: list | None = None) -> str:
     """这个群经不经过外部通道、那条通道有什么规矩 —— 给 AI 的一段话（没有通道就返回空串）
 
     为什么由平台注入，而不是让 AI 自己猜：消息从 QQ 来这件事背后有一串接口约束
     （腾讯 2025-04-21 起下线了主动推送），不说清它就会答应"我待会儿在群里提醒你"，
     然后什么都发不出去。
 
-    「@其他成员」那条规矩**随群的实际模式变**（全量开着时正文是完整的）：模式由插件观测
-    事件类型得到，这里问活着的实例；问不到就两句话都讲，不猜——猜错了 AI 会当事实用。
+    为什么这段话能进锁定前缀：它只由库里的通道绑定（served_instances）与插件声明的能力
+    算出来，不掺任何运行期观测。它每轮进 message 0，抖一个字节整份上下文就得重算一遍。
+    随群播报模式变的那条 @ 规矩是运行期观测，在 live_mention_rule 里走尾部读数。
     """
     found_channels: list[dict[str, Any]] = []
-    qq_modes: list[bool | None] = []
-    for plugin_id, instance, found in (served if served is not None else await served_instances(db, group_id)):
-        if found["kind"] == "qq":
-            qq_modes.append(_live_full_mode(plugin_id, instance))
+    for _plugin_id, _instance, found in (served if served is not None else await served_instances(db, group_id)):
         # 同一个插件有多个实例（多条通道）时，说明里只列一次
         if found["plugin_id"] not in [c["plugin_id"] for c in found_channels]:
             found_channels.append(found)
@@ -308,7 +306,7 @@ async def group_brief(db: AsyncSession, group_id: int, *, served: list | None = 
             "- 官方机器人私聊**可以**主动发消息，但每天每个用户最多 2 条：留给要紧的提醒，别用来说废话。"
         )
         lines.append("- 你写的 Markdown 会尽量按富文本发（机器人没开通 Markdown 权限时平台会自动降级成纯文本）。")
-        lines.append(_mention_rule_line(_brief_full_mode(qq_modes)))
+        lines.append("- **QQ 用户看不到 Copree 侧（此侧）的 ID**。")
         lines.append(
             "- **撤回不同步**：QQ 里别人撤回的消息我们收不到通知，你上下文里那条还在（就当它发生过）；"
             "反过来你在站内撤回（2 分钟内）我们会请 QQ 一起撤，超时就只有站内撤掉。"
@@ -324,6 +322,24 @@ async def group_brief(db: AsyncSession, group_id: int, *, served: list | None = 
             "那边的人收不到。要传内容就把正文写成文字，或给出一个能打开的链接。"
         )
     return "\n".join(lines)
+
+
+async def live_mention_rule(db: AsyncSession, group_id: int, *, served: list | None = None) -> str:
+    """「@其他成员」那条规矩 —— 走**尾部读数**（随群播报模式变，问活着的实例才知道）
+
+    为什么不能锁进前缀：模式是插件观测事件类型得到的运行期事实（重启后要重新观测，
+    还会从"不知道"变成"知道"），锁进去就等于让每个群的前缀随时可能重算。
+    读数是每轮重拼的一行，几十字，比整份上下文重算便宜得多。
+
+    问不到就两句话都讲，不猜——猜错了 AI 会当事实用。
+    """
+    modes: list[bool | None] = []
+    for plugin_id, instance, found in (served if served is not None else await served_instances(db, group_id)):
+        if found["kind"] == "qq":
+            modes.append(_live_full_mode(plugin_id, instance))
+    if not modes:
+        return ""
+    return _mention_rule_line(_brief_full_mode(modes))
 
 
 def _live_group_facts(plugin_id: str, instance: str, group_id: int) -> dict[str, Any] | None:
