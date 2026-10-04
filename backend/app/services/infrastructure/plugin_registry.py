@@ -32,6 +32,15 @@ def split_key(key: str) -> tuple[str, str]:
     return key, ""
 
 
+def get_by_owner(plugin_id: str, instance: str):
+    """按 (插件 id, 实例) 取活着的实例；没有则 None。
+
+    这个键的拼法（registry_key）只在这里维护：散着拼迟早出现「消息落在某实例、
+    平台却查到另一个」的错配。
+    """
+    return PluginRegistry.get(registry_key(plugin_id, instance))
+
+
 class ServicePlugin:
     """服务插件基类 — 每个系统服务一个子类"""
 

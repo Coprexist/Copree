@@ -28,19 +28,20 @@ async def current_environment(db: AsyncSession, group_id: int) -> dict | None:
     插件应以 text 覆盖整句。插件抛出异常或返回值违约时丢弃该条并记 error，不降级为
     「无环境」——降级会伪造出一次环境消失。
     """
-    from app.services.infrastructure.plugin_registry import PluginRegistry, registry_key
+    from app.services.infrastructure.plugin_registry import get_by_owner
     from app.services.plugin.channel import served_instances
+    from app.utils.pure.channel_landing import session_ref
 
     merged: dict = {}
     for plugin_id, instance, _found in await served_instances(db, group_id):
-        plugin = PluginRegistry.get(registry_key(plugin_id, instance))
+        plugin = get_by_owner(plugin_id, instance)
         probe = getattr(plugin, "environment", None)
         if not callable(probe):
             continue
         # origin = 这个会话的标识（平台总能给出；插件自己解析成它的对端对象）
         try:
             raw = await asyncio.wait_for(
-                probe(origin=f"group:{int(group_id)}"), timeout=ENV_TIMEOUT_SECONDS,
+                probe(origin=session_ref(group_id)), timeout=ENV_TIMEOUT_SECONDS,
             )
             env = normalize(raw)
         except EnvContractError as e:

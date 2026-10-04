@@ -21,7 +21,12 @@ _ENV_RENDERERS: dict[str, Callable[[Any], str]] = {
     "origin_name": lambda v: f"「{v}」",
     "member_num": lambda v: f"{v} 人",
     "full_mode": lambda v: "全量模式" if v else "仅 @ 唤醒",
+    # 简介是唯一可能偏长的字段：低频、且留在锁定段里可被缓存复用，但单字段仍要设上限
+    "origin_memo": lambda v: f"简介：{str(v)[:ENV_MEMO_MAX]}",
 }
+
+# 单字段上限（简介这类）：环境段每轮进前缀，单个字段不该无界
+ENV_MEMO_MAX = 80
 
 # 平台认识的公共键清单（顺序即渲染顺序）
 ENV_PUBLIC_KEYS: tuple[str, ...] = tuple(_ENV_RENDERERS)

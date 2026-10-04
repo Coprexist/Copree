@@ -89,4 +89,4 @@ async def test_plugin_base_has_no_environment_by_default():
 def test_public_api_exports_the_contract():
     from app.services.plugin.api import ENV_PUBLIC_KEYS, ENV_TEXT_KEY
     assert ENV_TEXT_KEY == "text"
-    assert ENV_PUBLIC_KEYS == ("channel", "origin_name", "member_num", "full_mode")
+    assert ENV_PUBLIC_KEYS == ("channel", "origin_name", "member_num", "full_mode", "origin_memo")

@@ -12,6 +12,28 @@ import json
 from typing import Any
 
 
+SESSION_GROUP_PREFIX = "group:"
+
+
+def session_ref(group_id: int) -> str:
+    """群会话的会话标识（环境接口的 origin 用它）。
+
+    与账本的会话键同形是刻意的：环境的作用域就是会话，两者必须指同一个东西。
+    """
+    return f"{SESSION_GROUP_PREFIX}{int(group_id)}"
+
+
+def group_id_of_session(ref: str | int | None) -> int | None:
+    """会话标识 → Copree 群号；不是群会话（私信、空值、格式不符）时返回 None。"""
+    text = str(ref or "")
+    if not text.startswith(SESSION_GROUP_PREFIX):
+        return None
+    try:
+        return int(text[len(SESSION_GROUP_PREFIX):])
+    except ValueError:
+        return None
+
+
 def parse_group_map(raw: Any) -> tuple[dict[str, int], list[str]]:
     """解析 group_map（通道侧群标识 → Copree 群 id）。
 

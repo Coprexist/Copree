@@ -413,8 +413,8 @@ async def test_group_brief_reaches_groups_mapped_by_group_map(migrated_db):
                 await skill_bridge._unload_plugin(plugin_id)
 
 
-async def test_group_brief_names_the_channel_group(migrated_db):
-    """通道那边拉到过群名时，群名要进通道说明：同一个 AI 接着好几个群，它得分得清自己在哪个"""
+async def test_group_brief_leaves_channel_facts_to_the_environment(migrated_db):
+    """群名/人数/简介只由环境段讲一次：brief 只讲规矩，不再重复第二遍"""
     from app.database import async_session
     from app.services.infrastructure.plugin_registry import PluginRegistry, registry_key
     from app.services.plugin import channel, config as plugin_config, skill_bridge
@@ -445,7 +445,8 @@ async def test_group_brief_names_the_channel_group(migrated_db):
             PluginRegistry.register(_LiveChannel(key))
             try:
                 brief = await channel.group_brief(db, 7)
-                assert "合欢宗藏经阁" in brief and "115 人" in brief and "只聊养猫" in brief, brief
+                assert "合欢宗藏经阁" not in brief and "115" not in brief and "只聊养猫" not in brief, brief
+                assert "被动回复" in brief, brief
                 assert await channel.channel_group_name(db, 7) == "合欢宗藏经阁"
                 # 没接通道的群：既没有说明，也没有"通道那边的群名"
                 assert await channel.channel_group_name(db, 999) == ""

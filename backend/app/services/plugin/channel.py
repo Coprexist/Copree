@@ -229,9 +229,9 @@ async def _refresh_live_group_facts(
     触发点都是用户动作（按开关、打开资料卡），所以机会不多；force=False 仍受插件那边的
     "今天问过就用手里的"约束——资料卡会被反复打开，不能每次都去问通道。
     """
-    from app.services.infrastructure.plugin_registry import PluginRegistry, registry_key
+    from app.services.infrastructure.plugin_registry import get_by_owner
 
-    plugin = PluginRegistry.get(registry_key(plugin_id, instance))
+    plugin = get_by_owner(plugin_id, instance)
     probe = getattr(plugin, "refresh_group_facts", None)
     if not callable(probe):
         return None
@@ -272,13 +272,9 @@ async def group_brief(db: AsyncSession, group_id: int) -> str:
     """
     found_channels: list[dict[str, Any]] = []
     qq_modes: list[bool | None] = []
-    qq_facts: list[dict[str, Any]] = []
     for plugin_id, instance, found in await served_instances(db, group_id):
         if found["kind"] == "qq":
             qq_modes.append(_live_full_mode(plugin_id, instance))
-            facts = _live_group_facts(plugin_id, instance, group_id)
-            if facts:
-                qq_facts.append(facts)
         # 同一个插件有多个实例（多条通道）时，说明里只列一次
         if found["plugin_id"] not in [c["plugin_id"] for c in found_channels]:
             found_channels.append(found)
@@ -292,9 +288,6 @@ async def group_brief(db: AsyncSession, group_id: int) -> str:
         "## 这个群接进了外部聊天软件（" + labels + "）",
         "- 群里你只能**被动回复**：别人 @ 你（或回复你）时才轮到你说话；不要承诺「我待会儿在群里发」「稍后提醒你」这类主动开口。",
     ]
-    identity = _qq_group_identity(qq_facts)
-    if identity:
-        lines.append(identity)
     if "qq" in kinds:
         lines.append(
             "- 官方 QQ 机器人：腾讯自 2025-04-21 起下线了主动推送；被动回复的有效窗口是"
@@ -322,33 +315,12 @@ def _live_group_facts(plugin_id: str, instance: str, group_id: int) -> dict[str,
 
     与推送模式同一口径：这是运行期观测（今天拉到的群信息），不落库；重启后第一条群消息重新拉。
     """
-    from app.services.infrastructure.plugin_registry import PluginRegistry, registry_key
+    from app.services.infrastructure.plugin_registry import get_by_owner
 
-    plugin = PluginRegistry.get(registry_key(plugin_id, instance))
+    plugin = get_by_owner(plugin_id, instance)
     probe = getattr(plugin, "facts_for_group", None)
     return probe(group_id) if callable(probe) else None
 
-
-def _qq_group_identity(facts: list[dict[str, Any]]) -> str:
-    """这个群在 QQ 那边叫什么、多大：同一个 AI 可能同时在好几个群，它得分得清自己在哪个
-
-    只说今天真的拉到过群信息的（拿不到就不说，别让它把 openid 尾号当群名用）；
-    简介有就带上，那是群主写的"这个群是干什么的"。
-    """
-    parts: list[str] = []
-    for facts_of_one in facts:
-        name = str(facts_of_one.get("name") or "").strip()
-        if not name:
-            continue
-        num = int(facts_of_one.get("member_num") or 0)
-        memo = str(facts_of_one.get("memo") or "").strip()
-        line = f"「{name}」" + (f"（{num} 人）" if num else "")
-        if memo:
-            line += f"，群简介：{memo[:60]}"
-        parts.append(line)
-    if not parts:
-        return ""
-    return "- 这个群在 QQ 那边叫 " + "、".join(parts) + "。"
 
 
 def _live_full_mode(plugin_id: str, instance: str) -> bool | None:
@@ -357,9 +329,9 @@ def _live_full_mode(plugin_id: str, instance: str) -> bool | None:
     为什么不落库：这是运行期观测（事件类型），不是配置；重启后第一条群消息就能重新观测到。
     给 AI 的**持久**记录在账本里（QQ 插件投的「通道变更」通知），不靠这里。
     """
-    from app.services.infrastructure.plugin_registry import PluginRegistry, registry_key
+    from app.services.infrastructure.plugin_registry import get_by_owner
 
-    plugin = PluginRegistry.get(registry_key(plugin_id, instance))
+    plugin = get_by_owner(plugin_id, instance)
     probe = getattr(plugin, "observed_full_mode", None)
     return probe() if callable(probe) else None
 
@@ -414,7 +386,7 @@ async def _view_one(
     db: AsyncSession, *, declared_channel: dict[str, Any], agent_id: int, user_id: int,
     group_options: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    from app.services.infrastructure.plugin_registry import PluginRegistry, registry_key
+    from app.services.infrastructure.plugin_registry import get_by_owner
 
     from app.services.plugin.skill_bridge import ensure_declared
 
@@ -425,7 +397,7 @@ async def _view_one(
     masked = await plugin_config.mask_config(plugin_id, instance, db=db)
     schema = await plugin_config.get_schema(plugin_id)
     rows = await pairing.list_rows(db, kind=declared_channel["kind"], owner_scope=instance)
-    plugin = PluginRegistry.get(registry_key(plugin_id, instance))
+    plugin = get_by_owner(plugin_id, instance)
     running = False
     detail: dict = {}
     if plugin is None:
@@ -575,13 +547,13 @@ async def self_test(*, plugin_id: str, agent_id: int) -> dict[str, Any]:
     刻意不走 runtime_control：自测要答的是"现在这条链路通不通"，
     没起来就该说没起来，而不是顺手把它拉起来把问题盖过去。
     """
-    from app.services.infrastructure.plugin_registry import PluginRegistry, registry_key
+    from app.services.infrastructure.plugin_registry import get_by_owner, registry_key
 
     declared(plugin_id)
-    key = registry_key(plugin_id, instance_of(agent_id))
-    plugin = PluginRegistry.get(key)
+    instance = instance_of(agent_id)
+    plugin = get_by_owner(plugin_id, instance)
     if plugin is None:
-        raise UnknownInstance(key)
+        raise UnknownInstance(registry_key(plugin_id, instance))
     if not plugin.self_testable:
         raise NoSelfTest(f"{plugin.display_name()} 没有可自测的出口")
     result = await plugin.self_test()

@@ -833,6 +833,36 @@ class QqChannelPlugin(ServicePlugin):
                 return facts
         return None
 
+    async def environment(self, *, origin: str | int) -> dict[str, Any] | None:
+        """这个 Copree 群在 QQ 侧的环境事实（纯读内存，零新增网络往返）
+
+        契约要求每轮调用廉价：这里只取「今天拉到的群信息」与观测到的推送模式。
+        真正的网络往返发生在收到群消息时（当天第一条）与用户手动同步时；
+        refresh_group_facts 更新 _group_facts 之后，下一轮读到的就是新值。
+        """
+        from app.utils.pure.channel_landing import group_id_of_session
+
+        group_id = group_id_of_session(origin)
+        if group_id is None:
+            return None
+        facts = self.facts_for_group(group_id)
+        if not facts:
+            return None
+        env: dict[str, Any] = {"channel": "qq"}
+        name = str(facts.get("name") or "").strip()
+        if name:
+            env["origin_name"] = name
+        num = int(facts.get("member_num") or 0)
+        if num:
+            env["member_num"] = num
+        memo = str(facts.get("memo") or "").strip()
+        if memo:
+            env["origin_memo"] = memo
+        mode = self.observed_full_mode()
+        if mode is not None:
+            env["full_mode"] = bool(mode)
+        return env
+
     def facts_for_group(self, group_id: int) -> dict[str, Any] | None:
         """这个 Copree 群对应的 QQ 群信息（今天拉到的）：平台给 AI 讲通道规矩时要说明"你在哪个群"
 
