@@ -146,3 +146,57 @@ async def test_plugin_failure_is_dropped_not_treated_as_no_environment():
         assert await env_mod.current_environment(None, 7) is None, "违约同样丢弃"
     finally:
         PluginRegistry.get, channel_mod.served_instances = old_get, old_served
+
+
+async def test_each_instance_is_asked_once_per_turn():
+    """"每实例每轮只问一次"是契约的廉价要求之一：渲染或判定处再问一遍会成倍放慢链路。"""
+    from app.services.infrastructure.plugin_registry import PluginRegistry
+    from app.services.plugin import channel as channel_mod
+    from app.services.plugin import environment as env_mod
+
+    calls: list[str] = []
+
+    class _P:
+        async def environment(self, *, origin):
+            calls.append(str(origin))
+            return {"channel": "qq"}
+
+    async def _served(db, group_id):
+        return [("a", "i1", {}), ("b", "i2", {})]
+
+    old_get, old_served = PluginRegistry.get, channel_mod.served_instances
+    PluginRegistry.get = staticmethod(lambda key: _P())
+    channel_mod.served_instances = _served
+    try:
+        assert await env_mod.current_environment(None, 7) == {"channel": "qq"}
+        assert calls == ["group:7", "group:7"], calls
+    finally:
+        PluginRegistry.get, channel_mod.served_instances = old_get, old_served
+
+
+async def test_slow_plugin_is_cut_off_by_the_time_gate():
+    """"廉价"不靠作者自觉：超过时间闸就丢弃本次，绝不拖住整条消息链路。"""
+    import asyncio
+    import time
+
+    from app.services.infrastructure.plugin_registry import PluginRegistry
+    from app.services.plugin import channel as channel_mod
+    from app.services.plugin import environment as env_mod
+
+    class _Slow:
+        async def environment(self, *, origin):
+            await asyncio.sleep(5)
+            return {"channel": "qq"}
+
+    async def _served(db, group_id):
+        return [("qq-channel", "agent-47", {})]
+
+    old_get, old_served = PluginRegistry.get, channel_mod.served_instances
+    PluginRegistry.get = staticmethod(lambda key: _Slow())
+    channel_mod.served_instances = _served
+    try:
+        started = time.monotonic()
+        assert await env_mod.current_environment(None, 7) is None
+        assert time.monotonic() - started < 2.5, "超时闸没生效"
+    finally:
+        PluginRegistry.get, channel_mod.served_instances = old_get, old_served

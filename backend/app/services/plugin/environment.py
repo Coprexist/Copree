@@ -7,9 +7,14 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
+
+# 环境取值的时间闸：契约要求「廉价」，但契约拦不住写错的插件，平台强制一个上限；
+# 超时按「丢弃本次」处理（与异常同路径）——卡住的插件不该拖住整条消息链路。
+ENV_TIMEOUT_SECONDS = 1.0
 
 from app.utils.pure.plugin_env import EnvContractError, changed, normalize, render_environment
 
@@ -34,10 +39,17 @@ async def current_environment(db: AsyncSession, group_id: int) -> dict | None:
             continue
         # origin = 这个会话的标识（平台总能给出；插件自己解析成它的对端对象）
         try:
-            raw = await probe(origin=f"group:{int(group_id)}")
+            raw = await asyncio.wait_for(
+                probe(origin=f"group:{int(group_id)}"), timeout=ENV_TIMEOUT_SECONDS,
+            )
             env = normalize(raw)
         except EnvContractError as e:
             logger.error(f"🌐 插件 {plugin_id}/{instance} 环境返回值违约（丢弃本次）: {e}")
+            continue
+        except asyncio.TimeoutError:
+            logger.error(
+                f"🌐 插件 {plugin_id}/{instance} 环境取值超时（>{ENV_TIMEOUT_SECONDS}s，丢弃本次）"
+            )
             continue
         except Exception as e:  # noqa: BLE001 —— 插件故障不该打断这一轮对话
             logger.error(f"🌐 插件 {plugin_id}/{instance} 环境取值异常（丢弃本次）: {type(e).__name__}: {e}")
