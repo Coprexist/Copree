@@ -93,17 +93,13 @@ export function formatRelativeTime(
     (now.getFullYear() - date.getFullYear()) * 12 +
     (now.getMonth() - date.getMonth())
   if (diffMonths >= 1 && diffMonths <= 11) {
-    return lang === 'zh'
-      ? `${diffMonths}月前`
-      : `${diffMonths} month${diffMonths > 1 ? 's' : ''} ago`
+    return meta.monthsAgo(diffMonths)
   }
 
   // 1+ 年
   const diffYears = now.getFullYear() - date.getFullYear()
   if (diffYears >= 1) {
-    return lang === 'zh'
-      ? `${diffYears}年前`
-      : `${diffYears} year${diffYears > 1 ? 's' : ''} ago`
+    return meta.yearsAgo(diffYears)
   }
 
   // 兜底
@@ -131,49 +127,40 @@ export function formatMessageTime(
   const diffDays = Math.max(0, calendarDayDiff(now, date))
   const diffMins = Math.max(0, Math.floor(diffMs / (1000 * 60)))
 
-  const timeStr = date.toLocaleTimeString(lang === 'zh' ? 'zh-CN' : 'en-US', {
+  const meta = getLangMeta(lang)
+  const timeStr = date.toLocaleTimeString(meta.locale, {
     hour: '2-digit', minute: '2-digit',
   })
 
   // < 1 分钟
-  if (diffMins < 1) return lang === 'zh' ? '刚刚' : 'Just now'
+  if (diffMins < 1) return meta.justNow
 
   // < 1 小时
-  if (diffMins < 60) return lang === 'zh' ? `${diffMins}分钟前` : `${diffMins} min ago`
+  if (diffMins < 60) return meta.minutesAgo(diffMins)
 
   // 今天
   if (diffDays === 0) return timeStr
 
   // 昨天
-  if (diffDays === 1) return lang === 'zh' ? `昨天 ${timeStr}` : `Yesterday ${timeStr}`
+  if (diffDays === 1) return `${meta.yesterday} ${timeStr}`
 
   // 2-6 天
-  if (diffDays >= 2 && diffDays <= 6) {
-    return lang === 'zh' ? `${diffDays}天前 ${timeStr}` : `${diffDays} days ago ${timeStr}`
-  }
+  if (diffDays >= 2 && diffDays <= 6) return `${meta.daysAgo(diffDays)} ${timeStr}`
 
   // 1-4 周
   if (diffDays >= 7 && diffDays <= 28) {
-    const weeks = Math.floor(diffDays / 7)
-    const w = lang === 'zh' ? `${weeks}周前` : `${weeks} week${weeks > 1 ? 's' : ''} ago`
-    return `${w} ${timeStr}`
+    return `${meta.weeksAgo(Math.floor(diffDays / 7))} ${timeStr}`
   }
 
   // 1-11 月
   const diffMonths =
     (now.getFullYear() - date.getFullYear()) * 12 +
     (now.getMonth() - date.getMonth())
-  if (diffMonths >= 1 && diffMonths <= 11) {
-    const m = lang === 'zh' ? `${diffMonths}月前` : `${diffMonths} month${diffMonths > 1 ? 's' : ''} ago`
-    return `${m} ${timeStr}`
-  }
+  if (diffMonths >= 1 && diffMonths <= 11) return `${meta.monthsAgo(diffMonths)} ${timeStr}`
 
   // 1+ 年
   const diffYears = now.getFullYear() - date.getFullYear()
-  if (diffYears >= 1) {
-    const y = lang === 'zh' ? `${diffYears}年前` : `${diffYears} year${diffYears > 1 ? 's' : ''} ago`
-    return `${y} ${timeStr}`
-  }
+  if (diffYears >= 1) return `${meta.yearsAgo(diffYears)} ${timeStr}`
 
   // 兜底
   const y = date.getFullYear()
