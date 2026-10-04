@@ -52,6 +52,8 @@ export default function SearchOverlay() {
   const [addFriendTarget, setAddFriendTarget] = useState<string | null>(null) // `${type}:${id}`
   const [friendMessage, setFriendMessage] = useState('')
   const [addingFriend, setAddingFriend] = useState(false)
+  // 已发出好友申请（同上：本页内即时反馈；申请 ≠ 已是好友，别把按钮换成私信）
+  const [requestedFriends, setRequestedFriends] = useState<string[]>([])
   // 资料卡
   const [profileCard, setProfileCard] = useState<{
     type: 'human' | 'ai'; id: number; name: string; state: string | null
@@ -123,9 +125,7 @@ export default function SearchOverlay() {
         target_id: item.id,
         message: friendMessage.trim() || undefined,
       })
-      setResults(prev => prev.map(r =>
-        r.type === item.type && r.id === item.id ? { ...r, is_friend: true } : r
-      ))
+      setRequestedFriends(prev => prev.includes(key) ? prev : [...prev, key])
       setAddFriendTarget(null)
       setFriendMessage('')
       alert(t('search:addFriendSuccess'))
@@ -222,6 +222,8 @@ export default function SearchOverlay() {
             <MessageSquare size={12} />
             {sendingDM === key ? '...' : t('search:sendDM')}
           </button>
+        ) : requestedFriends.includes(key) ? (
+          <span className="text-xs text-textMuted shrink-0">{t('search:requested')}</span>
         ) : isAddingThis ? (
           <div className="shrink-0 flex items-center gap-1">
             <input

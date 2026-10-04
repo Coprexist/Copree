@@ -63,6 +63,7 @@ export default function ProfileCard({ entityType, entityId, entityName, state, a
   const [showAddFriend, setShowAddFriend] = useState(false)
   const [friendMessage, setFriendMessage] = useState('')
   const [addingFriend, setAddingFriend] = useState(false)
+  const [requestSent, setRequestSent] = useState(false)
   const [isPriority, setIsPriority] = useState(false)
   const [togglingPriority, setTogglingPriority] = useState(false)
 
@@ -118,7 +119,9 @@ export default function ProfileCard({ entityType, entityId, entityName, state, a
         target_id: entityId,
         message: friendMessage.trim() || undefined,
       })
-      setProfile(prev => prev ? { ...prev, is_friend: true } : null)
+      // 申请只是送出去了，对方还没通过——不能标成好友，否则卡片会显示成
+      // 「已是好友」而刷新后又变回去
+      setRequestSent(true)
       setShowAddFriend(false)
       setFriendMessage('')
       alert(t('search:addFriendSuccess'))
@@ -264,6 +267,9 @@ export default function ProfileCard({ entityType, entityId, entityName, state, a
             ) : profile?.last_active_at ? (
               <span>{t('dm:lastActive')} {formatMessageTime(profile.last_active_at, lang)}</span>
             ) : null}
+            {/* 关系状态跟注册时间/在线一样是"这个人的信息"，放这一行；不放操作区（那不是能点的东西） */}
+            {!isGroup && isFriend && <span>{t('profileCard:alreadyFriend')}</span>}
+            {!isGroup && !isFriend && requestSent && <span>{t('profileCard:requestSent')}</span>}
           </div>
         </div>
 
@@ -286,8 +292,8 @@ export default function ProfileCard({ entityType, entityId, entityName, state, a
             </button>
           )}
 
-          {/* 加好友区域 */}
-          {!isFriend && (
+          {/* 加好友区域：已是好友 / 已发申请都不给按钮（状态在上一行的信息里，后端也会拒） */}
+          {!isFriend && !requestSent && (
             showAddFriend ? (
               <div className="space-y-2">
                 <textarea
@@ -328,7 +334,6 @@ export default function ProfileCard({ entityType, entityId, entityName, state, a
           )}
           </>
           )}
-
           {/* 发消息 */}
           <button
             onClick={handleSendDM}
