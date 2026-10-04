@@ -510,6 +510,38 @@ def keep_request_tools(effective_defs: list, allowed_names: set) -> list:
     return out
 
 
+# 自己刚改过的源：{agent_id: {source}} —— 只是"下一轮通知别念变更量"的记号。
+# 进程内内存：丢了最坏也就是多念一次完整变更（无害），所以不落库、不加列。
+_SELF_CHANGES: dict[int, set[str]] = {}
+
+
+def _holder_id(holder) -> int | None:
+    if isinstance(holder, int):
+        return holder
+    if isinstance(holder, dict):
+        return int(holder["id"]) if holder.get("id") is not None else None
+    return int(holder.id) if getattr(holder, "id", None) is not None else None
+
+
+def mark_self_change(holder, source: str) -> None:
+    """记下"这条源是这个 AI 自己刚改的"（写记忆 / 改自己提示词的工具在写成功后调）。"""
+    holder_id = _holder_id(holder)
+    if holder_id is not None:
+        _SELF_CHANGES.setdefault(holder_id, set()).add(str(source))
+
+
+def take_self_change(holder, source: str) -> bool:
+    """取走并清掉这个记号（第一个来读的状态拿到短句，其余状态照常拿完整变更）。"""
+    holder_id = _holder_id(holder)
+    marked = _SELF_CHANGES.get(holder_id) if holder_id is not None else None
+    if not marked or str(source) not in marked:
+        return False
+    marked.discard(str(source))
+    if not marked:
+        _SELF_CHANGES.pop(holder_id, None)
+    return True
+
+
 async def build_change_notice(
     cap_repo: CapabilityRepository, holder, sources: list[str],
     state: str | None = None, foci=None,
@@ -558,7 +590,12 @@ async def build_change_notice(
             if r.changelog and scope_covers(r.scope, state, foci)
         ]
         if parts:
-            lines.append(f"【能力变更通知 · {source_label(source)} v{known}→v{latest.version}】\n" + "\n".join(parts))
+            head = f"【能力变更通知 · {source_label(source)} v{known}→v{latest.version}】"
+            if take_self_change(holder, source):
+                # 自己刚改的：变更量对它没有信息量（工具结果已经回过"成功"），只报一句已生效
+                lines.append(head + "已生效（你自己刚改的，不再列出变更量）。")
+            else:
+                lines.append(head + "\n" + "\n".join(parts))
             changed = True
         write_progress(holder, "cap_known_versions", state, source, latest.version)
     if not changed:

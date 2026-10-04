@@ -27,7 +27,11 @@ from app.chat import chat_api
 from app.utils.display_name import display_name
 from app.utils.text import extract_mentions as _extract_mentions, check_mention as _check_mention
 from app.utils.crypto import APIKeyDecryptError
-from app.ai.executor import _tool_call_loop, _get_api_config, _check_rate_limit, _send_system_error, _send_system_error_notification, add_pending_interrupt, is_agent_running, mark_agent_running, unmark_agent_running
+from app.ai.executor import (
+    _tool_call_loop, _get_api_config, _check_rate_limit, _send_system_error,
+    _send_system_error_notification, add_pending_interrupt, drain_pending_interrupts,
+    is_agent_running, mark_agent_running, restore_pending_interrupts, unmark_agent_running,
+)
 from app.ai.alarm import _process_alarm_event
 
 logger = logging.getLogger(__name__)
@@ -71,6 +75,68 @@ async def _run_serialized(agent, coro):
 # ============================================================
 # 主循环
 # ============================================================
+
+def _filter_by_only(candidates: list[int], only) -> list[int]:
+    """only_ai_ids：忙时重排的事件只叫指定的那个 AI。
+
+    为什么需要：这条消息**原本那次**已经给同群所有 AI 过过一遍了，重排只是补上当时忙着的
+    那一个；不限定就会把已经答过、或不打算答的 AI 再叫一遍。
+    """
+    if not only:
+        return candidates
+    wanted = {int(x) for x in only}
+    return [c for c in candidates if c in wanted]
+
+
+async def _inject_busy_group_message(agent_id: int, *, group_id: int, content: str,
+                                     message_id: int | None, sender_id: int | None,
+                                     sender_name: str) -> None:
+    """AI 正忙时：把这条消息投进它**当前那一轮**（下一轮 LLM 调用前注入，见 executor）。
+
+    注入不用等这一轮结束——executor 每轮请求前都会把缓冲拼成一条 user 消息。
+    """
+    await add_pending_interrupt(agent_id, {
+        "type": "user_message",
+        "content": content,
+        "message_id": message_id,
+        "group_id": group_id,
+        "sender_id": sender_id,
+        "sender_name": sender_name or "群成员",
+    })
+
+
+async def _requeue_leftover_interrupts(agent_id: int, ai_user_id: int, group_id: int,
+                                       chain_depth: int) -> None:
+    """这一轮跑完还没投出去的中断消息 → 自己排一轮（收尾轮之后到达的那条就靠这里）。
+
+    注入点是每轮 LLM 调用**之前**，所以落在最后一次注入之后的消息只会在缓冲里等下一次有人来叫
+    ——那时通常谁也不会来。这里把它捞出来重新投回队列，带 only_ai_ids 限定只叫这一个 AI。
+    """
+    leftovers = await drain_pending_interrupts(agent_id, group_id=group_id)
+    requeued = 0
+    for pm in leftovers:
+        if pm.get("type") == "notice":
+            continue        # 通知是提前量，账本那条才是底子：没赶上就丢掉，不重排也不回写
+        if pm.get("type") != "user_message":
+            await restore_pending_interrupts(agent_id, [pm])   # 认不出的类型原样放回
+            continue
+        try:
+            message_queue.put_nowait({
+                "conversation_type": "group",
+                "group_id": group_id,
+                "message_id": pm.get("message_id"),
+                "content": pm.get("content", ""),
+                "sender_type": "human",
+                "sender_id": pm.get("sender_id"),
+                "chain_depth": chain_depth,
+                "only_ai_ids": [ai_user_id],
+            })
+            requeued += 1
+        except asyncio.QueueFull:
+            logger.warning("AI 回复队列已满，忙时到达的消息重排失败（这条不会被回应）")
+    if requeued:
+        logger.info(f"🔁 AI(agent={agent_id}) 正忙时到达的 {requeued} 条消息改为单独排一轮（群 {group_id}）")
+
 
 async def ai_response_worker():
     """
@@ -336,6 +402,8 @@ async def _process_group_event(db, event: dict):
     candidates = list(target_ai_ids)
     if sender_type == "ai" and exclude_user_id and exclude_user_id in candidates:
         candidates.remove(exclude_user_id)
+    # 忙时重排的事件只叫指定那个 AI（同群其他 AI 早就处理过这条消息了，见 _filter_by_only）
+    candidates = _filter_by_only(candidates, event.get("only_ai_ids"))
 
     if not candidates:
         return
@@ -348,6 +416,8 @@ async def _process_group_event(db, event: dict):
     from app.services.world.decision_skill import load_rules_map
     _by_agent = await load_rules_map(db, "agent", [r[0] for r in _rows])
     rules_map = {r[1]: _by_agent.get(r[0], []) for r in _rows}
+    # user_id（group_members.member_id）→ agent.id：中断缓冲是按 agent.id 记的
+    agent_id_by_user = {int(r[1]): int(r[0]) for r in _rows}
 
     logger.info(
         f"群聊 {group_id} 收到消息 (sender={sender_type}:{sender_id}, depth={chain_depth})，"
@@ -386,15 +456,38 @@ async def _process_group_event(db, event: dict):
     normal_sem = chat_chain_manager.get_semaphore(group_id, limit=getattr(group, "concurrent_ai_limit", 0))
     priority_sem = chat_chain_manager.get_priority_semaphore(group_id)
 
+    # 忙时注入要写说话人名字：没人忙时一次都不查
+    _busy_names: dict[int, str] = {}
+
+    async def _busy_sender_name() -> str:
+        if sender_id is None:
+            return "群成员"
+        if sender_id not in _busy_names:
+            from app.utils.display_name import display_names
+            _busy_names[sender_id] = (
+                await display_names(db, {sender_id})
+            ).get(sender_id) or f"用户{sender_id}"
+        return _busy_names[sender_id]
+
     for ai_id in candidates:
         if is_priority_msg:
-            if not chat_chain_manager.try_claim_priority(ai_id, group_id):
-                continue
-            sem = priority_sem
+            claimed = chat_chain_manager.try_claim_priority(ai_id, group_id)
         else:
-            if not chat_chain_manager.try_claim(ai_id, group_id):
-                continue
-            sem = normal_sem
+            claimed = chat_chain_manager.try_claim(ai_id, group_id)
+        if not claimed:
+            # 这个 AI 正在这个群里跑着一轮：把消息**投给它当前那一轮**（下一轮 LLM 调用前注入），
+            # 而不是丢掉。原先这里直接 continue，注释写着"LLM 跑完自然看到"——而跑着的那一轮
+            # 开局就把上下文构建好了、中途不重读群历史：既没唤醒它、它也没看见
+            # （2026-10-04 群 69 实测：同一句话连发三条只回一条）。
+            _agent_id = agent_id_by_user.get(int(ai_id))
+            if _agent_id is not None:
+                await _inject_busy_group_message(
+                    _agent_id, group_id=group_id, content=content, message_id=message_id,
+                    sender_id=sender_id, sender_name=await _busy_sender_name(),
+                )
+                logger.info(f"⏳ AI agent={_agent_id} 正在群里跑一轮，消息 {message_id} 改为投给它当前轮")
+            continue
+        sem = priority_sem if is_priority_msg else normal_sem
 
         async def _trigger_one(aid, chan_sem):
             async with chan_sem:
@@ -413,6 +506,10 @@ async def _process_group_event(db, event: dict):
                     logger.error(f"AI {aid} 触发异常 (group={group_id}): {e}", exc_info=True)
                 finally:
                     chat_chain_manager.release_claim(aid, group_id)
+                    # 收尾兜底：这一轮没赶上的忙时消息自己排一轮（claim 已放开，不会再被挡）
+                    _agent_id = agent_id_by_user.get(int(aid))
+                    if _agent_id is not None:
+                        await _requeue_leftover_interrupts(_agent_id, aid, group_id, chain_depth)
 
         asyncio.create_task(_trigger_one(ai_id, sem))
 
@@ -749,7 +846,9 @@ async def _maybe_trigger_ai_reply(
         logger.info(f"AI {agent.name}(id={resolved_agent_id}) 速率限制，跳过")
         return
 
-    # 4.5. 忙时中断注入
+    # 4.5. 忙时中断注入（正常不会走到这里：同一个群的忙由上面的 claim 挡在注入那一支；
+    # 走到这儿的是"这个 AI 正在**别的会话**里跑一轮"，消息会按会话记进缓冲，
+    # 等本会话下一轮再投出去——绝不拼进别的会话的上下文里，见 executor.conversation_of）
     if await is_agent_running(agent.id):
         await add_pending_interrupt(agent.id, {
             "type": "user_message",

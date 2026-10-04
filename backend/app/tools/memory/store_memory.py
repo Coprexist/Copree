@@ -81,8 +81,14 @@ class StoreMemory(ToolPlugin):
     async def execute(self, db: AsyncSession, agent_id: int, group_id: int | None,
                       arguments: dict, context: dict) -> dict:
         if arguments.get("memory_id"):
-            return await self._update(db, agent_id, group_id, arguments, context)
-        return await self._store(db, agent_id, group_id, arguments, context)
+            result = await self._update(db, agent_id, group_id, arguments, context)
+        else:
+            result = await self._store(db, agent_id, group_id, arguments, context)
+        if result.get("success"):
+            # 写成功才喊：轮内一句「已生效」+ 给下一轮的变更通知打「自己改的」记号
+            from app.services.memory.memory_service import note_memory_changed
+            await note_memory_changed(agent_id, group_id)
+        return result
 
     async def _store(self, db: AsyncSession, agent_id: int, group_id: int | None,
                      arguments: dict, context: dict) -> dict:

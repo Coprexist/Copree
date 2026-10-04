@@ -726,3 +726,16 @@ def format_memories_for_prompt(memories: list[dict]) -> str:
     #    Python 会把第二个 " 当作字符串终止符，导致 SyntaxError 全局炸（worker 崩溃、AI 不回复）
     lines.append("请参考以上记忆来个性化你的回复，但不要刻意提及「记忆库」。\n")
     return "\n".join(lines)
+
+
+async def note_memory_changed(agent_id: int, group_id: int | None = None) -> None:
+    """记忆写成功之后：轮内喊一声 + 让下一轮的变更通知只说「已生效」。
+
+    两件事都不影响账本那条通知照旧写（便签一定贴，喊只是提前量），也不产生新一轮。
+    记忆工具共用一个出口：store_memory / forget_memory 都走这里，别各写一份。
+    """
+    from app.ai.executor import shout_change
+    from app.services.capability_versioning import mark_self_change, memory_index_source
+
+    mark_self_change(agent_id, memory_index_source(agent_id))
+    await shout_change(agent_id, "你刚改的记忆已生效（记忆索引会在下次刷新上下文时整体换新）。")

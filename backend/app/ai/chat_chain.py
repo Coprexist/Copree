@@ -412,7 +412,7 @@ class ChatChainManager:
 
 
     def try_claim_priority(self, agent_id: int, group_id: int) -> bool:
-        """尝试进 @优先通道。已在普通通道则不重复触发（LLM跑完自然看到@的消息）。"""
+        """尝试进 @优先通道。已在跑一轮时返回 False——调用方要把消息投给那一轮，不是丢掉。"""
         proc = self._processing.setdefault(group_id, set())
         if agent_id not in proc:
             proc.add(agent_id)

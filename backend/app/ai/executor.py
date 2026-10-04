@@ -42,8 +42,10 @@ _CLOSING_INSTRUCTION = (
 )
 
 _pending_interrupts: dict[int, list[dict]] = {}
-# 当前正在 _tool_call_loop 中的 agent ID 集合
-_active_run_agent_ids: set[int] = set()
+# 正在 _tool_call_loop 里的 agent → 它在**哪些会话**里跑着（agent_id → {会话键}）。
+# 为什么要到会话级：同一个 AI 可以群 A 跑一轮、同时收到群 B 的消息；"忙"得能分清哪个会话忙，
+# 否则投递会串会话（见 conversation_of），也没法回答"能不能趁它干活喊一声"。
+_active_runs: dict[int, set[str]] = {}
 # 全局状态锁（保护以上两个变量的并发访问）
 _state_lock = asyncio.Lock()
 
@@ -53,34 +55,139 @@ logger = logging.getLogger(__name__)
 _rate_limit_tracker: dict[int, float] = {}
 
 
+# 每个 agent 的中断缓冲上限：这是"本轮再读一次"的通道，不是消息仓库——超了丢最旧的
+# （消息本身已经在群里/账本里，下一轮历史照样看得到，丢的只是这一次投递），并留痕。
+MAX_PENDING_INTERRUPTS = 20
+
+
 async def add_pending_interrupt(agent_id: int, message: dict) -> None:
-    """线程安全地添加待处理的中断消息。"""
+    """线程安全地添加待处理的中断消息（超上限丢最旧的，见 MAX_PENDING_INTERRUPTS）。"""
     async with _state_lock:
-        _pending_interrupts.setdefault(agent_id, []).append(message)
+        items = _pending_interrupts.setdefault(agent_id, [])
+        items.append(message)
+        overflow = len(items) - MAX_PENDING_INTERRUPTS
+        if overflow > 0:
+            del items[:overflow]
+            logger.warning(
+                f"AI(agent={agent_id}) 忙时中断缓冲超过 {MAX_PENDING_INTERRUPTS} 条，丢弃最旧的 {overflow} 条"
+                "（消息仍在群/账本里，下一轮历史照常能看到）"
+            )
 
 
-async def drain_pending_interrupts(agent_id: int) -> list[dict]:
-    """线程安全地取出并清空指定 agent 的待处理中断消息。"""
+def conversation_of(message: dict) -> tuple[str, object]:
+    """一条中断消息属于哪个会话：群看 group_id，私信看 session_id。
+
+    为什么要有这个：同一个 agent 的缓冲是**跨会话共用**的（它同时在群和私信里说话），
+    不区分就会把 A 群的消息拼进正在跑的 B 群的轮次里——AI 会把两边的上下文混着读。
+    """
+    if message.get("group_id") is not None:
+        return ("group", message["group_id"])
+    if message.get("session_id") is not None:
+        return ("dm", message["session_id"])
+    return ("", None)
+
+
+async def drain_pending_interrupts(agent_id: int, *, group_id: int | None = None,
+                                   session_id: str | None = None) -> list[dict]:
+    """取出待处理的中断消息；给了会话就**只取那个会话的**，其余留在缓冲里。
+
+    不传会话 = 全取（历史调用口径）。工具轮每轮调用前按自己的会话取，取错会话等于投错人。
+    """
     async with _state_lock:
-        return _pending_interrupts.pop(agent_id, None) or []
+        items = _pending_interrupts.get(agent_id) or []
+        if group_id is None and session_id is None:
+            _pending_interrupts.pop(agent_id, None)
+            return items
+        want = ("group", group_id) if group_id is not None else ("dm", session_id)
+        mine, keep = [], []
+        for item in items:
+            # 通知不分会话（它说的是"你这个 AI 变了"）：哪一轮来取都给，别让它等会话
+            is_notice = item.get("type") == "notice"
+            (mine if is_notice or conversation_of(item) == want else keep).append(item)
+        if keep:
+            _pending_interrupts[agent_id] = keep
+        else:
+            _pending_interrupts.pop(agent_id, None)
+        return mine
 
 
-async def is_agent_running(agent_id: int) -> bool:
-    """检查指定 agent 是否正在执行 _tool_call_loop。"""
+def interrupt_message_block(pm: dict, agent_name: str) -> dict:
+    """一条中断消息 → 上下文里那条 user 块。
+
+    多条**各成一块**，不合并：AI 要分得清是谁在第几条说的，糊成一段就等于把两个人两句话
+    说成一个人说的。带上 message_id，它才知道要引用回复哪条。
+    """
+    if pm.get("type") == "notice":
+        # 平台说的一句话（能力/记忆变更的提前量）：系统口吻、随轮消失，不进历史
+        return {"role": "system", "content": str(pm.get("content") or "")}
+
+    from zoneinfo import ZoneInfo
+
+    from app.utils.pure.prompting import format_message
+
+    tz = ZoneInfo(settings.display_timezone)
+    now_str = datetime.now(tz).strftime(f"%Y-%m-%d %H:%M {tz.key}")
+    msg_struct = {
+        "time": now_str,
+        "speaker_name": pm.get("sender_name") or "用户",
+        "speaker_id": pm.get("sender_id"),
+        "is_self": False,
+        "content": pm.get("content", ""),
+        "message_id": pm.get("message_id"),
+    }
+    return {"role": "user", "content": format_message(msg_struct, agent_name, max_content_len=-1)}
+
+
+async def restore_pending_interrupts(agent_id: int, messages: list[dict]) -> None:
+    """把取出来但没投出去的中断消息放回缓冲（轮次收尾的兜底用）。
+
+    顺序：放回队首——它们比新来的更早发生，下一轮该先看到它们。
+    """
+    if not messages:
+        return
     async with _state_lock:
-        return agent_id in _active_run_agent_ids
+        old = _pending_interrupts.get(agent_id) or []
+        _pending_interrupts[agent_id] = list(messages) + old
 
 
-async def mark_agent_running(agent_id: int) -> None:
-    """标记 agent 为正在执行。"""
+async def is_agent_running(agent_id: int, conversation: str | None = None) -> bool:
+    """这个 agent 是否正在跑一轮；给了会话就只看那个会话。"""
     async with _state_lock:
-        _active_run_agent_ids.add(agent_id)
+        running = _active_runs.get(agent_id) or set()
+        return bool(running) if conversation is None else conversation in running
 
 
-async def unmark_agent_running(agent_id: int) -> None:
-    """取消 agent 的执行标记。"""
+async def mark_agent_running(agent_id: int, conversation: str | None = None) -> None:
+    """标记 agent 正在某个会话里执行。"""
     async with _state_lock:
-        _active_run_agent_ids.discard(agent_id)
+        _active_runs.setdefault(agent_id, set()).add(conversation or "")
+
+
+async def unmark_agent_running(agent_id: int, conversation: str | None = None) -> None:
+    """取消标记（会话跑完）。"""
+    async with _state_lock:
+        running = _active_runs.get(agent_id)
+        if not running:
+            return
+        running.discard(conversation or "")
+        if not running:
+            _active_runs.pop(agent_id, None)
+
+
+async def shout_change(agent_id: int, text: str) -> bool:
+    """变更发生的那一刻，趁它正在干活"喊一声"（这一轮就能看到）。
+
+    - 只在它**确实在跑一轮**时才喊；没在跑就不喊——账本那条变更通知照样会在下一轮给它，
+      喊只是提前量（便签一定贴，喊只是顺口一句）。
+    - 通知**不分会话**：「你的工具 / 记忆 / 人格变了」在哪个会话里都成立，所以它的会话字段为空，
+      取用的那一轮会照收（见 drain_pending_interrupts）。
+    - **绝不产生新一轮、也不落库**：投递只负责投递。type="notice" 的块随轮消失，
+      轮末兜底只重排"人说的话"，通知直接丢掉（账本那条才是它的底子）。
+    """
+    if not str(text or "").strip() or not await is_agent_running(agent_id):
+        return False
+    await add_pending_interrupt(agent_id, {"type": "notice", "content": str(text).strip()})
+    return True
 
 
 def _get_tool_task_summary(tool_name: str, arguments: dict) -> str | None:
@@ -828,28 +935,17 @@ async def _tool_call_loop(
                                 pass
 
                 # ── 注入用户忙时消息（中断缓冲）──
-                pending_msgs = await drain_pending_interrupts(agent.id)
+                # 只取本会话的中断：同一个 AI 的缓冲跨会话共用（见 conversation_of）
+                pending_msgs = await drain_pending_interrupts(
+                    agent.id,
+                    group_id=group_id if conversation_type == "group" else None,
+                    session_id=None if conversation_type == "group" else session_id,
+                )
                 if pending_msgs:
                     try:
                         for pm in pending_msgs:
                             if pm.get("type") == "user_message":
-                                from zoneinfo import ZoneInfo
-                                tz = ZoneInfo(settings.display_timezone)
-                                now_str = datetime.now(tz).strftime(f"%Y-%m-%d %H:%M {tz.key}")
-                                sender_name = pm.get("sender_name", "用户")
-                                sender_id = pm.get("sender_id")
-                                msg_struct = {
-                                    "time": now_str,
-                                    "speaker_name": sender_name,
-                                    "speaker_id": sender_id,
-                                    "is_self": False,
-                                    "content": pm.get("content", ""),
-                                }
-                                from app.utils.pure.prompting import format_message
-                                messages.append({
-                                    "role": "user",
-                                    "content": format_message(msg_struct, agent.name, max_content_len=-1),
-                                })
+                                messages.append(interrupt_message_block(pm, agent.name))
                         logger.info(f"AI {agent.name}({agent.id}): 注入 {len(pending_msgs)} 条中断消息")
                     except Exception:
                         # 注入失败：回写缓冲，避免消息永久丢失

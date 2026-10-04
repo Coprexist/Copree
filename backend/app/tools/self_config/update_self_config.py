@@ -66,6 +66,12 @@ class UpdateSelfConfig(ToolPlugin):
                 updates=updates, is_admin=False,
             )
             await db.commit()
+            if "system_prompt" in updates:
+                # 自己刚改的人格：轮内喊一声；下一轮的变更通知只说已生效（别把改前改后念一遍）
+                from app.ai.executor import shout_change
+                from app.services.capability_versioning import agent_prompt_source, mark_self_change
+                mark_self_change(agent_id, agent_prompt_source(agent_id))
+                await shout_change(agent_id, "你刚改的人格提示词已生效（下次 compact / 清空上下文时整体换上）。")
             return {"success": True, "message": f"已更新，会在之后同步给你（{', '.join(updates.keys())}）"}
         except ValueError as e:
             return {"error": True, "message": str(e)}

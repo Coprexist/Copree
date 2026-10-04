@@ -44,6 +44,8 @@ class ForgetMemory(ToolPlugin):
             return {"error": True, "message": out.get("message", "没删成")}
         logger.info(f"AI({agent_id}) 删除记忆 {memory_id}「{out['title']}」："
                     f"{str(arguments.get('reason') or '未说明')[:120]}")
+        from app.services.memory.memory_service import note_memory_changed
+        await note_memory_changed(agent_id, group_id)
         return {"success": True, "id": out["id"], "title": out["title"],
                 "message": f"已删掉「{out['title']}」"}
 
