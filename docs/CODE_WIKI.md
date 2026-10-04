@@ -607,7 +607,8 @@ class KeyFatalError(Exception):     # 402/401 → 跳过此 Key
 | `_chat_completion_streaming()` | SSE 流式聊天补全 |
 | `_chat_completion_non_streaming()` | 非流式聊天补全 |
 | `_build_tools_segment()` | 构建工具段（按 6 段分组） |
-| `_build_skill_injection()` | Skill 引擎注入（记忆改走账本条目：`_recall_memory_ids` 只召回，投递在 `memory_delivery`） |
+| `_build_skill_injection()` | Skill 引擎注入（技能沉尾部读数；记忆走账本条目：`_recall_memory_ids` 只召回，投递在 `memory_delivery`） |
+| `_deliver_plan_board()` / `_collect_injection_events()` | 计划板投递（`plan_service.deliver_plans`，账本条目 `kind=plan`，键是会话）与「便签 + 能力变更通知」的合并入口——两条路径共用一处 |
 
 #### 5.4.5 chat_chain.py — 聊天链尺时间
 

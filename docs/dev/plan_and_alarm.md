@@ -23,8 +23,8 @@
 | 状态栈是 `agents.state_stack` 一列 JSON，同时装两类帧 | 全站 39 帧**全是情景帧**（dm/group_chat），任务帧 0 个；`paused`/`completed`/`closed` 一个都没有 | `push_state`/`close_state` 这套从上线到现在没被真正用过 |
 | **帧 id 会变** | 摘要结尾写着「完成后调用 pop_state」；实测某个 AI 每轮 `end_turn` 前都 `pop_state` → 栈清空 → 下次触发 `ensure_active_frame` 重建新帧（新 uuid） | 绑 `frame_id` 必须配离栈规则，不能假设它是长期标识 |
 | 栈深上限 10 | `MAX_STACK_DEPTH`；`ensure_active_frame` 超了从**栈底裁**，`push_state` 满了**拒绝** | 本机最深 5 层，裁剪从未触发；触发条件是「同一 AI 被 11 个以上不同会话触发过」 |
-| `agent_alarms` 是**可变行** | `update_alarm` 就地改 wake_at/task，cancel/fire 改 status | 没有版本列、没有事件表，所以「哪一版」只能靠内容指纹现算 |
-| 前缀缓存的命中边界 | 命中恒等于「工具定义 + system 段」约 17k token；实测某个 AI 从 190 条消息涨到 235 条，`cached_tokens` 死钉在 17,280 | 历史一直没进缓存；记忆召回块（拼在历史之前、每轮重算）是元凶，已修 |
+| `agent_alarms` 是**可变行** | `update_alarm` 就地改 wake_at/task，cancel/fire 改 status | 没有版本列、没有事件表：所以「变没变」只能投递时比渲染文本现算（§3.2），而不是查版本号 |
+| 前缀缓存的命中边界 | 修前：命中恒等于「工具定义 + system 段」约 17k token，某 AI 从 190 条涨到 235 条 `cached_tokens` 死钉在 17,280。修后（同一 AI 同一群）：233 / 235 / 239 条消息时 `cached_tokens` 27,264 / 27,520 / 27,648，占 prompt 94%~97%；相邻两次请求首个不同下标 225/227（总长 233/239），`messages[0]` 4894 字符逐字节相同 | 整段历史现在都进缓存。规矩：**开头每个字节只许随「配置/能力版本」变**，随对话/时间变的一律去尾部读数或账本条目 |
 | 状态摘要本身是字节稳定的 | 同一帧 8 连轮 243 字节完全一致，且位置在历史**之后** | 它不需要改；计划和它同区即可 |
 
 ## 三、设计
@@ -33,30 +33,41 @@
 
 计划与闹钟共用一份「节奏」，按**状态帧**归属，用**账本条目**进上下文（进一次 + 只补改变量），到点时在它所属的状态里唤醒。
 
-### 3.2 进上下文的机制：与记忆同一条管线
+### 3.2 进上下文的机制：一条按会话归属的账本条目
 
 - 条目 `kind=plan`，位置**紧挨着当轮新消息之前**（构建请求时先投计划、再 `sync_*_history` 落当轮消息）。
   落账本而不是拼在历史之前——账本只追加，位置定下就固定，前缀字节从头到尾一致。
-- 幂等键 `ref = plan:<frame_id>:<alarm_id>@<指纹>`（指纹 = `wake_at` + `task` + `status`；改时间、改描述、取消、触发都算变）。
-  指纹只进 `ref`，**不进请求体**：请求体里只有「这条计划是什么」。
-- 三种情形：账本里没见过 → 投一条；见过但指纹不同 → 投「以新的为准」+ 最新内容；指纹相同 → 什么都不投。
-- **全量基线**：帧被激活（push / 切回 / 重建）时投一次该状态的全部计划；AI 主动调 `list_alarms` / `check_workspace`
-  视为「请求完整列表」→ 把该帧还没投的变化标记为已投（内容已经在工具结果里了）。
+- 键是**会话**：`ref = plan:<context_ref>`。不用帧 id 当键——实测帧 id 每轮都可能重建（AI 自己 `pop_state`），
+  拿它当键会让计划板每轮都被当成"没见过"重投一遍；会话轴稳定，正好是「这个状态下次被触发」的那个粒度。
+  没有内容指纹、没有 alarm id、不需要新列。
+- **变化判据是渲染文本本身**：账本里该会话最后一条 `plan` 条目的正文就是"上次投出去的是什么"，
+  这次渲染的板子和它逐字节比——不同才追加一条。首投 `【计划】`，变了 `【计划更新】以这份为准`。
+  板子里只出现绝对时间（本地时区），不出现"还有 N 分钟"这类相对量，所以"没变"就是真的没变。
+- AI 主动调 `list_alarms` / `check_workspace` 看到的就是完整列表；比文本的机制下不需要额外「标记已投」——
+  板子没变就不投，变了才投（那点重复的内容它刚从工具结果里看过，无害）。
 - 条目带 `drop_on_unlock`（compact 后重投一轮）并进 `NEVER_COMPRESSIBLE`（与 `handoff` 同款）。
 
-### 3.3 渲染口径（三条，一起出现）
+### 3.3 渲染口径（四栏，一起出现）
 
-1. **本状态的所有计划**：`frame_id == 当前帧` 且未到点，全量列出（按 wake_at 升序）。
-2. **本状态排给其他状态、还没到点的**：`origin_frame` 是本帧、`frame_id` 是别的帧、status=pending。
-3. **其他状态的计划数目**：按帧分组只报数（带帧的 type / doing 当标签）。
+1. **本会话的计划**：`origin_context_ref == 当前会话` 且未到点，按 `wake_at` 升序列出。
+2. **本会话排给别处的**：`origin_context_ref == 当前会话`、目标帧不是当前帧、未到点——写清到点会在哪个状态里叫醒它。
+3. **其他会话的计划数目**：只报数，带目标帧的 type / doing 当标签。
+4. **已执行的**：`status=fired` 的留一行 `✅ 已执行`，只留最近几条——这就是「下次这个状态被触发时更新显示一下」，
+   下一次任何变化带来的重渲染会自然带上它，然后随时间淡出。
+5. **没记归属的（迁移前排的老闹钟）**：两列都空的行不能猜成"这个会话的"，单独报数并把 id 给出来
+   （`另有 N 条早先排的闹钟没记归属：#1、#2`），让 AI 自己用 `list_alarms` 看全量后决定去留。
 
 语义焦段只作为**标签**（排计划时快照当时的 `semantic_focus`，显示用），不参与归属——
 焦段是记忆的适用范围，而且它的锚点还没参与召回，拿它做归属既绕又不可靠。
 
 ### 3.4 唤醒与状态
 
-- `_process_alarm_event` 唤醒前按 `alarm.frame_id` 恢复状态：帧还在栈里 → 回跳到它；已离栈 → `make_state_frame` 重建同 type 的帧压栈，再跑任务。
+唤醒侧保持薄：**说清「你被哪条闹钟唤醒、当初要做什么」+ 把状态恢复回去**，不做别的。
+- 恢复按 `alarm.frame_id`（该唤醒谁）：帧还在栈里 → 回跳到它；已离栈 → 按 `origin_context_ref` 重建同型帧压栈，再跑任务。
   这样「叫醒的是那个状态下的他」，任务描述里的上下文才成立。
+- 归属只记两个事实，都在闹钟行上（单一来源）：`origin_context_ref`（谁拉起的，口径就是账本会话键：群 `group:{id}`、
+  私信 `session_id`）、`frame_id`（该唤醒谁）。
+  **「该通知谁」不落列**——它是这两者推出来的两类读者（本会话的、排给别处的），存一份就是第二份真相。
 - 帧离栈（`pop_state` / `close_state` / 栈底裁剪）时**不静默删计划**：记一条「状态 X 已关闭，名下还有 N 条没到点」，
   让 AI 下次醒着时自己改派或取消。静默删等于丢东西。
 
@@ -71,11 +82,12 @@
 
 ### 3.6 变更「什么时候发现」
 
-- **(A) 变更点记一笔**：`app/ai/alarm.py` 的 `set_alarm` / `update_alarm` / `cancel_alarm` / `fire_alarm` + `workspace_service.set_workspace_file`。
-  需要一张待投递表或队列。
-- **(B) 不记，投递时比对指纹**：与记忆完全同形，零插桩、零新表。代价：一条计划改了、而持有它的帧当时不在活跃状态，
-  要等那个状态下次被触发才看到——而帧激活本来就投全量，所以不会漏。
-- **建议 (B)**：少一张表、少五处插桩，且与记忆共用一套心智（比对在投递时做，写入侧完全不动）。
+不插桩、不建表：写入侧完全不动，判据在投递时算——**比渲染文本**（§3.2）。
+代价：一条计划改了、而它所属的会话当时不活跃，要等那个会话下次被触发才看到。这是可接受的：
+计划板本来就是「这个状态下次醒来时看到的东西」，不是实时推送。
+
+（早先的版本想用「内容指纹 + alarm id 进 ref」回答"上次投的是哪一版"。比文本把这一层整个省掉：
+账本条目自己就是上次的渲染结果，跟它比逐字节比算指纹更直接，也不用维护哈希。）
 
 ### 3.7 「每次触发都叫他规划」
 
@@ -96,18 +108,19 @@
 
 1. **迁移 0078**（当前 head `0077_chat_list_indexes.py`）：`agent_alarms` 加 `frame_id`(String(12), 可空) 与 `origin_context_ref`(String(64), 可空)；
    `agents` 加 `plan_injection_enabled`(Boolean, default false)。帧 id 是字符串（帧活在 `agents.state_stack` 的 JSON 里），不是外键。
-2. **`backend/app/utils/pure/plan_entry.py`**（照 `utils/pure/memory_entry.py` 的形状）：计划指纹、ref 构造、
-   三条渲染（本状态 / 交出去 / 其他计数）、条目构造。纯函数、无 IO。
-3. **`backend/app/services/agent/plan_service.py`**：投递器（读账本 → 比对指纹 → 投新增/变更 → 清基线）、
-   `mark_seen`（`list_alarms`/`check_workspace` 时刷新基线）、帧离栈通知。照 `services/memory/memory_delivery.py` 的形状。
+2. **`backend/app/utils/pure/plan_entry.py`**：`plan_ref(context_ref)` + 计划板渲染（本会话 / 排给别处 / 其他计数 / 已执行）
+   + 条目构造（首投与「以这份为准」两种头）。纯函数、无 IO、无指纹。
+3. **`backend/app/services/agent/plan_service.py`**：投递器——读账本里该会话最后一条 `plan` 条目的正文，
+   与本次渲染逐字节比，不同才 `append_events`。照 `services/memory/memory_delivery.py` 的形状。
 4. **`backend/app/ai/llm.py`**：群聊与私信两条路径都接上（在 `sync_*_history` **之前**投递）；
    顺手把 `_deliver_frame_notes` / `_build_capability_notice` / 计划投递三个源收成一个 `_collect_injection_events`
    （现在那三行在 1146-1151 与 1528-1533 各抄了一遍）。
-5. **`backend/app/ai/alarm.py`**：`set_alarm` 落 `frame_id`；`_process_alarm_event` 按 `frame_id` 恢复状态再执行。
+5. **`backend/app/ai/alarm.py`**：`set_alarm` 落 `frame_id` / `origin_context_ref`（读 `get_frames` 的栈顶）；
+   `_process_alarm_event` 先按 `frame_id` 恢复状态（`restore_frame`）再执行，并把「被 #几 唤醒、当初写的是什么」说清楚。
 6. **开关链**：`schemas/agent.py` → `services/agent/agent_service.py`（`CONFIG_PROFILES` + `current_values` + `get_effective_config`）
    → `utils/pure/presets.py` → `routers/agents.py`（创建/更新/预设预览）→ 前端四处 → i18n 三语 → `update_self_config`。
-7. **验证（四层闭环）**：新单测 `backend/tests/test_plan_delivery.py`（照 `test_memory_delivery.py`：只投一次、改过只补最新、
-   请求体里没有 frame_id/alarm id/指纹）→ 全量套件 `docker exec -w /app ai_group_backend bash -c 'export TEST_DATABASE_URL="${DATABASE_URL}_test"; python tests/run_without_pytest.py'`
+7. **验证（四层闭环）**：新单测 `backend/tests/test_plan_delivery.py`（照 `test_memory_delivery.py`：只投一次、改过只重投最新板、
+   请求体里没有状态帧 id——闹钟 #id 是故意显示的，AI 靠它 update_alarm / cancel_alarm）→ 全量套件 `docker exec -w /app ai_group_backend bash -c 'export TEST_DATABASE_URL="${DATABASE_URL}_test"; python tests/run_without_pytest.py'`
    → `docker restart ai_group_backend` 看启动日志到 uvicorn running、health 200 → 真机看新增日志里 `kind=plan` 条目的位置
    与 `cached_tokens` 是否随消息数增长。
 
@@ -118,26 +131,32 @@
 | `backend/app/models/alarm.py` | `AgentAlarm`：agent_id / wake_at / task / status(pending/fired/cancelled) / fired_at |
 | `backend/app/ai/alarm.py` | `set_alarm` / `update_alarm` / `cancel_alarm` / `fire_alarm` / `list_alarms` / `get_due_alarms` / `alarm_scheduler` / `_process_alarm_event` |
 | `backend/app/ai/decider.py` | `_decide_alarm_action`（优先级 85） |
-| `backend/app/services/agent/state_stack_service.py` | `ensure_active_frame`(445) / `push_state`(144) / `pop_state`(196) / `close_state`(268) / `get_state_stack_summary`(302) / `frame_turn_context`(398) |
+| `backend/app/services/agent/state_stack_service.py` | `get_frames` / `restore_frame`（闹钟唤醒时按帧恢复状态）/ `ensure_active_frame` / `push_state` / `pop_state` / `close_state` / `get_state_stack_summary` / `frame_turn_context` |
 | `backend/app/utils/pure/state_stack.py` | `make_state_frame`(48) / `format_state_stack_summary`(147) / `MAX_STACK_DEPTH`(21) |
 | `backend/app/models/agent.py` | `state_stack`(152) / `cross_state_notes`(162) / `foci`(166) / `state_stack_max_chars`(169) |
-| `backend/app/ai/llm.py` | 群聊路径 `dynamic_readings`(~1004) + 账本段(~1123-1160)；私信路径(~1410) + 账本段(~1519-1541) |
+| `backend/app/ai/llm.py` | 群聊路径：锁定段 + 尾部读数(`tail_blocks`) + 账本段（记忆投递在 `sync_group_history` 之前）；私信路径同形。`message 0` 之后**直接进历史**，开头没有注入插槽 |
 | `backend/app/services/history/context_sync.py` | `sync_group_history`(131) / `sync_dm_history` / `append_events`(40) / `rewrite_context`(52) |
 | `backend/app/utils/pure/history.py` | `KINDS` / `NEVER_COMPRESSIBLE` / `make_entry` / `entries_to_messages` / `latest_message_ref` |
-| `backend/app/utils/pure/memory_entry.py`、`services/memory/memory_delivery.py` | 记忆那一半的成型样板，计划照抄形状 |
+| `backend/app/utils/pure/memory_entry.py`、`services/memory/memory_delivery.py` | 记忆那一半（指纹 + id 去重）；计划的形状更薄：会话键 + 文本比对 |
 | `backend/app/services/agent/workspace_service.py` | `get_current_task_text` / `set_workspace_file`（写 plan/todo 的地方） |
 | `backend/app/tools/self_management/` | `set_alarm` / `list_alarms` / `update_alarm` / `cancel_alarm` / `check_workspace` / `manage_workspace` |
 
-## 七、两个可选前置（不做也能上）
+## 七、可选前置与后续（不做也能上）
 
 1. **情景帧与任务帧分家**：现在两类帧挤在一个数组、共用 10 层上限，而情景帧本该按会话长期保留。
    做了它，帧 id 才可能是长期标识；不做，就靠 3.4 的离栈通知兜底。
 2. **`make_entry` 的 kind 兜底**：现在是 `message`（未声明/未知的 kind 会被改写成它），建议改成通用 `system` 类。
    kind 只活在账本里（`entries_to_messages` 投影只留 role + content，前端日志读的是投影后的 messages），加 kind 不影响前端显示。
+3. **唤醒提示词里也摆一次计划板**：闹钟唤醒走的是独立提示词（不读账本、不进历史），所以那一轮看不见板子。
+   要做就在 `_process_alarm_event` 里按 `origin_context_ref` 渲染一次、当尾部 system 块塞进去（与它现在注入记忆的方式同形）。
+   本次没做：唤醒轮本来就是冷启动，而板子已经会在那个状态的下一次正常轮次里出现。
 
 ## 八、顺带记录：记忆注入那一半的现状
 
-已落地（`utils/pure/memory_entry.py` + `services/memory/memory_delivery.py` + `ai/llm.py` 两条路径 + 注入文案去掉相似度），
-守卫用例 `backend/tests/test_memory_delivery.py`，全量套件 544 通过。**唯一待验的是真机缓存数字**：
-重启后单次调用日志的 `cached_tokens` 应随消息数增长（改之前某个 AI 从 190 条涨到 235 条、cached 恒为 17,280）。
-注意重启后的**第一轮仍会全 miss**（记忆块从历史之前挪进了历史，布局变了），从第二轮起才可能对齐。
+已落地并**真机验证通过**（`utils/pure/memory_entry.py` + `services/memory/memory_delivery.py` + `ai/llm.py` 两条路径 + 注入文案去掉相似度），
+守卫用例 `backend/tests/test_memory_delivery.py`；计划板那一半也已落地（2026-10-03），全量套件 **551 通过**。
+   真机数字（同一 AI 同一群、单次调用）：
+改前 201 条消息 `cached` 11,904 / prompt 26,444（45%）；改后 233 / 235 / 239 条消息时 27,264 / 27,520 / 27,648，
+占 prompt 94%~97%；`messages[0]` 4894 字符逐字节相同，相邻两次请求首个不同下标 225/227（总长 233/239）。
+注意重启后的**第一轮仍会全 miss**（布局变了），从第二轮起对齐。同一批收尾还删掉了 `dynamic_readings` 这个
+「当轮注入区」（技能注入按它自己的注释沉到尾部），开头现在只剩走版本链冻结的锁定段。

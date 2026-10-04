@@ -50,6 +50,43 @@ async def _set_stack(db: AsyncSession, agent_id: int, stack: list[dict]) -> None
     )
 
 
+async def get_frames(db: AsyncSession, agent_id: int) -> list[dict]:
+    """状态栈全帧（栈底 → 栈顶）。"""
+    return await _get_stack(db, agent_id)
+
+
+async def restore_frame(db: AsyncSession, agent_id: int, frame_id: str,
+                        origin_context_ref: str = "") -> dict:
+    """把栈顶换成指定帧（闹钟唤醒用）：帧还在栈里就回跳，已被 pop 就重建同型帧。
+
+    重建时**沿用原 frame_id**——"该唤醒谁"是这条计划写下时就定下的身份，不能因为
+    中间 pop 过一次就换人；计划板也靠它认出"这条是排给这个状态的"。
+    返回恢复好的帧（没有帧身份可用时返回 {}）。
+    """
+    db = _ensure_repo(db)
+    stack = await _get_stack(db, agent_id)
+    idx = next((i for i, f in enumerate(stack) if frame_id and f.get("id") == frame_id), None)
+    if idx is not None:
+        frame = stack.pop(idx)
+    else:
+        if not origin_context_ref:
+            return {}
+        # 键的口径只有两种：群是 group:{id}，私信就是 session_id（context_sync.context_ref）
+        frame = make_state_frame(
+            type_="group_chat" if origin_context_ref.startswith("group:") else "dm",
+            context_ref=origin_context_ref, id=frame_id or None,
+            why="闹钟唤醒", doing="执行自己排下的计划",
+        )
+    if stack:
+        stack[-1]["status"] = "suspended"
+    frame["status"] = "active"
+    stack.append(frame)
+    if len(stack) > MAX_STACK_DEPTH:
+        stack = stack[-MAX_STACK_DEPTH:]
+    await _set_stack(db, agent_id, stack)
+    return frame
+
+
 async def load_trigger_state(db: AsyncSession, agent_id: int) -> dict:
     """读当前会话的触发规则状态（{tool_uses, delivered}）。
 

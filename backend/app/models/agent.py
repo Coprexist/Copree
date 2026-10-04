@@ -84,6 +84,8 @@ class Agent(Base):
 
     # 对话结束时是否强制要求 AI 设定闹钟（数字生命档默认开启，防止"睡死"）
     force_alarm_on_end = Column(Boolean, default=False)
+    # 把计划与闹钟投进上下文（计划板的显示开关）。存量 AI 一律关：打开会改变它们每轮的提示词与花费
+    plan_injection_enabled = Column(Boolean, default=False, comment="把计划与闹钟投进上下文")
 
     # AI 最多可设多少个活跃闹钟（心跳节奏的边界）
     max_alarms = Column(Integer, default=10)

@@ -525,6 +525,27 @@ async def _inject_cross_state_context(db, agent, context_ref: str, messages: lis
         logger.warning(f"交接尾巴注入失败（非致命）: {e}")
 
 
+async def _deliver_plan_board(db, agent, context_ref: str) -> None:
+    """计划板：与记忆同一条管线，落在当轮新消息之前（见 docs/dev/plan_and_alarm.md §3.2）。"""
+    from app.services.agent.plan_service import deliver_plans
+    await deliver_plans(db, agent, context_ref)
+
+
+async def _collect_injection_events(db, agent, context_ref: str, entries: list[dict]) -> list[dict]:
+    """历史之后、尾部读数之前的一次性事件：便签投递/撤下 + 能力变更通知。
+
+    群聊与私信两条路径曾经各抄一遍这几行；语义要求是「紧跟历史」，所以收成一处——
+    下次加事件源时才不会只改了一条路。
+    """
+    from app.utils.pure.history import make_entry
+
+    events: list[dict] = await _deliver_frame_notes(db, agent, context_ref, entries)
+    cap_notice = await _build_capability_notice(db, agent)
+    if cap_notice:
+        events.append(make_entry("notice", cap_notice, flags={"drop_on_unlock": True}))
+    return events
+
+
 async def _deliver_frame_notes(db, agent, context_ref: str, entries: list[dict]) -> list[dict]:
     """跨状态便签：**投递 = 落一条 note 条目**（账本里有了就不再投，幂等）；返回本轮要追加的条目。
 
@@ -993,17 +1014,11 @@ async def build_messages(
     if "tools" in enabled_segments:
         segments["tools"] = await _build_tools_segment(db, agent, is_dm)
     
-    # injected_skills（记忆 + 技能注入）**不进 message 0**：它的检索词就是「最近 5 条消息」，
-    # 每条新消息都让它变——它一变，整个前缀从第 0 字节起全 miss（实测：插一条消息前后首差下标 = 0）。
-    # 按 §3 的规矩它就是「当轮事实」，跟状态栈/任务一起沉到尾部读数。
-    dynamic_readings: list[str] = []
+    # injected_skills（记忆索引 + 技能注入）拆成两半：索引只看能力版本，走版本链冻结，
+    # 所以能待在锁定段；技能注入的检索词是「最近 5 条消息」，属于当轮事实，归尾部读数。
     recalled_memory_ids: list[int] = []
     if "injected_skills" in enabled_segments and context_config_parser.should_inject_skills(context_config):
-        # 索引（冻结）进锁定段；技能注入（检索词是当轮消息）进尾部读数
         segments["injected_skills"] = await _build_memory_index(db, agent)
-        _skill_block = await _build_skill_injection(db, agent, group_id)
-        if _skill_block:
-            dynamic_readings.append(_skill_block)
         # 记忆不走尾部读数：它是账本条目，要落在当轮新消息之前（见下方账本段）
         recalled_memory_ids = await _recall_memory_ids(
             db, agent, group_id, query_text, api_base_url, api_key, trigger_user_id)
@@ -1016,8 +1031,12 @@ async def build_messages(
 
     # 动态内容一律沉到尾部（message 0 只留静态段）：状态栈每次切会话都在变、任务/通道规矩/
     # 好友申请也会变——写进前缀等于每轮重建整个前缀，缓存全废。它们按「当轮事实」跟在历史后面。
-    # 记忆单独提前（见下）；其余动态块（任务/状态/通道）仍沉在末尾
+    # 记忆是例外，但它走的是账本条目（追加在历史尾部），不是"提前到历史之前"
     tail_blocks: list[str] = []
+    if "injected_skills" in enabled_segments and context_config_parser.should_inject_skills(context_config):
+        skill_block = await _build_skill_injection(db, agent, group_id)
+        if skill_block:
+            tail_blocks.append(skill_block)
 
     # ✨ 工作区任务（配置驱动）
     if context_config_parser.should_inject_workspace(context_config):
@@ -1066,12 +1085,10 @@ async def build_messages(
         except Exception as e:
             logger.warning(f"好友申请注入失败（非致命）: {e}")
 
+    # message 0 之后直接进对话历史：这里曾经有个"当轮注入区"（dynamic_readings），
+    # 每轮重算的块放在历史之前会把后面整段前缀缓存打掉——能力索引已冻结进 message 0，
+    # 其余当轮事实（技能、任务、状态、时间）一律沉到尾部读数或账本条目
     messages = [{"role": "system", "content": system_prompt}]
-
-    # 记忆紧跟系统提示、排在对话历史之前：让 AI 先想起这个人，再读他说的话。
-    # 它仍在 message 0 之外的"当轮区域"，所以前缀缓存不受影响。
-    for block in dynamic_readings:
-        messages.append({"role": "system", "content": block})
 
     # ── 多会话上下文（配置驱动）──
     if context_config_parser.should_inject_cross_conversation(context_config):
@@ -1138,6 +1155,8 @@ async def build_messages(
         # 所以它抢在 sync 之前落账本——sync 一追加，新消息就压到它前面去了。
         from app.services.memory.memory_delivery import deliver_memories
         await deliver_memories(db, agent, group_ref, recalled_memory_ids)
+        # 计划板同一条管线：先投计划、再 sync 落当轮消息，板子就紧挨着新消息之前
+        await _deliver_plan_board(db, agent, group_ref)
 
         # ── 历史消息：账本（只追加 + 缺口）──
         # 旧实现每轮按「最新 N 条」重建窗口，前缀每轮前移 → 整段 miss；
@@ -1147,11 +1166,7 @@ async def build_messages(
         # 一次性事件（能力变更通知 / 便签撤下）**落成条目**：它们属于「外界带来了什么」，
         # 必须紧跟历史——落在尾部读数之前，否则下一轮它们会从末尾跑到中间（顺序变 = 断缓存）。
         # 便签投递（逐条条目、幂等）+ 撤下通知：投过没有以账本为准
-        events: list[dict] = await _deliver_frame_notes(db, agent, group_ref, ledger)
-        cap_notice = await _build_capability_notice(db, agent)
-        if cap_notice:
-            events.append(make_entry("notice", cap_notice,
-                                 flags={"drop_on_unlock": True}))
+        events = await _collect_injection_events(db, agent, group_ref, ledger)
         ledger = ledger + await append_events(db, agent, group_ref, events)
 
         last_user_idx = None
@@ -1410,12 +1425,7 @@ async def build_dm_messages(
         "tools": await _build_tools_segment(db, agent, is_dm=True),
         "injected_skills": await _build_memory_index(db, agent),  # 索引（冻结）进锁定段
     }
-    # 技能注入的检索词是「最近 5 条消息」，每轮都变 → 沉到尾部读数（§3）。
     # 记忆不走这里：它是账本条目，落在当轮新消息之前（见下方账本段）
-    dynamic_readings: list[str] = []
-    _skill_block = await _build_skill_injection(db, agent, group_id=0)
-    if _skill_block:
-        dynamic_readings.append(_skill_block)
     recalled_memory_ids = await _recall_memory_ids(
         db, agent, group_id=0,  # group_id=0 表示非群聊上下文
         query_text=query_text, api_base_url=api_base_url, api_key=api_key,
@@ -1430,8 +1440,12 @@ async def build_dm_messages(
 
     # 动态内容一律沉到尾部（message 0 只留静态段）：切会话时状态栈会变，写进前缀
     # 等于每轮重建前缀、缓存全废。它们按「当轮事实」跟在历史后面。
-    # 记忆单独提前（见下）；其余动态块仍沉在末尾
+    # 记忆是例外，但它走的是账本条目（追加在历史尾部），不是"提前到历史之前"
     tail_blocks: list[str] = []
+    # 技能注入的检索词是「最近 5 条消息」，每轮都变 → 沉到尾部读数（§3）
+    _skill_block = await _build_skill_injection(db, agent, group_id=0)
+    if _skill_block:
+        tail_blocks.append(_skill_block)
 
     # ✨ 工作区任务
     try:
@@ -1499,12 +1513,10 @@ async def build_dm_messages(
     except Exception as e:
         logger.warning(f"DM 好友申请注入失败（非致命）: {e}")
 
+    # message 0 之后直接进对话历史：这里曾经有个"当轮注入区"（dynamic_readings），
+    # 每轮重算的块放在历史之前会把后面整段前缀缓存打掉——能力索引已冻结进 message 0，
+    # 其余当轮事实（技能、任务、状态、时间）一律沉到尾部读数或账本条目
     messages = [{"role": "system", "content": system_prompt}]
-
-    # 记忆紧跟系统提示、排在对话历史之前：让 AI 先想起这个人，再读他说的话。
-    # 它仍在 message 0 之外的"当轮区域"，所以前缀缓存不受影响。
-    for block in dynamic_readings:
-        messages.append({"role": "system", "content": block})
 
     # ── 统一上下文：数字生命档/沉浸档/共振 → 加载多会话上下文 ──
     cross_msgs = await _build_cross_conversation_context(
@@ -1530,15 +1542,13 @@ async def build_dm_messages(
     # 记忆条目抢在 sync 之前落账本：位置就是"当轮新消息之前"（同群聊）
     from app.services.memory.memory_delivery import deliver_memories
     await deliver_memories(db, agent, dm_ref, recalled_memory_ids)
+    # 计划板同一条管线：先投计划、再 sync 落当轮消息
+    await _deliver_plan_board(db, agent, dm_ref)
 
     ledger = await sync_dm_history(db, agent, session_id, cap=limit)
 
     # 一次性事件（能力变更通知 / 便签撤下）落成条目：紧跟历史、排在尾部读数之前
-    events: list[dict] = await _deliver_frame_notes(db, agent, dm_ref, ledger)
-    cap_notice = await _build_capability_notice(db, agent)
-    if cap_notice:
-        events.append(make_entry("notice", cap_notice,
-                                 flags={"drop_on_unlock": True}))
+    events = await _collect_injection_events(db, agent, dm_ref, ledger)
     ledger = ledger + await append_events(db, agent, dm_ref, events)
 
     last_user_idx = None

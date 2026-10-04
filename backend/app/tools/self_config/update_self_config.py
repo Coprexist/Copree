@@ -28,6 +28,7 @@ class UpdateSelfConfig(ToolPlugin):
         "max_tool_rounds": {"type": "integer", "nullable": True, "description": "单次回复最大工具调用轮次，范围 1-20。谨慎调高，每轮都会消耗 token"},
         "alarm_max_tool_rounds": {"type": "integer", "nullable": True, "description": "闹钟/心跳任务的最大工具调用轮次，范围 1-30"},
         "force_alarm_on_end": {"type": "boolean", "nullable": True, "description": "对话结束时是否必须设定闹钟。开启后每次回复结束前要 set_alarm"},
+        "plan_injection_enabled": {"type": "boolean", "nullable": True, "description": "是否把你自己排的计划与闹钟投进上下文（会在历史尾部显示一块计划板）"},
         "max_alarms": {"type": "integer", "nullable": True, "description": "最多可设多少个活跃闹钟，范围 1-50"},
         "delay_reply_enabled": {"type": "boolean", "nullable": True, "description": "是否启用延迟回复功能（需要管理员开启全局开关）"},
     }
@@ -44,7 +45,7 @@ class UpdateSelfConfig(ToolPlugin):
             "system_prompt", "temperature", "top_p", "presence_penalty",
             "frequency_penalty", "thinking_enabled", "config_profile",
             "hide_ai_identity", "max_tool_rounds", "alarm_max_tool_rounds",
-            "force_alarm_on_end", "max_alarms", "delay_reply_enabled",
+            "force_alarm_on_end", "plan_injection_enabled", "max_alarms", "delay_reply_enabled",
             "allow_friend_requests", "auto_respond_friend_request",
         ]
 

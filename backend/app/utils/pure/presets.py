@@ -12,7 +12,7 @@ _STRONG_NUMERIC_PARAMS = [
     "memory_recent_count",
 ]
 _STRONG_BOOL_PARAMS = [
-    "thinking_enabled", "force_alarm_on_end", "is_ai_editable",
+    "thinking_enabled", "force_alarm_on_end", "plan_injection_enabled", "is_ai_editable",
 ]
 # 字符串枚举参数：切换预设时直接覆盖（不合并）
 _STRONG_STRING_PARAMS = [

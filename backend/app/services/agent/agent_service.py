@@ -42,6 +42,7 @@ CONFIG_PROFILES = {
         "alarm_max_tool_rounds": 8,
         # 闹钟 / 心跳
         "force_alarm_on_end": False,
+        "plan_injection_enabled": False,
         "max_alarms": 3,
         # 行为开关
         "delay_reply_enabled": False,
@@ -64,6 +65,7 @@ CONFIG_PROFILES = {
         "alarm_max_tool_rounds": 10,
         # 闹钟 / 心跳
         "force_alarm_on_end": False,
+        "plan_injection_enabled": False,
         "max_alarms": 5,
         # 行为开关
         "delay_reply_enabled": True,
@@ -86,6 +88,7 @@ CONFIG_PROFILES = {
         "alarm_max_tool_rounds": 15,
         # 闹钟 / 心跳
         "force_alarm_on_end": True,
+        "plan_injection_enabled": True,
         "max_alarms": 20,
         # 行为开关
         "delay_reply_enabled": True,
@@ -136,6 +139,7 @@ async def apply_config_profile(
         "max_tool_rounds": agent.max_tool_rounds,
         "alarm_max_tool_rounds": agent.alarm_max_tool_rounds,
         "force_alarm_on_end": agent.force_alarm_on_end,
+        "plan_injection_enabled": agent.plan_injection_enabled,
         "max_alarms": agent.max_alarms,
         "is_ai_editable": agent.is_ai_editable,
         "memory_recent_count": agent.memory_recent_count,
@@ -215,6 +219,7 @@ async def create_agent(
     max_tool_rounds: int = 3,
     alarm_max_tool_rounds: int = 10,
     force_alarm_on_end: bool = False,
+    plan_injection_enabled: bool = False,
     max_alarms: int = 10,
     is_ai_editable: bool = True,
     ai_type: str = "resonance",
@@ -309,6 +314,7 @@ async def create_agent(
         max_tool_rounds=max_tool_rounds,
         alarm_max_tool_rounds=alarm_max_tool_rounds,
         force_alarm_on_end=force_alarm_on_end,
+        plan_injection_enabled=plan_injection_enabled,
         max_alarms=max_alarms,
         is_ai_editable=is_ai_editable,
         ai_type=ai_type,
@@ -436,6 +442,7 @@ async def get_effective_config(
             "max_tool_rounds": agent.max_tool_rounds,
             "alarm_max_tool_rounds": agent.alarm_max_tool_rounds,
             "force_alarm_on_end": agent.force_alarm_on_end,
+        "plan_injection_enabled": agent.plan_injection_enabled,
             "max_alarms": agent.max_alarms,
             "config_profile": agent.config_profile,
             "is_ai_editable": agent.is_ai_editable,
@@ -473,6 +480,7 @@ async def get_effective_config(
         "max_tool_rounds": agent.max_tool_rounds,
         "alarm_max_tool_rounds": agent.alarm_max_tool_rounds,
         "force_alarm_on_end": agent.force_alarm_on_end,
+        "plan_injection_enabled": agent.plan_injection_enabled,
         "max_alarms": agent.max_alarms,
         "config_profile": agent.config_profile,
         "is_ai_editable": agent.is_ai_editable,
@@ -687,6 +695,10 @@ async def update_agent_config(
     # force_alarm_on_end 对话结束强制闹钟
     if "force_alarm_on_end" in updates:
         agent.force_alarm_on_end = updates["force_alarm_on_end"]
+
+    # plan_injection_enabled 计划板进上下文
+    if "plan_injection_enabled" in updates:
+        agent.plan_injection_enabled = updates["plan_injection_enabled"]
 
     # max_alarms 最大闹钟数
     if "max_alarms" in updates and updates["max_alarms"] is not None:
@@ -1279,6 +1291,7 @@ def agent_to_dict(agent: Agent) -> dict:
         "max_tool_rounds": agent.max_tool_rounds,
         "alarm_max_tool_rounds": agent.alarm_max_tool_rounds,
         "force_alarm_on_end": agent.force_alarm_on_end,
+        "plan_injection_enabled": agent.plan_injection_enabled,
         "max_alarms": agent.max_alarms,
         "hide_ai_identity": agent.hide_ai_identity,
         "ai_type": agent.ai_type or "resonance",

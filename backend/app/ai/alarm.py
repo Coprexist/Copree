@@ -47,12 +47,20 @@ async def set_alarm(
     返回:
         {"id": int, "wake_at": str, "task": str}
     """
+    # 计划到点是在某个状态里执行的（唤醒时构建的就是那个状态的请求体），所以记下"该唤醒谁"（帧 id）；
+    # 再记一个"谁拉起的"：帧 id 会被 pop/重建，会话轴不会，计划板的归属与"排给别处"都靠它
+    from app.services.agent.state_stack_service import get_frames
+    stack = await get_frames(db, agent_id)
+    origin_context_ref = next(
+        (str(f.get("context_ref")) for f in reversed(stack) if f.get("context_ref")), "")
     alarm = AgentAlarm(
         agent_id=agent_id,
         wake_at=wake_at,
         task=task,
         status="pending",
         created_at=utc_now(),  # ⚠️ TIMESTAMP WITHOUT TIME ZONE
+        frame_id=str((stack[-1] if stack else {}).get("id") or "") or None,
+        origin_context_ref=origin_context_ref or None,
     )
     db.add(alarm)
     await db.flush()
@@ -343,6 +351,21 @@ async def _process_alarm_event(db, event: dict):
         logger.warning(f"⏰ 闹钟 #{alarm_id}: agent {agent_id} 不存在")
         return
 
+    # 叫醒的是"那个状态下的他"：先按闹钟记的帧把状态恢复回去，任务描述里的上下文才成立
+    alarm_row = (await db.execute(
+        select(AgentAlarm).where(AgentAlarm.id == alarm_id)
+    )).scalar_one_or_none()
+    if alarm_row is not None and (alarm_row.frame_id or alarm_row.origin_context_ref):
+        try:
+            from app.services.agent.state_stack_service import restore_frame
+            restored = await restore_frame(db, agent_id, alarm_row.frame_id or "",
+                                           alarm_row.origin_context_ref or "")
+            if restored:
+                logger.info(f"⏰ 闹钟 #{alarm_id}: 状态恢复为 [{restored.get('type')}] "
+                            f"{restored.get('context_ref')}")
+        except Exception as e:
+            logger.warning(f"⏰ 闹钟 #{alarm_id}: 状态恢复失败（非致命）: {e}")
+
     # 决策技能：定时情景。命中且 notify=false → 程序跑完即止，不唤醒本体
     decision_note = ""
     try:
@@ -436,9 +459,9 @@ async def _process_alarm_event(db, event: dict):
         {
             "role": "user",
             "content": (
-                f"⏰ **你的闹钟响了！**\n\n"
-                f"你之前给自己设了一个闹钟，现在是时候执行了。\n\n"
-                f"**你要做的事：** {task}\n\n"
+                f"⏰ **你被闹钟 #{alarm_id} 唤醒了。**\n\n"
+                f"这是你之前给自己排的计划，现在到点了。\n\n"
+                f"**你当初写的是：** {task}\n\n"
                 f"请现在就开始执行这个任务。如果需要发消息、查记忆、执行命令等，直接调用相应的工具。\n\n"
                 f"⚠️ **重要**：\n"
                 f"- 如果任务已完成 → 干净利落地停止，不要为了「多说一句」而额外发言\n"

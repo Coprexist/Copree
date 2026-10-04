@@ -25,13 +25,14 @@ KINDS = (
     "summary",     # compact 产物
     "thinking",    # 保留的思考（仅 keep_thinking=true 时）
     "memory",      # 记忆投递：想起一条 / 这条改动过（内容指纹在 ref 里，不进请求体）
+    "plan",        # 计划板：这个状态下排了什么 / 板子变了以新的为准（键是会话，不是帧）
 )
 
 # actor → LLM role
 ROLE_BY_ACTOR = {"self": "assistant", "user": "user", "world": "user", "system": "system"}
 
 # 事件类：压缩时**原样搬运**，不揉进摘要（揉了就等于丢契约/丢"有个洞"）
-NEVER_COMPRESSIBLE = ("gap", "note", "notice", "handoff", "memory")
+NEVER_COMPRESSIBLE = ("gap", "note", "notice", "handoff", "memory", "plan")
 
 
 def make_entry(kind: str, content: str, *, actor: str = "system",

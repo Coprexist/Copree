@@ -22,6 +22,7 @@ class AgentCreateRequest(BaseModel):
     max_tool_rounds: int = Field(default=6, ge=1, le=20, description="单次回复最大工具调用轮次")
     alarm_max_tool_rounds: int = Field(default=10, ge=1, le=30, description="闹钟/心跳最大工具调用轮次")
     force_alarm_on_end: bool = Field(default=False, description="对话结束时强制要求 AI 设定闹钟")
+    plan_injection_enabled: bool = Field(default=False, description="把计划与闹钟投进上下文（计划板）")
     max_alarms: int = Field(default=10, ge=1, le=50, description="AI 最多可设活跃闹钟数")
     is_ai_editable: bool = Field(default=True, description="是否允许 AI 自修改配置")
     reminder_not_count: bool | None = Field(default=None, description="[已废弃] 请用 reminder_grace")
@@ -88,6 +89,7 @@ class AgentUpdateConfigRequest(BaseModel):
     max_tool_rounds: int | None = Field(default=None, ge=1, le=20, description="工具调用轮次上限")
     alarm_max_tool_rounds: int | None = Field(default=None, ge=1, le=30, description="闹钟/心跳轮次上限")
     force_alarm_on_end: bool | None = None
+    plan_injection_enabled: bool | None = None
     max_alarms: int | None = Field(default=None, ge=1, le=50, description="最大闹钟数")
     reminder_grace: str | None = Field(default=None, description="系统提醒额外轮次: every_time|once|off")
     allow_friend_requests: bool | None = Field(default=None, description="是否允许接收好友申请")
@@ -154,6 +156,7 @@ class AgentResponse(BaseModel):
     max_tool_rounds: int = 6
     alarm_max_tool_rounds: int = 10
     force_alarm_on_end: bool = False
+    plan_injection_enabled: bool = False
     max_alarms: int = 10
     ai_type: str = "resonance"
     allow_friend_requests: bool = True
