@@ -12,7 +12,7 @@
   /* 结构色 — 浅色主题 */
   --tw-canvas: 248 250 252;        /* slate-50 */
   --tw-surface: 255 255 255;       /* white */
-  --tw-elevated: 241 245 249;      /* slate-100 —— 比背景深一档，按钮/卡片有可见底色 */
+  --tw-elevated: 243 243 245;      /* #F3F3F5 —— 中性灰（原 slate-100 偏蓝发脏）：次级按钮/标签的安静底色 */
   --tw-border: 203 213 225;        /* slate-300 —— 描边可见，次级按钮与背景可区分 */
   /* 文本色 — 浅色主题 */
   --tw-text-primary: 17 24 39;     /* gray-900 */
@@ -648,9 +648,10 @@
 .btn-primary:hover { background: rgb(var(--tw-primary-600)); }
 .btn-accent { background: rgb(var(--tw-accent-400)); color: rgb(var(--tw-text-primary)); }
 .btn-accent:hover { background: rgb(var(--tw-accent-500)); }
-.btn-secondary { background: rgb(var(--tw-elevated)); color: rgb(var(--tw-text-secondary));
+/* 次级按钮＝白底描边（默认就白，才不像一块灰补丁）；hover 才落一档灰 */
+.btn-secondary { background: rgb(var(--tw-surface)); color: rgb(var(--tw-text-secondary));
   border: 1px solid rgb(var(--tw-border)); box-shadow: 0 1px 2px rgb(0 0 0 / .05); }
-.btn-secondary:hover { background: rgb(var(--tw-border)); color: rgb(var(--tw-text-primary)); }
+.btn-secondary:hover { background: rgb(var(--tw-elevated)); color: rgb(var(--tw-text-primary)); }
 .btn-ghost { color: rgb(var(--tw-text-secondary)); }
 .btn-ghost:hover { background: rgb(var(--tw-canvas)); color: rgb(var(--tw-text-primary)); }
 .btn-danger { background: rgb(var(--tw-rose-500)); color: #fff; }
