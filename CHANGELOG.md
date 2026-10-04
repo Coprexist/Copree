@@ -87,6 +87,12 @@
   从缓存里打掉。现在技能跟任务、状态栈摘要、当前时间一样沉尾部，开头只留走版本链冻结的锁定段。
 
 ### 🐛 修复
+- **AI 通过/拒绝好友申请不再报错**：好友模块 08-22 起改成"吃仓储 + 关键字参数"（`friend_repo=`），
+  AI 侧两个工具（`handle_friend_request` 通过/拒绝、`send_friend_request` 发送）与 `routers/chat.py`
+  的旧入口没跟着迁，仍按位置传会话——AI 点「通过」直接
+  `accept_friend_request() takes 0 positional arguments but 3 were given`，申请永远挂在「待处理」，
+  申请人那边的「发出的申请」也永远不消（日志里从 09-27 起就断续在报，最近一天 10 次）。
+  三处统一借同一个 session 包装成 `SQLAlchemyFriendRepository`；"该申请不是发给你的"越权校验不变。
 - **世界用量不再丢账，命中率不再被记成个位数**：世界 AI 每轮把 LLM 返回的原始 usage 直接交给内容域的
   用量账，而世界仓库的 `execute` 不带 `params`（`takes 2 positional arguments but 3 were given`，
   按天聚合整体失败、调用一次丢一次，日志里几千条）；改为借同一个 session 包装成 ContentRepository 记账。

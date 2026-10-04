@@ -36,6 +36,7 @@ class SendFriendRequest(ToolPlugin):
 
     async def execute(self, db: AsyncSession, agent_id: int, group_id: int | None,
                       arguments: dict, context: dict) -> dict:
+        from app.repositories.friend_repo import SQLAlchemyFriendRepository
         from app.services.social.friend_service import send_friend_request
         from app.models.agent import Agent as AgentModel
 
@@ -63,7 +64,7 @@ class SendFriendRequest(ToolPlugin):
 
         try:
             result = await send_friend_request(
-                db,
+                friend_repo=SQLAlchemyFriendRepository(db),
                 requester_id=agent.user_id,
                 target_type=target_type,
                 target_id=target_id,

@@ -54,11 +54,12 @@ async def chat_friend_request(
     db: AsyncSession = Depends(get_db),
 ):
     """发送好友请求（统一入口）"""
+    from app.repositories.friend_repo import SQLAlchemyFriendRepository
     from app.services.social.friend_service import send_friend_request
 
     try:
         result = await send_friend_request(
-            db,
+            friend_repo=SQLAlchemyFriendRepository(db),
             requester_id=current_user["user_id"],
             target_type=req.target_type,
             target_id=req.target_id,

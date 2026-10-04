@@ -39,6 +39,7 @@ class HandleFriendRequest(ToolPlugin):
     async def execute(self, db: AsyncSession, agent_id: int, group_id: int | None,
                       arguments: dict, context: dict) -> dict:
         from app.models.agent import Agent as AgentModel
+        from app.repositories.friend_repo import SQLAlchemyFriendRepository
         from app.services.social.friend_service import accept_friend_request, reject_friend_request
 
         action = str(arguments.get("action") or "")
@@ -60,13 +61,19 @@ class HandleFriendRequest(ToolPlugin):
         if req is None or req.target_type != "ai" or req.target_id != agent.user_id:
             return {"success": False, "error": "该申请不是发给你的，无法处理"}
 
+        # 好友服务吃的是仓储（关键字参数），不是裸会话——借同一个 session 包装
+        friend_repo = SQLAlchemyFriendRepository(db)
         if action == "accept":
-            result = await accept_friend_request(db, request_id, agent.user_id)
+            result = await accept_friend_request(
+                friend_repo=friend_repo, request_id=request_id, user_id=agent.user_id,
+            )
             await db.commit()
             logger.info(f"🤝 AI「{agent.name}」通过了好友申请 #{request_id}")
             return {"success": True, "result": "已通过好友申请", **result}
         else:
-            result = await reject_friend_request(db, request_id, agent.user_id)
+            result = await reject_friend_request(
+                friend_repo=friend_repo, request_id=request_id, user_id=agent.user_id,
+            )
             await db.commit()
             logger.info(f"🤝 AI「{agent.name}」拒绝了好友申请 #{request_id}")
             return {"success": True, "result": "已拒绝好友申请", **result}
