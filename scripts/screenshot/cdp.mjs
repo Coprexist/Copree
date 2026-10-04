@@ -27,9 +27,14 @@ export async function launchChrome({ port, profileDir }) {
         '--disable-gpu',
         '--hide-scrollbars',
         '--force-color-profile=srgb',
+        // 容器里 /dev/shm 通常只有 64MB，不关掉它渲染进程会直接崩：进程活着但调试端口始终没有页面
+        '--disable-dev-shm-usage',
         '--no-sandbox',
         'about:blank',
       ], { stdio: ['ignore', 'ignore', 'pipe'], detached: true })
+      // 候选路径不存在时 spawn 抛 ENOENT：不接住会变成未处理异常打死整个进程，后面的候选一个也试不到
+      proc.on('error', () => {})
+      proc.stderr.resume()
       proc.unref()
       const wsUrl = await waitForTarget(port)
       if (wsUrl) return { proc, wsUrl, bin }
