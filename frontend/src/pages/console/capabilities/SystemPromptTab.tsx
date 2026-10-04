@@ -111,7 +111,7 @@ export default function SystemPromptTab() {
   }
 
   return (
-    <div className="max-w-3xl space-y-4">
+    <div className="space-y-4">
       {/* 标题栏 */}
       <div className="flex items-center gap-3 flex-wrap">
         <h3 className="text-sm font-semibold text-textPrimary flex items-center gap-2">
@@ -122,7 +122,7 @@ export default function SystemPromptTab() {
         <div className="ml-auto flex items-center gap-2">
           <button
             onClick={() => setPreviewOpen(!previewOpen)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-control bg-elevated hover:bg-canvas border border-border text-xs text-textSecondary hover:text-textPrimary transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-control bg-surface hover:bg-elevated border border-border text-xs text-textSecondary hover:text-textPrimary transition-colors"
           >
             <Eye size={13} />
             {previewOpen ? '隐藏预览' : '预览拼接'}

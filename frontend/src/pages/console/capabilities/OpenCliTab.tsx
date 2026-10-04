@@ -77,7 +77,7 @@ function OpenCLIConfigSection() {
   if (!config) return <p className="text-textMuted">{t('common:loading')}</p>
 
   return (
-    <div className="bg-surface rounded-card border border-border p-5 max-w-lg">
+    <div className="bg-surface rounded-card border border-border p-5">
       <h3 className="font-semibold text-textPrimary mb-4">{t('admin:globalConfig')}</h3>
       <div className="space-y-4">
         <div className="flex items-center gap-3">
@@ -329,7 +329,7 @@ function OpenCLICommandsSection() {
       </div>
 
       {/* ── 手动添加表单 ── */}
-      <div className="bg-surface rounded-card border border-border p-5 max-w-lg">
+      <div className="bg-surface rounded-card border border-border p-5">
         <h3 className="font-semibold mb-3 text-textPrimary">{t('admin:manualAddCommand')}</h3>
         <p className="text-xs text-textMuted mb-3" dangerouslySetInnerHTML={{ __html: t('admin:manualAddDesc') }} />
         <div className="flex flex-wrap items-end gap-3">
