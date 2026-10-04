@@ -82,6 +82,12 @@ class ServicePlugin:
         """
         return None
 
+    # 环境上报（可选实现）：返回这个会话当前的环境，None = 当前无环境。
+    # 平台不解释字段语义，只做等值判定与渲染——契约见 docs/plugin-dev/environment-api.md。
+    # origin 是该插件在这个会话上的对端标识（QQ 插件就当群号用），平台解析会话后传入。
+    async def environment(self, *, origin: str | int) -> dict[str, Any] | None:
+        return None
+
     async def start(self) -> bool:
         """启动服务"""
         raise NotImplementedError(f"{self.id} 未实现 start()")

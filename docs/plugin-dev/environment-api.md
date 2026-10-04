@@ -107,5 +107,10 @@ canonical(v) = json.dumps(
 
 ## 10. 落地状态
 
-本契约待实现：`api.py` 统一导出（`environment` 契约 + `ENV_TEXT_KEY` + `ENV_PUBLIC_KEYS`）尚未落地，
-现有插件与平台侧均未接入。
+| 部分 | 状态 |
+|---|---|
+| 契约方法 `ServicePlugin.environment` | 已落地（默认返回 `None` = 不提供环境） |
+| `api.py` 统一导出 `ENV_TEXT_KEY` / `ENV_PUBLIC_KEYS` | 已落地 |
+| 校验 / 规范化 / 判定 / 渲染（`utils/pure/plugin_env.py`） | 已落地，契约见 `tests/test_plugin_environment_api.py` |
+| 帧落点（`env_locked` / `env_notified`）与请求链路接线 | 未落地 |
+| 插件实现 `environment()`（QQ 插件为首个） | 未落地 |

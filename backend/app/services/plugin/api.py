@@ -62,6 +62,7 @@ from app.services.skill.skill_engine import (
     register_action_handler,
     register_inject_handler,
 )
+from app.utils.pure.plugin_env import ENV_PUBLIC_KEYS, ENV_TEXT_KEY
 from app.utils.pure.skill_registry import SkillRegistry
 
 logger = logging.getLogger(__name__)
@@ -189,4 +190,6 @@ __all__ = [
     "drop_service_def",
     "set_current_plugin",
     "get_current_plugin",
+    "ENV_TEXT_KEY",
+    "ENV_PUBLIC_KEYS",
 ]
