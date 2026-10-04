@@ -92,6 +92,17 @@
   从缓存里打掉。现在技能跟任务、状态栈摘要、当前时间一样沉尾部，开头只留走版本链冻结的锁定段。
 
 ### 🐛 修复
+- **群聊搜索一直是空的（根因是两条 `/search` 打架）**：`routers/friends.py` 里那条 `/search` 是早期遗留，
+  路由按文件名顺序注册，`friends.py` 排在 `search.py` 前面——它把后者整个遮住，前端要的 `groups`
+  从来没回来过（只回 `results` 与 `query`）。删掉这条重复路由后群聊搜索立刻通了（实测搜到
+  `CoExisten`）。同时清掉这次暴露出来的重复实现：`friend_service.search_entities`（无调用方）、
+  `friend_repo.search_users_and_agents`、只给它俩用的两个 schema。
+- **搜索收敛成一处置**：现在只有 `services/social/search_service.search_entities`——人只出激活账号、
+  AI 只出开了「可被发现」且有统一 ID 的、自己不进结果（人按 user_id、调用的 AI 按自己的 user_id），
+  好友关系与制作者名字各一次批查询（原先按人头查，20 条结果要发 40 条 SQL）。
+  AI 的 `search_users` 工具改成调它、只裁出对话里够用的几栏，不再自己写一套查询。
+- **AI 能看自己的好友列表了**：新增 `list_friends` 工具（复用 `friend_service.list_friends`，与人类侧同源），
+  加好友前先确认对方是不是已经是好友，比发一次申请撞上「已经是好友了」省一轮。
 - **AI 加好友前能看见「已经是好友」**：AI 的搜索工具（`search_users`）只回 id 与名字，人类侧搜索却带
   `is_friend`——于是 AI 常给已经是好友的人再发一次申请，只能撞上服务层那句「已经是好友了」才知道。
   现在工具结果也带 `is_friend`（一次批量查，不按人头查），工具说明写明"是好友的不要再发"；

@@ -33,7 +33,6 @@ class FriendRepository(Protocol):
     async def get_agent_by_user_id(self, user_id: int) -> Optional[Agent]: ...
     async def get_pending_requests_for_ai(self, agent_user_id: int) -> list[FriendshipRequest]: ...
     async def list_friend_requests(self, user_id: int, status: str, received_only: bool) -> list[FriendshipRequest]: ...
-    async def search_users_and_agents(self, query: str, current_user_id: int, limit: int) -> tuple[list[User], list[Agent]]: ...
     async def is_friend(self, user_id: int, friend_type: str, friend_id: int) -> bool: ...
     async def flush(self) -> None: ...
     async def refresh(self, obj) -> None: ...
@@ -196,22 +195,6 @@ class SQLAlchemyFriendRepository:
         )
         sent = list(sent_result.scalars().all())
         return received + sent
-
-    async def search_users_and_agents(self, query: str, current_user_id: int, limit: int) -> tuple[list[User], list[Agent]]:
-        like_pattern = f"%{query}%"
-        user_result = await self.session.execute(
-            select(User).where(
-                User.username.ilike(like_pattern),
-                User.is_active == True,
-                User.type == "human",
-            ).limit(limit)
-        )
-        users = list(user_result.scalars().all())
-        agent_result = await self.session.execute(
-            select(Agent).where(Agent.name.ilike(like_pattern)).limit(limit)
-        )
-        agents = list(agent_result.scalars().all())
-        return users, agents
 
     async def is_friend(self, user_id: int, friend_type: str, friend_id: int) -> bool:
         friendship = await self.get_friendship(user_id, friend_type, friend_id)

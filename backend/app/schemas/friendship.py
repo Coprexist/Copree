@@ -43,20 +43,3 @@ class FriendResponse(BaseModel):
     created_at: str | None = None
     last_dm_at: str | None = None  # 最近一次私信时间
 
-
-class SearchResult(BaseModel):
-    """搜索结果项"""
-    id: int
-    type: str  # human 或 ai
-    name: str
-    avatar_url: str | None = None
-    owner_name: str | None = None  # AI 的创建者名称
-    is_friend: bool = False
-    state: str | None = None  # AI 的在线状态
-    auto_respond_friend_request: bool | None = None
-
-
-class SearchResponse(BaseModel):
-    """搜索响应"""
-    results: list[SearchResult]
-    query: str

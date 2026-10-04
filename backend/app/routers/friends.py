@@ -6,12 +6,11 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from app.repositories.friend_repo import FriendRepository
 from app.schemas.friendship import (
-    FriendRequestCreate, FriendRequestResponse,
-    FriendResponse, SearchResponse, SearchResult,
+    FriendRequestCreate, FriendRequestResponse, FriendResponse,
 )
 from app.services.social.friend_service import (
     send_friend_request, accept_friend_request, reject_friend_request,
-    remove_friend, list_friends, list_friend_requests, search_entities,
+    remove_friend, list_friends, list_friend_requests,
     trigger_ai_auto_respond,
 )
 from app.utils.auth import get_current_user
@@ -34,21 +33,6 @@ async def _notify_friend_request(event_type: str, data: dict, target_user_id: in
         })
     except Exception as e:
         logger.warning(f"推送好友通知给用户 {target_user_id} 失败: {e}")
-
-
-@router.get("/search", response_model=SearchResponse)
-async def search(
-    q: str = Query(..., min_length=1, description="搜索关键词"),
-    current_user: dict = Depends(get_current_user),
-    friend_repo: FriendRepository = Depends(get_friend_repo),
-):
-    """搜索用户和 AI（支持按用户名/AI名搜索）"""
-    results = await search_entities(
-        friend_repo=friend_repo,
-        query=q,
-        current_user_id=current_user["user_id"],
-    )
-    return {"results": results, "query": q}
 
 
 @router.get("/friends", response_model=list[FriendResponse])

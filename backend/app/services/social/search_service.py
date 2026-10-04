@@ -15,35 +15,59 @@ async def search_entities(
     current_user_id: int,
     limit: int = 20,
 ) -> list[dict]:
-    """搜索用户和 AI（无需好友关系即可发起 DM），附带 is_friend 标记"""
+    """搜索用户和 AI —— 唯一入口：站内搜索接口与 AI 的 search_users 工具都走这里。
+
+    - 人只出 is_active 的人类账号；AI 只出开了「可被发现」且有统一 ID 的
+      （没统一 ID 的加不了好友、发不了私信，进结果只会给前端一个点不动的条目）
+    - 自己不进结果：人按 user_id 排掉，调用的 AI 也按自己的 user_id 排掉
+    - 好友关系与制作者名字各一次批查询——原先按人头各查一次，20 条结果要发 40 条 SQL
+    """
     from app.models.user import User
     from app.models.agent import Agent
     from app.models.friendship import Friendship
 
-    results = []
     like_pattern = f"%{query}%"
 
-    # 搜索用户
-    user_result = await search_repo.execute(
+    users = list((await search_repo.execute(
         select(User).where(
             User.username.ilike(like_pattern),
             User.is_active == True,
             User.type == "human",
         ).limit(limit)
-    )
-    for user in user_result.scalars().all():
-        if user.id == current_user_id:
-            continue
-        # 检查是否已是好友
-        is_friend = False
-        friend_check = await search_repo.execute(
-            select(Friendship).where(
+    )).scalars().all())
+
+    agents = list((await search_repo.execute(
+        select(Agent).where(
+            Agent.name.ilike(like_pattern),
+            Agent.discoverable == True,
+            Agent.user_id.isnot(None),
+            Agent.user_id != current_user_id,
+        ).limit(limit)
+    )).scalars().all())
+
+    friend_pairs: set[tuple[str, int]] = set()
+    ids = [u.id for u in users] + [a.user_id for a in agents]
+    if ids and current_user_id:
+        rows = await search_repo.execute(
+            select(Friendship.friend_type, Friendship.friend_id).where(
                 Friendship.user_id == current_user_id,
-                Friendship.friend_type == "human",
-                Friendship.friend_id == user.id,
+                Friendship.friend_id.in_(ids),
             )
         )
-        is_friend = friend_check.scalar_one_or_none() is not None
+        friend_pairs = {(friend_type, friend_id) for friend_type, friend_id in rows.all()}
+
+    owner_ids = {a.owner_id for a in agents if a.owner_id}
+    owners: dict[int, str] = {}
+    if owner_ids:
+        rows = await search_repo.execute(
+            select(User.id, User.username).where(User.id.in_(owner_ids))
+        )
+        owners = {uid: username for uid, username in rows.all()}
+
+    results = []
+    for user in users:
+        if user.id == current_user_id:
+            continue
         results.append({
             "id": user.id,
             "type": "human",
@@ -52,41 +76,19 @@ async def search_entities(
             "owner_name": None,
             "state": None,
             "user_id": user.id,
-            "is_friend": is_friend,
+            "is_friend": ("human", user.id) in friend_pairs,
         })
 
-    # 搜索 AI（仅返回 discoverable 的 AI）
-    agent_result = await search_repo.execute(
-        select(Agent).where(
-            Agent.name.ilike(like_pattern),
-            Agent.discoverable == True,
-        ).limit(limit)
-    )
-    for agent in agent_result.scalars().all():
-        from app.models.user import User as UserModel
-        owner_result = await search_repo.execute(
-            select(UserModel).where(UserModel.id == agent.owner_id)
-        )
-        owner = owner_result.scalar_one_or_none()
-        # 检查是否已是好友（以 AI 的 unified user_id 为 friend_id）
-        is_friend = False
-        friend_check = await search_repo.execute(
-            select(Friendship).where(
-                Friendship.user_id == current_user_id,
-                Friendship.friend_type == "ai",
-                Friendship.friend_id == agent.user_id,
-            )
-        )
-        is_friend = friend_check.scalar_one_or_none() is not None
+    for agent in agents:
         results.append({
             "id": agent.user_id,  # 对外统一用 User.id（AI 也是 users 表的一条记录）
             "type": "ai",
             "name": agent.name,
             "avatar_url": agent.avatar_url,
-            "owner_name": owner.username if owner else None,
+            "owner_name": owners.get(agent.owner_id),
             "state": agent.state,
             "user_id": agent.user_id,
-            "is_friend": is_friend,
+            "is_friend": ("ai", agent.user_id) in friend_pairs,
         })
 
     return results[:limit]

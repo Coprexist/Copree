@@ -337,49 +337,6 @@ async def list_friend_requests(
     return results
 
 
-async def search_entities(
-    *,
-    friend_repo: FriendRepository,
-    query: str,
-    current_user_id: int,
-    limit: int = 20,
-) -> list[dict]:
-    """搜索用户和 AI"""
-    users, agents = await friend_repo.search_users_and_agents(query, current_user_id, limit)
-    results = []
-
-    for user in users:
-        if user.id == current_user_id:
-            continue
-        is_friend = await friend_repo.is_friend(current_user_id, "human", user.id)
-        results.append({
-            "id": user.id,
-            "type": "human",
-            "name": user.username,
-            "avatar_url": user.avatar_url,
-            "owner_name": None,
-            "is_friend": is_friend,
-            "state": None,
-        })
-
-    for agent in agents:
-        owner = await friend_repo.get_user_by_id(agent.owner_id)
-        is_friend = await friend_repo.is_friend(current_user_id, "ai", agent.user_id)
-        results.append({
-            "id": agent.user_id,
-            "type": "ai",
-            "name": agent.name,
-            "avatar_url": agent.avatar_url,
-            "owner_name": owner.username if owner else None,
-            "is_friend": is_friend,
-            "state": agent.state,
-            "auto_respond_friend_request": agent.auto_respond_friend_request,
-            "user_id": agent.user_id,
-        })
-
-    return results[:limit]
-
-
 async def trigger_ai_auto_respond(
     *,
     friend_repo: FriendRepository,
