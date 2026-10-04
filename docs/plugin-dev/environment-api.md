@@ -30,6 +30,13 @@ async def environment(self, *, origin: str | int) -> dict[str, str | int | bool]
 | `None` | 当前无环境（未接入 / 不属于本实例） |
 | 其他 | 违规：丢弃本次上报，记 error，**不视为环境消失** |
 
+两条运行时约束：
+
+- 本方法**每一轮构请求前都会被调用一次**，必须廉价、不阻塞，不得在其中发起网络请求；需要远程
+  数据的插件应先缓存再返回（例如 QQ 插件读它自己的日缓存）。
+- 长文本不要进环境段：环境段每轮进前缀，渲染结果整体有长度上限（`ENV_RENDER_MAX`），超出截断。
+  群简介这类长内容留在资料卡与能力说明里，不进这里。
+
 ## 3. 保留键 `text`
 
 `text` 是平台保留的**覆盖键**，与公共键分开导出（`ENV_TEXT_KEY` / `ENV_PUBLIC_KEYS`）。它在两层里身份不同：
@@ -57,6 +64,9 @@ async def environment(self, *, origin: str | int) -> dict[str, str | int | bool]
 渲染优先级：`text`（非空）→ 公共键骨架 → 通用兜底。
 
 私有键只参与比较，不参与渲染；要让 AI 看到，就写进 `text`。
+
+`full_mode` 由插件观测消息类型得到，因此**缺失 → 有值会被判定为一次环境变更**（观测到的那一刻才
+算数）。通知晚一拍是正常的，不是平台漏判。
 
 ## 5. 判定（一条路径）
 
@@ -112,5 +122,6 @@ canonical(v) = json.dumps(
 | 契约方法 `ServicePlugin.environment` | 已落地（默认返回 `None` = 不提供环境） |
 | `api.py` 统一导出 `ENV_TEXT_KEY` / `ENV_PUBLIC_KEYS` | 已落地 |
 | 校验 / 规范化 / 判定 / 渲染（`utils/pure/plugin_env.py`） | 已落地，契约见 `tests/test_plugin_environment_api.py` |
-| 帧落点（`env_locked` / `env_notified`）与请求链路接线 | 未落地 |
-| 插件实现 `environment()`（QQ 插件为首个） | 未落地 |
+| 取值与判定（`services/plugin/environment.py`）、帧落点 `env_locked` / `env_notified` | 已落地，见 `tests/test_plugin_environment_sync.py` |
+| 锁定段接线（`ai/llm.py` 群聊路径）与解锁点（`UNLOCK_STEPS` 的 `apply_environment`） | 已落地 |
+| 插件实现 `environment()`（QQ 插件为首个，走接入与收敛） | 未落地 |

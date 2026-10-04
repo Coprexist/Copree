@@ -29,6 +29,10 @@ ENV_PUBLIC_KEYS: tuple[str, ...] = tuple(_ENV_RENDERERS)
 # 既没有 text、也没有可用公共键时的兜底：AI 至少要知道「环境变了」
 ENV_FALLBACK_TEXT = "你的环境有变化。"
 
+# 渲染结果上限：环境段每轮进前缀，插件用 text 塞长文（群简介之类）会把每轮成本拉高。
+# 这是防御闸，不是排版偏好——超长宁可截断，也不要让它进每一轮请求。
+ENV_RENDER_MAX = 400
+
 
 class EnvContractError(ValueError):
     """插件返回值违反契约 —— 平台丢弃本次上报，保持已告知值不变（不降级为无环境）"""
@@ -79,11 +83,18 @@ def changed(previous: dict[str, Any] | None, current: dict[str, Any] | None) -> 
 
 
 def render_environment(value: dict[str, Any] | None) -> str:
-    """环境 → AI 看到的那句话：text 覆盖 → 公共键骨架 → 兜底。"""
+    """环境 → AI 看到的那句话：text 覆盖 → 公共键骨架 → 兜底，并统一加上限。"""
     if not value:
         return ENV_FALLBACK_TEXT
     text = value.get(ENV_TEXT_KEY)
     if isinstance(text, str) and text.strip():
-        return text
+        return _clip(text)
     parts = [render(value[k]) for k, render in _ENV_RENDERERS.items() if value.get(k) is not None]
-    return " ".join(part for part in parts if part) or ENV_FALLBACK_TEXT
+    return _clip(" ".join(part for part in parts if part) or ENV_FALLBACK_TEXT)
+
+
+def _clip(text: str) -> str:
+    """截断到上限（见 ENV_RENDER_MAX）。"""
+    if len(text) <= ENV_RENDER_MAX:
+        return text
+    return text[:ENV_RENDER_MAX] + "…"

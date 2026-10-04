@@ -1346,6 +1346,7 @@ UNLOCK_STEPS = (
     "reset_trigger_state",    # 触发规则状态复位（scope=frame 在新上下文里从零开始）
     "apply_pending_config",   # 应用挂起的配置
     "apply_pending_changes",  # 能力版本对齐最新（工具定义 + 提示词）
+    "apply_environment",      # 环境：写进前缀的那份对齐现值（锁定态只落通知，字节不动）
 )
 
 
@@ -1429,12 +1430,21 @@ async def _unlock_context(db, agent, *, group_id, session_id, conversation_type,
             logger.warning(f"解锁时收集世界能力源失败（非致命）: {e}")
         await apply_pending_changes(SQLAlchemyCapabilityRepository(db), agent, sources)
 
+    async def _apply_environment():
+        # 环境：解锁点把写进前缀的那份对齐到现值。锁定态只落通知、字节不动；这里上下文
+        # 本来就重建了，换新零成本。DM 没有环境来源（通道按群服务），传 None 即清空。
+        from app.services.agent.state_stack_service import write_frame_env
+        from app.services.plugin.environment import current_environment
+        current = await current_environment(db, group_id) if group_id else None
+        await write_frame_env(db, agent.id, ref, locked=current, notified=current)
+
     runners = {
         "rewrite_history": _rewrite_history,
         "clear_note_copies": _clear_note_copies,
         "reset_trigger_state": _reset_trigger_state,
         "apply_pending_config": _apply_pending_config,
         "apply_pending_changes": _apply_pending_changes,
+        "apply_environment": _apply_environment,
     }
     done: list[str] = []
     for name in UNLOCK_STEPS:

@@ -64,6 +64,12 @@ def test_render_uses_public_keys_skeleton():
     assert got == "你在 qq 「泰拉都市」 27 人 全量模式", got
 
 
+def test_render_is_length_capped():
+    from app.utils.pure.plugin_env import ENV_RENDER_MAX, render_environment
+    got = render_environment({"text": "长" * 1000})
+    assert len(got) == ENV_RENDER_MAX + 1 and got.endswith("…"), len(got)
+
+
 def test_render_falls_back_when_nothing_renderable():
     from app.utils.pure.plugin_env import ENV_FALLBACK_TEXT, render_environment
     assert render_environment({"rev": "a3f9"}) == ENV_FALLBACK_TEXT

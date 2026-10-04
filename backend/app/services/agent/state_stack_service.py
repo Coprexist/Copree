@@ -372,6 +372,43 @@ async def set_frame_notes(db: AsyncSession, agent_id: int, context_ref: str, cop
     return copies
 
 
+async def read_frame_env(db: AsyncSession, agent_id: int, context_ref: str) -> tuple[bool, dict | None, dict | None]:
+    """读取本会话帧上的环境状态。
+
+    返回 (established, locked, notified)：established 表示该会话帧是否已建立环境基线；
+    locked 是写进前缀的那一份；notified 是已告知 AI 的那一份。会话帧不在栈顶时，
+    三者依次为 False、None、None。
+
+    两个字段均不存在即尚未建立基线（新帧，或由旧版本升级而来的帧），调用方据此只记录、
+    不通知——否则 AI 进入会话时会先收到一条并不存在的环境变更。
+    """
+    db = _ensure_repo(db)
+    stack = await _get_stack(db, agent_id)
+    if not stack or str(stack[-1].get("context_ref")) != str(context_ref):
+        return False, None, None
+    top = stack[-1]
+    if "env_locked" not in top and "env_notified" not in top:
+        return False, None, None
+    return True, top.get("env_locked"), top.get("env_notified")
+
+
+async def write_frame_env(db: AsyncSession, agent_id: int, context_ref: str, *,
+                          locked: dict | None, notified: dict | None) -> bool:
+    """写入本会话帧的环境字段，返回是否命中该会话帧。
+
+    只认栈顶帧即本会话，理由与 set_frame_notes 相同：切换未完成时栈顶仍是别的会话，
+    强行写入会把 A 的环境记到 B 名下。本函数不提交事务，以保证与通知条目同属一次提交。
+    """
+    db = _ensure_repo(db)
+    stack = await _get_stack(db, agent_id)
+    if not stack or str(stack[-1].get("context_ref")) != str(context_ref):
+        return False
+    stack[-1]["env_locked"] = locked
+    stack[-1]["env_notified"] = notified
+    await _set_stack(db, agent_id, stack)
+    return True
+
+
 async def retire_frame_notes(db: AsyncSession, agent_id: int, note_ids: set[str]) -> int:
     """把各会话帧里这些便签副本标成「已撤下」（AI 删记录 / 清空时调用）。
 
