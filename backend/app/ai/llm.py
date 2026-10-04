@@ -531,12 +531,11 @@ async def _deliver_plan_board(db, agent, context_ref: str) -> None:
     await deliver_plans(db, agent, context_ref)
 
 
-async def _collect_injection_events(db, agent, context_ref: str, entries: list[dict],
-                                    group_id: int | None = None) -> list[dict]:
-    """历史之后、尾部读数之前的一次性事件：便签投递/撤下 + 能力变更通知 + 环境变更。
+async def _collect_injection_events(db, agent, context_ref: str, entries: list[dict]) -> list[dict]:
+    """历史之后、尾部读数之前的一次性事件：便签投递/撤下 + 能力变更通知。
 
     群聊与私信两条路径曾经各抄一遍这几行；语义要求是「紧跟历史」，所以收成一处——
-    下次加事件源时才不会只改了一条路。group_id 只在群聊给出：环境是群级会话的事实。
+    下次加事件源时才不会只改了一条路。环境变更由调用方追加（它已在构建前缀时算过）。
     """
     from app.utils.pure.history import make_entry
 
@@ -544,11 +543,6 @@ async def _collect_injection_events(db, agent, context_ref: str, entries: list[d
     cap_notice = await _build_capability_notice(db, agent)
     if cap_notice:
         events.append(make_entry("notice", cap_notice, flags={"drop_on_unlock": True}))
-    if group_id:
-        from app.services.plugin.environment import sync_environment
-        env_entry = await sync_environment(db, agent, group_id)
-        if env_entry:
-            events.append(env_entry)
     return events
     from app.utils.pure.history import make_entry
 
@@ -1042,11 +1036,14 @@ async def build_messages(
     # 环境段固定在锁定段末尾：它是这个会话的常量（只在解锁点对齐 env_locked），所以能待在
     # 锁定段；环境变了只往尾部投一条通知，这里的字节不动。不走 segment_order——
     # 它是平台机制，不是管理员可编辑的提示词段。
-    from app.services.history.context_sync import context_ref as _env_ctx_ref
-    from app.services.plugin.environment import locked_environment_text
-    _env_text = await locked_environment_text(db, agent.id, _env_ctx_ref(group_id=group_id))
-    if _env_text:
-        system_prompt = f"{system_prompt}\n\n{_env_text}"
+    # 本轮的环境判定一并在这里做掉：一次读帧、一次问通道，渲染与通知共用这一次取值。
+    from app.services.plugin.channel import served_instances as _served_instances
+    from app.services.plugin.environment import environment_turn
+    from app.utils.pure.plugin_env import render_environment
+    _served = await _served_instances(db, group_id)   # 一轮取一次：通道规矩与环境共用
+    _env_locked, _env_entry = await environment_turn(db, agent, group_id, served=_served)
+    if _env_locked:
+        system_prompt = f"{system_prompt}\n\n{render_environment(_env_locked)}"
 
     # ✨ 人格锚点注入（只读，始终在最前面 — 设计文档 6.2）
     system_prompt = await _inject_personality_anchor(db, agent, system_prompt, language)
@@ -1084,7 +1081,7 @@ async def build_messages(
     if group_id:
         try:
             from app.services.plugin import channel as channel_service
-            brief = await channel_service.group_brief(db, group_id)
+            brief = await channel_service.group_brief(db, group_id, served=_served)
             if brief:
                 tail_blocks.append(brief)
         except Exception as e:
@@ -1188,7 +1185,9 @@ async def build_messages(
         # 一次性事件（能力变更通知 / 便签撤下）**落成条目**：它们属于「外界带来了什么」，
         # 必须紧跟历史——落在尾部读数之前，否则下一轮它们会从末尾跑到中间（顺序变 = 断缓存）。
         # 便签投递（逐条条目、幂等）+ 撤下通知：投过没有以账本为准
-        events = await _collect_injection_events(db, agent, group_ref, ledger, group_id=group_id)
+        events = await _collect_injection_events(db, agent, group_ref, ledger)
+        if _env_entry:
+            events.append(_env_entry)
         ledger = ledger + await append_events(db, agent, group_ref, events)
 
         last_user_idx = None

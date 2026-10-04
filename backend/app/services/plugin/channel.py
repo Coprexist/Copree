@@ -260,7 +260,7 @@ async def describe_group(db: AsyncSession, group_id: int, *, refresh: bool = Fal
     return out
 
 
-async def group_brief(db: AsyncSession, group_id: int) -> str:
+async def group_brief(db: AsyncSession, group_id: int, *, served: list | None = None) -> str:
     """这个群经不经过外部通道、那条通道有什么规矩 —— 给 AI 的一段话（没有通道就返回空串）
 
     为什么由平台注入，而不是让 AI 自己猜：消息从 QQ 来这件事背后有一串接口约束
@@ -272,7 +272,7 @@ async def group_brief(db: AsyncSession, group_id: int) -> str:
     """
     found_channels: list[dict[str, Any]] = []
     qq_modes: list[bool | None] = []
-    for plugin_id, instance, found in await served_instances(db, group_id):
+    for plugin_id, instance, found in (served if served is not None else await served_instances(db, group_id)):
         if found["kind"] == "qq":
             qq_modes.append(_live_full_mode(plugin_id, instance))
         # 同一个插件有多个实例（多条通道）时，说明里只列一次

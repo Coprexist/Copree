@@ -12,16 +12,16 @@ import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-# 环境取值的时间闸：契约要求「廉价」，但契约拦不住写错的插件，平台强制一个上限；
-# 超时按「丢弃本次」处理（与异常同路径）——卡住的插件不该拖住整条消息链路。
-ENV_TIMEOUT_SECONDS = 1.0
-
 from app.utils.pure.plugin_env import EnvContractError, changed, normalize, render_environment
 
 logger = logging.getLogger(__name__)
 
+# 环境取值的时间闸：契约要求「廉价」，但契约拦不住写错的插件，平台强制一个上限；
+# 超时按「丢弃本次」处理（与异常同路径）——卡住的插件不该拖住整条消息链路。
+ENV_TIMEOUT_SECONDS = 1.0
 
-async def current_environment(db: AsyncSession, group_id: int) -> dict | None:
+
+async def current_environment(db: AsyncSession, group_id: int, *, served: list | None = None) -> dict | None:
     """返回该会话当前的环境；没有任何通道提供环境时返回 None。
 
     多个通道同时服务一个群属于罕见情形，此处按先声明者合并，而非并列展开；确需并列说明的
@@ -33,7 +33,7 @@ async def current_environment(db: AsyncSession, group_id: int) -> dict | None:
     from app.utils.pure.channel_landing import session_ref
 
     merged: dict = {}
-    for plugin_id, instance, _found in await served_instances(db, group_id):
+    for plugin_id, instance, _found in (served if served is not None else await served_instances(db, group_id)):
         plugin = get_by_owner(plugin_id, instance)
         probe = getattr(plugin, "environment", None)
         if not callable(probe):
@@ -62,36 +62,33 @@ async def current_environment(db: AsyncSession, group_id: int) -> dict | None:
     return merged or None
 
 
-async def sync_environment(db: AsyncSession, agent, group_id: int) -> dict | None:
-    """取值、判定，并建立基线或落一条通知；返回落下的通知文本，无变化时返回空串。
+async def environment_turn(
+    db: AsyncSession, agent, group_id: int | None, *, served: list | None = None,
+) -> tuple[dict | None, dict | None]:
+    """本轮的环境：返回 (写进前缀的那份, 要落的通知条目)。
+
+    一次读帧、一次问通道，两处用途（渲染前缀段、判定要不要通知）共用这一次取值——
+    分成两个函数各自读一遍状态栈，每轮就多一次 DB 往返，而这是每轮都付的钱。
 
     会话帧首次取值只建立基线、不发通知（见 read_frame_env）。发生变更时先推进已告知值
     （去重依据），写进前缀的那一份保持不变——锁定态只落通知，解锁点
-    （UNLOCK_STEPS 的 apply_environment）才将两者对齐。返回的条目由调用方与其它当轮事件
-    一起 append，因此本函数不落库、不提交事务。「紧跟历史」是账本条目的纪律。
+    （UNLOCK_STEPS 的 apply_environment）才将两者对齐。私信会话（group_id 为空）没有环境
+    来源，直接返回空。本函数不提交事务：与注入同一次提交才构成同事务。
     """
+    if not group_id:
+        return None, None
     from app.services.agent.state_stack_service import read_frame_env, write_frame_env
     from app.services.history.context_sync import context_ref
     from app.utils.pure.history import make_entry
 
     ref = context_ref(group_id=group_id)
-    current = await current_environment(db, group_id)
-    baseline, locked, notified = await read_frame_env(db, agent.id, ref)
-    if not baseline:
+    current = await current_environment(db, group_id, served=served)
+    established, locked, notified = await read_frame_env(db, agent.id, ref)
+    if not established:
         await write_frame_env(db, agent.id, ref, locked=current, notified=current)
-        return None
+        return current, None
     if not changed(notified, current):
-        return None
+        return locked, None
     await write_frame_env(db, agent.id, ref, locked=locked, notified=current)
     text = f"【环境变化】{render_environment(current)}"
-    return make_entry("notice", text, flags={"drop_on_unlock": True})
-
-
-async def locked_environment_text(db: AsyncSession, agent_id: int, context_ref: str) -> str:
-    """返回锁定态写进前缀的环境文本；会话帧缺失、未建立基线或环境为空时返回空串。"""
-    from app.services.agent.state_stack_service import read_frame_env
-
-    have, locked, _notified = await read_frame_env(db, agent_id, context_ref)
-    if not have or not locked:
-        return ""
-    return render_environment(locked)
+    return locked, make_entry("notice", text, flags={"drop_on_unlock": True})

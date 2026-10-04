@@ -53,7 +53,7 @@ async def test_first_read_establishes_baseline_without_notice(migrated_db):
 
     seen = {"channel": "qq", "origin_name": "泰拉都市", "member_num": 27}
 
-    async def _fake(db_, group_id):
+    async def _fake(db_, group_id, *, served=None):
         return dict(seen)
 
     async with async_session() as db:
@@ -61,7 +61,7 @@ async def test_first_read_establishes_baseline_without_notice(migrated_db):
         await _open_frame(db)
         agent = await _agent(db)
         with _stub_current(_fake):
-            assert await env_mod.sync_environment(db, agent, 7) is None, "建立基线不发通知"
+            assert (await env_mod.environment_turn(db, agent, 7))[1] is None, "建立基线不发通知"
             await db.commit()
         have, locked, notified = await read_frame_env(db, 47, REF)
         assert have, "首次取值要把基线写进会话帧"
@@ -77,7 +77,7 @@ async def test_change_lands_a_notice_and_keeps_the_locked_copy(migrated_db):
 
     box = {"value": {"channel": "qq", "member_num": 27}}
 
-    async def _fake(db_, group_id):
+    async def _fake(db_, group_id, *, served=None):
         return box["value"]
 
     async with async_session() as db:
@@ -85,15 +85,15 @@ async def test_change_lands_a_notice_and_keeps_the_locked_copy(migrated_db):
         await _open_frame(db)
         agent = await _agent(db)
         with _stub_current(_fake):
-            await env_mod.sync_environment(db, agent, 7)
+            await env_mod.environment_turn(db, agent, 7)
             await db.commit()
             box["value"] = {"channel": "qq", "member_num": 28}
-            entry = await env_mod.sync_environment(db, agent, 7)
+            _locked, entry = await env_mod.environment_turn(db, agent, 7)
             await db.commit()
             assert entry and entry["kind"] == "notice", entry
             assert entry["content"].startswith("【环境变化】"), entry
             assert "28" in entry["content"]
-            assert await env_mod.sync_environment(db, agent, 7) is None, "同一份值不再重复投递"
+            assert (await env_mod.environment_turn(db, agent, 7))[1] is None, "同一份值不再重复投递"
             await db.commit()
         have, locked, notified = await read_frame_env(db, 47, REF)
         assert notified == {"channel": "qq", "member_num": 28}, "已告知值要推进（去重依据）"
@@ -106,7 +106,7 @@ async def test_environment_disappearing_is_a_change(migrated_db):
 
     box = {"value": {"channel": "qq"}}
 
-    async def _fake(db_, group_id):
+    async def _fake(db_, group_id, *, served=None):
         return box["value"]
 
     async with async_session() as db:
@@ -114,10 +114,10 @@ async def test_environment_disappearing_is_a_change(migrated_db):
         await _open_frame(db)
         agent = await _agent(db)
         with _stub_current(_fake):
-            await env_mod.sync_environment(db, agent, 7)
+            await env_mod.environment_turn(db, agent, 7)
             await db.commit()
             box["value"] = None
-            assert await env_mod.sync_environment(db, agent, 7), "环境消失也算变更"
+            assert (await env_mod.environment_turn(db, agent, 7))[1], "环境消失也算变更"
             await db.commit()
 
 
