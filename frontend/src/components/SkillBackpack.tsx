@@ -85,7 +85,7 @@ export default function SkillBackpack({ agentId, className = '' }: Props) {
       {/* 当前状态指示 */}
       {data.agent_state && (
         <div className="flex items-center gap-2 text-xs text-textSecondary mb-1">
-          <span>{t('backpack.currentState')}:</span>
+          <span>{t('backpack:currentState')}:</span>
           <span className={`px-2 py-0.5 rounded ${STATE_TAG_COLORS[data.agent_state] || ''}`}>
             {STATE_LABELS[data.agent_state] || data.agent_state}
           </span>
@@ -117,7 +117,7 @@ export default function SkillBackpack({ agentId, className = '' }: Props) {
                 </div>
                 <div className="flex-1 min-w-0">
                   <h3 className="text-sm font-semibold text-textPrimary">{seg.name}</h3>
-                  <p className="text-3xs text-textMuted">{seg.tool_count} {t('backpack.toolCount')}</p>
+                  <p className="text-3xs text-textMuted">{seg.tool_count} {t('backpack:toolCount')}</p>
                 </div>
                 <div className="shrink-0 text-textMuted">
                   {isExpanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
@@ -150,7 +150,7 @@ export default function SkillBackpack({ agentId, className = '' }: Props) {
       {/* 展开区域 — 通栏显示被选中段落的工具（与插件页共用同一块 ExpandPanel） */}
       {expandedSeg && (
         <ExpandPanel
-          title={`${expandedSeg.name} — ${t('backpack.toolsInSkill')} (${expandedSeg.tool_count})`}
+          title={`${expandedSeg.name} — ${t('backpack:toolsInSkill')} (${expandedSeg.tool_count})`}
           collapseLabel={t('tool:ui.collapse')}
           onCollapse={() => setExpandedSegment(null)}
         >
@@ -166,7 +166,7 @@ export default function SkillBackpack({ agentId, className = '' }: Props) {
                         ? 'bg-mint-100 text-mint-700 dark:bg-mint-900/30 dark:text-mint-400'
                         : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
                     }`}>
-                      {tool.available_in_current_state ? t('backpack.availableNow') : t('backpack.unavailableNow')}
+                      {tool.available_in_current_state ? t('backpack:availableNow') : t('backpack:unavailableNow')}
                     </span>
                   )}
                   {/* 状态标签 */}

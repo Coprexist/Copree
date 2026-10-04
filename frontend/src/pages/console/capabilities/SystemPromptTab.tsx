@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { api } from '../../../api/client'
 import { useT } from '../../../i18n/I18nContext'
+import { NOTICE_BOX_CLASS, useNotice } from '../../../hooks/useNotice'
 import { Save, RotateCcw, Eye, Edit3, ChevronDown, ChevronUp, Loader2, Layers, ArrowRight, ArrowUp, ArrowDown } from 'lucide-react'
 
 interface Segment {
@@ -22,7 +23,7 @@ export default function SystemPromptTab() {
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [expandedKey, setExpandedKey] = useState<string | null>(null)
-  const [message, setMessage] = useState<string | null>(null)
+  const { notice, ok: noticeOk, fail: noticeFail, clear: clearNotice } = useNotice()
   const [previewOpen, setPreviewOpen] = useState(false)
 
   useEffect(() => {
@@ -36,7 +37,7 @@ export default function SystemPromptTab() {
         setSegments(r.segments)
         setOrder(r.segment_order)
       })
-      .catch(() => setMessage('加载失败'))
+      .catch(() => noticeFail(t('admin:loadFailed')))
       .finally(() => setLoading(false))
   }
 
@@ -60,14 +61,14 @@ export default function SystemPromptTab() {
       }
     }
     setSaving(true)
-    setMessage(null)
+    clearNotice()
     try {
       await api.put('/admin/system-prompt', { overrides })
-      setMessage('已保存')
+      noticeOk(t('admin:saveSuccess'))
       setEditingKey(null)
       await loadSegments()
     } catch {
-      setMessage('保存失败')
+      noticeFail(t('admin:saveFailed'))
     } finally {
       setSaving(false)
     }
@@ -81,13 +82,13 @@ export default function SystemPromptTab() {
       }
     }
     setSaving(true)
-    setMessage(null)
+    clearNotice()
     try {
       await api.put('/admin/system-prompt', { overrides })
-      setMessage('已恢复默认')
+      noticeOk(t('admin:promptResetDone'))
       await loadSegments()
     } catch {
-      setMessage('重置失败')
+      noticeFail(t('admin:promptResetFailed'))
     } finally {
       setSaving(false)
     }
@@ -129,10 +130,8 @@ export default function SystemPromptTab() {
         </div>
       </div>
 
-      {message && (
-        <div className={`text-sm px-3 py-2 rounded-card ${
-          message.includes('失败') ? 'bg-rose-400/10 text-rose-400' : 'bg-mint-400/10 text-mint-400'
-        }`}>{message}</div>
+      {notice && (
+        <div className={`text-sm px-3 py-2 rounded-card ${NOTICE_BOX_CLASS[notice.tone]}`}>{notice.text}</div>
       )}
 
       {/* 预览面板 */}
@@ -247,11 +246,11 @@ export default function SystemPromptTab() {
           </h4>
           <button
             onClick={async () => {
-              setSaving(true); setMessage(null)
+              setSaving(true); clearNotice()
               try {
                 await api.put('/admin/system-prompt', { segment_order: order })
-                setMessage('顺序已保存')
-              } catch { setMessage('保存顺序失败') }
+                noticeOk(t('admin:promptOrderSaved'))
+              } catch { noticeFail(t('admin:promptOrderSaveFailed')) }
               finally { setSaving(false) }
             }}
             disabled={saving}

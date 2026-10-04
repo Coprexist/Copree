@@ -26,6 +26,7 @@ const INITIAL_FORM: AgentForm = {
   maxToolRounds: 6,
   alarmMaxToolRounds: 8,
   forceAlarmOnEnd: false,
+  retireHandoverSelf: false,
   maxAlarms: 10,
   isAiEditable: true,
   allowFriendRequests: true,
@@ -123,6 +124,7 @@ export default function CreateAgentModal({
     maxToolRounds, setMaxToolRounds,
     alarmMaxToolRounds, setAlarmMaxToolRounds,
     forceAlarmOnEnd, setForceAlarmOnEnd,
+    retireHandoverSelf, setRetireHandoverSelf,
     maxAlarms, setMaxAlarms,
     isAiEditable, setIsAiEditable,
     allowFriendRequests, setAllowFriendRequests,
@@ -225,6 +227,7 @@ export default function CreateAgentModal({
     setMaxToolRounds(preset.max_tool_rounds)
     setAlarmMaxToolRounds(preset.alarm_max_tool_rounds)
     setForceAlarmOnEnd(preset.force_alarm_on_end)
+    setRetireHandoverSelf(preset.retire_handover_self)
     setMaxAlarms(preset.max_alarms)
     setDelayReplyEnabled(preset.delay_reply_enabled)
     setIsAiEditable(preset.is_ai_editable)
@@ -245,6 +248,7 @@ export default function CreateAgentModal({
         if (sub.params.is_ai_editable !== undefined) setIsAiEditable(sub.params.is_ai_editable)
         if (sub.params.alarm_max_tool_rounds !== undefined) setAlarmMaxToolRounds(sub.params.alarm_max_tool_rounds)
         if (sub.params.force_alarm_on_end !== undefined) setForceAlarmOnEnd(sub.params.force_alarm_on_end)
+        if (sub.params.retire_handover_self !== undefined) setRetireHandoverSelf(sub.params.retire_handover_self)
         if (sub.params.max_alarms !== undefined) setMaxAlarms(sub.params.max_alarms)
         if (sub.ai_type) setAiType(sub.ai_type)
       }
@@ -287,13 +291,13 @@ export default function CreateAgentModal({
         } catch (err: any) {
           // AI 已经建好，只是独立 API 配置没落库：先别关窗——关掉就没人看得见这句话了
           setCreatedAgent(agent.name)
-          setError(err?.message || t('modal.createAgentApiConfigFailed'))
+          setError(err?.message || t('modal:createAgentApiConfigFailed'))
           return
         }
       }
       onCreated(agent.name)
     } catch (err: any) {
-      setError(err.message || t('modal.createAgentFailed'))
+      setError(err.message || t('modal:createAgentFailed'))
     } finally {
       setLoading(false)
     }
@@ -322,13 +326,13 @@ export default function CreateAgentModal({
           <button onClick={handleClose} className="icon-btn-sm -ml-1 text-textSecondary">
             <ArrowLeft size={20} />
           </button>
-          <h2 className="text-base font-semibold text-textPrimary">{t('modal.createAgentTitle')}</h2>
+          <h2 className="text-base font-semibold text-textPrimary">{t('modal:createAgentTitle')}</h2>
           <div className="w-6" />
         </div>
 
         {/* 桌面端头部：标题 + X */}
         <div className="hidden md:flex items-center justify-between mb-5">
-          <h2 className="text-lg font-semibold text-textPrimary">{t('modal.createAgentTitle')}</h2>
+          <h2 className="text-lg font-semibold text-textPrimary">{t('modal:createAgentTitle')}</h2>
           <button onClick={handleClose} className="text-textMuted hover:text-textSecondary transition-colors">
             <X size={20} />
           </button>
@@ -339,25 +343,25 @@ export default function CreateAgentModal({
 
         {/* ── 名称输入 ── */}
         <div className="mb-4">
-          <label className="block text-xs font-medium mb-1.5 text-textSecondary">{t('modal.agentNameLabel')}</label>
+          <label className="block text-xs font-medium mb-1.5 text-textSecondary">{t('modal:agentNameLabel')}</label>
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
             className="w-full px-3.5 py-2.5 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
-            placeholder={t('modal.createAgentNamePlaceholder')}
+            placeholder={t('modal:createAgentNamePlaceholder')}
           />
         </div>
 
         {/* ── 系统提示词 ── */}
         <div className="mb-5">
-          <label className="block text-xs font-medium mb-1.5 text-textSecondary">{t('modal.createAgentSystemPrompt')}</label>
+          <label className="block text-xs font-medium mb-1.5 text-textSecondary">{t('modal:createAgentSystemPrompt')}</label>
           <textarea
             value={systemPrompt}
             onChange={(e) => setSystemPrompt(e.target.value)}
             rows={3}
             className="w-full px-3.5 py-2.5 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50 resize-none"
-            placeholder={t('modal.createAgentSystemPromptPlaceholder')}
+            placeholder={t('modal:createAgentSystemPromptPlaceholder')}
           />
         </div>
 
@@ -406,9 +410,9 @@ export default function CreateAgentModal({
         {selectedPreset && (
           <div className="mb-5">
             <div className="flex items-center gap-2 mb-2">
-              <label className="text-xs font-medium text-textSecondary">{t('modal.detailSettingsAiType')}</label>
+              <label className="text-xs font-medium text-textSecondary">{t('modal:detailSettingsAiType')}</label>
               {selectedSub && (
-                <span className="chip chip-primary shrink-0">{t('modal.aiTypeRecommended')}</span>
+                <span className="chip chip-primary shrink-0">{t('modal:aiTypeRecommended')}</span>
               )}
             </div>
             <AiTypeSelector value={aiType} onChange={setAiType} />
@@ -421,7 +425,7 @@ export default function CreateAgentModal({
             onClick={() => setShowDetailSettings(true)}
             className="w-full text-center text-xs text-textMuted hover:text-textSecondary transition-colors mb-3 py-1"
           >
-            {t('modal.createAgentSkipPreset')}
+            {t('modal:createAgentSkipPreset')}
           </button>
         )}
 
@@ -430,7 +434,7 @@ export default function CreateAgentModal({
           <textarea
             value={bio}
             onChange={(e) => setBio(e.target.value)}
-            placeholder={t('agentDetail.bioPlaceholder')}
+            placeholder={t('agentDetail:bioPlaceholder')}
             rows={2}
             maxLength={500}
             className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50 resize-none"
@@ -439,7 +443,7 @@ export default function CreateAgentModal({
             type="text"
             value={statusText}
             onChange={(e) => setStatusText(e.target.value)}
-            placeholder={t('agentDetail.statusTextPlaceholder')}
+            placeholder={t('agentDetail:statusTextPlaceholder')}
             className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
           />
         </div>
@@ -448,7 +452,7 @@ export default function CreateAgentModal({
         {createdAgent ? (
           // 建号已完成，只剩收尾：不再给"再建一个"的入口
           <button onClick={handleClose} className="btn btn-md btn-primary w-full">
-            {t('common.close')}
+            {t('common:close')}
           </button>
         ) : (
           <div className="flex gap-3">
@@ -457,19 +461,19 @@ export default function CreateAgentModal({
               className="flex-1 py-2.5 text-sm border border-border rounded-card hover:bg-elevated text-textSecondary transition-colors font-medium flex items-center justify-center gap-1.5"
             >
               <Settings size={14} />
-              {t('modal.createAgentDetailSettings')}
+              {t('modal:createAgentDetailSettings')}
             </button>
             <button
               onClick={handleCreate}
               disabled={!name.trim() || loading}
               className="btn btn-md btn-primary flex-1"
             >
-              {loading ? t('modal.createAgentCreating') : t('modal.createAgentCreate')}
+              {loading ? t('modal:createAgentCreating') : t('modal:createAgentCreate')}
             </button>
           </div>
         )}
         {!name.trim() && selectedPreset && (
-          <p className="text-xs text-textMuted mt-2 text-center">{t('modal.createAgentConfirmHint')}</p>
+          <p className="text-xs text-textMuted mt-2 text-center">{t('modal:createAgentConfirmHint')}</p>
         )}
 
         {error && <div className="text-sm text-rose-400 mt-3 text-center">{error}</div>}

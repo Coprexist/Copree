@@ -89,16 +89,16 @@ export function ConfirmDialogHost() {
       title={
         <span className="flex items-center gap-2">
           <AlertTriangle size={18} className={options.danger ? 'text-rose-400' : 'text-accent-400'} />
-          {options.title || t('common.confirm')}
+          {options.title || t('common:confirm')}
         </span>
       }
       footer={
         <>
           <Button variant="secondary" onClick={() => resolveAndClose(false)}>
-            {options.cancelText || t('common.cancel')}
+            {options.cancelText || t('common:cancel')}
           </Button>
           <Button variant={options.danger ? 'danger' : 'primary'} onClick={() => resolveAndClose(true)}>
-            {options.confirmText || t('common.confirm')}
+            {options.confirmText || t('common:confirm')}
           </Button>
         </>
       }

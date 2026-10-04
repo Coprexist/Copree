@@ -398,7 +398,7 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
         id: -Date.now(),
         sender_type: 'system',
         sender_id: 0,
-        sender_name: t('groupSettings.announcement'),
+        sender_name: t('groupSettings:announcement'),
         content: d.content,
         reply_to: null,
         created_at: new Date().toISOString(),
@@ -517,7 +517,7 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
       const failed = (res?.channel || []).filter((c: any) => !c.ok)
       if (failed.length) {
         // 通道侧没撤掉要如实说：QQ 只有 2 分钟窗口、还要求机器人有权限（站内已撤，别让人以为全撤了）
-        setRevokeNotice(t('chat.revokedChannelFailed', {
+        setRevokeNotice(t('chat:revokedChannelFailed', {
           reason: failed.map((c: any) => c.reason).join('；'),
         }))
       }
@@ -547,7 +547,7 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
           {msg.id === firstUnreadId && hasMoreBefore && (
             <div className="flex items-center gap-2 my-3 select-none">
               <div className="flex-1 h-px bg-rose-500/30" />
-              <span className="text-3xs font-medium text-rose-400 whitespace-nowrap">{t('chat.newMessages')}</span>
+              <span className="text-3xs font-medium text-rose-400 whitespace-nowrap">{t('chat:newMessages')}</span>
               <div className="flex-1 h-px bg-rose-500/30" />
             </div>
           )}
@@ -1062,17 +1062,17 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
     <div className="absolute inset-0 z-toast flex items-center justify-center bg-black/70 backdrop-blur-sm">
       <div className="w-full max-w-md mx-4 max-h-full overflow-y-auto bg-surface rounded-dialog border border-primary-500/30 shadow-2xl p-8 text-center">
         <div className="mb-4"><Globe size={48} className="mx-auto text-primary-400" /></div>
-        <h2 className="text-lg font-semibold text-textPrimary">{t('chat.worldGateTitle')}</h2>
-        <p className="text-sm text-textMuted mt-2 mb-7">{t('chat.worldGateSubtitle')}</p>
+        <h2 className="text-lg font-semibold text-textPrimary">{t('chat:worldGateTitle')}</h2>
+        <p className="text-sm text-textMuted mt-2 mb-7">{t('chat:worldGateSubtitle')}</p>
         <div className="space-y-2.5">
           <button onClick={openImmersive} className="btn btn-md btn-primary w-full gap-1.5">
-            <Gamepad2 size={14} /> {t('chat.worldGateImmersive')}
+            <Gamepad2 size={14} /> {t('chat:worldGateImmersive')}
           </button>
           <button
             onClick={closeWorldModal}
             className="w-full inline-flex items-center justify-center gap-1.5 py-3 bg-elevated hover:bg-border text-textPrimary rounded-card font-medium transition-colors"
           >
-            <Settings size={12} /> {t('chat.worldGateStandard')}
+            <Settings size={12} /> {t('chat:worldGateStandard')}
           </button>
         </div>
       </div>
@@ -1085,7 +1085,7 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
       {reconnecting && (
         <div className="absolute top-0 left-0 right-0 z-modal flex items-center justify-center gap-2 bg-accent-500/15 border-b border-accent-500/20 text-accent-400 px-4 py-1.5 text-xs font-medium backdrop-blur-sm">
           <Loader2 size={12} className="animate-spin" />
-          {t('chat.reconnecting')}
+          {t('chat:reconnecting')}
         </div>
       )}
 
@@ -1095,7 +1095,7 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
           onClick={openImmersive}
           className="shrink-0 flex items-center justify-center gap-1.5 px-4 py-1.5 text-xs font-medium text-primary-400 bg-primary-500/10 border-b border-primary-500/20 hover:bg-primary-500/15 transition-colors"
         >
-          <Gamepad2 size={12} /> {t('chat.worldEnterImmersive')}
+          <Gamepad2 size={12} /> {t('chat:worldEnterImmersive')}
         </button>
       )}
 
@@ -1146,7 +1146,7 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
           className="absolute top-3 right-4 z-drawer flex items-center gap-1.5 px-3 py-1.5 bg-primary-500/90 hover:bg-primary-500 text-white text-xs font-medium rounded-full shadow-lg shadow-primary-500/30 backdrop-blur-sm transition-all duration-200"
         >
           <ArrowUp size={14} />
-          {t('chat.jumpToFirstUnread')}
+          {t('chat:jumpToFirstUnread')}
         </button>
       )}
 
@@ -1156,7 +1156,7 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
       {/* 消息列表：外层不滚动，专门用来挂拖拽蒙版（放进滚动容器会随内容滚走）；
           containerRef 必须留在内层——虚拟列表靠它读 scrollTop */}
       <div className="flex-1 min-h-0 relative" {...attachments.zoneProps('list')}>
-        <DropMask {...attachments.dropState('list')} label={t('chat.dropToAdd')} />
+        <DropMask {...attachments.dropState('list')} label={t('chat:dropToAdd')} />
         <div
           ref={containerRef}
           className="absolute inset-0 overflow-y-auto px-4 py-4 bg-canvas"
@@ -1174,7 +1174,7 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
           {/* 无更多旧消息提示 */}
           {!hasMoreBefore && messages.length > 0 && (
             <div className="text-center text-3xs text-textMuted py-2 select-none">
-              {t('chat.beginningOfChat')}
+              {t('chat:beginningOfChat')}
             </div>
           )}
 
@@ -1212,7 +1212,7 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
           <button
             onClick={() => scrollToBottom(true)}
             className="flex items-center justify-center w-9 h-9 bg-elevated border border-border rounded-full shadow-lg shadow-black/20 text-textSecondary hover:text-textPrimary hover:bg-surface transition-all duration-200"
-            title={t('chat.scrollToBottom')}
+            title={t('chat:scrollToBottom')}
           >
             <ArrowDown size={16} />
           </button>
@@ -1244,9 +1244,9 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
 
       {/* 输入框（文件可直接拖进来放下，与点回形针等价） */}
       <div className="p-3 bg-surface border-t border-border relative" {...attachments.zoneProps('input')} {...attachments.pasteProps}>
-        <DropMask {...attachments.dropState('input')} label={t('chat.dropToAdd')} />
+        <DropMask {...attachments.dropState('input')} label={t('chat:dropToAdd')} />
         {/* 附件预览列表（与群视界世界对话共用同一组件） */}
-        <AttachmentChips items={attachments.items} onRemove={attachments.remove} errorText={t('chat.uploadFailed')} />
+        <AttachmentChips items={attachments.items} onRemove={attachments.remove} errorText={t('chat:uploadFailed')} />
 
         {/* @提及 自动补全下拉 */}
         {mentionActive && mentionFiltered.length > 0 && (

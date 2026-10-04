@@ -13,7 +13,7 @@ import {
 } from 'lucide-react'
 import AvatarPickerModal from '../components/AvatarPickerModal'
 import AgentSettingsModal from '../components/AgentSettingsModal'
-import { ContentColumn, Dialog, EmptyState } from '../components/ui'
+import { ContentColumn, Dialog, EmptyState, UnderlineTabs } from '../components/ui'
 import FilePreviewModal from '../components/FilePreviewModal'
 import ChannelCard from '../components/channels/ChannelCard'
 import LogBrowser from '../components/shared/LogBrowser'
@@ -69,6 +69,7 @@ interface Agent {
   max_tool_rounds: number
   alarm_max_tool_rounds: number
   force_alarm_on_end: boolean
+  retire_handover_self: boolean
   max_alarms: number
   allow_friend_requests: boolean
   auto_respond_friend_request: boolean
@@ -283,13 +284,13 @@ export default function AgentDetailPage() {
   // 页签文案：一张表代替七层三元表达式；每项都写成字面量 key（不要用变量拼），
   // i18n 静态检查只认源码里的字面量调用，加页签只动一行
   const tabLabels: Record<string, string> = {
-    info: t('agentDetail.tabInfo'),
-    channels: t('agentDetail.tabChannels'),
-    memories: t('agentDetail.tabMemories'),
-    storage: t('agentDetail.tabStorage'),
-    workspace: t('agentDetail.tabWorkspace'),
-    logs: t('agentDetail.tabLogs'),
-    collaborators: t('agentDetail.tabCollaborators'),
+    info: t('agentDetail:tabInfo'),
+    channels: t('agentDetail:tabChannels'),
+    memories: t('agentDetail:tabMemories'),
+    storage: t('agentDetail:tabStorage'),
+    workspace: t('agentDetail:tabWorkspace'),
+    logs: t('agentDetail:tabLogs'),
+    collaborators: t('agentDetail:tabCollaborators'),
   }
   const [showFullSettings, setShowFullSettings] = useState(false)
   const [modelOptions, setModelOptions] = useState<{ value: string; label: string; provider_name?: string; provider_key?: string }[]>([])
@@ -487,7 +488,7 @@ export default function AgentDetailPage() {
       refreshUser()
       navigate('/agents')
     } catch (err: any) {
-      alert(err.message || t('error.saveFailed'))
+      alert(err.message || t('error:saveFailed'))
     } finally {
       setDeleting(false)
     }
@@ -517,7 +518,7 @@ export default function AgentDetailPage() {
       setDeleteFileRefs(null)
       loadStorage()
     } catch (err: any) {
-      alert(err.message || err.detail || t('error.saveFailed'))
+      alert(err.message || err.detail || t('error:saveFailed'))
     } finally {
       setDeletingFile(false)
     }
@@ -531,7 +532,7 @@ export default function AgentDetailPage() {
       setAgent(data)
       setEditingPrompt(false)
     } catch (err: any) {
-      alert(err.message || t('error.saveFailed'))
+      alert(err.message || t('error:saveFailed'))
     } finally {
       setSavingPrompt(false)
     }
@@ -543,7 +544,7 @@ export default function AgentDetailPage() {
       const data = await api.put(`/agents/${agentId}/config`, { delay_reply_enabled: value })
       setAgent(data)
     } catch (err: any) {
-      alert(err.message || t('error.saveFailed'))
+      alert(err.message || t('error:saveFailed'))
     }
   }
 
@@ -552,7 +553,7 @@ export default function AgentDetailPage() {
       const data = await api.put(`/agents/${agentId}/config`, { [field]: value })
       setAgent(data)
     } catch (err: any) {
-      alert(err.message || t('error.saveFailed'))
+      alert(err.message || t('error:saveFailed'))
     }
   }
 
@@ -565,7 +566,7 @@ export default function AgentDetailPage() {
       setTokenMasked(null) // refresh
       await loadToken()
     } catch (err: any) {
-      alert(err.message || t('error.operationFailed'))
+      alert(err.message || t('error:operationFailed'))
     } finally {
       setGeneratingToken(false)
     }
@@ -576,7 +577,7 @@ export default function AgentDetailPage() {
     try {
       await api.download(`/agents/${agentId}/export`, `soul_${agent?.name || 'agent'}.json`)
     } catch (err: any) {
-      alert(t('error.exportFailed'))
+      alert(t('error:exportFailed'))
     }
   }
 
@@ -592,7 +593,7 @@ export default function AgentDetailPage() {
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     } catch {
-      alert(t('common.copied') + ' ' + t('error.operationFailed'))
+      alert(t('common:copied') + ' ' + t('error:operationFailed'))
     }
   }
 
@@ -612,12 +613,12 @@ export default function AgentDetailPage() {
       })
       if (!res.ok) {
         const err = await res.json()
-        throw new Error(err.detail || t('error.operationFailed'))
+        throw new Error(err.detail || t('error:operationFailed'))
       }
       const data = await res.json()
       navigate(`/agents/${data.id}`)
     } catch (err: any) {
-      alert(err.message || t('error.operationFailed'))
+      alert(err.message || t('error:operationFailed'))
     } finally {
       setImporting(false)
     }
@@ -685,11 +686,11 @@ export default function AgentDetailPage() {
                 )}
                 {agent.ai_type && agent.ai_type !== 'resonance' && (
                   <span className="text-xs px-2 py-0.5 rounded-full border border-accent-400/40 bg-accent-400/10 text-accent-400">
-                    {agent.ai_type === 'general' ? t('agentDetail.aiTypeGeneral') : t('agentDetail.aiTypeSemiGeneral')}
+                    {agent.ai_type === 'general' ? t('agentDetail:aiTypeGeneral') : t('agentDetail:aiTypeSemiGeneral')}
                   </span>
                 )}
                 <span className="text-xs text-textMuted">
-                  {t('agentDetail.createdOn')} {new Date(agent.created_at).toLocaleDateString('zh-CN')}
+                  {t('agentDetail:createdOn')} {new Date(agent.created_at).toLocaleDateString('zh-CN')}
                 </span>
               </div>
             </div>
@@ -697,21 +698,15 @@ export default function AgentDetailPage() {
         </div>
 
         {/* Tabs */}
-        <div className="flex gap-1 mb-4 border-b border-border overflow-x-auto">
-          {(['info', 'channels', 'memories', 'storage', 'workspace', 'logs', 'collaborators'] as const).map((tab) => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
-                activeTab === tab
-                  ? 'border-primary-500 text-primary-400'
-                  : 'border-transparent text-textMuted hover:text-textSecondary'
-              }`}
-            >
-              {tabLabels[tab]}
-            </button>
-          ))}
-        </div>
+        <UnderlineTabs
+          className="mb-4"
+          items={(['info', 'channels', 'memories', 'storage', 'workspace', 'logs', 'collaborators'] as const).map((tab) => ({
+            key: tab,
+            label: tabLabels[tab],
+          }))}
+          value={activeTab}
+          onChange={setActiveTab}
+        />
 
         {/* Tab Content */}
         {activeTab === 'info' && (
@@ -722,8 +717,8 @@ export default function AgentDetailPage() {
               className="w-full flex items-center justify-center gap-2 py-2.5 rounded-card border-2 border-dashed border-primary-400/50 bg-primary-500/5 hover:bg-primary-500/10 text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 text-sm font-medium transition-colors"
             >
               <Settings size={16} />
-              {t('agentDetail.fullSettings')}
-              <span className="text-textMuted text-xs font-normal">— {t('agentDetail.fullSettingsDesc')}</span>
+              {t('agentDetail:fullSettings')}
+              <span className="text-textMuted text-xs font-normal">— {t('agentDetail:fullSettingsDesc')}</span>
             </button>
 
             {/* Quick Edit Prompt */}
@@ -731,14 +726,14 @@ export default function AgentDetailPage() {
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
                   <Edit3 size={16} className="text-primary-400" />
-                  <h3 className="font-medium text-textPrimary text-sm">{t('agentDetail.systemPrompt')}</h3>
+                  <h3 className="font-medium text-textPrimary text-sm">{t('agentDetail:systemPrompt')}</h3>
                 </div>
                 {!editingPrompt ? (
                   <button
                     onClick={() => { setEditingPrompt(true); setPromptText(agent.current_system_prompt || '') }}
                     className="text-xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 transition-colors"
                   >
-                    {t('common.edit')}
+                    {t('common:edit')}
                   </button>
                 ) : (
                   <div className="flex gap-2">
@@ -760,7 +755,7 @@ export default function AgentDetailPage() {
                 />
               ) : (
                 <p className="text-sm text-textSecondary leading-relaxed whitespace-pre-wrap">
-                  {agent.current_system_prompt || t('agentDetail.notSet')}
+                  {agent.current_system_prompt || t('agentDetail:notSet')}
                 </p>
               )}
             </div>
@@ -769,11 +764,11 @@ export default function AgentDetailPage() {
             <div className="bg-surface rounded-card border border-border p-4">
               <div className="flex items-center gap-2 mb-3">
                 <User size={16} className="text-primary-400" />
-                <h3 className="font-medium text-textPrimary text-sm">{t('agentDetail.profileSection')}</h3>
+                <h3 className="font-medium text-textPrimary text-sm">{t('agentDetail:profileSection')}</h3>
               </div>
               <div className="space-y-3">
                 <div>
-                  <label className="text-xs text-textMuted">{t('agentDetail.bioLabel')}</label>
+                  <label className="text-xs text-textMuted">{t('agentDetail:bioLabel')}</label>
                   <div className="relative mt-1">
                     <textarea
                       defaultValue={agent?.bio || ''}
@@ -784,12 +779,12 @@ export default function AgentDetailPage() {
                       rows={3}
                       maxLength={500}
                       className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50 resize-y"
-                      placeholder={t('agentDetail.bioPlaceholder')}
+                      placeholder={t('agentDetail:bioPlaceholder')}
                     />
                   </div>
                 </div>
                 <div>
-                  <label className="text-xs text-textMuted">{t('agentDetail.statusTextLabel')}</label>
+                  <label className="text-xs text-textMuted">{t('agentDetail:statusTextLabel')}</label>
                   <input
                     type="text"
                     defaultValue={agent?.status_text || ''}
@@ -798,12 +793,12 @@ export default function AgentDetailPage() {
                       if (val !== (agent?.status_text || '')) handleUpdateAgentField('status_text', val || null)
                     }}
                     className="w-full mt-1 px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
-                    placeholder={t('agentDetail.statusTextPlaceholder')}
+                    placeholder={t('agentDetail:statusTextPlaceholder')}
                   />
-                  <p className="text-3xs text-textMuted mt-1">{t('agentDetail.statusTextHint')}</p>
+                  <p className="text-3xs text-textMuted mt-1">{t('agentDetail:statusTextHint')}</p>
                 </div>
                 <div>
-                  <label className="text-xs text-textMuted">{t('me.statusColorLabel')}</label>
+                  <label className="text-xs text-textMuted">{t('me:statusColorLabel')}</label>
                   <div className="flex items-center gap-2 flex-wrap mt-1">
                     {STATUS_COLORS.map(c => (
                       <button key={c.value} type="button"
@@ -830,7 +825,7 @@ export default function AgentDetailPage() {
                           }
                         }}
                         className="w-6 h-6 rounded-full cursor-pointer border-2 border-border hover:border-primary-400 transition-colors"
-                        title={t('me.statusColorCustom')} />
+                        title={t('me:statusColorCustom')} />
                     </div>
                   </div>
                 </div>
@@ -839,42 +834,42 @@ export default function AgentDetailPage() {
 
             {/* Config Info */}
             <div className="bg-surface rounded-card border border-border p-4">
-              <h3 className="font-medium text-textPrimary text-sm mb-3">{t('agentDetail.modelConfig')}</h3>
+              <h3 className="font-medium text-textPrimary text-sm mb-3">{t('agentDetail:modelConfig')}</h3>
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <div>
-                  <span className="text-textMuted">{t('agentDetail.chatModel')}</span>
-                  <span className="text-textPrimary">{agent.chat_model || t('common.default')}</span>
+                  <span className="text-textMuted">{t('agentDetail:chatModel')}</span>
+                  <span className="text-textPrimary">{agent.chat_model || t('common:default')}</span>
                 </div>
                 <div>
-                  <span className="text-textMuted">{t('agentDetail.workModel')}</span>
-                  <span className="text-textPrimary">{agent.work_model || t('common.default')}</span>
+                  <span className="text-textMuted">{t('agentDetail:workModel')}</span>
+                  <span className="text-textPrimary">{agent.work_model || t('common:default')}</span>
                 </div>
                 <div>
-                  <span className="text-textMuted">{t('agentDetail.temperature')}</span>
+                  <span className="text-textMuted">{t('agentDetail:temperature')}</span>
                   <span className="text-textPrimary">{agent.current_temperature}</span>
                 </div>
                 <div>
-                  <span className="text-textMuted">{t('agentDetail.topP')}</span>
+                  <span className="text-textMuted">{t('agentDetail:topP')}</span>
                   <span className="text-textPrimary">{agent.current_top_p}</span>
                 </div>
                 <div>
-                  <span className="text-textMuted">{t('agentDetail.thinking')}</span>
-                  <span className="text-textPrimary">{agent.thinking_enabled ? t('agentDetail.enabled') : t('agentDetail.disabled')}</span>
+                  <span className="text-textMuted">{t('agentDetail:thinking')}</span>
+                  <span className="text-textPrimary">{agent.thinking_enabled ? t('agentDetail:enabled') : t('agentDetail:disabled')}</span>
                 </div>
                 <div>
-                  <span className="text-textMuted">{t('agentDetail.aiIdentity')}</span>
-                  <span className="text-textPrimary">{agent.hide_ai_identity ? t('agentDetail.hidden') : t('agentDetail.normal')}</span>
+                  <span className="text-textMuted">{t('agentDetail:aiIdentity')}</span>
+                  <span className="text-textPrimary">{agent.hide_ai_identity ? t('agentDetail:hidden') : t('agentDetail:normal')}</span>
                 </div>
                 <div>
-                  <span className="text-textMuted">{t('agentDetail.configProfile')}</span>
+                  <span className="text-textMuted">{t('agentDetail:configProfile')}</span>
                   <span className="text-textPrimary">
-                    {agent.config_profile === 'chat' ? t('agentDetail.profileChat') :
-                     agent.config_profile === 'immersive' ? t('agentDetail.profileImmersive') :
-                     t('agentDetail.profileDigitalLife')}
+                    {agent.config_profile === 'chat' ? t('agentDetail:profileChat') :
+                     agent.config_profile === 'immersive' ? t('agentDetail:profileImmersive') :
+                     t('agentDetail:profileDigitalLife')}
                   </span>
                 </div>
                 <div>
-                  <span className="text-textMuted">{t('agentDetail.delayReply')}</span>
+                  <span className="text-textMuted">{t('agentDetail:delayReply')}</span>
                   <select
                     value={agent.delay_reply_enabled === null ? 'inherit' : agent.delay_reply_enabled ? 'on' : 'off'}
                     onChange={(e) => {
@@ -883,18 +878,18 @@ export default function AgentDetailPage() {
                     }}
                     className="text-xs px-2 py-0.5 rounded border border-border bg-canvas text-textPrimary focus:outline-none focus:ring-1 focus:ring-primary-500/50"
                   >
-                    <option value="inherit">{t('agentDetail.inheritGlobal')}</option>
-                    <option value="on">{t('agentDetail.enabled')}</option>
-                    <option value="off">{t('agentDetail.disabled')}</option>
+                    <option value="inherit">{t('agentDetail:inheritGlobal')}</option>
+                    <option value="on">{t('agentDetail:enabled')}</option>
+                    <option value="off">{t('agentDetail:disabled')}</option>
                   </select>
                 </div>
               </div>
               {/* 工具调用 & 闹钟 */}
               <div className="mt-4 pt-4 border-t border-border/60">
-                <h4 className="text-xs font-medium text-textSecondary mb-3">{t('agentDetail.toolCallsAndAlarms')}</h4>
+                <h4 className="text-xs font-medium text-textSecondary mb-3">{t('agentDetail:toolCallsAndAlarms')}</h4>
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   <div>
-                    <span className="text-textMuted">{t('agentDetail.maxToolRounds')}</span>
+                    <span className="text-textMuted">{t('agentDetail:maxToolRounds')}</span>
                     <span className="inline-flex items-center gap-1 ml-1">
                       <button
                         onClick={() => handleUpdateAgentField('max_tool_rounds', Math.max(1, (agent.max_tool_rounds || 3) - 1))}
@@ -908,7 +903,7 @@ export default function AgentDetailPage() {
                     </span>
                   </div>
                   <div>
-                    <span className="text-textMuted">{t('agentDetail.alarmMaxRounds')}</span>
+                    <span className="text-textMuted">{t('agentDetail:alarmMaxRounds')}</span>
                     <span className="inline-flex items-center gap-1 ml-1">
                       <button
                         onClick={() => handleUpdateAgentField('alarm_max_tool_rounds', Math.max(1, (agent.alarm_max_tool_rounds || 10) - 1))}
@@ -922,11 +917,15 @@ export default function AgentDetailPage() {
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="text-textMuted">{t('agentDetail.forceAlarm')}</span>
+                    <span className="text-textMuted">{t('agentDetail:forceAlarm')}</span>
                     <Toggle checked={agent.force_alarm_on_end} onChange={(v) => handleUpdateAgentField('force_alarm_on_end', v)} />
                   </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-textMuted">{t('agentDetail:retireHandover')}</span>
+                    <Toggle checked={agent.retire_handover_self} onChange={(v) => handleUpdateAgentField('retire_handover_self', v)} />
+                  </div>
                   <div>
-                    <span className="text-textMuted">{t('agentDetail.maxAlarms')}</span>
+                    <span className="text-textMuted">{t('agentDetail:maxAlarms')}</span>
                     <span className="inline-flex items-center gap-1 ml-1">
                       <button
                         onClick={() => handleUpdateAgentField('max_alarms', Math.max(1, (agent.max_alarms || 10) - 1))}
@@ -943,22 +942,22 @@ export default function AgentDetailPage() {
               </div>
               {/* 文件记忆 */}
               <div className="mt-4 pt-4 border-t border-border/60">
-                <h4 className="text-xs font-medium text-textSecondary mb-3">{t('agentDetail.fileMemory')}</h4>
+                <h4 className="text-xs font-medium text-textSecondary mb-3">{t('agentDetail:fileMemory')}</h4>
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   <div>
-                    <span className="text-textMuted">{t('agentDetail.memoryLoadMode')}</span>
+                    <span className="text-textMuted">{t('agentDetail:memoryLoadMode')}</span>
                     <select
                       value={agent.memory_load_mode || 'index_only'}
                       onChange={(e) => handleUpdateAgentField('memory_load_mode', e.target.value)}
                       className="text-xs px-2 py-0.5 rounded border border-border bg-canvas text-textPrimary focus:outline-none focus:ring-1 focus:ring-primary-500/50 ml-1"
                     >
-                      <option value="index_only">{t('agentDetail.memoryModeIndexOnly')}</option>
-                      <option value="index_plus_recent">{t('agentDetail.memoryModeIndexRecent')}</option>
-                      <option value="index_plus_semantic">{t('agentDetail.memoryModeIndexSemantic')}</option>
+                      <option value="index_only">{t('agentDetail:memoryModeIndexOnly')}</option>
+                      <option value="index_plus_recent">{t('agentDetail:memoryModeIndexRecent')}</option>
+                      <option value="index_plus_semantic">{t('agentDetail:memoryModeIndexSemantic')}</option>
                     </select>
                   </div>
                   <div>
-                    <span className="text-textMuted">{t('agentDetail.memoryRecentCount')}</span>
+                    <span className="text-textMuted">{t('agentDetail:memoryRecentCount')}</span>
                     <span className="inline-flex items-center gap-1 ml-1">
                       <button
                         onClick={() => handleUpdateAgentField('memory_recent_count', Math.max(0, (agent.memory_recent_count || 0) - 1))}
@@ -972,29 +971,29 @@ export default function AgentDetailPage() {
                     </span>
                   </div>
                   <div className="col-span-2">
-                    <span className="text-textMuted">{t('agentDetail.memorySharedScope')}</span>
+                    <span className="text-textMuted">{t('agentDetail:memorySharedScope')}</span>
                     <select
                       value={agent.memory_shared_scope || 'private_only'}
                       onChange={(e) => handleUpdateAgentField('memory_shared_scope', e.target.value)}
                       className="text-xs px-2 py-0.5 rounded border border-border bg-canvas text-textPrimary focus:outline-none focus:ring-1 focus:ring-primary-500/50 ml-1"
                     >
-                      <option value="private_only">{t('agentDetail.sharedScopePrivate')}</option>
-                      <option value="private_plus_shared_by_user">{t('agentDetail.sharedScopeByUser')}</option>
-                      <option value="private_plus_shared_all">{t('agentDetail.sharedScopeAll')}</option>
+                      <option value="private_only">{t('agentDetail:sharedScopePrivate')}</option>
+                      <option value="private_plus_shared_by_user">{t('agentDetail:sharedScopeByUser')}</option>
+                      <option value="private_plus_shared_all">{t('agentDetail:sharedScopeAll')}</option>
                     </select>
                   </div>
                 </div>
               </div>
               {/* 好友与社交 */}
               <div className="mt-4 pt-4 border-t border-border/60">
-                <h4 className="text-xs font-medium text-textSecondary mb-3">{t('agentDetail.friendsAndSocial')}</h4>
+                <h4 className="text-xs font-medium text-textSecondary mb-3">{t('agentDetail:friendsAndSocial')}</h4>
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   <div className="flex items-center gap-2">
-                    <span className="text-textMuted">{t('agentDetail.allowFriendRequests')}</span>
+                    <span className="text-textMuted">{t('agentDetail:allowFriendRequests')}</span>
                     <Toggle checked={agent.allow_friend_requests} onChange={(v) => handleUpdateAgentField('allow_friend_requests', v)} />
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="text-textMuted">{t('agentDetail.autoRespondRequests')}</span>
+                    <span className="text-textMuted">{t('agentDetail:autoRespondRequests')}</span>
                     <Toggle checked={agent.auto_respond_friend_request} onChange={(v) => handleUpdateAgentField('auto_respond_friend_request', v)} disabled={!agent.allow_friend_requests} />
                   </div>
                 </div>
@@ -1005,19 +1004,19 @@ export default function AgentDetailPage() {
             <div className="bg-surface rounded-card border border-border p-4">
               <div className="flex items-center gap-2 mb-3">
                 <Key size={16} className="text-primary-400" />
-                <h3 className="font-medium text-textPrimary text-sm">{t('agentDetail.apiConfig')}</h3>
+                <h3 className="font-medium text-textPrimary text-sm">{t('agentDetail:apiConfig')}</h3>
               </div>
               <div className="text-sm space-y-1">
                 <p>
-                  <span className="text-textMuted">{t('agentDetail.apiBaseUrl')}</span>
-                  <span className="text-textPrimary">{agent.api_base_url || t('agentDetail.inheritGlobal')}</span>
+                  <span className="text-textMuted">{t('agentDetail:apiBaseUrl')}</span>
+                  <span className="text-textPrimary">{agent.api_base_url || t('agentDetail:inheritGlobal')}</span>
                 </p>
                 <p>
-                  <span className="text-textMuted">{t('agentDetail.apiKey')}</span>
-                  <span className="text-textPrimary">{agent.has_api_key ? t('agentDetail.apiKeySet') : t('agentDetail.inheritGlobal')}</span>
+                  <span className="text-textMuted">{t('agentDetail:apiKey')}</span>
+                  <span className="text-textPrimary">{agent.has_api_key ? t('agentDetail:apiKeySet') : t('agentDetail:inheritGlobal')}</span>
                 </p>
                 <p>
-                  <span className="text-textMuted">{t('agentDetail.apiCreditCost')}</span>
+                  <span className="text-textMuted">{t('agentDetail:apiCreditCost')}</span>
                   <span className="text-textPrimary">{agent.api_credit_cost}</span>
                 </p>
               </div>
@@ -1025,21 +1024,21 @@ export default function AgentDetailPage() {
 
             {/* Actions */}
             <div className="bg-surface rounded-card border border-border p-4">
-              <h3 className="font-medium text-textPrimary text-sm mb-3">{t('agentDetail.actions')}</h3>
+              <h3 className="font-medium text-textPrimary text-sm mb-3">{t('agentDetail:actions')}</h3>
               <div className="flex flex-wrap gap-2">
                 {/* Export */}
                 <button onClick={handleExport} className={ACTION_BTN}>
-                  <Download size={14} /> {t('agentDetail.exportSoul')}
+                  <Download size={14} /> {t('agentDetail:exportSoul')}
                 </button>
                 <button onClick={handleCopyExport} className={ACTION_BTN}>
                   {copied ? <Check size={14} className="text-mint-400" /> : <Copy size={14} />}
-                  {copied ? t('agentDetail.copied') : t('agentDetail.copySoul')}
+                  {copied ? t('agentDetail:copied') : t('agentDetail:copySoul')}
                 </button>
 
                 {/* Import */}
                 <label className={ACTION_BTN}>
                   <Upload size={14} />
-                  {importing ? t('common.saving') : t('agentDetail.importSoul')}
+                  {importing ? t('common:saving') : t('agentDetail:importSoul')}
                   <input type="file" accept=".json" onChange={handleImport} className="hidden" />
                 </label>
 
@@ -1050,13 +1049,13 @@ export default function AgentDetailPage() {
                   className={ACTION_BTN}
                 >
                   <Image size={14} />
-                  {uploadingAvatar ? t('me.uploadingAvatar') : t('agentDetail.changeAvatar')}
+                  {uploadingAvatar ? t('me:uploadingAvatar') : t('agentDetail:changeAvatar')}
                 </button>
 
                 {/* Token */}
                 <button onClick={handleGenerateToken} disabled={generatingToken} className={ACTION_BTN}>
                   <RefreshCw size={14} className={generatingToken ? 'animate-spin' : ''} />
-                  {tokenMasked ? `Token: ${tokenMasked}` : t('agentDetail.generateToken')}
+                  {tokenMasked ? `Token: ${tokenMasked}` : t('agentDetail:generateToken')}
                 </button>
                 {token && (
                   <div className="w-full flex items-center gap-2 mt-2 p-2 rounded-control bg-accent-400/5 border border-accent-400/20">
@@ -1065,14 +1064,14 @@ export default function AgentDetailPage() {
                       onClick={() => { navigator.clipboard.writeText(token); setToken(null) }}
                       className="text-xs text-accent-400 hover:text-accent-500 dark:hover:text-accent-300"
                     >
-                      {t('agentDetail.copyOnce')}
+                      {t('agentDetail:copyOnce')}
                     </button>
                   </div>
                 )}
 
                 {/* Delete */}
                 <button onClick={() => setShowDelete(true)} className={ACTION_BTN_DANGER}>
-                  <Trash2 size={14} /> {t('agentDetail.deleteAgent')}
+                  <Trash2 size={14} /> {t('agentDetail:deleteAgent')}
                 </button>
               </div>
             </div>
@@ -1088,7 +1087,7 @@ export default function AgentDetailPage() {
           <div className="bg-surface rounded-card border border-border p-4">
             <div className="flex items-center gap-2 mb-4">
               <HardDrive size={16} className="text-primary-400" />
-              <h3 className="font-medium text-textPrimary text-sm">{t('agentDetail.storageTitle')}</h3>
+              <h3 className="font-medium text-textPrimary text-sm">{t('agentDetail:storageTitle')}</h3>
             </div>
             {storage ? (
               <>
@@ -1096,7 +1095,7 @@ export default function AgentDetailPage() {
                 <div className="mb-4">
                   <div className="flex justify-between text-xs mb-1.5">
                     <span className="text-textSecondary">
-                      {t('agentDetail.storageUsed')} {formatSize(storage.total_size)} / {storage.quota_mb}MB
+                      {t('agentDetail:storageUsed')} {formatSize(storage.total_size)} / {storage.quota_mb}MB
                     </span>
                     <span className={`font-medium ${
                       storage.usage_percent > 90 ? 'text-rose-400' :
@@ -1117,22 +1116,22 @@ export default function AgentDetailPage() {
                     />
                   </div>
                   {storage.usage_percent > 90 && (
-                    <p className="text-xs text-rose-400 mt-1">{t('agentDetail.storageAlmostFull')}</p>
+                    <p className="text-xs text-rose-400 mt-1">{t('agentDetail:storageAlmostFull')}</p>
                   )}
                 </div>
 
                 {/* 统计卡片 */}
                 <div className="flex gap-3 mb-4 text-sm">
                   <div className="flex-1 px-3 py-2 rounded-control bg-canvas border border-border text-center">
-                    <div className="text-textMuted text-xs">{t('agentDetail.fileCountLabel')}</div>
+                    <div className="text-textMuted text-xs">{t('agentDetail:fileCountLabel')}</div>
                     <div className="text-textPrimary font-semibold">{storage.file_count}</div>
                   </div>
                   <div className="flex-1 px-3 py-2 rounded-control bg-canvas border border-border text-center">
-                    <div className="text-textMuted text-xs">{t('agentDetail.totalSize')}</div>
+                    <div className="text-textMuted text-xs">{t('agentDetail:totalSize')}</div>
                     <div className="text-textPrimary font-semibold">{formatSize(storage.total_size)}</div>
                   </div>
                   <div className="flex-1 px-3 py-2 rounded-control bg-canvas border border-border text-center">
-                    <div className="text-textMuted text-xs">{t('agentDetail.quotaLabel')}</div>
+                    <div className="text-textMuted text-xs">{t('agentDetail:quotaLabel')}</div>
                     <div className="text-textPrimary font-semibold">{storage.quota_mb}MB</div>
                   </div>
                 </div>
@@ -1144,7 +1143,7 @@ export default function AgentDetailPage() {
                         <button
                           onClick={() => setPreviewFile({ id: f.id, name: f.name, size: f.size, mime: getMimeType(f) })}
                           className="text-textSecondary hover:text-primary-400 truncate flex-1 mr-2 transition-colors text-left"
-                          title={t('agentDetail.clickToPreview')}
+                          title={t('agentDetail:clickToPreview')}
                         >
                           {f.name}
                         </button>
@@ -1152,7 +1151,7 @@ export default function AgentDetailPage() {
                         <button
                           onClick={() => handleOpenDeleteConfirm(f)}
                           className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-rose-500/10 text-textMuted hover:text-rose-400 transition-all"
-                          title={t('common.delete')}
+                          title={t('common:delete')}
                         >
                           <Trash2 size={14} />
                         </button>
@@ -1160,11 +1159,11 @@ export default function AgentDetailPage() {
                     ))}
                   </div>
                 ) : (
-                  <p className="text-sm text-textMuted">{t('agentDetail.noFiles')}</p>
+                  <p className="text-sm text-textMuted">{t('agentDetail:noFiles')}</p>
                 )}
               </>
             ) : (
-              <p className="text-sm text-textMuted">{t('agentDetail.storageLoading')}</p>
+              <p className="text-sm text-textMuted">{t('agentDetail:storageLoading')}</p>
             )}
           </div>
         )}
@@ -1173,7 +1172,7 @@ export default function AgentDetailPage() {
           <div className="bg-surface rounded-card border border-border p-4">
             <div className="flex items-center gap-2 mb-3">
               <ScrollText size={16} className="text-primary-400" />
-              <h3 className="font-medium text-textPrimary text-sm">{t('agentDetail.logTitle')}</h3>
+              <h3 className="font-medium text-textPrimary text-sm">{t('agentDetail:logTitle')}</h3>
             </div>
             <LogBrowser agentId={agentId} exportLog={exportLog} />
           </div>
@@ -1184,20 +1183,20 @@ export default function AgentDetailPage() {
             {/* 非 owner 的合作者提示 */}
             {!isOwner && agent && user && agent.owner_id !== user.id && (
               <div className="bg-primary-500/10 border border-primary-500/20 rounded-card p-3 text-sm text-primary-500">
-                {t('agentDetail.collaboratorNote')}
+                {t('agentDetail:collaboratorNote')}
               </div>
             )}
 
             {/* Owner: 添加合作者 */}
             {isOwner && (
               <div className="bg-surface rounded-card border border-border p-4">
-                <h3 className="font-medium text-textPrimary text-sm mb-3">{t('agentDetail.addCollaborator')}</h3>
+                <h3 className="font-medium text-textPrimary text-sm mb-3">{t('agentDetail:addCollaborator')}</h3>
                 <div className="flex gap-2 mb-3">
                   <input
                     type="text"
                     value={collabSearch}
                     onChange={e => { setCollabSearch(e.target.value); searchUsers(e.target.value) }}
-                    placeholder={t('agentDetail.searchUserPlaceholder')}
+                    placeholder={t('agentDetail:searchUserPlaceholder')}
                     className="flex-1 px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
                   />
                 </div>
@@ -1207,19 +1206,19 @@ export default function AgentDetailPage() {
                     <input type="checkbox" checked={newCollabPerms.can_edit}
                       onChange={e => setNewCollabPerms(p => ({ ...p, can_edit: e.target.checked }))}
                       className="rounded" />
-                    {t('agentDetail.permEdit')}
+                    {t('agentDetail:permEdit')}
                   </label>
                   <label className="flex items-center gap-1.5 text-xs text-textSecondary">
                     <input type="checkbox" checked={newCollabPerms.can_delete}
                       onChange={e => setNewCollabPerms(p => ({ ...p, can_delete: e.target.checked }))}
                       className="rounded" />
-                    {t('agentDetail.permDelete')}
+                    {t('agentDetail:permDelete')}
                   </label>
                   <label className="flex items-center gap-1.5 text-xs text-textSecondary">
                     <input type="checkbox" checked={newCollabPerms.can_manage_collaborators}
                       onChange={e => setNewCollabPerms(p => ({ ...p, can_manage_collaborators: e.target.checked }))}
                       className="rounded" />
-                    {t('agentDetail.permManageCollaborators')}
+                    {t('agentDetail:permManageCollaborators')}
                   </label>
                 </div>
                 {/* 搜索结果 */}
@@ -1240,7 +1239,7 @@ export default function AgentDetailPage() {
                           disabled={addingCollab}
                           className="px-3 py-1 rounded-control bg-mint-400 text-white text-xs hover:bg-mint-500 disabled:opacity-40 transition-colors"
                         >
-                          {addingCollab ? '...' : t('agentDetail.addCollaboratorBtn')}
+                          {addingCollab ? '...' : t('agentDetail:addCollaboratorBtn')}
                         </button>
                       </div>
                     ))}
@@ -1252,7 +1251,7 @@ export default function AgentDetailPage() {
             {/* 合作者列表 */}
             {collaborators.length > 0 && (
               <div className="bg-surface rounded-card border border-border p-4">
-                <h3 className="font-medium text-textPrimary text-sm mb-3">{t('agentDetail.collaboratorList')} ({collaborators.length})</h3>
+                <h3 className="font-medium text-textPrimary text-sm mb-3">{t('agentDetail:collaboratorList')} ({collaborators.length})</h3>
                 <div className="space-y-2">
                   {collaborators.map(c => (
                     <div key={c.id} className="flex items-center justify-between px-3 py-2 rounded-control bg-canvas border border-border/60">
@@ -1267,30 +1266,30 @@ export default function AgentDetailPage() {
                         <div>
                           <span className="text-sm text-textPrimary">{c.username || `ID:${c.user_id}`}</span>
                           <div className="flex gap-1 mt-0.5">
-                            {c.can_edit && <span className="text-3xs px-1.5 py-0.5 rounded bg-mint-400/10 text-mint-400 border border-mint-400/20">{t('agentDetail.permEdit')}</span>}
-                            {c.can_delete && <span className="text-3xs px-1.5 py-0.5 rounded bg-rose-400/10 text-rose-400 border border-rose-400/20">{t('agentDetail.permDelete')}</span>}
-                            {c.can_manage_collaborators && <span className="text-3xs px-1.5 py-0.5 rounded bg-accent-400/10 text-accent-400 border border-accent-400/20">{t('agentDetail.permManageCollaborators')}</span>}
+                            {c.can_edit && <span className="text-3xs px-1.5 py-0.5 rounded bg-mint-400/10 text-mint-400 border border-mint-400/20">{t('agentDetail:permEdit')}</span>}
+                            {c.can_delete && <span className="text-3xs px-1.5 py-0.5 rounded bg-rose-400/10 text-rose-400 border border-rose-400/20">{t('agentDetail:permDelete')}</span>}
+                            {c.can_manage_collaborators && <span className="text-3xs px-1.5 py-0.5 rounded bg-accent-400/10 text-accent-400 border border-accent-400/20">{t('agentDetail:permManageCollaborators')}</span>}
                           </div>
                         </div>
                       </div>
                       {isOwner && (
                         <div className="flex items-center gap-2">
                           <div className="flex items-center gap-1">
-                            <span className="text-3xs text-textMuted">{t('agentDetail.permEdit')}</span>
+                            <span className="text-3xs text-textMuted">{t('agentDetail:permEdit')}</span>
                             <Toggle checked={c.can_edit} onChange={v => handleUpdateCollaborator(c.user_id, { can_edit: v })} />
                           </div>
                           <div className="flex items-center gap-1">
-                            <span className="text-3xs text-textMuted">{t('agentDetail.permDelete')}</span>
+                            <span className="text-3xs text-textMuted">{t('agentDetail:permDelete')}</span>
                             <Toggle checked={c.can_delete} onChange={v => handleUpdateCollaborator(c.user_id, { can_delete: v })} />
                           </div>
                           <div className="flex items-center gap-1">
-                            <span className="text-3xs text-textMuted">{t('agentDetail.permManageCollaborators')}</span>
+                            <span className="text-3xs text-textMuted">{t('agentDetail:permManageCollaborators')}</span>
                             <Toggle checked={c.can_manage_collaborators} onChange={v => handleUpdateCollaborator(c.user_id, { can_manage_collaborators: v })} />
                           </div>
                           <button
                             onClick={() => handleRemoveCollaborator(c.user_id)}
                             className="ml-1 p-1 rounded text-textMuted hover:text-rose-400 transition-colors"
-                            title={t('agentDetail.removeCollaborator')}
+                            title={t('agentDetail:removeCollaborator')}
                           >
                             <X size={14} />
                           </button>
@@ -1305,7 +1304,7 @@ export default function AgentDetailPage() {
             {/* 空状态 */}
             {collaborators.length === 0 && isOwner && (
               <div className="text-center py-8 text-textMuted text-sm">
-                {t('agentDetail.noCollaborators')}
+                {t('agentDetail:noCollaborators')}
               </div>
             )}
           </div>
@@ -1315,7 +1314,7 @@ export default function AgentDetailPage() {
           <div className="bg-surface rounded-card border border-border p-4">
             <div className="flex items-center gap-2 mb-3">
               <Brain size={16} className="text-primary-400" />
-              <h3 className="font-medium text-textPrimary text-sm">{t('agentDetail.memoryTitlePrefix')}{memTotal}{t('agentDetail.memoryTitleSuffix')}</h3>
+              <h3 className="font-medium text-textPrimary text-sm">{t('agentDetail:memoryTitlePrefix')}{memTotal}{t('agentDetail:memoryTitleSuffix')}</h3>
               <div className="flex gap-0.5 ml-auto bg-canvas rounded-control p-0.5 border border-border">
                 {(['structured', 'vector'] as const).map((st) => (
                   <button
@@ -1325,7 +1324,7 @@ export default function AgentDetailPage() {
                       memSubTab === st ? 'bg-primary-500 text-white shadow-sm' : 'text-textMuted hover:text-textSecondary'
                     }`}
                   >
-                    {st === 'structured' ? t('agentDetail.structuredMemories') : t('agentDetail.vectorMemories')}
+                    {st === 'structured' ? t('agentDetail:structuredMemories') : t('agentDetail:vectorMemories')}
                   </button>
                 ))}
               </div>
@@ -1342,7 +1341,7 @@ export default function AgentDetailPage() {
                     ))}
                   </div>
                 ) : (
-                  <p className="text-sm text-textMuted">{t('agentDetail.noMemories')}</p>
+                  <p className="text-sm text-textMuted">{t('agentDetail:noMemories')}</p>
                 )}
                 {memTotal > 20 && (
                   <div className="flex justify-center gap-2 mt-4">
@@ -1351,7 +1350,7 @@ export default function AgentDetailPage() {
                       disabled={memPage <= 1}
                       className="px-3 py-1 text-xs rounded-control border border-border text-textSecondary hover:text-textPrimary disabled:opacity-30"
                     >
-                      {t('agentDetail.prevPage')}
+                      {t('agentDetail:prevPage')}
                     </button>
                     <span className="text-xs text-textMuted py-1">{memPage} / {Math.ceil(memTotal / 20)}</span>
                     <button
@@ -1359,7 +1358,7 @@ export default function AgentDetailPage() {
                       disabled={memPage >= Math.ceil(memTotal / 20)}
                       className="px-3 py-1 text-xs rounded-control border border-border text-textSecondary hover:text-textPrimary disabled:opacity-30"
                     >
-                      {t('agentDetail.nextPage')}
+                      {t('agentDetail:nextPage')}
                     </button>
                   </div>
                 )}
@@ -1372,28 +1371,24 @@ export default function AgentDetailPage() {
           <div className="bg-surface rounded-card border border-border p-4">
             <div className="flex items-center gap-2 mb-3">
               <Edit3 size={16} className="text-primary-400" />
-              <h3 className="font-medium text-textPrimary text-sm">{t('agentDetail.workspaceTitle')}</h3>
-              <span className="text-xs text-textMuted ml-auto">{t('agentDetail.workspaceHint')}</span>
+              <h3 className="font-medium text-textPrimary text-sm">{t('agentDetail:workspaceTitle')}</h3>
+              <span className="text-xs text-textMuted ml-auto">{t('agentDetail:workspaceHint')}</span>
             </div>
             {/* Sub-tabs */}
-            <div className="flex gap-1 mb-3 border-b border-border">
-              {(['todo', 'plan', 'journal'] as const).map((f) => (
-                <button
-                  key={f}
-                  onClick={() => setWsActive(f)}
-                  className={`px-3 py-1.5 text-xs font-medium border-b-2 transition-colors ${
-                    wsActive === f
-                      ? 'border-primary-500 text-primary-400'
-                      : 'border-transparent text-textMuted hover:text-textSecondary'
-                  }`}
-                >
-                  {f === 'todo' ? t('agentDetail.workspaceTodoLabel') : f === 'plan' ? t('agentDetail.workspacePlanLabel') : t('agentDetail.workspaceJournalLabel')}
-                </button>
-              ))}
-            </div>
+            <UnderlineTabs
+              size="sm"
+              className="mb-3"
+              items={[
+                { key: 'todo', label: t('agentDetail:workspaceTodoLabel') },
+                { key: 'plan', label: t('agentDetail:workspacePlanLabel') },
+                { key: 'journal', label: t('agentDetail:workspaceJournalLabel') },
+              ]}
+              value={wsActive}
+              onChange={setWsActive}
+            />
             {/* Content */}
             <pre className="text-xs text-textSecondary whitespace-pre-wrap max-h-80 overflow-y-auto p-3 rounded-control bg-canvas border border-border leading-relaxed font-mono min-h-[120px]">
-              {workspace[wsActive] || `（${wsActive === 'todo' ? t('agentDetail.workspaceTodoLabel') : wsActive === 'plan' ? t('agentDetail.workspacePlanLabel') : t('agentDetail.workspaceJournalLabel')} ${t('agentDetail.workspaceEmptySuffix')}`}
+              {workspace[wsActive] || `（${wsActive === 'todo' ? t('agentDetail:workspaceTodoLabel') : wsActive === 'plan' ? t('agentDetail:workspacePlanLabel') : t('agentDetail:workspaceJournalLabel')} ${t('agentDetail:workspaceEmptySuffix')}`}
             </pre>
           </div>
         )}
@@ -1403,10 +1398,10 @@ export default function AgentDetailPage() {
       {showDelete && (
         <div className="fixed inset-0 z-modal flex items-center justify-center bg-black/50">
           <div className="bg-surface rounded-dialog border border-border p-6 w-full max-w-sm mx-4 pb-[var(--safe-bottom)] md:pb-6">
-            <h3 className="text-lg font-bold text-textPrimary mb-2">{t('agentDetail.deleteConfirmTitle')}</h3>
+            <h3 className="text-lg font-bold text-textPrimary mb-2">{t('agentDetail:deleteConfirmTitle')}</h3>
             <p className="text-sm text-textSecondary mb-4">
-              {t('agentDetail.deleteConfirmText')}<span className="text-mint-400 font-medium">{agent.api_credit_cost}</span> {t('agentDetail.deleteConfirmText2')}
-              <span className="text-rose-400 font-medium">"{agent.name}"</span> {t('agentDetail.deleteConfirm')}
+              {t('agentDetail:deleteConfirmText')}<span className="text-mint-400 font-medium">{agent.api_credit_cost}</span> {t('agentDetail:deleteConfirmText2')}
+              <span className="text-rose-400 font-medium">"{agent.name}"</span> {t('agentDetail:deleteConfirm')}
             </p>
             <input
               type="text"
@@ -1420,14 +1415,14 @@ export default function AgentDetailPage() {
                 onClick={() => { setShowDelete(false); setDeleteConfirmName('') }}
                 className="flex-1 px-4 py-2 rounded-card border border-border text-sm text-textSecondary hover:text-textPrimary"
               >
-                {t('common.cancel')}
+                {t('common:cancel')}
               </button>
               <button
                 onClick={handleDelete}
                 disabled={deleteConfirmName !== agent.name || deleting}
                 className="flex-1 px-4 py-2 rounded-card bg-rose-500 text-white text-sm font-medium hover:bg-rose-400 disabled:opacity-30 transition-colors"
               >
-                {deleting ? t('agentDetail.deleting') : t('agentDetail.confirmDelete')}
+                {deleting ? t('agentDetail:deleting') : t('agentDetail:confirmDelete')}
               </button>
             </div>
           </div>
@@ -1439,7 +1434,7 @@ export default function AgentDetailPage() {
         <AvatarPickerModal
           onUpload={handleAgentAvatarPickerUpload}
           onClose={() => setAvatarPickerOpen(false)}
-          title={t('agentDetail.changeAvatar')}
+          title={t('agentDetail:changeAvatar')}
         />
       )}
 
@@ -1462,11 +1457,11 @@ export default function AgentDetailPage() {
               <div className="w-8 h-8 rounded-full bg-rose-500/10 flex items-center justify-center">
                 <Trash2 size={16} className="text-rose-400" />
               </div>
-              <h3 className="font-semibold text-textPrimary text-base">{t('agentDetail.deleteFileTitle')}</h3>
+              <h3 className="font-semibold text-textPrimary text-base">{t('agentDetail:deleteFileTitle')}</h3>
             </div>
 
             <p className="text-sm text-textSecondary mb-3">
-              {t('agentDetail.deleteFileConfirm')} <span className="font-medium text-textPrimary">「{deleteFileTarget.name}」</span>？
+              {t('agentDetail:deleteFileConfirm')} <span className="font-medium text-textPrimary">「{deleteFileTarget.name}」</span>？
             </p>
 
             {/* 引用信息 */}
@@ -1474,12 +1469,12 @@ export default function AgentDetailPage() {
               {deleteFileLoading ? (
                 <div className="flex items-center gap-2 text-textMuted py-2">
                   <Loader2 size={14} className="animate-spin" />
-                  {t('agentDetail.checkingReferences')}
+                  {t('agentDetail:checkingReferences')}
                 </div>
               ) : deleteFileRefs && deleteFileRefs.reference_count > 0 ? (
                 <>
                   <p className="text-accent-400 font-medium mb-2">
-                    {t('agentDetail.fileReferencedBy').replace('{count}', String(deleteFileRefs.reference_count))}
+                    {t('agentDetail:fileReferencedBy').replace('{count}', String(deleteFileRefs.reference_count))}
                   </p>
                   <div className="space-y-1 max-h-32 overflow-y-auto">
                     {deleteFileRefs.references.map((ref, i) => (
@@ -1488,10 +1483,10 @@ export default function AgentDetailPage() {
                       </div>
                     ))}
                   </div>
-                  <p className="text-textMuted mt-2 text-3xs">{t('agentDetail.deleteFileConsequence')}</p>
+                  <p className="text-textMuted mt-2 text-3xs">{t('agentDetail:deleteFileConsequence')}</p>
                 </>
               ) : (
-                <p className="text-textMuted">{t('agentDetail.fileNoReferences')}</p>
+                <p className="text-textMuted">{t('agentDetail:fileNoReferences')}</p>
               )}
             </div>
 
@@ -1500,14 +1495,14 @@ export default function AgentDetailPage() {
                 onClick={() => { setDeleteFileTarget(null); setDeleteFileRefs(null) }}
                 className="flex-1 py-2.5 text-sm border border-border text-textSecondary rounded-card hover:bg-elevated font-medium transition-colors"
               >
-                {t('common.cancel')}
+                {t('common:cancel')}
               </button>
               <button
                 onClick={handleDeleteFile}
                 disabled={deletingFile}
                 className="flex-1 py-2.5 text-sm bg-rose-500 text-white rounded-card hover:bg-rose-400 font-medium transition-all disabled:opacity-50"
               >
-                {deletingFile ? <Loader2 size={16} className="animate-spin mx-auto" /> : t('common.delete')}
+                {deletingFile ? <Loader2 size={16} className="animate-spin mx-auto" /> : t('common:delete')}
               </button>
             </div>
           </div>

@@ -58,7 +58,7 @@ export default function AvatarPickerModal({
       // 只显示图片
       setFiles(list.filter((f) => f.mime_type?.startsWith('image/')))
     } catch (e: any) {
-      setFileError(e?.detail || t('common.loadFailed'))
+      setFileError(e?.detail || t('common:loadFailed'))
     } finally {
       setLoadingFiles(false)
     }
@@ -77,7 +77,7 @@ export default function AvatarPickerModal({
     if (!file) return
     // 大小校验
     if (file.size > maxSizeMB * 1024 * 1024) {
-      setFileError(t('error.avatarTooLarge'))
+      setFileError(t('error:avatarTooLarge'))
       e.target.value = ''
       return
     }
@@ -91,7 +91,7 @@ export default function AvatarPickerModal({
         // 直接上传原文件
         setUploading(true)
         onUpload(file).then(onClose).catch((err: any) => {
-          setFileError(err?.detail || err?.message || t('error.uploadFailed'))
+          setFileError(err?.detail || err?.message || t('error:uploadFailed'))
           setUploading(false)
         })
         return
@@ -102,7 +102,7 @@ export default function AvatarPickerModal({
       if (file.type === 'image/gif') {
         setUploading(true)
         onUpload(file).then(onClose).catch((err: any) => {
-          setFileError(err?.detail || err?.message || t('error.uploadFailed'))
+          setFileError(err?.detail || err?.message || t('error:uploadFailed'))
           setUploading(false)
         })
         return
@@ -117,8 +117,8 @@ export default function AvatarPickerModal({
     try {
       const res = await fetch(fileDownloadUrl(fileItem.id))
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: t('common.loadFailed') }))
-        throw new Error(err.detail || t('common.loadFailed'))
+        const err = await res.json().catch(() => ({ detail: t('common:loadFailed') }))
+        throw new Error(err.detail || t('common:loadFailed'))
       }
       const blob = await res.blob()
       // 提取扩展名
@@ -128,7 +128,7 @@ export default function AvatarPickerModal({
       })
       setCropFile(file)
     } catch (e: any) {
-      setFileError(e?.message || t('common.loadFailed'))
+      setFileError(e?.message || t('common:loadFailed'))
     }
   }
 
@@ -140,7 +140,7 @@ export default function AvatarPickerModal({
       await onUpload(blob)
       onClose()
     } catch (e: any) {
-      setFileError(e?.detail || e?.message || t('error.uploadFailed'))
+      setFileError(e?.detail || e?.message || t('error:uploadFailed'))
       setUploading(false)
     }
   }
@@ -149,7 +149,7 @@ export default function AvatarPickerModal({
     setCropFile(null)
   }
 
-  const modalTitle = title || t('groupSettings.avatarPickerTitle')
+  const modalTitle = title || t('groupSettings:avatarPickerTitle')
 
   return (
     <>
@@ -194,10 +194,10 @@ export default function AvatarPickerModal({
                   <Image size={22} className="text-primary-400" />
                 </div>
                 <span className="text-sm font-medium text-textPrimary">
-                  {t('groupSettings.avatarPickerFromSpace')}
+                  {t('groupSettings:avatarPickerFromSpace')}
                 </span>
                 <span className="text-3xs text-textMuted text-center leading-tight">
-                  {t('groupSettings.avatarPickerFromSpaceDesc')}
+                  {t('groupSettings:avatarPickerFromSpaceDesc')}
                 </span>
               </button>
 
@@ -210,10 +210,10 @@ export default function AvatarPickerModal({
                   <Upload size={22} className="text-mint-400" />
                 </div>
                 <span className="text-sm font-medium text-textPrimary">
-                  {t('groupSettings.avatarPickerUploadNew')}
+                  {t('groupSettings:avatarPickerUploadNew')}
                 </span>
                 <span className="text-3xs text-textMuted text-center leading-tight">
-                  {t('groupSettings.avatarPickerUploadNewDesc')}
+                  {t('groupSettings:avatarPickerUploadNewDesc')}
                 </span>
               </button>
             </div>
@@ -227,7 +227,7 @@ export default function AvatarPickerModal({
                 onClick={() => setStep('pick')}
                 className="mb-3 text-xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 transition-colors"
               >
-                ← {t('common.back')}
+                ← {t('common:back')}
               </button>
 
               {loadingFiles ? (
@@ -237,7 +237,7 @@ export default function AvatarPickerModal({
               ) : files.length === 0 ? (
                 <div className="text-center py-6 text-textMuted">
                   <Image size={28} className="mx-auto mb-2 opacity-40" />
-                  <p className="text-xs">{t('groupSettings.avatarPickerNoImages')}</p>
+                  <p className="text-xs">{t('groupSettings:avatarPickerNoImages')}</p>
                 </div>
               ) : (
                 <div className="grid grid-cols-3 gap-2 max-h-64 overflow-y-auto">
@@ -280,7 +280,7 @@ export default function AvatarPickerModal({
           {uploading && (
             <div className="mt-3 flex items-center justify-center gap-2 text-xs text-primary-400">
               <Loader2 size={14} className="animate-spin" />
-              {t('common.uploading')}
+              {t('common:uploading')}
             </div>
           )}
         </div>

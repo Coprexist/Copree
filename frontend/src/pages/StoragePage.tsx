@@ -48,7 +48,7 @@ export default function StoragePage() {
       setStorage(s)
       setFiles(Array.isArray(f) ? f : [])
     }).catch((e) => {
-      setError(e?.message || t('common.error'))
+      setError(e?.message || t('common:error'))
     }).finally(() => setLoading(false))
   }, [])
 
@@ -98,7 +98,7 @@ export default function StoragePage() {
             <span className="text-sm font-medium text-textPrimary">用量</span>
           </div>
           <div className="flex items-center justify-between text-xs text-textMuted mb-2">
-            <span>{t('me.used')} {formatSize(storage.total_used)}</span>
+            <span>{t('me:used')} {formatSize(storage.total_used)}</span>
             <span className={storage.usage_percent > 90 ? 'text-rose-400 font-medium' : ''}>
               {storage.usage_percent}%
             </span>

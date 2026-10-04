@@ -198,7 +198,9 @@ if (await confirmAsync({ title: '删除？', message: '不可恢复', danger: tr
 ```bash
 # 前端在容器里跑，容器内不装依赖
 docker exec -w /app ai_group_frontend node_modules/.bin/tsc --noEmit
+# i18n 两道闸门（等价于 yarn i18n:check）
 docker exec -w /app ai_group_frontend node scripts/check-i18n.mjs
+docker exec -w /app ai_group_frontend node scripts/check-i18n-keys.mjs
 
 # 别让旧的裸写法回流（数字应逐步下降，不应上升）
 cd frontend/src
@@ -208,3 +210,23 @@ grep -rho "text-\[1[0-9]px\]" --include=*.tsx . | wc -l
 ```
 
 界面改完还要**截图对比**（`node scripts/screenshot/run.mjs`），别只靠类型检查。
+
+## 8. 文案与 i18n
+
+- 文案按命名空间分文件：`src/i18n/ns/<ns>.ts`，一个命名空间一个文件，三语（zh/en/ja）同序；
+  新增命名空间不用改脚本，`check-i18n.mjs` 自动发现。
+- 调用点写 `t('<ns>:<key>')`。**没有冒号就按 `common` 命名空间查**——所以拆命名空间之前的点号写法
+  （`i18nKey: 'settings.chinese'`）在新结构下必然取不到，`t()` 查不到就把传入的 path 原样回显，
+  界面上看到的就是 key 本身。最容易漏的是"藏在数据表里的 key"：`i18nKey / labelKey / keyLabel / descKey / hintKey`。
+- **同一句话只留一个 key**：字段里别写裸文案（`labelKey: 'UI 缩放'` 等于没翻译）；页面标题优先复用导航的
+  key（`nav:worlds`），别再造一个「群视界」。
+- **提示的语气不要从文案里猜**。`msg.includes('失败')` 换语言就失灵——英文 "failed"、日文「失敗」都
+  匹配不上中文关键词，红色提示会变绿。语气在产生提示的那一刻就是确定的（try/catch 走哪一支），
+  用 `src/hooks/useNotice.ts`：`ok()/fail()/clear()` + `NOTICE_TEXT_CLASS` / `NOTICE_BOX_CLASS`，配色也只在那里定义。
+
+两道闸门（`yarn i18n:check` 一次跑完）：
+
+| 闸门 | 抓什么 |
+| --- | --- |
+| `scripts/check-i18n.mjs` | 静态字面量：用了但字典里没有、字典里有但没人用 |
+| `scripts/check-i18n-keys.mjs` | 拿**真字典**（esbuild 就地转译 `ns/*.ts`）逐个解析调用点，含动态 key 的数据表；另抓点号旧形式、key 字段写成裸文案 |

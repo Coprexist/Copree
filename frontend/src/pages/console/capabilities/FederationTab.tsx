@@ -92,7 +92,7 @@ export default function FederationTab() {
       setPeers(peerList)
       setInstanceForm({ display_name: inst.display_name, public_url: inst.public_url, public_id: inst.public_id || '' })
     } catch (e: any) {
-      setError(e?.message || t('admin.loadFailed'))
+      setError(e?.message || t('admin:loadFailed'))
     } finally {
       setLoading(false)
     }
@@ -112,17 +112,17 @@ export default function FederationTab() {
       setShowAddPeer(false)
       await loadData()
     } catch (e: any) {
-      setError(e?.message || t('admin.addPeerFailed'))
+      setError(e?.message || t('admin:addPeerFailed'))
     }
   }
 
   const handleDeletePeer = async (id: number) => {
-    if (!confirm(t('admin.confirmRemovePeer'))) return
+    if (!confirm(t('admin:confirmRemovePeer'))) return
     try {
       await api.delete(`/admin/federation/peers/${id}`)
       await loadData()
     } catch (e: any) {
-      setError(e?.message || t('admin.deletePeerFailed'))
+      setError(e?.message || t('admin:deletePeerFailed'))
     }
   }
 
@@ -132,7 +132,7 @@ export default function FederationTab() {
       await api.post(`/admin/federation/peers/${id}/connect`)
       await loadData()
     } catch (e: any) {
-      setError(e?.message || t('admin.connectFailed'))
+      setError(e?.message || t('admin:connectFailed'))
       await loadData()  // 仍然刷新，后端可能更新了状态
     }
   }
@@ -142,7 +142,7 @@ export default function FederationTab() {
       await api.post(`/admin/federation/peers/${id}/disconnect`)
       await loadData()
     } catch (e: any) {
-      setError(e?.message || t('admin.disconnectFailed'))
+      setError(e?.message || t('admin:disconnectFailed'))
     }
   }
 
@@ -180,7 +180,7 @@ export default function FederationTab() {
 
     // 执行轮换
     if (!rotateUrl.trim()) {
-      setRotateError(t('admin.urlRequired'))
+      setRotateError(t('admin:urlRequired'))
       return
     }
 
@@ -191,7 +191,7 @@ export default function FederationTab() {
       setRotatingPeerId(null)
       await loadData()
     } catch (e: any) {
-      setRotateError(e?.message || t('admin.rotateFailed'))
+      setRotateError(e?.message || t('admin:rotateFailed'))
     } finally {
       setRotateLoading(false)
     }
@@ -210,19 +210,19 @@ export default function FederationTab() {
     // 如果弹窗中填了 Token（无论是首次配置还是更换），先保存
     const needSaveToken = !!dialogToken.trim()
     if (needSaveToken) {
-      setRegisterResult(t('admin.savingToken'))
+      setRegisterResult(t('admin:savingToken'))
       try {
         await api.put('/admin/federation/instance/github-token', { token: dialogToken.trim() })
         setDialogToken('')
         await loadData() // 刷新 github_token_configured
       } catch (e: any) {
         setRegisterState('error')
-        setRegisterResult(e?.response?.data?.detail || t('admin.tokenSaveFailed'))
+        setRegisterResult(e?.response?.data?.detail || t('admin:tokenSaveFailed'))
         return
       }
     }
 
-    setRegisterResult(t('admin.verifyingRegister'))
+    setRegisterResult(t('admin:verifyingRegister'))
     setRegisterErrorCode('')
 
     try {
@@ -240,7 +240,7 @@ export default function FederationTab() {
       } else {
         setRegisterState('error')
         setRegisterErrorCode(result.error_code || '')
-        setRegisterResult(result.message || t('admin.registerFailed'))
+        setRegisterResult(result.message || t('admin:registerFailed'))
       }
     } catch (e: any) {
       setRegisterState('error')
@@ -249,7 +249,7 @@ export default function FederationTab() {
         setRegisterErrorCode(detail.error_code || '')
         setRegisterResult(detail.message || JSON.stringify(detail))
       } else {
-        setRegisterResult(typeof detail === 'string' ? detail : (e?.message || t('admin.registerFailed')))
+        setRegisterResult(typeof detail === 'string' ? detail : (e?.message || t('admin:registerFailed')))
       }
     }
   }
@@ -258,13 +258,13 @@ export default function FederationTab() {
     // 快速保存 Token 并重试注册（TOKEN_MISSING / TOKEN_INVALID 错误恢复）
     if (!quickToken.trim()) return
     setRegisterState('loading')
-    setRegisterResult(t('admin.savingToken'))
+    setRegisterResult(t('admin:savingToken'))
     try {
       await api.put('/admin/federation/instance/github-token', { token: quickToken.trim() })
       setQuickToken('')
       await loadData()
       // 保存成功后自动重试注册
-      setRegisterResult(t('admin.verifyingRegister'))
+      setRegisterResult(t('admin:verifyingRegister'))
       const result = await api.post<{
         success: boolean; message: string; error_code?: string
       }>('/admin/federation/instance/register')
@@ -275,7 +275,7 @@ export default function FederationTab() {
       } else {
         setRegisterState('error')
         setRegisterErrorCode(result.error_code || '')
-        setRegisterResult(result.message || t('admin.registerFailed'))
+        setRegisterResult(result.message || t('admin:registerFailed'))
       }
     } catch (e: any) {
       setRegisterState('error')
@@ -284,7 +284,7 @@ export default function FederationTab() {
         setRegisterErrorCode(detail.error_code || '')
         setRegisterResult(detail.message || JSON.stringify(detail))
       } else {
-        setRegisterResult(typeof detail === 'string' ? detail : (e?.message || t('admin.saveOrRegisterFailed')))
+        setRegisterResult(typeof detail === 'string' ? detail : (e?.message || t('admin:saveOrRegisterFailed')))
       }
     }
   }
@@ -296,17 +296,17 @@ export default function FederationTab() {
       await api.put('/admin/federation/instance/github-token', { token: manageToken.trim() })
       setManageToken('')
       setShowTokenInput(false)
-      setRegisterResult(t('admin.tokenUpdated'))
+      setRegisterResult(t('admin:tokenUpdated'))
       await loadData()
     } catch (e: any) {
-      setRegisterResult(e?.response?.data?.detail || t('admin.saveFailed'))
+      setRegisterResult(e?.response?.data?.detail || t('admin:saveFailed'))
     } finally {
       setTokenSaving(false)
     }
   }
 
   const handleRegenerateId = async () => {
-    if (!confirm(t('admin.confirmRegenerateId'))) return
+    if (!confirm(t('admin:confirmRegenerateId'))) return
     try {
       const result = await api.post<{ success: boolean; public_id: string }>('/admin/federation/instance/regenerate-id')
       if (result.public_id) {
@@ -315,23 +315,23 @@ export default function FederationTab() {
         await loadData()
       }
     } catch (e: any) {
-      alert(e?.response?.data?.detail || t('admin.saveFailed'))
+      alert(e?.response?.data?.detail || t('admin:saveFailed'))
     }
   }
 
   const handleSaveToken = async () => {
     if (!githubToken.trim()) {
-      setRegisterResult(t('admin.pleaseEnterToken'))
+      setRegisterResult(t('admin:pleaseEnterToken'))
       return
     }
     setTokenSaving(true)
     try {
       await api.put('/admin/federation/instance/github-token', { token: githubToken.trim() })
       setGithubToken('')
-      setRegisterResult(t('admin.tokenSavedEncrypted'))
+      setRegisterResult(t('admin:tokenSavedEncrypted'))
       await loadData()
     } catch (e: any) {
-      setRegisterResult(e?.response?.data?.detail || t('admin.saveFailed'))
+      setRegisterResult(e?.response?.data?.detail || t('admin:saveFailed'))
     } finally {
       setTokenSaving(false)
     }
@@ -339,17 +339,17 @@ export default function FederationTab() {
 
   const stateBadge = (state: string) => {
     const map: Record<string, { bg: string; text: string; label: string }> = {
-      connected: { bg: 'bg-mint-500/10', text: 'text-mint-400', label: t('admin.connected') },
-      connecting: { bg: 'bg-accent-500/10', text: 'text-accent-400', label: t('admin.connecting') },
-      disconnected: { bg: 'bg-slate-500/10', text: 'text-slate-400', label: t('common.disconnected') },
-      failed: { bg: 'bg-rose-500/10', text: 'text-rose-400', label: t('admin.failed') },
-      rotating: { bg: 'bg-primary-500/10', text: 'text-primary-400', label: t('admin.rotating') },
+      connected: { bg: 'bg-mint-500/10', text: 'text-mint-400', label: t('admin:connected') },
+      connecting: { bg: 'bg-accent-500/10', text: 'text-accent-400', label: t('admin:connecting') },
+      disconnected: { bg: 'bg-slate-500/10', text: 'text-slate-400', label: t('common:disconnected') },
+      failed: { bg: 'bg-rose-500/10', text: 'text-rose-400', label: t('admin:failed') },
+      rotating: { bg: 'bg-primary-500/10', text: 'text-primary-400', label: t('admin:rotating') },
     }
     const s = map[state] || map.disconnected
     return <span className={`text-xs px-2 py-0.5 rounded-full ${s.bg} ${s.text}`}>{s.label}</span>
   }
 
-  if (loading) return <div className="text-textMuted text-sm p-4">{t('common.loading')}</div>
+  if (loading) return <div className="text-textMuted text-sm p-4">{t('common:loading')}</div>
 
   const isRegistering = registerState === 'loading'
 
@@ -366,24 +366,24 @@ export default function FederationTab() {
       {registerState === 'confirm' && (
         <Dialog onClose={() =>  { setRegisterState('idle'); setDialogToken('') } } className="flex items-center justify-center">
           <div className="bg-surface border border-border rounded-card p-6 max-w-md mx-4 shadow-2xl" onClick={e => e.stopPropagation()}>
-            <h3 className="text-base font-semibold text-textPrimary mb-3">{t('admin.registerNotice')}</h3>
+            <h3 className="text-base font-semibold text-textPrimary mb-3">{t('admin:registerNotice')}</h3>
             <div className="text-sm text-textSecondary space-y-2 mb-5">
-              <p>{t('admin.registerNoticeText')}</p>
+              <p>{t('admin:registerNoticeText')}</p>
               <ul className="list-disc pl-5 space-y-1 text-xs">
-                <li>{t('admin.registerNoticeItem1')}</li>
-                <li>{t('admin.registerNoticeItem2')}</li>
-                <li>{t('admin.registerNoticeItem3')}</li>
-                <li>{t('admin.registerNoticeItem4')}</li>
-                <li className="text-accent-400">{t('admin.registerNoticeItem5')}</li>
+                <li>{t('admin:registerNoticeItem1')}</li>
+                <li>{t('admin:registerNoticeItem2')}</li>
+                <li>{t('admin:registerNoticeItem3')}</li>
+                <li>{t('admin:registerNoticeItem4')}</li>
+                <li className="text-accent-400">{t('admin:registerNoticeItem5')}</li>
               </ul>
-              <p className="text-xs text-textMuted mt-2">{t('admin.registerNoticeVerify')}</p>
+              <p className="text-xs text-textMuted mt-2">{t('admin:registerNoticeVerify')}</p>
             </div>
             {/* Token 输入区：未配置时突出显示，已配置时可折叠更换 */}
             <div className={`mb-4 p-3 rounded-control ${!instance?.github_token_configured ? 'bg-accent-500/5 border border-accent-500/20' : 'bg-canvas border border-border'}`}>
               {instance?.github_token_configured ? (
                 <details className="text-xs">
                   <summary className="text-textMuted cursor-pointer hover:text-textPrimary transition-colors">
-                    {t('admin.tokenConfiguredClickChange')}
+                    {t('admin:tokenConfiguredClickChange')}
                   </summary>
                   <div className="mt-2">
                     <input
@@ -391,22 +391,22 @@ export default function FederationTab() {
                       value={dialogToken}
                       onChange={e => setDialogToken(e.target.value)}
                       className="w-full px-3 py-1.5 text-sm bg-canvas border border-border rounded-control text-textPrimary font-mono"
-                      placeholder={t('admin.pasteNewToken')}
+                      placeholder={t('admin:pasteNewToken')}
                     />
                     <p className="text-3xs text-textMuted mt-1">
-                      {t('admin.tokenHintOrGet')} <ExternalLinkSafe href="https://github.com/settings/tokens/new" className="text-primary-400 hover:text-primary-500 dark:hover:text-primary-300">github.com/settings/tokens</ExternalLinkSafe>
+                      {t('admin:tokenHintOrGet')} <ExternalLinkSafe href="https://github.com/settings/tokens/new" className="text-primary-400 hover:text-primary-500 dark:hover:text-primary-300">github.com/settings/tokens</ExternalLinkSafe>
                     </p>
                   </div>
                 </details>
               ) : (
                 <>
                   <label className="text-xs text-textMuted">
-                    {t('admin.githubToken')}{' '}
+                    {t('admin:githubToken')}{' '}
                     <ExternalLinkSafe href="https://github.com/settings/tokens/new" className="text-primary-400 hover:text-primary-500 dark:hover:text-primary-300">
-                      {t('common.back')} →
+                      {t('common:back')} →
                     </ExternalLinkSafe>
                   </label>
-                  <p className="text-3xs text-textMuted mb-1.5" dangerouslySetInnerHTML={{ __html: t('admin.tokenHelpText') }} />
+                  <p className="text-3xs text-textMuted mb-1.5" dangerouslySetInnerHTML={{ __html: t('admin:tokenHelpText') }} />
                   <input
                     type="password"
                     value={dialogToken}
@@ -422,7 +422,7 @@ export default function FederationTab() {
                 onClick={() => { setRegisterState('idle'); setDialogToken('') }}
                 className="px-4 py-1.5 text-xs bg-canvas border border-border text-textSecondary rounded-control hover:bg-border/20 transition-colors"
               >
-                {t('common.cancel')}
+                {t('common:cancel')}
               </button>
               <button
                 onClick={handleRegister}
@@ -433,7 +433,7 @@ export default function FederationTab() {
                     : 'bg-mint-600 hover:bg-mint-500 text-white'
                 }`}
               >
-                {!instance?.github_token_configured ? t('admin.saveTokenAndRegister') : t('admin.knownAndContinue')}
+                {!instance?.github_token_configured ? t('admin:saveTokenAndRegister') : t('admin:knownAndContinue')}
               </button>
             </div>
           </div>
@@ -443,30 +443,30 @@ export default function FederationTab() {
       <section className="bg-surface border border-border rounded-card p-5">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-semibold text-textPrimary flex items-center gap-2">
-            <Shield size={16} /> {t('admin.instanceIdentity')}
+            <Shield size={16} /> {t('admin:instanceIdentity')}
           </h2>
           <button
             onClick={() => setEditInstance(!editInstance)}
             className="text-xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 transition-colors"
           >
-            {editInstance ? t('common.cancel') : t('common.edit')}
+            {editInstance ? t('common:cancel') : t('common:edit')}
           </button>
         </div>
 
         {editInstance ? (
           <div className="space-y-3">
             <div>
-              <label className="text-xs text-textMuted">{t('admin.displayName')}</label>
+              <label className="text-xs text-textMuted">{t('admin:displayName')}</label>
               <input
                 value={instanceForm.display_name}
                 onChange={e => setInstanceForm({ ...instanceForm, display_name: e.target.value })}
                 className="w-full mt-1 px-3 py-1.5 text-sm bg-canvas border border-border rounded-control text-textPrimary"
-                placeholder={t('admin.instanceNamePlaceholder')}
+                placeholder={t('admin:instanceNamePlaceholder')}
               />
             </div>
             <div>
               <label className="text-xs text-textMuted">
-                {t('admin.publicUrlLabel')}
+                {t('admin:publicUrlLabel')}
               </label>
               <div className="flex items-stretch mt-1">
                 <select
@@ -499,7 +499,7 @@ export default function FederationTab() {
               </div>
             </div>
             <div>
-              <label className="text-xs text-textMuted">{t('admin.publicIdLabel')}</label>
+              <label className="text-xs text-textMuted">{t('admin:publicIdLabel')}</label>
               <div className="flex items-center gap-2 mt-1">
                 <input
                   value={instanceForm.public_id}
@@ -509,27 +509,27 @@ export default function FederationTab() {
                 <button
                   onClick={handleRegenerateId}
                   className="btn btn-xs btn-outline shrink-0 text-3xs text-textMuted hover:text-accent-400 hover:bg-accent-500/10"
-                  title={t('admin.confirmRegenerateId')}
+                  title={t('admin:confirmRegenerateId')}
                 >
-                  {t('admin.regenerate')}
+                  {t('admin:regenerate')}
                 </button>
               </div>
             </div>
             <div>
               <label className="text-xs text-textMuted">
-                {t('admin.githubTokenLabel')}{' '}
+                {t('admin:githubTokenLabel')}{' '}
                 <ExternalLinkSafe href="https://github.com/settings/tokens/new" className="text-primary-400 hover:text-primary-500 dark:hover:text-primary-300">
-                  {t('common.back')} →
+                  {t('common:back')} →
                 </ExternalLinkSafe>
               </label>
-              <p className="text-3xs text-textMuted mb-1" dangerouslySetInnerHTML={{ __html: t('admin.tokenHelpText') }} />
+              <p className="text-3xs text-textMuted mb-1" dangerouslySetInnerHTML={{ __html: t('admin:tokenHelpText') }} />
               <div className="flex gap-2 mt-1">
                 <input
                   type="password"
                   value={githubToken}
                   onChange={e => setGithubToken(e.target.value)}
                   className="flex-1 px-3 py-1.5 text-sm bg-canvas border border-border rounded-control text-textPrimary font-mono"
-                  placeholder={instance?.github_token_configured ? t('admin.tokenConfiguredPlaceholder') : t('admin.tokenPlaceholder')}
+                  placeholder={instance?.github_token_configured ? t('admin:tokenConfiguredPlaceholder') : t('admin:tokenPlaceholder')}
                 />
                 <button
                   onClick={handleSaveToken}
@@ -540,11 +540,11 @@ export default function FederationTab() {
                       : 'bg-accent-600 hover:bg-accent-500 text-white'
                   }`}
                 >
-                  {tokenSaving ? t('common.saving') : t('admin.saveToken')}
+                  {tokenSaving ? t('common:saving') : t('admin:saveToken')}
                 </button>
               </div>
               {instance?.github_token_configured && !githubToken && (
-                <p className="text-3xs text-mint-400 mt-1">{t('admin.tokenConfigured')}</p>
+                <p className="text-3xs text-mint-400 mt-1">{t('admin:tokenConfigured')}</p>
               )}
             </div>
             <div className="flex gap-2">
@@ -552,7 +552,7 @@ export default function FederationTab() {
                 onClick={handleSaveInstance}
                 className="btn btn-xs btn-primary"
               >
-                {t('admin.saveInstanceInfo')}
+                {t('admin:saveInstanceInfo')}
               </button>
               <button
                 onClick={handleRegister}
@@ -565,7 +565,7 @@ export default function FederationTab() {
                     : 'bg-mint-600 hover:bg-mint-500 text-white'
                 }`}
               >
-                {registerState === 'loading' ? t('admin.registering') : registerState === 'success' ? t('admin.registered') : t('admin.registerToGithub')}
+                {registerState === 'loading' ? t('admin:registering') : registerState === 'success' ? t('admin:registered') : t('admin:registerToGithub')}
               </button>
             </div>
             {registerResult && (
@@ -597,7 +597,7 @@ export default function FederationTab() {
                   disabled={registerState === 'loading' || !quickToken.trim()}
                   className="shrink-0 px-3 py-1.5 text-xs bg-accent-600 hover:bg-accent-500 text-white rounded-control transition-colors disabled:opacity-50"
                 >
-                  {registerState === 'loading' ? t('common.saving') : t('admin.saveAndRetry')}
+                  {registerState === 'loading' ? t('common:saving') : t('admin:saveAndRetry')}
                 </button>
               </div>
             )}
@@ -606,38 +606,38 @@ export default function FederationTab() {
           <>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
               <div>
-                <span className="text-textMuted text-xs">{t('admin.instanceId')}</span>
+                <span className="text-textMuted text-xs">{t('admin:instanceId')}</span>
                 <p className="text-textPrimary font-mono text-xs mt-0.5 truncate">{instance?.instance_id}</p>
               </div>
               <div>
-                <span className="text-textMuted text-xs">{t('admin.publicId')}</span>
+                <span className="text-textMuted text-xs">{t('admin:publicId')}</span>
                 <p className="text-textPrimary font-mono text-xs mt-0.5">
-                  {instance?.public_id || <span className="text-textMuted italic">{t('admin.notGenerated')}</span>}
+                  {instance?.public_id || <span className="text-textMuted italic">{t('admin:notGenerated')}</span>}
                 </p>
               </div>
               <div>
-                <span className="text-textMuted text-xs">{t('admin.displayName')}</span>
+                <span className="text-textMuted text-xs">{t('admin:displayName')}</span>
                 <p className="text-textPrimary text-xs mt-0.5">{instance?.display_name || '-'}</p>
               </div>
               <div>
-                <span className="text-textMuted text-xs">{t('admin.publicUrl')}</span>
+                <span className="text-textMuted text-xs">{t('admin:publicUrl')}</span>
                 <p className="text-textPrimary text-xs mt-0.5">{instance?.public_url || '-'}</p>
               </div>
               <div>
-                <span className="text-textMuted text-xs">{t('admin.githubToken')}</span>
+                <span className="text-textMuted text-xs">{t('admin:githubToken')}</span>
                 <div className="flex items-center gap-2 mt-0.5">
                   <p className="text-xs">
                     {instance?.github_token_configured ? (
-                      <span className="text-mint-400">{t('admin.tokenConfiguredEncrypted')}</span>
+                      <span className="text-mint-400">{t('admin:tokenConfiguredEncrypted')}</span>
                     ) : (
-                      <span className="text-textMuted italic">{t('admin.notConfigured')}</span>
+                      <span className="text-textMuted italic">{t('admin:notConfigured')}</span>
                     )}
                   </p>
                   <button
                     onClick={() => setShowTokenInput(!showTokenInput)}
                     className="text-3xs text-textMuted hover:text-textPrimary border border-border rounded px-1.5 py-0.5 transition-colors"
                   >
-                    {showTokenInput ? t('common.cancel') : instance?.github_token_configured ? t('admin.change') : t('admin.configure')}
+                    {showTokenInput ? t('common:cancel') : instance?.github_token_configured ? t('admin:change') : t('admin:configure')}
                   </button>
                 </div>
                 {showTokenInput && (
@@ -647,14 +647,14 @@ export default function FederationTab() {
                       value={manageToken}
                       onChange={e => setManageToken(e.target.value)}
                       className="flex-1 px-2 py-1 text-xs bg-canvas border border-border rounded-control text-textPrimary font-mono"
-                      placeholder={instance?.github_token_configured ? t('admin.pasteNewToken') : t('admin.tokenPlaceholder')}
+                      placeholder={instance?.github_token_configured ? t('admin:pasteNewToken') : t('admin:tokenPlaceholder')}
                     />
                     <button
                       onClick={handleManageToken}
                       disabled={tokenSaving || !manageToken.trim()}
                       className="shrink-0 px-2 py-1 text-xs bg-accent-600 hover:bg-accent-500 text-white rounded transition-colors disabled:opacity-50"
                     >
-                      {tokenSaving ? t('common.saving') : t('common.save')}
+                      {tokenSaving ? t('common:saving') : t('common:save')}
                     </button>
                   </div>
                 )}
@@ -671,7 +671,7 @@ export default function FederationTab() {
                       : 'bg-mint-600 hover:bg-mint-500 text-white'
                   }`}
                 >
-                  {isRegistering ? t('admin.registering') : registerState === 'success' ? t('admin.registered') : t('admin.registerToGithub')}
+                  {isRegistering ? t('admin:registering') : registerState === 'success' ? t('admin:registered') : t('admin:registerToGithub')}
                 </button>
                 {registerResult && (
                   <span className={`text-xs self-center ${
@@ -691,14 +691,14 @@ export default function FederationTab() {
                       value={quickToken}
                       onChange={e => setQuickToken(e.target.value)}
                       className="flex-1 px-3 py-1.5 text-sm bg-canvas border border-border rounded-control text-textPrimary font-mono"
-                      placeholder={t('admin.tokenPlaceholder')}
+                      placeholder={t('admin:tokenPlaceholder')}
                     />
                     <button
                       onClick={handleQuickSaveToken}
                       disabled={registerState === 'loading' || !quickToken.trim()}
                       className="shrink-0 px-3 py-1.5 text-xs bg-accent-600 hover:bg-accent-500 text-white rounded-control transition-colors disabled:opacity-50"
                     >
-                      {registerState === 'loading' ? t('common.saving') : t('admin.saveAndRetry')}
+                      {registerState === 'loading' ? t('common:saving') : t('admin:saveAndRetry')}
                     </button>
                   </div>
                 )}
@@ -712,13 +712,13 @@ export default function FederationTab() {
       <section className="bg-surface border border-border rounded-card p-5">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-semibold text-textPrimary flex items-center gap-2">
-            <Link size={16} /> {t('admin.peers').replace('{count}', String(peers.length))}
+            <Link size={16} /> {t('admin:peers').replace('{count}', String(peers.length))}
           </h2>
           <button
             onClick={() => setShowAddPeer(!showAddPeer)}
             className="flex items-center gap-1 text-xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 transition-colors"
           >
-            <Plus size={14} /> {t('admin.addPeer')}
+            <Plus size={14} /> {t('admin:addPeer')}
           </button>
         </div>
 
@@ -727,26 +727,26 @@ export default function FederationTab() {
           <div className="mb-4 p-4 bg-canvas rounded-control border border-border space-y-3">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
-                <label className="text-xs text-textMuted">{t('admin.peerPublicId')}</label>
+                <label className="text-xs text-textMuted">{t('admin:peerPublicId')}</label>
                 <input
                   value={newPeer.peer_public_id}
                   onChange={e => setNewPeer({ ...newPeer, peer_public_id: e.target.value })}
                   className="w-full mt-1 px-3 py-1.5 text-sm bg-surface border border-border rounded-control text-textPrimary font-mono"
-                  placeholder={t('admin.peerIdPlaceholder')}
+                  placeholder={t('admin:peerIdPlaceholder')}
                 />
               </div>
               <div>
-                <label className="text-xs text-textMuted">{t('admin.peerDisplayName')}</label>
+                <label className="text-xs text-textMuted">{t('admin:peerDisplayName')}</label>
                 <input
                   value={newPeer.display_name}
                   onChange={e => setNewPeer({ ...newPeer, display_name: e.target.value })}
                   className="w-full mt-1 px-3 py-1.5 text-sm bg-surface border border-border rounded-control text-textPrimary"
-                  placeholder={t('admin.peerNamePlaceholder')}
+                  placeholder={t('admin:peerNamePlaceholder')}
                 />
               </div>
               <div className="md:col-span-2">
                 <label className="text-xs text-textMuted">
-                  {t('admin.peerWsUrl')} <span className="text-textMuted/60">— {t('admin.optional')}</span>
+                  {t('admin:peerWsUrl')} <span className="text-textMuted/60">— {t('admin:optional')}</span>
                 </label>
                 <div className="flex items-stretch mt-1">
                   <select
@@ -777,16 +777,16 @@ export default function FederationTab() {
                     /federation/ws
                   </span>
                 </div>
-                <p className="text-3xs text-textMuted mt-1">{t('admin.peerUrlOptionalHint')}</p>
+                <p className="text-3xs text-textMuted mt-1">{t('admin:peerUrlOptionalHint')}</p>
               </div>
               <div className="md:col-span-2">
-                <label className="text-xs text-textMuted">{t('admin.sharedSecret')}</label>
+                <label className="text-xs text-textMuted">{t('admin:sharedSecret')}</label>
                 <input
                   type="password"
                   value={newPeer.shared_secret}
                   onChange={e => setNewPeer({ ...newPeer, shared_secret: e.target.value })}
                   className="w-full mt-1 px-3 py-1.5 text-sm bg-surface border border-border rounded-control text-textPrimary"
-                  placeholder={t('admin.secretPlaceholder')}
+                  placeholder={t('admin:secretPlaceholder')}
                 />
               </div>
             </div>
@@ -795,13 +795,13 @@ export default function FederationTab() {
                 onClick={handleAddPeer}
                 className="btn btn-xs btn-primary"
               >
-                {t('admin.addAndConnect')}
+                {t('admin:addAndConnect')}
               </button>
               <button
                 onClick={() => setShowAddPeer(false)}
                 className="px-4 py-1.5 text-xs bg-canvas border border-border text-textSecondary rounded-control hover:bg-border/20 transition-colors"
               >
-                {t('common.cancel')}
+                {t('common:cancel')}
               </button>
             </div>
           </div>
@@ -809,7 +809,7 @@ export default function FederationTab() {
 
         {/* 对等端表格 */}
         {peers.length === 0 ? (
-          <p className="text-sm text-textMuted py-4 text-center">{t('admin.noPeers')}</p>
+          <p className="text-sm text-textMuted py-4 text-center">{t('admin:noPeers')}</p>
         ) : (
           <div className="space-y-2">
             {peers.map(peer => (
@@ -836,14 +836,14 @@ export default function FederationTab() {
                       <button
                         onClick={() => handleRotateUrl(peer.id)}
                         className="p-1.5 text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 hover:bg-primary-500/10 rounded-control transition-colors"
-                        title={t('admin.rotateUrl')}
+                        title={t('admin:rotateUrl')}
                       >
                         <RefreshCw size={14} />
                       </button>
                       <button
                         onClick={() => handleDisconnect(peer.id)}
                         className="p-1.5 text-rose-400 hover:text-rose-500 dark:hover:text-rose-300 dark:hover:text-rose-300 hover:bg-rose-500/10 rounded-control transition-colors"
-                        title={t('admin.disconnect')}
+                        title={t('admin:disconnect')}
                       >
                         <Power size={14} />
                       </button>
@@ -853,14 +853,14 @@ export default function FederationTab() {
                       <button
                         onClick={() => handleConnect(peer.id)}
                         className="p-1.5 text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 hover:bg-primary-500/10 rounded-control transition-colors"
-                        title={t('admin.connect')}
+                        title={t('admin:connect')}
                       >
                         <RefreshCw size={14} />
                       </button>
                       <button
                         onClick={() => handleEditPeer(peer)}
                         className="p-1.5 text-textMuted hover:text-accent-400 hover:bg-accent-500/10 rounded-control transition-colors"
-                        title={t('common.edit')}
+                        title={t('common:edit')}
                       >
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                       </button>
@@ -869,7 +869,7 @@ export default function FederationTab() {
                   <button
                     onClick={() => handleDeletePeer(peer.id)}
                     className="p-1.5 text-textMuted hover:text-rose-400 hover:bg-rose-500/10 rounded-control transition-colors"
-                    title={t('common.delete')}
+                    title={t('common:delete')}
                   >
                     <Trash2 size={14} />
                   </button>
@@ -880,7 +880,7 @@ export default function FederationTab() {
                 <div className="p-3 bg-canvas rounded-control border border-accent-500/20 space-y-2">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                     <div>
-                      <label className="text-3xs text-textMuted">{t('admin.displayName')}</label>
+                      <label className="text-3xs text-textMuted">{t('admin:displayName')}</label>
                       <input
                         value={editPeerForm.display_name}
                         onChange={e => setEditPeerForm({ ...editPeerForm, display_name: e.target.value })}
@@ -888,7 +888,7 @@ export default function FederationTab() {
                       />
                     </div>
                     <div>
-                      <label className="text-3xs text-textMuted">{t('admin.peerUrl')}</label>
+                      <label className="text-3xs text-textMuted">{t('admin:peerUrl')}</label>
                       <div className="flex items-stretch mt-0.5">
                         <select
                           value={(editPeerForm.remote_url.match(/^(wss?):\/\//)?.[1]) || 'wss'}
@@ -920,13 +920,13 @@ export default function FederationTab() {
                       </div>
                     </div>
                     <div className="md:col-span-2">
-                      <label className="text-3xs text-textMuted">{t('admin.secretNoChange')}</label>
+                      <label className="text-3xs text-textMuted">{t('admin:secretNoChange')}</label>
                       <input
                         type="password"
                         value={editPeerForm.shared_secret}
                         onChange={e => setEditPeerForm({ ...editPeerForm, shared_secret: e.target.value })}
                         className="w-full mt-0.5 px-2 py-1 text-xs bg-surface border border-border rounded text-textPrimary"
-                        placeholder={t('admin.newSecretPlaceholder')}
+                        placeholder={t('admin:newSecretPlaceholder')}
                       />
                     </div>
                   </div>
@@ -935,13 +935,13 @@ export default function FederationTab() {
                       onClick={handleSavePeer}
                       className="btn btn-xs btn-primary"
                     >
-                      {t('common.save')}
+                      {t('common:save')}
                     </button>
                     <button
                       onClick={() => setEditingPeerId(null)}
                       className="px-3 py-1 text-xs bg-canvas border border-border text-textSecondary rounded hover:bg-border/20 transition-colors"
                     >
-                      {t('common.cancel')}
+                      {t('common:cancel')}
                     </button>
                   </div>
                 </div>
@@ -951,7 +951,7 @@ export default function FederationTab() {
                 <div className="p-3 bg-canvas rounded-control border border-primary-500/20 space-y-2">
                   <div className="flex items-center gap-2 text-xs text-primary-400">
                     <RefreshCw size={12} className="animate-spin" />
-                    <span>{t('admin.rotateHint')}</span>
+                    <span>{t('admin:rotateHint')}</span>
                   </div>
                   <div className="flex gap-2">
                     <select
@@ -979,13 +979,13 @@ export default function FederationTab() {
                       disabled={rotateLoading}
                       className="px-3 py-1 text-xs bg-primary-600 hover:bg-primary-500 disabled:opacity-50 text-white rounded transition-colors"
                     >
-                      {rotateLoading ? t('admin.rotating') : t('admin.initiateRotate')}
+                      {rotateLoading ? t('admin:rotating') : t('admin:initiateRotate')}
                     </button>
                     <button
                       onClick={() => { setRotatingPeerId(null); setRotateError('') }}
                       className="px-3 py-1 text-xs bg-canvas border border-border text-textSecondary rounded hover:bg-border/20 transition-colors"
                     >
-                      {t('common.cancel')}
+                      {t('common:cancel')}
                     </button>
                   </div>
                 </div>
@@ -993,9 +993,9 @@ export default function FederationTab() {
               {/* 轮换次数 */}
               {peer.url_rotation_count > 0 && (
                 <p className="text-3xs text-textMuted ml-11">
-                  {t('admin.urlRotated')} <span className="text-primary-400">{peer.url_rotation_count}</span>
+                  {t('admin:urlRotated')} <span className="text-primary-400">{peer.url_rotation_count}</span>
                   {peer.url_rotated_at && (
-                    <span> · {t('admin.lastRotated')} {new Date(peer.url_rotated_at).toLocaleString()}</span>
+                    <span> · {t('admin:lastRotated')} {new Date(peer.url_rotated_at).toLocaleString()}</span>
                   )}
                 </p>
               )}
@@ -1010,11 +1010,11 @@ export default function FederationTab() {
       {/* GitHub 注册说明（可选） */}
       <section className="bg-surface border border-border rounded-card p-5">
         <h2 className="text-sm font-semibold text-textPrimary flex items-center gap-2 mb-4">
-          <Globe size={16} /> {t('admin.federationDiscovery')}
+          <Globe size={16} /> {t('admin:federationDiscovery')}
         </h2>
-        <p className="text-sm text-textMuted">{t('admin.federationDiscoveryDesc')}</p>
+        <p className="text-sm text-textMuted">{t('admin:federationDiscoveryDesc')}</p>
         <p className="text-xs text-textMuted mt-2">
-          {t('admin.federationDiscoveryHint')}
+          {t('admin:federationDiscoveryHint')}
         </p>
       </section>
     </div>
@@ -1054,7 +1054,7 @@ function FederatedEntitiesSection() {
   }
 
   const deleteEntity = async (entity: FederatedEntity) => {
-    if (!confirm(t('admin.confirmRemoveEntity'))) return
+    if (!confirm(t('admin:confirmRemoveEntity'))) return
     try {
       await api.delete(`/admin/federation/entities/${entity.id}`)
       await loadEntities()
@@ -1072,23 +1072,23 @@ function FederatedEntitiesSection() {
   }
 
   const typeLabel = (entityType: string) => {
-    const map: Record<string, string> = { group: t('common.group'), dm: 'DM', user: t('common.user'), agent: 'AI' }
+    const map: Record<string, string> = { group: t('common:group'), dm: 'DM', user: t('common:user'), agent: 'AI' }
     return map[entityType] || entityType
   }
 
-  if (loading) return <div className="bg-surface border border-border rounded-card p-5 text-sm text-textMuted">{t('common.loading')}</div>
+  if (loading) return <div className="bg-surface border border-border rounded-card p-5 text-sm text-textMuted">{t('common:loading')}</div>
 
   return (
     <section className="bg-surface border border-border rounded-card p-5">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-sm font-semibold text-textPrimary flex items-center gap-2">
-          <Globe size={16} /> {t('admin.federationEntities').replace('{count}', String(entities.length))}
+          <Globe size={16} /> {t('admin:federationEntities').replace('{count}', String(entities.length))}
         </h2>
-        <p className="text-xs text-textMuted">{t('admin.federationEntitiesHint')}</p>
+        <p className="text-xs text-textMuted">{t('admin:federationEntitiesHint')}</p>
       </div>
 
       {entities.length === 0 ? (
-        <p className="text-sm text-textMuted py-4 text-center">{t('admin.noFederatedEntities')}</p>
+        <p className="text-sm text-textMuted py-4 text-center">{t('admin:noFederatedEntities')}</p>
       ) : (
         <div className="space-y-2">
           {entities.map(entity => (
@@ -1118,14 +1118,14 @@ function FederatedEntitiesSection() {
                       ? 'bg-mint-500/10 text-mint-400 hover:bg-rose-500/10 hover:text-rose-400'
                       : 'bg-rose-500/10 text-rose-400 hover:bg-mint-500/10 hover:text-mint-400'
                   }`}
-                  title={entity.is_enabled ? t('admin.disable') : t('admin.enable')}
+                  title={entity.is_enabled ? t('admin:disable') : t('admin:enable')}
                 >
-                  {entity.is_enabled ? t('admin.enabled') : t('admin.disabled')}
+                  {entity.is_enabled ? t('admin:enabled') : t('admin:disabled')}
                 </button>
                 <button
                   onClick={() => deleteEntity(entity)}
                   className="p-1.5 text-textMuted hover:text-rose-400 hover:bg-rose-500/10 rounded-control transition-colors"
-                  title={t('common.delete')}
+                  title={t('common:delete')}
                 >
                   <Trash2 size={14} />
                 </button>

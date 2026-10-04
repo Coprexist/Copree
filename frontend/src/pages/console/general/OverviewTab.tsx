@@ -93,14 +93,14 @@ export default function OverviewTab() {
     if (mtBusy) return
     setMtBusy('hard'); setMtError('')
     try { const d: any = await api.post('/admin/maintenance/hard'); setMt(prev => ({ ...prev, hard: !!d.hard })) }
-    catch (e: any) { setMtError(e?.detail || e?.message || t('common.error')) }
+    catch (e: any) { setMtError(e?.detail || e?.message || t('common:error')) }
     setMtBusy(null)
   }
   const toggleSoft = async () => {
     if (mtBusy) return
     setMtBusy('soft'); setMtError('')
     try { const d: any = await api.post('/admin/maintenance/soft'); setMt(prev => ({ ...prev, soft: !!d.soft })) }
-    catch (e: any) { setMtError(e?.detail || e?.message || t('common.error')) }
+    catch (e: any) { setMtError(e?.detail || e?.message || t('common:error')) }
     setMtBusy(null)
   }
 
@@ -114,22 +114,22 @@ export default function OverviewTab() {
   type Task = { key: string; text: string; hint: string; icon: React.ElementType; to: string }
   const tasks: Task[] = []
   if (pending) tasks.push({
-    key: 'pending', text: t('admin.homePending', { n: pending }), hint: t('admin.homePendingHint'),
+    key: 'pending', text: t('admin:homePending', { n: pending }), hint: t('admin:homePendingHint'),
     icon: Inbox, to: '/list',
   })
   const suspects = ops?.attack?.suspects || 0
   if (suspects) tasks.push({
-    key: 'suspects', text: t('admin.homeSuspects', { n: suspects }),
-    hint: t('admin.homeSuspectsHint', { min: ops?.attack?.min_failures ?? 5 }),
+    key: 'suspects', text: t('admin:homeSuspects', { n: suspects }),
+    hint: t('admin:homeSuspectsHint', { min: ops?.attack?.min_failures ?? 5 }),
     icon: ShieldAlert, to: 'tab=logs&log_type=login_failed',
   })
   const lockouts = ops?.lockouts || 0
   if (lockouts) tasks.push({
-    key: 'lockouts', text: t('admin.homeLockouts', { n: lockouts }), hint: t('admin.homeLockoutsHint'),
+    key: 'lockouts', text: t('admin:homeLockouts', { n: lockouts }), hint: t('admin:homeLockoutsHint'),
     icon: ShieldAlert, to: 'tab=logs&log_type=login_failed',
   })
   if (pool && pool.filter(k => k.is_active).length === 0) tasks.push({
-    key: 'pool', text: t('admin.homeNoPoolKey'), hint: t('admin.homeNoPoolKeyHint'),
+    key: 'pool', text: t('admin:homeNoPoolKey'), hint: t('admin:homeNoPoolKeyHint'),
     icon: KeyRound, to: 'tab=apipool',
   })
   const lastBackupAt = backups && backups.length
@@ -137,42 +137,42 @@ export default function OverviewTab() {
   const backupAgeDays = lastBackupAt ? Math.floor((Date.now() - lastBackupAt) / 86400000) : null
   if (backups && (backupAgeDays === null || backupAgeDays >= BACKUP_STALE_DAYS)) tasks.push({
     key: 'backup',
-    text: backupAgeDays === null ? t('admin.homeNoBackup') : t('admin.homeBackupStale', { n: backupAgeDays }),
-    hint: backupAgeDays === null ? t('admin.homeNoBackupHint') : t('admin.homeBackupStaleHint'),
+    text: backupAgeDays === null ? t('admin:homeNoBackup') : t('admin:homeBackupStale', { n: backupAgeDays }),
+    hint: backupAgeDays === null ? t('admin:homeNoBackupHint') : t('admin:homeBackupStaleHint'),
     icon: Database, to: 'tab=backup',
   })
   if (mt.auto || mt.hard || mt.soft) tasks.push({
-    key: 'maintenance', text: t('admin.homeMaintenanceOn'), hint: t('admin.homeMaintenanceOnHint'),
+    key: 'maintenance', text: t('admin:homeMaintenanceOn'), hint: t('admin:homeMaintenanceOnHint'),
     icon: Wrench, to: 'tab=system',
   })
   const hasTasks = tasks.length > 0
 
   // ── 平台现状：同一套形状，色相只用来分组——存量=紫，近 24 小时=金（活跃）/玫瑰（风险）/薄荷（增长）
   const numbers: Array<{ key: string; label: string; value: any; to: string; hue: Hue; icon: React.ElementType; fresh?: boolean }> = [
-    { key: 'users', label: t('admin.totalUsers'), value: ov?.total_users, to: 'tab=users', hue: 'primary', icon: Users },
-    { key: 'agents', label: t('admin.totalAgents'), value: ov?.total_agents, to: 'tab=agents', hue: 'primary', icon: Bot },
-    { key: 'groups', label: t('admin.totalGroups'), value: ov?.total_groups, to: 'tab=groups', hue: 'primary', icon: MessageCircle },
-    { key: 'turns', label: t('admin.opsTurns'), value: ops?.conversation?.turns, to: 'tab=convlog', hue: 'accent', icon: MessagesSquare, fresh: true },
-    { key: 'loginFail', label: t('admin.opsLoginFail'), value: ops?.login?.failed, to: 'tab=logs&log_type=login_failed', hue: 'rose', icon: ShieldAlert, fresh: true },
-    { key: 'newUsers', label: t('admin.opsNewUsers'), value: ops?.people?.new_local, to: 'tab=logs&log_type=register', hue: 'mint', icon: UserPlus, fresh: true },
+    { key: 'users', label: t('admin:totalUsers'), value: ov?.total_users, to: 'tab=users', hue: 'primary', icon: Users },
+    { key: 'agents', label: t('admin:totalAgents'), value: ov?.total_agents, to: 'tab=agents', hue: 'primary', icon: Bot },
+    { key: 'groups', label: t('admin:totalGroups'), value: ov?.total_groups, to: 'tab=groups', hue: 'primary', icon: MessageCircle },
+    { key: 'turns', label: t('admin:opsTurns'), value: ops?.conversation?.turns, to: 'tab=convlog', hue: 'accent', icon: MessagesSquare, fresh: true },
+    { key: 'loginFail', label: t('admin:opsLoginFail'), value: ops?.login?.failed, to: 'tab=logs&log_type=login_failed', hue: 'rose', icon: ShieldAlert, fresh: true },
+    { key: 'newUsers', label: t('admin:opsNewUsers'), value: ops?.people?.new_local, to: 'tab=logs&log_type=register', hue: 'mint', icon: UserPlus, fresh: true },
   ]
 
   const recent = recentTabs().filter(k => k !== 'overview').slice(0, 5).map(findConsoleItem)
 
   const statusBadge = mt.auto
-    ? { cls: 'bg-accent-500/15 text-accent-400', label: t('admin.maintenanceStarting') }
+    ? { cls: 'bg-accent-500/15 text-accent-400', label: t('admin:maintenanceStarting') }
     : mt.hard
-      ? { cls: 'bg-rose-500/15 text-rose-400', label: t('admin.maintenanceStatusPaused') }
+      ? { cls: 'bg-rose-500/15 text-rose-400', label: t('admin:maintenanceStatusPaused') }
       : mt.soft
-        ? { cls: 'bg-accent-500/15 text-accent-400', label: t('admin.maintenanceStatusTip') }
-        : { cls: 'bg-mint-500/15 text-mint-400', label: t('admin.maintenanceStatusNormal') }
+        ? { cls: 'bg-accent-500/15 text-accent-400', label: t('admin:maintenanceStatusTip') }
+        : { cls: 'bg-mint-500/15 text-mint-400', label: t('admin:maintenanceStatusNormal') }
   const statusDesc = mt.auto
-    ? t('admin.maintenanceDescAuto')
+    ? t('admin:maintenanceDescAuto')
     : mt.hard
-      ? t('admin.maintenanceDescHard')
+      ? t('admin:maintenanceDescHard')
       : mt.soft
-        ? t('admin.maintenanceDescSoft')
-        : t('admin.maintenanceDescNormal')
+        ? t('admin:maintenanceDescSoft')
+        : t('admin:maintenanceDescNormal')
   const statusDot = mt.auto ? 'bg-accent-400 animate-pulse' : mt.hard ? 'bg-rose-400' : mt.soft ? 'bg-accent-400' : 'bg-mint-400'
   const statusHue: Hue = mt.hard ? 'rose' : mt.soft || mt.auto ? 'accent' : 'mint'
 
@@ -189,7 +189,7 @@ export default function OverviewTab() {
             <span className={`w-6 h-6 rounded-control flex items-center justify-center shrink-0 ${HUE[hasTasks ? 'accent' : 'mint'].chip}`}>
               {hasTasks ? <AlertTriangle size={13} /> : <CheckCircle2 size={13} />}
             </span>
-            <h3 className="text-sm font-semibold text-textPrimary">{t('admin.homeAttention')}</h3>
+            <h3 className="text-sm font-semibold text-textPrimary">{t('admin:homeAttention')}</h3>
             {ready && hasTasks && (
               <span className="ml-auto text-2xs font-medium px-2 py-0.5 rounded-full bg-accent-500/15 text-accent-400">
                 {tasks.length}
@@ -197,9 +197,9 @@ export default function OverviewTab() {
             )}
           </div>
           {!ready ? (
-            <p className="px-4 py-3 text-xs text-textMuted">{t('common.loading')}</p>
+            <p className="px-4 py-3 text-xs text-textMuted">{t('common:loading')}</p>
           ) : !hasTasks ? (
-            <p className="px-4 py-3 text-xs text-mint-400">{t('admin.homeAllClear')}</p>
+            <p className="px-4 py-3 text-xs text-mint-400">{t('admin:homeAllClear')}</p>
           ) : tasks.map(({ icon: Icon, ...task }) => (
             <button
               key={task.key}
@@ -214,7 +214,7 @@ export default function OverviewTab() {
                 <span className="block text-2xs text-textMuted mt-0.5">{task.hint}</span>
               </span>
               <span className="shrink-0 flex items-center gap-1 text-xs font-medium text-primary-400">
-                {t('admin.homeGo')}<ArrowRight size={12} />
+                {t('admin:homeGo')}<ArrowRight size={12} />
               </span>
             </button>
           ))}
@@ -223,13 +223,13 @@ export default function OverviewTab() {
 
       {/* ── 平台现状 ── */}
       <section>
-        <SectionTitle icon={Gauge} hue="primary" title={t('admin.homeNumbers')} hint={t('admin.homeNumbersHint')} />
+        <SectionTitle icon={Gauge} hue="primary" title={t('admin:homeNumbers')} hint={t('admin:homeNumbersHint')} />
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
           {numbers.map(({ icon: Icon, ...n }) => (
             <button
               key={n.key}
               onClick={() => goto(n.to)}
-              title={n.fresh ? t('admin.homeLast24h') : undefined}
+              title={n.fresh ? t('admin:homeLast24h') : undefined}
               className={`group relative rounded-card border border-border px-3 py-2.5 text-left transition-colors ${HUE[n.hue].wash} ${HUE[n.hue].hoverBorder}`}
             >
               <span className="flex items-center gap-1.5">
@@ -240,7 +240,7 @@ export default function OverviewTab() {
               </span>
               <span className="block mt-1 text-xl font-semibold text-textPrimary tabular-nums">{n.value ?? '—'}</span>
               {n.fresh && (
-                <span className="absolute top-1.5 right-2 text-3xs text-textMuted">{t('admin.homeLast24h')}</span>
+                <span className="absolute top-1.5 right-2 text-3xs text-textMuted">{t('admin:homeLast24h')}</span>
               )}
             </button>
           ))}
@@ -250,7 +250,7 @@ export default function OverviewTab() {
       {/* ── 最近访问：虚线块，和下面实线的入口块区分开（同一栏，不同性质） ── */}
       {recent.length > 0 && (
         <section>
-          <SectionTitle icon={History} hue="primary" title={t('admin.homeRecent')} />
+          <SectionTitle icon={History} hue="primary" title={t('admin:homeRecent')} />
           <div className="flex flex-wrap gap-2">
             {recent.map(({ icon: Icon, ...item }) => (
               <button
@@ -275,7 +275,7 @@ export default function OverviewTab() {
               </span>
               <div>
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-textPrimary">{t('admin.maintenanceMode')}</span>
+                  <span className="text-sm font-medium text-textPrimary">{t('admin:maintenanceMode')}</span>
                   <span className={`text-2xs px-2 py-0.5 rounded-full ${statusBadge.cls}`}>{statusBadge.label}</span>
                 </div>
                 <div className="flex items-center gap-1.5 text-2xs text-textMuted mt-0.5">
@@ -285,17 +285,17 @@ export default function OverviewTab() {
               </div>
             </div>
             <div className="flex gap-2">
-              <button onClick={toggleHard} disabled={!!mtBusy} title={t('admin.homeMaintenanceOnHint')}
+              <button onClick={toggleHard} disabled={!!mtBusy} title={t('admin:homeMaintenanceOnHint')}
                 className={`px-3 py-1.5 rounded-control text-xs font-medium transition-colors disabled:opacity-50 ${
                   mt.hard ? 'bg-mint-500 hover:bg-mint-600 text-white' : 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30'
                 }`}>
-                {mtBusy === 'hard' ? '···' : mt.hard ? t('admin.maintenanceResumeService') : t('admin.maintenancePauseService')}
+                {mtBusy === 'hard' ? '···' : mt.hard ? t('admin:maintenanceResumeService') : t('admin:maintenancePauseService')}
               </button>
-              <button onClick={toggleSoft} disabled={!!mtBusy} title={t('admin.homeMaintenanceOnHint')}
+              <button onClick={toggleSoft} disabled={!!mtBusy} title={t('admin:homeMaintenanceOnHint')}
                 className={`px-3 py-1.5 rounded-control text-xs font-medium transition-colors disabled:opacity-50 ${
                   mt.soft ? 'bg-mint-500 hover:bg-mint-600 text-white' : 'bg-accent-500/10 hover:bg-accent-500/20 text-accent-400 border border-accent-500/30'
                 }`}>
-                {mtBusy === 'soft' ? '···' : mt.soft ? t('admin.maintenanceCancelTip') : t('admin.maintenanceShowTip')}
+                {mtBusy === 'soft' ? '···' : mt.soft ? t('admin:maintenanceCancelTip') : t('admin:maintenanceShowTip')}
               </button>
             </div>
           </div>
@@ -305,7 +305,7 @@ export default function OverviewTab() {
 
       {/* ── 全部入口：工作区用小色块区分，入口本身保持同一形状（一致性），只在悬停时上品牌紫 ── */}
       <section className="space-y-3">
-        <SectionTitle icon={LayoutGrid} hue="primary" title={t('admin.homeAllEntries')} hint={t('admin.homeAllEntriesHint')} />
+        <SectionTitle icon={LayoutGrid} hue="primary" title={t('admin:homeAllEntries')} hint={t('admin:homeAllEntriesHint')} />
         {CONSOLE_WORKSPACES.map(({ icon: WorkspaceIcon, ...workspace }, wi) => {
           const hue: Hue = (['primary', 'mint', 'accent', 'rose', 'primary'] as Hue[])[wi % 5]
           return (

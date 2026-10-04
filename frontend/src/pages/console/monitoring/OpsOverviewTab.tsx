@@ -23,14 +23,14 @@ export default function OpsOverviewTab() {
     api.get(`/admin/ops/overview?days=${days}`).then(setData).catch(console.error)
   }, [days])
 
-  if (!data) return <p className="text-textMuted">{t('common.loading')}</p>
+  if (!data) return <p className="text-textMuted">{t('common:loading')}</p>
 
   const login = data.login || {}
   const attack = data.attack || {}
   const blocked = data.blocked || {}
   const conv = data.conversation || {}
   const people = data.people || {}
-  const window = t(`admin.opsRange${days}`)
+  const window = t(`admin:opsRange${days}`)
   // 限流那半是进程内计数：窗口跨过重启时只覆盖一部分，用 "—" 明说不知道，而不是报一个偏小的 0
   const throttleUnknown = blocked.throttle_partial && !blocked.throttle
   const repeatShare = attack.total_failures
@@ -43,58 +43,58 @@ export default function OpsOverviewTab() {
   }
   const cards: Card[] = [
     {
-      key: 'loginOk', label: t('admin.opsLoginOk'),
-      value: t('admin.opsLoginOkValue', { n: login.success }),
-      sub: t('admin.opsSubAccounts', { n: login.success_accounts }),
-      tip: t('admin.opsTipLoginOk'), to: 'tab=logs&log_type=login',
+      key: 'loginOk', label: t('admin:opsLoginOk'),
+      value: t('admin:opsLoginOkValue', { n: login.success }),
+      sub: t('admin:opsSubAccounts', { n: login.success_accounts }),
+      tip: t('admin:opsTipLoginOk'), to: 'tab=logs&log_type=login',
     },
     {
-      key: 'loginFail', label: t('admin.opsLoginFail'),
-      value: t('admin.opsLoginFailValue', { n: login.failed }),
-      sub: t('admin.opsSubAccounts', { n: login.failed_accounts }),
-      sub2: t('admin.opsSubFailLocked', { n: data.lockouts }),
-      tip: t('admin.opsTipLoginFail'), to: 'tab=logs&log_type=login_failed',
+      key: 'loginFail', label: t('admin:opsLoginFail'),
+      value: t('admin:opsLoginFailValue', { n: login.failed }),
+      sub: t('admin:opsSubAccounts', { n: login.failed_accounts }),
+      sub2: t('admin:opsSubFailLocked', { n: data.lockouts }),
+      tip: t('admin:opsTipLoginFail'), to: 'tab=logs&log_type=login_failed',
     },
     {
-      key: 'suspects', label: t('admin.opsSuspects'),
-      value: t('admin.opsSuspectsValue', { n: attack.suspects }),
-      sub: attack.top ? t('admin.opsSubTop', { n: attack.top.failures }) : t('admin.opsNoSuspects'),
-      sub2: attack.total_failures ? t('admin.opsSubRepeat', { p: repeatShare }) : '',
-      tip: t('admin.opsTipSuspects', { min: attack.min_failures }),
+      key: 'suspects', label: t('admin:opsSuspects'),
+      value: t('admin:opsSuspectsValue', { n: attack.suspects }),
+      sub: attack.top ? t('admin:opsSubTop', { n: attack.top.failures }) : t('admin:opsNoSuspects'),
+      sub2: attack.total_failures ? t('admin:opsSubRepeat', { p: repeatShare }) : '',
+      tip: t('admin:opsTipSuspects', { min: attack.min_failures }),
       warn: (attack.suspects || 0) > 0,
     },
     {
-      key: 'blocked', label: t('admin.opsBlocked'),
-      value: t('admin.opsBlockedValue', { n: blocked.total }),
+      key: 'blocked', label: t('admin:opsBlocked'),
+      value: t('admin:opsBlockedValue', { n: blocked.total }),
       sub: throttleUnknown
-        ? t('admin.opsSubBlockedPartial', { a: blocked.lockout, b: blocked.throttle })
-        : t('admin.opsSubBlocked', { a: blocked.lockout, b: blocked.throttle }),
-      tip: t('admin.opsTipBlocked'), to: 'tab=logs&log_type=login_failed',
+        ? t('admin:opsSubBlockedPartial', { a: blocked.lockout, b: blocked.throttle })
+        : t('admin:opsSubBlocked', { a: blocked.lockout, b: blocked.throttle }),
+      tip: t('admin:opsTipBlocked'), to: 'tab=logs&log_type=login_failed',
     },
     {
-      key: 'turns', label: t('admin.opsTurns'),
-      value: t('admin.opsTurnsValue', { n: conv.turns }),
-      sub: t('admin.opsSubMessages', { n: (conv.group_messages || 0) + (conv.dm_messages || 0) }),
-      tip: t('admin.opsTipTurns'), to: 'tab=convlog',
+      key: 'turns', label: t('admin:opsTurns'),
+      value: t('admin:opsTurnsValue', { n: conv.turns }),
+      sub: t('admin:opsSubMessages', { n: (conv.group_messages || 0) + (conv.dm_messages || 0) }),
+      tip: t('admin:opsTipTurns'), to: 'tab=convlog',
     },
     {
-      key: 'newUsers', label: t('admin.opsNewUsers'),
-      value: t('admin.opsNewUsersValue', { n: people.new_local }),
-      sub: t('admin.opsSubTotalUsers', { n: people.total_local }),
-      tip: t('admin.opsTipNewUsers'), to: 'tab=logs&log_type=register',
+      key: 'newUsers', label: t('admin:opsNewUsers'),
+      value: t('admin:opsNewUsersValue', { n: people.new_local }),
+      sub: t('admin:opsSubTotalUsers', { n: people.total_local }),
+      tip: t('admin:opsTipNewUsers'), to: 'tab=logs&log_type=register',
     },
   ]
 
   return (
     <div>
       <div className="flex flex-wrap items-center gap-3 mb-4">
-        <label className="text-xs text-textSecondary">{t('admin.opsRangeLabel')}:</label>
+        <label className="text-xs text-textSecondary">{t('admin:opsRangeLabel')}:</label>
         <select
           value={days}
           onChange={e => setDays(Number(e.target.value))}
           className="text-sm border border-border rounded-control px-2.5 py-1.5 bg-surface text-textPrimary"
         >
-          {RANGES.map(d => <option key={d} value={d}>{t(`admin.opsRange${d}`)}</option>)}
+          {RANGES.map(d => <option key={d} value={d}>{t(`admin:opsRange${d}`)}</option>)}
         </select>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
@@ -115,7 +115,7 @@ export default function OpsOverviewTab() {
         ))}
       </div>
       <p className="mt-4 text-xs text-textMuted leading-relaxed">
-        {t('admin.opsFootnote', { window })}
+        {t('admin:opsFootnote', { window })}
       </p>
     </div>
   )

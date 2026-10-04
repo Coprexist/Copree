@@ -28,7 +28,7 @@ export default function SystemMetricsTab() {
       <Loader2 className="animate-spin text-textSecondary" size={28} />
     </div>
   )
-  if (!metrics) return <p className="text-textMuted py-8 text-center">{t('admin.noMetrics')}</p>
+  if (!metrics) return <p className="text-textMuted py-8 text-center">{t('admin:noMetrics')}</p>
 
   const live = metrics.live
   const timeline = metrics.timeline || []
@@ -63,22 +63,22 @@ export default function SystemMetricsTab() {
           ))}
         </div>
         <span className="text-2xs text-textMuted">
-          {t('admin.metricsRetention').replace('{retentionDays}', String(retentionDays))}
+          {t('admin:metricsRetention').replace('{retentionDays}', String(retentionDays))}
         </span>
       </div>
 
       {/* 实时指标卡片 */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <MetricCard icon={Activity} label={t('admin.metricsLlmCalls')} value={live.llm?.total_calls ?? 0} color="primary" />
-        <MetricCard icon={Clock} label={t('admin.metricsAvgLatency')} value={`${(live.llm?.latency?.avg ?? 0).toFixed(2)}s`} color="mint" />
-        <MetricCard icon={AlertTriangle} label={t('admin.metricsErrorRate')} value={`${((live.llm?.error_rate ?? 0) * 100).toFixed(1)}%`} color="rose" />
-        <MetricCard icon={Layers} label={t('admin.metricsMaxQueueDepth')} value={live.queue?.max_depth ?? 0} color="amber" />
+        <MetricCard icon={Activity} label={t('admin:metricsLlmCalls')} value={live.llm?.total_calls ?? 0} color="primary" />
+        <MetricCard icon={Clock} label={t('admin:metricsAvgLatency')} value={`${(live.llm?.latency?.avg ?? 0).toFixed(2)}s`} color="mint" />
+        <MetricCard icon={AlertTriangle} label={t('admin:metricsErrorRate')} value={`${((live.llm?.error_rate ?? 0) * 100).toFixed(1)}%`} color="rose" />
+        <MetricCard icon={Layers} label={t('admin:metricsMaxQueueDepth')} value={live.queue?.max_depth ?? 0} color="amber" />
       </div>
 
       {/* LLM 延迟趋势图 */}
       {timeline.length > 0 && (
         <div className="bg-surface rounded-dialog border border-border p-5">
-          <h3 className="text-sm font-semibold text-textPrimary mb-4">{t('admin.metricsLatencyTrend')}</h3>
+          <h3 className="text-sm font-semibold text-textPrimary mb-4">{t('admin:metricsLatencyTrend')}</h3>
           <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={timeline}>
@@ -99,9 +99,9 @@ export default function SystemMetricsTab() {
                 />
                 <Legend />
                 <Line yAxisId="left" type="monotone" dataKey="llm_avg_latency" stroke={colors.primary}
-                  name={t('admin.metricsAvgLatencyS')} dot={false} strokeWidth={2} />
+                  name={t('admin:metricsAvgLatencyS')} dot={false} strokeWidth={2} />
                 <Line yAxisId="right" type="monotone" dataKey="messages_per_second" stroke={colors.mint}
-                  name={t('admin.metricsMsgPerSec')} dot={false} strokeWidth={2} />
+                  name={t('admin:metricsMsgPerSec')} dot={false} strokeWidth={2} />
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -112,7 +112,7 @@ export default function SystemMetricsTab() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         {errorPieData.length > 0 && (
           <div className="bg-surface rounded-dialog border border-border p-5">
-            <h3 className="text-sm font-semibold text-textPrimary mb-3">{t('admin.metricsErrorDistribution')}</h3>
+            <h3 className="text-sm font-semibold text-textPrimary mb-3">{t('admin:metricsErrorDistribution')}</h3>
             <div className="h-56">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
@@ -131,15 +131,15 @@ export default function SystemMetricsTab() {
 
         {live.tools && Object.keys(live.tools).length > 0 && (
           <div className="bg-surface rounded-dialog border border-border p-5">
-            <h3 className="text-sm font-semibold text-textPrimary mb-3">{t('admin.metricsToolStats')}</h3>
+            <h3 className="text-sm font-semibold text-textPrimary mb-3">{t('admin:metricsToolStats')}</h3>
             <div className="overflow-x-auto max-h-56 overflow-y-auto">
               <table className="w-full text-sm text-textPrimary">
                 <thead>
                   <tr className="border-b border-border sticky top-0 bg-surface">
-                    <th className="text-left py-2 px-3 font-medium text-textSecondary text-xs">{t('admin.toolColName')}</th>
-                    <th className="text-right py-2 px-3 font-medium text-textSecondary text-xs">{t('admin.toolColCalls')}</th>
-                    <th className="text-right py-2 px-3 font-medium text-textSecondary text-xs">{t('admin.toolColAvg')}</th>
-                    <th className="text-right py-2 px-3 font-medium text-textSecondary text-xs">{t('admin.toolColSuccessRate')}</th>
+                    <th className="text-left py-2 px-3 font-medium text-textSecondary text-xs">{t('admin:toolColName')}</th>
+                    <th className="text-right py-2 px-3 font-medium text-textSecondary text-xs">{t('admin:toolColCalls')}</th>
+                    <th className="text-right py-2 px-3 font-medium text-textSecondary text-xs">{t('admin:toolColAvg')}</th>
+                    <th className="text-right py-2 px-3 font-medium text-textSecondary text-xs">{t('admin:toolColSuccessRate')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -169,7 +169,7 @@ export default function SystemMetricsTab() {
       {/* 意愿评分分布 */}
       {live.willingness && Object.keys(live.willingness).length > 0 && (
         <div className="bg-surface rounded-dialog border border-border p-5">
-          <h3 className="text-sm font-semibold text-textPrimary mb-3">{t('admin.willingnessDistribution')}</h3>
+          <h3 className="text-sm font-semibold text-textPrimary mb-3">{t('admin:willingnessDistribution')}</h3>
           <div className="flex flex-wrap gap-2">
             {Object.entries(live.willingness).sort().map(([bucket, count]) => (
               <span key={bucket}

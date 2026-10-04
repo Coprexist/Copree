@@ -10,10 +10,10 @@ export default function OpenCLITab() {
   const t = useT()
   const [tab, setTab] = useState<'config' | 'agents' | 'commands' | 'logs'>('config')
   const subTabs = [
-    { key: 'config' as const, label: t('admin.globalConfig') },
-    { key: 'agents' as const, label: t('admin.opencliAiWhitelist') },
-    { key: 'commands' as const, label: t('admin.commandWhitelist') },
-    { key: 'logs' as const, label: t('admin.usageLogs') },
+    { key: 'config' as const, label: t('admin:globalConfig') },
+    { key: 'agents' as const, label: t('admin:opencliAiWhitelist') },
+    { key: 'commands' as const, label: t('admin:commandWhitelist') },
+    { key: 'logs' as const, label: t('admin:usageLogs') },
   ]
 
   return (
@@ -68,33 +68,33 @@ function OpenCLIConfigSection() {
         default_rate_limit_per_minute: rate,
         timeout_seconds: timeout,
       })
-      alert(t('admin.saveSuccess'))
+      alert(t('admin:saveSuccess'))
     } catch (err) { console.error(err) }
     setSaving(false)
   }
 
-  if (!config) return <p className="text-textMuted">{t('common.loading')}</p>
+  if (!config) return <p className="text-textMuted">{t('common:loading')}</p>
 
   return (
     <div className="bg-surface rounded-card border border-border p-5 max-w-lg">
-      <h3 className="font-semibold text-textPrimary mb-4">{t('admin.globalConfig')}</h3>
+      <h3 className="font-semibold text-textPrimary mb-4">{t('admin:globalConfig')}</h3>
       <div className="space-y-4">
         <div className="flex items-center gap-3">
-          <Toggle checked={enabled} onChange={setEnabled} label={t('admin.enableOpenCLI')} />
+          <Toggle checked={enabled} onChange={setEnabled} label={t('admin:enableOpenCLI')} />
         </div>
         <div>
-          <label className="block text-sm font-medium mb-1 text-textSecondary">{t('admin.rateLimit')}</label>
+          <label className="block text-sm font-medium mb-1 text-textSecondary">{t('admin:rateLimit')}</label>
           <input type="number" value={rate} onChange={(e) => setRate(parseInt(e.target.value))}
             className="w-24 px-2 py-1.5 border border-border bg-canvas rounded-card text-sm text-textPrimary" />
         </div>
         <div>
-          <label className="block text-sm font-medium mb-1 text-textSecondary">{t('admin.timeoutSeconds')}</label>
+          <label className="block text-sm font-medium mb-1 text-textSecondary">{t('admin:timeoutSeconds')}</label>
           <input type="number" value={timeout} onChange={(e) => setTimeout_(parseInt(e.target.value))}
             className="w-24 px-2 py-1.5 border border-border bg-canvas rounded-card text-sm text-textPrimary" />
         </div>
         <button onClick={handleSave} disabled={saving}
           className="btn btn-sm btn-primary">
-          {saving ? t('admin.saving') : t('admin.save')}
+          {saving ? t('admin:saving') : t('admin:save')}
         </button>
       </div>
     </div>
@@ -116,21 +116,21 @@ function OpenCLIAgentsSection() {
     setData(newData)
   }
 
-  if (!data.length) return <p className="text-textMuted">{t('common.loading')}</p>
+  if (!data.length) return <p className="text-textMuted">{t('common:loading')}</p>
 
   return (
     <div className="bg-surface rounded-card border border-border p-5">
-      <h3 className="font-semibold text-textPrimary mb-3">{t('admin.opencliAiWhitelist')}</h3>
+      <h3 className="font-semibold text-textPrimary mb-3">{t('admin:opencliAiWhitelist')}</h3>
       <div className="overflow-x-auto">
         <table className="w-full text-sm text-textPrimary">
           <thead>
             <tr className="border-b border-border">
-              <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin.opencliAiWhitelistColId')}</th>
-              <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin.opencliAiWhitelistColName')}</th>
-              <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin.opencliAiWhitelistColOwner')}</th>
-              <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin.opencliAiWhitelistColEnabled')}</th>
-              <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin.opencliAiWhitelistColRate')}</th>
-              <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin.opencliAiWhitelistColAction')}</th>
+              <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin:opencliAiWhitelistColId')}</th>
+              <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin:opencliAiWhitelistColName')}</th>
+              <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin:opencliAiWhitelistColOwner')}</th>
+              <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin:opencliAiWhitelistColEnabled')}</th>
+              <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin:opencliAiWhitelistColRate')}</th>
+              <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin:opencliAiWhitelistColAction')}</th>
             </tr>
           </thead>
           <tbody>
@@ -141,7 +141,7 @@ function OpenCLIAgentsSection() {
                 <td className="py-2 px-3">{a.owner_id}</td>
                 <td className="py-2 px-3">
                   <span className={a.enabled ? 'text-mint-400' : 'text-textMuted'}>
-                    {a.enabled ? t('common.enabled') : t('common.disabled')}
+                    {a.enabled ? t('common:enabled') : t('common:disabled')}
                   </span>
                 </td>
                 <td className="py-2 px-3">{a.actual_rate_limit}/min</td>
@@ -150,7 +150,7 @@ function OpenCLIAgentsSection() {
                     onClick={() => toggleAgent(a.agent_id, a.enabled)}
                     className="text-xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300"
                   >
-                    {a.enabled ? t('common.disabled') : t('common.enabled')}
+                    {a.enabled ? t('common:disabled') : t('common:enabled')}
                   </button>
                 </td>
               </tr>
@@ -170,23 +170,23 @@ function OpenCLICommandsSection() {
   const t = useT()
   const OPENCLI_PRESETS = [
     // ── 文件操作（AI 在自己的沙箱目录里读写，进程内 Python 实现） ──
-    { pattern: 'file_read',   is_regex: false, description: t('opencli.preset.fileRead'), category: t('opencli.category.fileOps') },
-    { pattern: 'file_write',  is_regex: false, description: t('opencli.preset.fileWrite'), category: t('opencli.category.fileOps') },
-    { pattern: 'file_list',   is_regex: false, description: t('opencli.preset.fileList'), category: t('opencli.category.fileOps') },
-    { pattern: 'file_delete', is_regex: false, description: t('opencli.preset.fileDelete'), category: t('opencli.category.fileOps') },
-    { pattern: 'file_info',   is_regex: false, description: t('opencli.preset.fileInfo'), category: t('opencli.category.fileOps') },
-    { pattern: 'create_dir',  is_regex: false, description: t('opencli.preset.createDir'), category: t('opencli.category.fileOps') },
+    { pattern: 'file_read',   is_regex: false, description: t('opencli:preset.fileRead'), category: t('opencli:category.fileOps') },
+    { pattern: 'file_write',  is_regex: false, description: t('opencli:preset.fileWrite'), category: t('opencli:category.fileOps') },
+    { pattern: 'file_list',   is_regex: false, description: t('opencli:preset.fileList'), category: t('opencli:category.fileOps') },
+    { pattern: 'file_delete', is_regex: false, description: t('opencli:preset.fileDelete'), category: t('opencli:category.fileOps') },
+    { pattern: 'file_info',   is_regex: false, description: t('opencli:preset.fileInfo'), category: t('opencli:category.fileOps') },
+    { pattern: 'create_dir',  is_regex: false, description: t('opencli:preset.createDir'), category: t('opencli:category.fileOps') },
     // ── 浏览器自动化（操控已登录的 Chrome 浏览器） ──
-    { pattern: 'browser',   is_regex: false, description: t('opencli.preset.browser'), category: t('opencli.category.browser') },
-    { pattern: 'list',      is_regex: false, description: t('opencli.preset.listCmds'), category: t('opencli.category.browser') },
+    { pattern: 'browser',   is_regex: false, description: t('opencli:preset.browser'), category: t('opencli:category.browser') },
+    { pattern: 'list',      is_regex: false, description: t('opencli:preset.listCmds'), category: t('opencli:category.browser') },
     // ── 外部 CLI 桥接（将已有命令行工具接入 OpenCLI） ──
-    { pattern: 'gh .*',     is_regex: true,  description: t('opencli.preset.ghCli'), category: t('opencli.category.cliBridge') },
-    { pattern: 'docker .*', is_regex: true,  description: t('opencli.preset.dockerCli'), category: t('opencli.category.cliBridge') },
-    { pattern: 'obsidian .*', is_regex: true, description: t('opencli.preset.obsidianCli'), category: t('opencli.category.cliBridge') },
-    { pattern: 'vercel .*', is_regex: true,  description: t('opencli.preset.vercelCli'), category: t('opencli.category.cliBridge') },
-    { pattern: 'tg .*',     is_regex: true,  description: t('opencli.preset.tgCli'), category: t('opencli.category.cliBridge') },
-    { pattern: 'discord .*', is_regex: true, description: t('opencli.preset.discordCli'), category: t('opencli.category.cliBridge') },
-    { pattern: 'wx .*',     is_regex: true,  description: t('opencli.preset.wxCli'), category: t('opencli.category.cliBridge') },
+    { pattern: 'gh .*',     is_regex: true,  description: t('opencli:preset.ghCli'), category: t('opencli:category.cliBridge') },
+    { pattern: 'docker .*', is_regex: true,  description: t('opencli:preset.dockerCli'), category: t('opencli:category.cliBridge') },
+    { pattern: 'obsidian .*', is_regex: true, description: t('opencli:preset.obsidianCli'), category: t('opencli:category.cliBridge') },
+    { pattern: 'vercel .*', is_regex: true,  description: t('opencli:preset.vercelCli'), category: t('opencli:category.cliBridge') },
+    { pattern: 'tg .*',     is_regex: true,  description: t('opencli:preset.tgCli'), category: t('opencli:category.cliBridge') },
+    { pattern: 'discord .*', is_regex: true, description: t('opencli:preset.discordCli'), category: t('opencli:category.cliBridge') },
+    { pattern: 'wx .*',     is_regex: true,  description: t('opencli:preset.wxCli'), category: t('opencli:category.cliBridge') },
   ]
   const [data, setData] = useState<any[]>([])
   const [pattern, setPattern] = useState('')
@@ -209,7 +209,7 @@ function OpenCLICommandsSection() {
   // 获取已添加预设的当前状态
   const getPresetStatus = (pattern: string, isRegex: boolean) => {
     const found = data.find((c: any) => c.pattern === pattern && c.is_regex === isRegex)
-    return found ? (found.enabled ? t('common.enabled') : t('common.disabled')) : t('opencli.status.notAdded')
+    return found ? (found.enabled ? t('common:enabled') : t('common:disabled')) : t('opencli:status.notAdded')
   }
 
   const handleAdd = async () => {
@@ -224,10 +224,10 @@ function OpenCLICommandsSection() {
     setAddingPresets(true)
     try {
       const result = await api.post('/admin/opencli/commands/presets')
-      alert(result.message || t('admin.presetsAddComplete'))
+      alert(result.message || t('admin:presetsAddComplete'))
       load()
     } catch (err: any) {
-      alert(err.message || t('admin.presetsAddFailed'))
+      alert(err.message || t('admin:presetsAddFailed'))
     }
     setAddingPresets(false)
   }
@@ -248,7 +248,7 @@ function OpenCLICommandsSection() {
   }
 
   const handleDelete = async (id: number) => {
-    if (!confirm(t('admin.confirmDeletePoolKey').replace('{name}', ''))) return
+    if (!confirm(t('admin:confirmDeletePoolKey').replace('{name}', ''))) return
     await api.delete(`/admin/opencli/commands/${id}`)
     load()
   }
@@ -262,9 +262,9 @@ function OpenCLICommandsSection() {
       <div className="bg-surface rounded-card border border-border p-5">
         <div className="flex items-center justify-between mb-3">
           <div>
-            <h3 className="font-semibold text-textPrimary">{t('admin.presetCommands')}</h3>
+            <h3 className="font-semibold text-textPrimary">{t('admin:presetCommands')}</h3>
             <p className="text-xs text-textMuted mt-1">
-              {t('admin.presetCommandsDesc')}
+              {t('admin:presetCommandsDesc')}
             </p>
           </div>
           <button
@@ -272,7 +272,7 @@ function OpenCLICommandsSection() {
             disabled={addingPresets}
             className="px-4 py-2 bg-mint-500 text-white rounded-card hover:bg-mint-400 disabled:opacity-50 text-sm font-medium transition-colors"
           >
-            {addingPresets ? t('common.saving') : t('admin.addAllPresets')}
+            {addingPresets ? t('common:saving') : t('admin:addAllPresets')}
           </button>
         </div>
 
@@ -284,7 +284,7 @@ function OpenCLICommandsSection() {
               <div className="flex items-center gap-2 mb-2">
                 <span className="text-xs font-semibold text-textSecondary uppercase tracking-wider">{cat}</span>
                 <span className={`text-xs px-1.5 py-0.5 rounded-full ${allAdded ? 'bg-mint-400/10 text-mint-400' : 'bg-accent-400/10 text-accent-400'}`}>
-                  {allAdded ? t('admin.allAdded') : `${catPresets.filter(p => isPresetAdded(p.pattern, p.is_regex)).length}/${catPresets.length}`}
+                  {allAdded ? t('admin:allAdded') : `${catPresets.filter(p => isPresetAdded(p.pattern, p.is_regex)).length}/${catPresets.length}`}
                 </span>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
@@ -303,7 +303,7 @@ function OpenCLICommandsSection() {
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0 flex-1">
                           <code className="text-xs font-mono text-textPrimary break-all">{p.pattern}</code>
-                          <span className="text-xs text-textMuted ml-1.5">{p.is_regex ? `(${t('admin.regex')})` : `(${t('admin.exact')})`}</span>
+                          <span className="text-xs text-textMuted ml-1.5">{p.is_regex ? `(${t('admin:regex')})` : `(${t('admin:exact')})`}</span>
                           <p className="text-xs text-textSecondary mt-1 leading-relaxed">{p.description}</p>
                         </div>
                         <button
@@ -315,7 +315,7 @@ function OpenCLICommandsSection() {
                               : 'bg-primary-500 text-white hover:bg-primary-600'
                           }`}
                         >
-                          {added ? status : '+ ' + t('admin.addCmd')}
+                          {added ? status : '+ ' + t('admin:addCmd')}
                         </button>
                       </div>
                     </div>
@@ -329,50 +329,50 @@ function OpenCLICommandsSection() {
 
       {/* ── 手动添加表单 ── */}
       <div className="bg-surface rounded-card border border-border p-5 max-w-lg">
-        <h3 className="font-semibold mb-3 text-textPrimary">{t('admin.manualAddCommand')}</h3>
-        <p className="text-xs text-textMuted mb-3" dangerouslySetInnerHTML={{ __html: t('admin.manualAddDesc') }} />
+        <h3 className="font-semibold mb-3 text-textPrimary">{t('admin:manualAddCommand')}</h3>
+        <p className="text-xs text-textMuted mb-3" dangerouslySetInnerHTML={{ __html: t('admin:manualAddDesc') }} />
         <div className="flex flex-wrap items-end gap-3">
           <div>
-            <label className="block text-xs mb-1 text-textSecondary">{t('admin.commandPattern')}</label>
+            <label className="block text-xs mb-1 text-textSecondary">{t('admin:commandPattern')}</label>
             <input value={pattern} onChange={(e) => setPattern(e.target.value)}
               className="w-40 px-2 py-1.5 border border-border bg-canvas rounded-card text-sm text-textPrimary"
-              placeholder={t('admin.commandPatternPlaceholder')} />
+              placeholder={t('admin:commandPatternPlaceholder')} />
           </div>
           <div className="flex items-center gap-1.5 mb-1">
             <input type="checkbox" checked={isRegex} onChange={(e) => setIsRegex(e.target.checked)}
               className="rounded" />
-            <span className="text-xs text-textSecondary">{t('admin.regexMode')}</span>
+            <span className="text-xs text-textSecondary">{t('admin:regexMode')}</span>
           </div>
           <div>
-            <label className="block text-xs mb-1 text-textSecondary">{t('admin.description')}</label>
+            <label className="block text-xs mb-1 text-textSecondary">{t('admin:description')}</label>
             <input value={desc} onChange={(e) => setDesc(e.target.value)}
               className="w-32 px-2 py-1.5 border border-border bg-canvas rounded-card text-sm text-textPrimary"
-              placeholder={t('common.optional')} />
+              placeholder={t('common:optional')} />
           </div>
           <button onClick={handleAdd}
             className="btn btn-xs btn-primary">
-            {t('admin.addCmd')}
+            {t('admin:addCmd')}
           </button>
         </div>
       </div>
 
       {/* ── 白名单列表 ── */}
       <ListPanel
-        title={t('admin.commandWhitelist')}
+        title={t('admin:commandWhitelist')}
         columns={[
-          { key: 'pattern', label: t('admin.cmdColPattern') },
-          { key: 'type', label: t('admin.cmdColType') },
-          { key: 'desc', label: t('admin.cmdColDesc') },
+          { key: 'pattern', label: t('admin:cmdColPattern') },
+          { key: 'type', label: t('admin:cmdColType') },
+          { key: 'desc', label: t('admin:cmdColDesc') },
           { key: 'default', label: '默认' },
-          { key: 'status', label: t('admin.cmdColStatus'), className: 'w-px whitespace-nowrap' },
-          { key: 'action', label: t('admin.cmdColAction'), className: 'w-px whitespace-nowrap' },
+          { key: 'status', label: t('admin:cmdColStatus'), className: 'w-px whitespace-nowrap' },
+          { key: 'action', label: t('admin:cmdColAction'), className: 'w-px whitespace-nowrap' },
         ]}
-        empty={data.length === 0 ? <p className="text-center text-textMuted">{t('admin.noCommands')}</p> : undefined}
+        empty={data.length === 0 ? <p className="text-center text-textMuted">{t('admin:noCommands')}</p> : undefined}
       >
               {data.map((c: any) => (
                 <tr key={c.id} className="border-b border-border/50">
                   <td className="py-2 px-3 font-mono text-xs text-textPrimary">{c.pattern}</td>
-                  <td className="py-2 px-3 text-xs text-textSecondary">{c.is_regex ? t('admin.regex') : t('admin.exact')}</td>
+                  <td className="py-2 px-3 text-xs text-textSecondary">{c.is_regex ? t('admin:regex') : t('admin:exact')}</td>
                   <td className="py-2 px-3 text-xs text-textSecondary">{c.description || '-'}</td>
                   <td className="py-2 px-3">
                     <button onClick={async () => {
@@ -384,17 +384,17 @@ function OpenCLICommandsSection() {
                   </td>
                   <td className="py-2 px-3">
                     <span className={c.enabled ? 'text-mint-400 text-xs' : 'text-textMuted text-xs'}>
-                      {c.enabled ? t('common.enabled') : t('common.disabled')}
+                      {c.enabled ? t('common:enabled') : t('common:disabled')}
                     </span>
                   </td>
                   <td className="py-2 px-3 flex gap-2">
                     <button onClick={() => handleToggle(c.id, c.enabled)}
                       className="text-xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300">
-                      {c.enabled ? t('common.disabled') : t('common.enabled')}
+                      {c.enabled ? t('common:disabled') : t('common:enabled')}
                     </button>
                     <button onClick={() => handleDelete(c.id)}
                       className="text-xs text-rose-400 hover:text-rose-500 dark:hover:text-rose-300">
-                      {t('common.delete')}
+                      {t('common:delete')}
                     </button>
                   </td>
                 </tr>
@@ -415,21 +415,21 @@ function OpenCLILogsSection() {
     api.get(`/admin/opencli/logs?page=${page}&page_size=30`).then(setData).catch(console.error)
   }, [page])
 
-  if (!data) return <p className="text-textMuted">{t('common.loading')}</p>
+  if (!data) return <p className="text-textMuted">{t('common:loading')}</p>
 
   return (
     <div className="bg-surface rounded-card border border-border p-5">
-      <h3 className="font-semibold text-textPrimary mb-3">{t('admin.usageLogs')}</h3>
+      <h3 className="font-semibold text-textPrimary mb-3">{t('admin:usageLogs')}</h3>
       <div className="overflow-x-auto">
         <table className="w-full text-sm text-textPrimary">
           <thead>
             <tr className="border-b border-border">
-              <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin.logsColTime')}</th>
-              <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin.logsColAi')}</th>
-              <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin.logsColCmd')}</th>
-              <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin.logsColExitCode')}</th>
-              <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin.logsColDuration')}</th>
-              <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin.logsColOutput')}</th>
+              <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin:logsColTime')}</th>
+              <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin:logsColAi')}</th>
+              <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin:logsColCmd')}</th>
+              <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin:logsColExitCode')}</th>
+              <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin:logsColDuration')}</th>
+              <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin:logsColOutput')}</th>
             </tr>
           </thead>
           <tbody>
@@ -459,11 +459,11 @@ function OpenCLILogsSection() {
       <div className="flex gap-2 mt-3">
         <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1}
           className="text-sm px-3 py-1 border border-border bg-canvas rounded hover:bg-elevated disabled:opacity-40 text-textSecondary">
-          {t('common.prevPage')}
+          {t('common:prevPage')}
         </button>
         <button onClick={() => setPage(p => p + 1)} disabled={data.items.length < data.page_size}
           className="text-sm px-3 py-1 border border-border bg-canvas rounded hover:bg-elevated disabled:opacity-40 text-textSecondary">
-          {t('common.nextPage')}
+          {t('common:nextPage')}
         </button>
       </div>
     </div>

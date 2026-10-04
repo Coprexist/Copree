@@ -48,7 +48,7 @@ export default function Sidebar({ mobile, onClose, translucent }: { mobile?: boo
           <button
             onClick={() => setCollapsed(!collapsed)}
             className="p-1.5 rounded-control hover:bg-elevated text-textMuted hover:text-textSecondary transition-colors"
-            title={collapsed ? t('sidebar.expand') : t('sidebar.collapse')}
+            title={collapsed ? t('sidebar:expand') : t('sidebar:collapse')}
           >
             {collapsed ? <Menu size={16} /> : <ChevronLeft size={16} />}
           </button>
@@ -69,9 +69,9 @@ export default function Sidebar({ mobile, onClose, translucent }: { mobile?: boo
             <p className="text-sm font-medium text-textPrimary truncate">{user.username}</p>
             <p className="text-xs text-textMuted">
               {user.role === 'admin' ? (
-                <span className="text-accent-400">{t('sidebar.adminPanel')}</span>
+                <span className="text-accent-400">{t('sidebar:adminPanel')}</span>
               ) : (
-                <span>{t('sidebar.quota') + ' ' + (user.ai_quota ?? 0) + ' · ' + t('sidebar.balance') + ' ' + ((user as any).total_effective ?? (user as any).api_credit ?? 0)}</span>
+                <span>{t('sidebar:quota') + ' ' + (user.ai_quota ?? 0) + ' · ' + t('sidebar:balance') + ' ' + ((user as any).total_effective ?? (user as any).api_credit ?? 0)}</span>
               )}
             </p>
           </div>
@@ -99,13 +99,13 @@ export default function Sidebar({ mobile, onClose, translucent }: { mobile?: boo
 
           <NavLink to="/settings" onClick={() => { onClose?.() }} className={navLinkClass}>
             <Settings size={18} />
-            <span>{t('nav.settings')}</span>
+            <span>{t('nav:settings')}</span>
           </NavLink>
 
           {user?.role === 'admin' && (
             <NavLink to="/admin" onClick={() => { onClose?.() }} className={navLinkClass}>
               <Shield size={18} />
-              <span>{t('nav.admin')}</span>
+              <span>{t('nav:admin')}</span>
             </NavLink>
           )}
 
@@ -115,7 +115,7 @@ export default function Sidebar({ mobile, onClose, translucent }: { mobile?: boo
             className={navLinkClass}
           >
             <BookOpen size={18} />
-            <span>{t('nav.manual')}</span>
+            <span>{t('nav:manual')}</span>
           </NavLink>
         </nav>
       )}
@@ -145,7 +145,7 @@ export default function Sidebar({ mobile, onClose, translucent }: { mobile?: boo
               to="/admin"
               onClick={() => { onClose?.() }}
               className={navIconClass}
-              title={t('sidebar.adminPanel')}
+              title={t('sidebar:adminPanel')}
             >
               <Shield size={18} />
             </NavLink>
@@ -154,7 +154,7 @@ export default function Sidebar({ mobile, onClose, translucent }: { mobile?: boo
             to={MANUAL_URL}
             onClick={() => { onClose?.() }}
             className={navIconClass}
-            title={t('sidebar.usageManual')}
+            title={t('sidebar:usageManual')}
           >
             <BookOpen size={18} />
           </NavLink>
@@ -168,10 +168,10 @@ export default function Sidebar({ mobile, onClose, translucent }: { mobile?: boo
           className={`flex items-center rounded-card text-textSecondary hover:text-textPrimary hover:bg-elevated transition-all duration-200 text-sm ${
             collapsed ? 'justify-center w-10 h-10' : 'gap-3 w-full px-3 py-2.5'
           }`}
-          title={t('sidebar.tools')}
+          title={t('sidebar:tools')}
         >
           <Menu size={18} />
-          {!collapsed && <span>{t('sidebar.tools')}</span>}
+          {!collapsed && <span>{t('sidebar:tools')}</span>}
         </button>
         {toolsOpen && (
           <>
@@ -184,7 +184,7 @@ export default function Sidebar({ mobile, onClose, translucent }: { mobile?: boo
                 className="w-full flex items-center gap-3 px-3 py-2 text-sm text-textSecondary hover:text-textPrimary hover:bg-elevated transition-colors"
               >
                 <Library size={16} strokeWidth={2} />
-                <span>{t('sidebar.studyRoom')}</span>
+                <span>{t('sidebar:studyRoom')}</span>
               </button>
             </div>
           </>
@@ -198,10 +198,10 @@ export default function Sidebar({ mobile, onClose, translucent }: { mobile?: boo
           className={`flex items-center rounded-card text-textSecondary hover:text-rose-400 hover:bg-rose-500/10 transition-all duration-200 text-sm ${
             collapsed ? 'justify-center w-10 h-10' : 'gap-3 w-full px-3 py-2.5'
           }`}
-          title={collapsed ? t('sidebar.logout') : undefined}
+          title={collapsed ? t('sidebar:logout') : undefined}
         >
           <LogOut size={18} />
-          {!collapsed && <span>{t('sidebar.logout')}</span>}
+          {!collapsed && <span>{t('sidebar:logout')}</span>}
         </button>
       </div>
     </aside>

@@ -16,13 +16,13 @@ import { useT } from '../i18n/I18nContext'
 /** 两个模式：存储上 plain=true 是通俗，false 是专业（缺省即专业）。 */
 export const MODE_PRO = {
   plain: false,
-  labelKey: 'worldChat.expressionModePro',
-  descKey: 'worldChat.expressionModeProDesc',
+  labelKey: 'worldChat:expressionModePro',
+  descKey: 'worldChat:expressionModeProDesc',
 }
 export const MODE_PLAIN = {
   plain: true,
-  labelKey: 'worldChat.expressionModePlain',
-  descKey: 'worldChat.expressionModePlainDesc',
+  labelKey: 'worldChat:expressionModePlain',
+  descKey: 'worldChat:expressionModePlainDesc',
 }
 
 export default function ExpressionModeSwitch() {
@@ -32,7 +32,7 @@ export default function ExpressionModeSwitch() {
   return (
     <label
       className="inline-flex items-center shrink-0 cursor-pointer select-none gap-1.5"
-      title={`${t('worldChat.expressionMode')}：${t(plain ? MODE_PLAIN.descKey : MODE_PRO.descKey)}`}
+      title={`${t('worldChat:expressionMode')}：${t(plain ? MODE_PLAIN.descKey : MODE_PRO.descKey)}`}
     >
       <span className="text-2xs text-textMuted">{t(MODE_PLAIN.labelKey)}</span>
       <Toggle size="sm" checked={plain} onChange={setPlain} disabled={saving} />

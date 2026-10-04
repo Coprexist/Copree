@@ -111,7 +111,7 @@ const KEY_LABELS: Record<ThemeColorKey, string> = {
 const BUILTIN_PRESETS: { id: string; nameKey: string; colors: Record<ThemeColorKey, string> }[] = [
   {
     id: 'platform-default',
-    nameKey: 'settings.themePresetPlatform',
+    nameKey: 'settings:themePresetPlatform',
     colors: {
       primary_400: '#6D28D9', primary_500: '#8B5CF6', primary_600: '#6D28D9',
       accent_400: '#FBBF24', accent_500: '#B45309',
@@ -121,7 +121,7 @@ const BUILTIN_PRESETS: { id: string; nameKey: string; colors: Record<ThemeColorK
   },
   {
     id: 'aurora',
-    nameKey: 'settings.themePresetAurora',
+    nameKey: 'settings:themePresetAurora',
     colors: {
       primary_400: '#34D399', primary_500: '#10B981', primary_600: '#059669',
       accent_400: '#FBBF24', accent_500: '#D97706',
@@ -271,7 +271,7 @@ export default function ThemeCustomizer() {
       await refreshUser()  // user 更新 → AuthContext 统一应用链重算
       setSaved(true)
       setDirty(false)
-      setPresetMsg(activeSkins.length ? { ok: true, text: t('settings.themeDesignSkinNote') } : null)
+      setPresetMsg(activeSkins.length ? { ok: true, text: t('settings:themeDesignSkinNote') } : null)
       setTimeout(() => setSaved(false), 2000)
     } catch (err: any) {
       console.error('保存主题失败', err)
@@ -315,7 +315,7 @@ export default function ThemeCustomizer() {
       setMyPresets(next)
       setPresetInput(false)
       setPresetName('')
-      setPresetMsg({ ok: true, text: t('settings.themeDesignPresetSaved') })
+      setPresetMsg({ ok: true, text: t('settings:themeDesignPresetSaved') })
     } catch (err: any) {
       setPresetMsg({ ok: false, text: String(err?.message || err) })
     }
@@ -329,7 +329,7 @@ export default function ThemeCustomizer() {
       await api.put('/user/settings', { ui_prefs })
       await refreshUser()
       setMyPresets(next)
-      setPresetMsg({ ok: true, text: t('settings.themeDesignPresetDeleted') })
+      setPresetMsg({ ok: true, text: t('settings:themeDesignPresetDeleted') })
     } catch (err: any) {
       setPresetMsg({ ok: false, text: String(err?.message || err) })
     }
@@ -345,20 +345,20 @@ export default function ThemeCustomizer() {
       <div className="flex items-center justify-between mb-1">
         <p className="text-sm font-medium text-textPrimary flex items-center gap-1.5">
           <Smartphone size={14} className="text-primary-400" />
-          {t('settings.themeCustom')}
+          {t('settings:themeCustom')}
         </p>
         <div className="flex items-center gap-2">
-          {dirty && <span className="text-3xs text-accent-500">{t('settings.unsaved')}</span>}
-          {saved && <span className="text-3xs text-mint-400 flex items-center gap-0.5"><Check size={11} /> {t('settings.saved')}</span>}
+          {dirty && <span className="text-3xs text-accent-500">{t('settings:unsaved')}</span>}
+          {saved && <span className="text-3xs text-mint-400 flex items-center gap-0.5"><Check size={11} /> {t('settings:saved')}</span>}
         </div>
       </div>
-      <p className="text-xs text-textMuted mb-3">{t('settings.themeCustomDesc')}</p>
+      <p className="text-xs text-textMuted mb-3">{t('settings:themeCustomDesc')}</p>
 
       <div className="flex flex-col md:flex-row gap-5">
         {/* 左侧：实时预览 */}
         <div className="md:w-[300px] flex-none">
           <p className="text-2xs font-medium text-textSecondary mb-2 flex items-center gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-mint-400" /> {t('settings.themeDesignPreview')}
+            <span className="w-1.5 h-1.5 rounded-full bg-mint-400" /> {t('settings:themeDesignPreview')}
           </p>
           <PhonePreview />
         </div>
@@ -389,7 +389,7 @@ export default function ThemeCustomizer() {
                   {/* 原生取色器 */}
                   <label
                     className="w-8 h-8 rounded-control border border-border flex items-center justify-center cursor-pointer hover:bg-elevated"
-                    title={t('settings.themeDesignPicker')}
+                    title={t('settings:themeDesignPicker')}
                     style={{ background: 'conic-gradient(#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00)' }}
                   >
                     <input
@@ -416,14 +416,14 @@ export default function ThemeCustomizer() {
 
       {/* 预设区 */}
       <div className="mt-5">
-        <p className="text-2xs font-medium text-textSecondary mb-2">{t('settings.themeDesignPresets')}</p>
+        <p className="text-2xs font-medium text-textSecondary mb-2">{t('settings:themeDesignPresets')}</p>
         <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
           {presetCards.map((p) => (
             <div
               key={p.id}
               className="relative rounded-card border border-border bg-surface p-3 transition-all hover:border-primary-400/40 hover:bg-elevated cursor-pointer"
               onClick={() => applyAll(p.colors)}
-              title={t('settings.themeDesignPresetApply')}
+              title={t('settings:themeDesignPresetApply')}
             >
               <div className="flex items-center gap-1.5 mb-1.5">
                 {PREVIEW_KEYS.map((k) => (
@@ -437,7 +437,7 @@ export default function ThemeCustomizer() {
                 {p.mine && (
                   <button
                     onClick={(e) => { e.stopPropagation(); deletePreset(p.name) }}
-                    title={t('settings.themeDesignDeletePreset')}
+                    title={t('settings:themeDesignDeletePreset')}
                     className="ml-auto w-5 h-5 rounded-control flex items-center justify-center text-textMuted hover:text-rose-500 hover:bg-rose-400/10"
                   >
                     <Trash2 size={11} />
@@ -455,7 +455,7 @@ export default function ThemeCustomizer() {
                 <input
                   value={presetName}
                   onChange={(e) => setPresetName(e.target.value)}
-                  placeholder={t('settings.themeDesignPresetName')}
+                  placeholder={t('settings:themeDesignPresetName')}
                   maxLength={20}
                   autoFocus
                   className="flex-1 min-w-0 h-8 px-2 rounded-control border border-border bg-surface text-2xs text-textPrimary outline-none focus:border-primary-400"
@@ -473,7 +473,7 @@ export default function ThemeCustomizer() {
                 onClick={() => setPresetInput(true)}
                 className="flex items-center justify-center gap-1 text-2xs text-textSecondary hover:text-primary-400 py-1"
               >
-                <Plus size={12} /> {t('settings.themeDesignSaveAsPreset')}
+                <Plus size={12} /> {t('settings:themeDesignSaveAsPreset')}
               </button>
             )}
           </div>
@@ -482,16 +482,16 @@ export default function ThemeCustomizer() {
           <p className={`text-3xs mt-2 ${presetMsg.ok ? 'text-mint-400' : 'text-rose-400'}`}>{presetMsg.text}</p>
         )}
         {!presetInput && Object.keys(myPresets).length === 0 && (
-          <p className="text-3xs text-textMuted mt-2">{t('settings.themeDesignPresetEmpty')}</p>
+          <p className="text-3xs text-textMuted mt-2">{t('settings:themeDesignPresetEmpty')}</p>
         )}
       </div>
 
       <div className="flex gap-2 mt-4">
         <button onClick={save} disabled={saving || !dirty} className="btn btn-md btn-primary disabled:opacity-40">
-          {saving ? '…' : t('settings.saveTheme')}
+          {saving ? '…' : t('settings:saveTheme')}
         </button>
         <button onClick={reset} disabled={saving} className="btn btn-md btn-secondary">
-          <RotateCcw size={14} /> {t('settings.resetTheme')}
+          <RotateCcw size={14} /> {t('settings:resetTheme')}
         </button>
       </div>
     </div>

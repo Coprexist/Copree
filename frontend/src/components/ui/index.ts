@@ -14,6 +14,7 @@
  *   ExpandPanel          列表里"就地展开"的详情块
  *   EmptyState           空状态
  *   Badge                胶囊标签
+ *   UnderlineTabs        下划线页签（页面级 / 卡片内二级共用一份画法）
  *   confirmAsync / ConfirmDialogHost  确认弹窗
  *
  * 视觉规范定义在 index.css 的 @layer components（.btn / .field / .card / .chip /
@@ -27,6 +28,7 @@ export { default as Select } from './Select'
 export { default as ComboBox, sortByPrefix } from './ComboBox'
 export { default as Card } from './Card'
 export { default as Badge } from './Badge'
+export { default as UnderlineTabs, type UnderlineTabItem } from './UnderlineTabs'
 export { default as Dialog } from './Dialog'
 export { default as EmptyState } from './EmptyState'
 export { default as ListPanel, LIST_ROW_CLASS, LIST_CELL_CLASS, LIST_CELL_FLEX } from './ListPanel'

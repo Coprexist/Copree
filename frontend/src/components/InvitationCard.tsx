@@ -45,10 +45,10 @@ export default function InvitationCard({
         </div>
         <div className="flex-1 min-w-0">
           <p className={`text-sm font-medium ${txt} truncate`}>
-            {t('invitation.title').replace('{inviter}', inviterName)}
+            {t('invitation:title').replace('{inviter}', inviterName)}
           </p>
           <p className={`text-xs ${txtSec} truncate`}>
-            {t('invitation.groupLabel')}：<span className={`${txt} font-medium`}>{groupName}</span>
+            {t('invitation:groupLabel')}：<span className={`${txt} font-medium`}>{groupName}</span>
           </p>
         </div>
         {/* 状态标签 */}
@@ -59,7 +59,7 @@ export default function InvitationCard({
               ? 'bg-mint-100 dark:bg-mint-900/30 text-mint-600 dark:text-mint-400'
               : 'bg-rose-100 dark:bg-rose-900/30 text-rose-600 dark:text-rose-400'}
           `}>
-            {status === 'accepted' ? t('invitation.accepted') : t('invitation.rejected')}
+            {status === 'accepted' ? t('invitation:accepted') : t('invitation:rejected')}
           </span>
         )}
       </div>
@@ -81,7 +81,7 @@ export default function InvitationCard({
               rounded-control transition-colors"
           >
             <Check size={14} />
-            {t('invitation.accept')}
+            {t('invitation:accept')}
           </button>
           <button
             onClick={(e) => { e.stopPropagation(); onReject(invitationId) }}
@@ -90,7 +90,7 @@ export default function InvitationCard({
               text-sm rounded-control border ${isMine ? 'border-white/20' : 'border-border'} transition-colors`}
           >
             <X size={14} />
-            {t('invitation.reject')}
+            {t('invitation:reject')}
           </button>
         </div>
       )}

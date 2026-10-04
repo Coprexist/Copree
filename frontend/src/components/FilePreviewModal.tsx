@@ -172,7 +172,7 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
 
         let text = await res.text()
         if (text.length > 2 * 1024 * 1024) {
-          text = text.slice(0, 2 * 1024 * 1024) + '\n\n' + t('filePreview.fileTooLarge')
+          text = text.slice(0, 2 * 1024 * 1024) + '\n\n' + t('filePreview:fileTooLarge')
         }
         if (codeLang) {
           text = '```' + codeLang + '\n' + text + '\n```'
@@ -187,7 +187,7 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
           if (!cancelled) tryFetch(attempt + 1)
         } else {
           if (err.name !== 'AbortError') {
-            setError(err.message || t('common.loadFailed'))
+            setError(err.message || t('common:loadFailed'))
             setLoading(false)
           }
         }
@@ -226,7 +226,7 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
       <button
         onClick={onClose}
         className="icon-btn-sm -ml-1 text-textSecondary"
-        title={t('common.close')}
+        title={t('common:close')}
       >
         <ArrowLeft size={18} className="md:hidden" />
         <X size={18} className="hidden md:block" />
@@ -243,10 +243,10 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
         <button
           onClick={() => setShowSource((v) => !v)}
           className="btn btn-xs btn-outline shrink-0"
-          title={showSource ? t('filePreview.viewRenderedHint') : t('filePreview.viewSourceHint')}
+          title={showSource ? t('filePreview:viewRenderedHint') : t('filePreview:viewSourceHint')}
         >
           {showSource ? <Eye size={14} /> : <Code2 size={14} />}
-          {showSource ? t('filePreview.viewRendered') : t('filePreview.viewSource')}
+          {showSource ? t('filePreview:viewRendered') : t('filePreview:viewSource')}
         </button>
       )}
 
@@ -254,7 +254,7 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
       {isImage && (
         <div className="flex items-center gap-1.5 sm:gap-2">
           <button onClick={zoom.zoomOut} disabled={zoom.scale <= ZOOM_MIN}
-            className="icon-btn-sm text-textSecondary" title={t('common.zoomOut')}>
+            className="icon-btn-sm text-textSecondary" title={t('common:zoomOut')}>
             <ZoomOut size={14} />
           </button>
 
@@ -290,12 +290,12 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
             {Math.round(zoom.scale * 100)}%
           </span>
           <button onClick={zoom.zoomIn} disabled={zoom.scale >= ZOOM_MAX}
-            className="icon-btn-sm text-textSecondary" title={t('common.zoomIn')}>
+            className="icon-btn-sm text-textSecondary" title={t('common:zoomIn')}>
             <ZoomIn size={14} />
           </button>
           <span className="hidden sm:inline-flex">
             <button onClick={zoom.reset}
-              className="icon-btn-sm text-textSecondary" title={t('common.resetZoom')}>
+              className="icon-btn-sm text-textSecondary" title={t('common:resetZoom')}>
               <RotateCcw size={14} />
             </button>
           </span>
@@ -308,29 +308,29 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
         <button
           onClick={toggleFullscreen}
           className="btn btn-xs btn-outline shrink-0"
-          title={isFullscreen ? t('common.exitFullscreen') : t('common.fullscreen')}
+          title={isFullscreen ? t('common:exitFullscreen') : t('common:fullscreen')}
         >
           {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-          <span className="hidden lg:inline">{isFullscreen ? t('common.exitFullscreen') : t('common.fullscreen')}</span>
+          <span className="hidden lg:inline">{isFullscreen ? t('common:exitFullscreen') : t('common:fullscreen')}</span>
         </button>
       </span>
 
       <button
         onClick={() => setForwardFile({ file_id: fileId ?? 0, name: fileName, size: fileSize, mime_type: mimeType })}
         className="btn btn-xs btn-outline shrink-0"
-        title={t('forward.send')}
+        title={t('forward:send')}
       >
         <Share2 size={14} />
-        <span className="hidden sm:inline">{t('forward.send')}</span>
+        <span className="hidden sm:inline">{t('forward:send')}</span>
       </button>
 
       <button
         onClick={handleDownload}
         className="btn btn-xs btn-primary shrink-0"
-        title={t('common.download')}
+        title={t('common:download')}
       >
         <Download size={14} />
-        <span className="hidden sm:inline">{t('common.download')}</span>
+        <span className="hidden sm:inline">{t('common:download')}</span>
       </button>
     </div>
   )
@@ -360,7 +360,7 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
                 <AlertTriangle size={24} className="text-rose-400" />
                 <p className="text-sm">{error}</p>
                 <button onClick={handleDownload} className="btn btn-sm btn-primary">
-                  {t('common.downloadInstead')}
+                  {t('common:downloadInstead')}
                 </button>
               </div>
             ) : isImage ? (

@@ -82,7 +82,7 @@ export default function ContentColumn({ width = 'content', className = '', child
       <WidthHandles
         varName={CONTENT_W_VAR}
         dragging={dragging}
-        title={t('common.contentWidthHint')}
+        title={t('common:contentWidthHint')}
         onReset={resetWidth}
         {...handleProps}
       />

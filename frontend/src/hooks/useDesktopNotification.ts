@@ -72,7 +72,7 @@ export function useDesktopNotification() {
     // 关掉桌面通知时计数不进标题（unread 归零即回到原标题）
     setUnreadCount(enabled ? total : 0)
     if (enabled && total > 0 && total > prev && document.hidden) {
-      startTitleFlash(t('chat.newMessages'))
+      startTitleFlash(t('chat:newMessages'))
     } else if (total === 0) {
       stopTitleFlash()
     }

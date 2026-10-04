@@ -95,9 +95,9 @@ export function TristateSelect({ value, onChange }: { value: boolean | null; onC
       onChange={(e) => { const v = e.target.value; onChange(v === 'inherit' ? null : v === 'on') }}
       className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
     >
-      <option value="inherit">{t('modal.detailSettingsInheritGlobal')}</option>
-      <option value="on">{t('common.enabled')}</option>
-      <option value="off">{t('common.disabled')}</option>
+      <option value="inherit">{t('modal:detailSettingsInheritGlobal')}</option>
+      <option value="on">{t('common:enabled')}</option>
+      <option value="off">{t('common:disabled')}</option>
     </select>
   )
 }

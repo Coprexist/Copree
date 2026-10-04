@@ -29,6 +29,7 @@ export interface PresetData {
   max_tool_rounds: number
   alarm_max_tool_rounds: number
   force_alarm_on_end: boolean
+  retire_handover_self: boolean
   max_alarms: number
   delay_reply_enabled: boolean
   is_ai_editable: boolean
@@ -63,6 +64,7 @@ export interface AgentForm {
   maxToolRounds: number
   alarmMaxToolRounds: number
   forceAlarmOnEnd: boolean
+  retireHandoverSelf: boolean
   maxAlarms: number
   isAiEditable: boolean
   allowFriendRequests: boolean

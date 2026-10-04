@@ -336,10 +336,10 @@ const ChatSidebar = memo(function ChatSidebar({
             {g.dnd_until && <BellOff size={10} className="text-rose-400 shrink-0" />}
             {/* 免打扰照显：被点名是"叫我"，跟"别拿常规消息打扰我"不是一回事 */}
             {g.has_mention && (
-              <span className="text-rose-400 font-medium shrink-0">{t('chatlist.atYou')}</span>
+              <span className="text-rose-400 font-medium shrink-0">{t('chatlist:atYou')}</span>
             )}
             <span className="min-w-0 flex-1" style={{ display: 'block' }}>
-              <PreviewText text={g.last_message_preview} placeholder={t('chatlist.noMessages')} />
+              <PreviewText text={g.last_message_preview} placeholder={t('chatlist:noMessages')} />
             </span>
             {g.last_message_at && (
               <span className="shrink-0">{formatRelativeTime(g.last_message_at, lang)}</span>
@@ -393,7 +393,7 @@ const ChatSidebar = memo(function ChatSidebar({
           </div>
           <div className="text-2xs text-textMuted mt-0.5 flex items-center gap-1 min-w-0">
             <span className="min-w-0 flex-1" style={{ display: 'block' }}>
-              <PreviewText text={s.last_message_preview} placeholder={t('chatlist.noMessages')} />
+              <PreviewText text={s.last_message_preview} placeholder={t('chatlist:noMessages')} />
             </span>
             {s.last_message_at && (
               <span className="shrink-0">{formatRelativeTime(s.last_message_at, lang)}</span>
@@ -414,17 +414,17 @@ const ChatSidebar = memo(function ChatSidebar({
           <button
             onClick={openDrawer}
             className="icon-btn-sm md:hidden text-textSecondary"
-            title={t('chatlist.menu')}
+            title={t('chatlist:menu')}
           >
             <Menu size={18} />
           </button>
-          <span>{t('chatlist.chat')}</span>
+          <span>{t('chatlist:chat')}</span>
         </div>
         <div className="relative">
           <button
             onClick={() => setShowPlusMenu(!showPlusMenu)}
             className="p-1 rounded-control hover:bg-elevated text-textMuted hover:text-primary-400 transition-colors"
-            title={t('chatlist.createNewGroup')}
+            title={t('chatlist:createNewGroup')}
           >
             <Plus size={16} />
           </button>
@@ -437,14 +437,14 @@ const ChatSidebar = memo(function ChatSidebar({
                   className="flex items-center gap-2.5 px-3.5 py-2.5 text-sm"
                 >
                   <Users size={15} />
-                  {t('chatlist.createGroup')}
+                  {t('chatlist:createGroup')}
                 </MenuItem>
                 <MenuItem
                   onClick={() => { setShowPlusMenu(false); onAddFriend() }}
                   className="flex items-center gap-2.5 px-3.5 py-2.5 text-sm"
                 >
                   <UserPlus size={15} />
-                  {t('list.add')}
+                  {t('list:add')}
                 </MenuItem>
               </MenuPanel>
             </>
@@ -457,7 +457,7 @@ const ChatSidebar = memo(function ChatSidebar({
         {pinnedItems.length > 0 && (
           <>
             <CollapsibleHeader
-              label={t('chatlist.pinned')}
+              label={t('chatlist:pinned')}
               collapsed={pinnedCollapsed}
               onToggle={() => setPinnedCollapsed(v => !v)}
             />
@@ -479,7 +479,7 @@ const ChatSidebar = memo(function ChatSidebar({
 
         {/* ── 群聊区 ── */}
         <CollapsibleHeader
-          label={t('chatlist.chat')}
+          label={t('chatlist:chat')}
           collapsed={groupsCollapsed}
           onToggle={() => setGroupsCollapsed(v => !v)}
           unreadCount={groupsUnreadTotal}
@@ -496,7 +496,7 @@ const ChatSidebar = memo(function ChatSidebar({
 
         {/* ── 私信区 ── */}
         <CollapsibleHeader
-          label={t('chatlist.dm')}
+          label={t('chatlist:dm')}
           collapsed={dmCollapsed}
           onToggle={() => setDmCollapsed(v => !v)}
           unreadCount={dmUnreadTotal}

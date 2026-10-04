@@ -20,12 +20,12 @@ interface Props {
 }
 
 const DND_DURATIONS = [
-  { key: 'dmSettings.dnd15min', minutes: 15 },
-  { key: 'dmSettings.dnd30min', minutes: 30 },
-  { key: 'dmSettings.dnd1hour', minutes: 60 },
-  { key: 'dmSettings.dnd4hours', minutes: 240 },
-  { key: 'dmSettings.dnd8hours', minutes: 480 },
-  { key: 'dmSettings.dndForever', minutes: null as unknown as number },
+  { key: 'dmSettings:dnd15min', minutes: 15 },
+  { key: 'dmSettings:dnd30min', minutes: 30 },
+  { key: 'dmSettings:dnd1hour', minutes: 60 },
+  { key: 'dmSettings:dnd4hours', minutes: 240 },
+  { key: 'dmSettings:dnd8hours', minutes: 480 },
+  { key: 'dmSettings:dndForever', minutes: null as unknown as number },
 ]
 
 export default function DMSettingsPanel({ sessionId, partner, myDndUntil, onClose, onDndChange }: Props) {
@@ -66,7 +66,7 @@ export default function DMSettingsPanel({ sessionId, partner, myDndUntil, onClos
       const until = minutes === null ? 'permanent' : new Date(Date.now() + minutes * 60_000).toISOString()
       onDndChange(until)
     } catch (e: any) {
-      setError(e?.detail || t('error.dndSetFailed'))
+      setError(e?.detail || t('error:dndSetFailed'))
     } finally {
       setLoading(false)
     }
@@ -75,11 +75,11 @@ export default function DMSettingsPanel({ sessionId, partner, myDndUntil, onClos
   const handleCustomDnd = async () => {
     const mins = parseInt(customMinutes, 10)
     if (isNaN(mins) || mins <= 0) {
-      setError(t('error.invalidMinutes'))
+      setError(t('error:invalidMinutes'))
       return
     }
     if (mins > 10080) {
-      setError(t('error.dndMaxDuration'))
+      setError(t('error:dndMaxDuration'))
       return
     }
     await handleSetDnd(mins)
@@ -94,7 +94,7 @@ export default function DMSettingsPanel({ sessionId, partner, myDndUntil, onClos
       await api.post(`/dm/${sessionId}/dnd/cancel`)
       onDndChange(null)
     } catch (e: any) {
-      setError(e?.detail || t('error.cancelFailed'))
+      setError(e?.detail || t('error:cancelFailed'))
     } finally {
       setLoading(false)
     }
@@ -130,7 +130,7 @@ export default function DMSettingsPanel({ sessionId, partner, myDndUntil, onClos
             >
               <ArrowLeft size={20} />
             </button>
-            <h2 className="font-semibold text-sm text-textPrimary">{t('dmSettings.title')}</h2>
+            <h2 className="font-semibold text-sm text-textPrimary">{t('dmSettings:title')}</h2>
           </div>
           <button onClick={onClose} className="icon-btn-sm text-textMuted hidden md:block">
             <X size={16} />
@@ -147,26 +147,26 @@ export default function DMSettingsPanel({ sessionId, partner, myDndUntil, onClos
           <div>
             <h3 className="text-sm font-medium text-textPrimary flex items-center gap-2 mb-3">
               <Bell size={14} className="text-textMuted" />
-              {t('dmSettings.dnd')}
+              {t('dmSettings:dnd')}
             </h3>
 
             {myDndUntil ? (
               <div className="space-y-3">
                 <div className="bg-mint-400/10 text-mint-400 rounded-control px-3 py-2 text-xs flex items-center gap-2">
                   <BellOff size={14} />
-                  {t('dmSettings.dndEnabled')}
+                  {t('dmSettings:dndEnabled')}
                 </div>
                 <button
                   onClick={handleCancelDnd}
                   disabled={loading}
                   className="btn btn-md btn-primary w-full"
                 >
-                  {t('dmSettings.cancelDnd')}
+                  {t('dmSettings:cancelDnd')}
                 </button>
               </div>
             ) : (
               <div className="space-y-2">
-                <p className="text-xs text-textMuted">{t('dmSettings.dndHint')}</p>
+                <p className="text-xs text-textMuted">{t('dmSettings:dndHint')}</p>
                 <div className="grid grid-cols-2 gap-2">
                   {DND_DURATIONS.map((d) => (
                     <button
@@ -185,7 +185,7 @@ export default function DMSettingsPanel({ sessionId, partner, myDndUntil, onClos
                     type="number"
                     value={customMinutes}
                     onChange={(e) => setCustomMinutes(e.target.value)}
-                    placeholder={t('groupSettings.dndCustomPlaceholder')}
+                    placeholder={t('groupSettings:dndCustomPlaceholder')}
                     min={1}
                     max={10080}
                     disabled={loading}
@@ -197,7 +197,7 @@ export default function DMSettingsPanel({ sessionId, partner, myDndUntil, onClos
                     disabled={loading || !customMinutes.trim()}
                     className="btn btn-xs btn-primary shrink-0"
                   >
-                    {t('common.set')}
+                    {t('common:set')}
                   </button>
                 </div>
               </div>
@@ -256,12 +256,12 @@ export default function DMSettingsPanel({ sessionId, partner, myDndUntil, onClos
           <div>
             <h3 className="text-sm font-medium text-textPrimary flex items-center gap-2 mb-3">
               <Download size={14} className="text-textMuted" />
-              {t('dmSettings.exportChat')}
+              {t('dmSettings:exportChat')}
             </h3>
 
             <div className="space-y-3">
               <div>
-                <label className="text-xs font-medium text-textSecondary">{t('groupSettings.exportFormat')}</label>
+                <label className="text-xs font-medium text-textSecondary">{t('groupSettings:exportFormat')}</label>
                 <div className="flex gap-2 mt-1">
                   {[
                     { key: 'json', labelKey: 'JSON' },
@@ -289,7 +289,7 @@ export default function DMSettingsPanel({ sessionId, partner, myDndUntil, onClos
                 className="btn btn-md btn-primary w-full gap-2"
               >
                 <Download size={16} />
-                {exporting ? t('common.exporting') : t('dmSettings.downloadExport')}
+                {exporting ? t('common:exporting') : t('dmSettings:downloadExport')}
               </button>
 
               {exportError && <div className="text-xs text-rose-400">{exportError}</div>}

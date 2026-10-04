@@ -14,6 +14,7 @@ import type { MagicVisionPrefs } from '../utils/cssFilters'
 import { useResizableSidebar } from '../hooks/useResizableSidebar'
 import VerificationCodeInput from '../components/VerificationCodeInput'
 import { LANGUAGES } from '../i18n/languages'
+import { NOTICE_BOX_CLASS, NOTICE_TEXT_CLASS, useNotice } from '../hooks/useNotice'
 import { isDesktop } from '../utils/platform'
 import { invoke } from '../utils/tauri'
 import { getApiKeyUrl } from '../utils/providers.tsx'
@@ -43,8 +44,8 @@ const TIMEZONES = [
 ]
 
 const CHAT_STYLES = [
-  { value: 'cozy', key: 'settings.cozyMode', descKey: 'settings.cozyModeDesc' },
-  { value: 'compact', key: 'settings.compactMode', descKey: 'settings.compactModeDesc' },
+  { value: 'cozy', key: 'settings:cozyMode', descKey: 'settings:cozyModeDesc' },
+  { value: 'compact', key: 'settings:compactMode', descKey: 'settings:compactModeDesc' },
 ]
 
 /** 侧边栏导航项（含分类） */
@@ -55,19 +56,19 @@ interface NavSection {
   category: string
 }
 const NAV_SECTIONS: NavSection[] = [
-  { id: 'quota',       icon: Zap,     labelKey: 'settings.quotaTitle',      category: 'settings.catAccount' },
-  { id: 'email',       icon: Mail,    labelKey: 'auth.email',                category: 'settings.catAccount' },
-  { id: 'api',         icon: Key,     labelKey: 'settings.apiConfigTitle',   category: 'settings.catApi' },
-  { id: 'timezone',    icon: Clock,   labelKey: 'settings.timezone',         category: 'settings.catPrefs' },
-  { id: 'language',    icon: Globe,   labelKey: 'settings.language',         category: 'settings.catPrefs' },
-  { id: 'chatstyle',   icon: Layout,   labelKey: 'settings.chatStyle',       category: 'settings.catPrefs' },
-  { id: 'uiscale',    icon: Monitor,  labelKey: 'UI 缩放',                  category: 'settings.catPrefs' },
-  { id: 'mermaid',    icon: BarChart3, labelKey: 'Mermaid 图表',             category: 'settings.catPrefs' },
-  { id: 'appearance',  icon: Palette, labelKey: 'settings.appearance',       category: 'settings.catPrefs' },
-  { id: 'notifications', icon: Bell,  labelKey: 'settings.notifications',   category: 'settings.catPrefs' },
-  { id: 'strategy',    icon: Zap,     labelKey: 'settings.strategy',         category: 'settings.catPrefs' },
+  { id: 'quota',       icon: Zap,     labelKey: 'settings:quotaTitle',      category: 'settings:catAccount' },
+  { id: 'email',       icon: Mail,    labelKey: 'auth:email',                category: 'settings:catAccount' },
+  { id: 'api',         icon: Key,     labelKey: 'settings:apiConfigTitle',   category: 'settings:catApi' },
+  { id: 'timezone',    icon: Clock,   labelKey: 'settings:timezone',         category: 'settings:catPrefs' },
+  { id: 'language',    icon: Globe,   labelKey: 'settings:language',         category: 'settings:catPrefs' },
+  { id: 'chatstyle',   icon: Layout,   labelKey: 'settings:chatStyle',       category: 'settings:catPrefs' },
+  { id: 'uiscale',    icon: Monitor,  labelKey: 'settings:uiScale',           category: 'settings:catPrefs' },
+  { id: 'mermaid',    icon: BarChart3, labelKey: 'settings:mermaidTitle',     category: 'settings:catPrefs' },
+  { id: 'appearance',  icon: Palette, labelKey: 'settings:appearance',       category: 'settings:catPrefs' },
+  { id: 'notifications', icon: Bell,  labelKey: 'settings:notifications',   category: 'settings:catPrefs' },
+  { id: 'strategy',    icon: Zap,     labelKey: 'settings:strategy',         category: 'settings:catPrefs' },
   ...(isDesktop() ? [
-    { id: 'desktop',  icon: Monitor, labelKey: 'settings.desktopSection',     category: 'settings.catDesktop' },
+    { id: 'desktop',  icon: Monitor, labelKey: 'settings:desktopSection',     category: 'settings:catDesktop' },
   ] : []),
 ]
 
@@ -118,7 +119,7 @@ export default function SettingsPage() {
     return stored === null ? true : stored === 'true'
   })
   const [saving, setSaving] = useState(false)
-  const [message, setMessage] = useState('')
+  const { notice: saveNotice, ok: noticeOk, fail: noticeFail, clear: clearNotice } = useNotice()
   const [agents, setAgents] = useState<any[]>([])
   const [editingAgentId, setEditingAgentId] = useState<number | null>(null)
   const [agentApiBaseUrl, setAgentApiBaseUrl] = useState('')
@@ -126,7 +127,7 @@ export default function SettingsPage() {
   const [agentApiSaving, setAgentApiSaving] = useState(false)
   const [redeemCode, setRedeemCode] = useState('')
   const [redeeming, setRedeeming] = useState(false)
-  const [redeemMsg, setRedeemMsg] = useState('')
+  const { notice: redeemNotice, ok: redeemOk, fail: redeemFail, clear: clearRedeemNotice } = useNotice()
   const [showAgentApi, setShowAgentApi] = useState(false)
 
   // ── 预设供应商列表 ──
@@ -200,7 +201,7 @@ export default function SettingsPage() {
         })
       }, 1000)
     } catch (err: any) {
-      setBindError(err.message || t('auth.tooManyRequests'))
+      setBindError(err.message || t('auth:tooManyRequests'))
     }
   }
 
@@ -215,7 +216,7 @@ export default function SettingsPage() {
       setBindEmail(''); setBindCode(''); setBindCodeSent(false); setBindSendCooldown(0)
       if (bindCooldownRef.current) { clearInterval(bindCooldownRef.current); bindCooldownRef.current = null }
     } catch (err: any) {
-      setBindError(err.message || t('auth.invalidCode'))
+      setBindError(err.message || t('auth:invalidCode'))
     } finally {
       setBindLoading(false)
     }
@@ -227,7 +228,7 @@ export default function SettingsPage() {
       await refreshUser()
       setRemoveConfirm(false)
     } catch (err: any) {
-      setBindError(err.message || t('error.saveFailed'))
+      setBindError(err.message || t('error:saveFailed'))
     }
   }
 
@@ -395,7 +396,7 @@ export default function SettingsPage() {
 
   const handleSave = async () => {
     setSaving(true)
-    setMessage('')
+    clearNotice()
     try {
       await api.put('/user/settings', {
         prefer_own_key: preferOwnKey,
@@ -411,7 +412,7 @@ export default function SettingsPage() {
       })
       try { localStorage.setItem('chat_style', chatStyle); localStorage.setItem('ui_scale', String(uiScale)) } catch {}
       setApiKey('')
-      setMessage(t('settings.saveSuccess'))
+      noticeOk(t('settings:saveSuccess'))
       setSavedValues({
         apiBaseUrl: apiBaseUrl || '',
         autoTimeout,
@@ -428,7 +429,7 @@ export default function SettingsPage() {
       apply(magicVision)
       api.get<any[]>('/agents').then(list => setAgents(list || [])).catch(() => {})
     } catch (err: any) {
-      setMessage(err.message || t('error.saveFailed'))
+      noticeFail(err.message || t('error:saveFailed'))
     } finally {
       setSaving(false)
     }
@@ -445,7 +446,7 @@ export default function SettingsPage() {
       setAgentApiKey('')
       api.get<any[]>('/agents').then(list => setAgents(list || [])).catch(() => {})
     } catch (err: any) {
-      alert(err.message || t('error.saveFailed'))
+      alert(err.message || t('error:saveFailed'))
     } finally {
       setAgentApiSaving(false)
     }
@@ -461,17 +462,17 @@ export default function SettingsPage() {
   const handleRedeem = async () => {
     if (!redeemCode.trim()) return
     setRedeeming(true)
-    setRedeemMsg('')
+    clearRedeemNotice()
     try {
       const data = await api.post<{ message: string }>('/user/redeem', { code: redeemCode.trim() })
-      setRedeemMsg(data.message || t('common.redeemSuccess'))
+      redeemOk(data.message || t('common:redeemSuccess'))
       setRedeemCode('')
       refreshUser()
     } catch (err: any) {
-      setRedeemMsg(err.message || t('common.redeemFailed'))
+      redeemFail(err.message || t('common:redeemFailed'))
     } finally {
       setRedeeming(false)
-      setTimeout(() => setRedeemMsg(''), 4000)
+      setTimeout(clearRedeemNotice, 4000)
     }
   }
 
@@ -487,28 +488,28 @@ export default function SettingsPage() {
       <div id="settings-quota" className={(activeTab === 'quota' ? '' : 'hidden') + ' bg-surface rounded-card border border-border p-3 md:p-6 scroll-mt-16'}>
         <div className="flex items-center gap-2 mb-4">
           <Zap size={18} className="text-primary-400" />
-          <h2 className="font-semibold text-textPrimary">{t('settings.quotaTitle')}</h2>
+          <h2 className="font-semibold text-textPrimary">{t('settings:quotaTitle')}</h2>
         </div>
         <div className="grid grid-cols-2 gap-3 mb-4">
           <div className="bg-canvas rounded-card p-4 border border-border">
-            <p className="text-xs text-textMuted mb-1">{t('settings.aiQuota')}</p>
+            <p className="text-xs text-textMuted mb-1">{t('settings:aiQuota')}</p>
             <p className="text-2xl font-bold text-textPrimary">{user?.ai_quota ?? 0}</p>
-            <p className="text-3xs text-textMuted mt-1">{t('settings.aiQuotaHint')}</p>
+            <p className="text-3xs text-textMuted mt-1">{t('settings:aiQuotaHint')}</p>
           </div>
           <div className="bg-canvas rounded-card p-4 border border-border">
-            <p className="text-xs text-textMuted mb-1">{t('settings.apiCredit')}</p>
+            <p className="text-xs text-textMuted mb-1">{t('settings:apiCredit')}</p>
             <p className="text-2xl font-bold text-textPrimary">{user?.api_credit ?? 0}</p>
-            <p className="text-3xs text-textMuted mt-1">{t('settings.apiCreditHint')}</p>
+            <p className="text-3xs text-textMuted mt-1">{t('settings:apiCreditHint')}</p>
           </div>
           <div className="bg-canvas rounded-card p-4 border border-border">
-            <p className="text-xs text-textMuted mb-1">{t('settings.platformCredit')}</p>
+            <p className="text-xs text-textMuted mb-1">{t('settings:platformCredit')}</p>
             <p className="text-2xl font-bold text-textPrimary">{user?.platform_gifted_credit ?? 0}</p>
-            <p className="text-3xs text-textMuted mt-1">{t('settings.platformCreditHint')}</p>
+            <p className="text-3xs text-textMuted mt-1">{t('settings:platformCreditHint')}</p>
           </div>
           <div className="bg-canvas rounded-card p-4 border border-border">
-            <p className="text-xs text-textMuted mb-1">{t('settings.fileQuota')}</p>
+            <p className="text-xs text-textMuted mb-1">{t('settings:fileQuota')}</p>
             <p className="text-2xl font-bold text-textPrimary">{user?.file_quota_mb ?? 0}<span className="text-sm font-normal text-textMuted"> MB</span></p>
-            <p className="text-3xs text-textMuted mt-1">{t('settings.fileQuotaHint')}</p>
+            <p className="text-3xs text-textMuted mt-1">{t('settings:fileQuotaHint')}</p>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -519,7 +520,7 @@ export default function SettingsPage() {
               value={redeemCode}
               onChange={(e) => setRedeemCode(e.target.value)}
               className="w-full pl-9 pr-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
-              placeholder={t('me.redeemPlaceholder')}
+              placeholder={t('me:redeemPlaceholder')}
             />
           </div>
           <button
@@ -528,12 +529,12 @@ export default function SettingsPage() {
             className="btn btn-sm btn-primary gap-1 shrink-0"
           >
             {redeeming ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
-            {t('me.redeem')}
+            {t('me:redeem')}
           </button>
         </div>
-        {redeemMsg && (
-          <p className={`text-xs mt-2 ${redeemMsg.includes('失败') ? 'text-rose-400' : 'text-mint-400'}`}>
-            {redeemMsg}
+        {redeemNotice && (
+          <p className={`text-xs mt-2 ${NOTICE_TEXT_CLASS[redeemNotice.tone]}`}>
+            {redeemNotice.text}
           </p>
         )}
       </div>
@@ -542,7 +543,7 @@ export default function SettingsPage() {
       <div id="settings-email" className={(activeTab === 'email' ? '' : 'hidden') + ' bg-surface rounded-card border border-border p-3 md:p-6 scroll-mt-16'}>
         <div className="flex items-center gap-2 mb-4">
           <Mail size={18} className="text-primary-400" />
-          <h2 className="font-semibold text-textPrimary">{t('auth.email')}</h2>
+          <h2 className="font-semibold text-textPrimary">{t('auth:email')}</h2>
         </div>
 
         {user?.email ? (
@@ -550,37 +551,37 @@ export default function SettingsPage() {
             <div className="flex items-center gap-3">
               <span className="text-sm text-textPrimary truncate">{user.email}</span>
               {user.email_verified ? (
-                <span className="chip chip-mint shrink-0">{t('auth.emailVerified')}</span>
+                <span className="chip chip-mint shrink-0">{t('auth:emailVerified')}</span>
               ) : (
-                <span className="chip chip-accent shrink-0">{t('auth.emailNotVerified')}</span>
+                <span className="chip chip-accent shrink-0">{t('auth:emailNotVerified')}</span>
               )}
             </div>
-            <p className="text-xs text-textMuted">{t('auth.emailVerified') ? t('settings.emailVerifiedDesc') : t('settings.emailNotVerifiedDesc')}</p>
+            <p className="text-xs text-textMuted">{t('auth:emailVerified') ? t('settings:emailVerifiedDesc') : t('settings:emailNotVerifiedDesc')}</p>
             <div className="flex gap-2">
               <button
                 onClick={() => { setShowBindEmail(true); setBindEmail(user.email || ''); setBindCode(''); setBindCodeSent(false); setBindError('') }}
                 className="px-3 py-1.5 text-xs rounded-control border border-border hover:bg-elevated text-textSecondary transition-colors"
               >
-                {t('auth.changeEmail')}
+                {t('auth:changeEmail')}
               </button>
               {user.email && (
                 <button
                   onClick={() => setRemoveConfirm(true)}
                   className="px-3 py-1.5 text-xs rounded-control border border-rose-500/20 text-rose-400 hover:bg-rose-500/10 transition-colors"
                 >
-                  {t('auth.removeEmail')}
+                  {t('auth:removeEmail')}
                 </button>
               )}
             </div>
           </div>
         ) : (
           <div className="space-y-3">
-            <p className="text-xs text-textMuted">{t('settings.emailNotSetDesc')}</p>
+            <p className="text-xs text-textMuted">{t('settings:emailNotSetDesc')}</p>
             <button
               onClick={() => { setShowBindEmail(true); setBindEmail(''); setBindCode(''); setBindCodeSent(false); setBindError('') }}
               className="px-3 py-1.5 text-xs rounded-control bg-primary-500 hover:bg-primary-600 text-white font-medium transition-colors"
             >
-              {t('auth.bindEmailTitle')}
+              {t('auth:bindEmailTitle')}
             </button>
           </div>
         )}
@@ -590,14 +591,14 @@ export default function SettingsPage() {
       <div id="settings-api" className={(activeTab === 'api' ? '' : 'hidden') + ' bg-surface rounded-card border border-border p-3 md:p-6 scroll-mt-16'}>
         <div className="flex items-center gap-2 mb-4 flex-wrap">
           <Key size={18} className="text-primary-400 shrink-0" />
-          <h2 className="font-semibold text-textPrimary whitespace-nowrap shrink-0">{t('settings.apiConfigTitle')}</h2>
-          <span className="text-3xs text-textMuted ml-auto">{t('settings.apiConfigHint')}</span>
+          <h2 className="font-semibold text-textPrimary whitespace-nowrap shrink-0">{t('settings:apiConfigTitle')}</h2>
+          <span className="text-3xs text-textMuted ml-auto">{t('settings:apiConfigHint')}</span>
         </div>
 
         <div className="space-y-4">
           {providerPresets.length > 0 && (
             <div>
-              <label className="block text-xs font-medium mb-1.5 text-textSecondary">{t('settings.presetProvider')}</label>
+              <label className="block text-xs font-medium mb-1.5 text-textSecondary">{t('settings:presetProvider')}</label>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 mb-2">
                 {providerPresets.map(p => (
                   <button
@@ -616,24 +617,24 @@ export default function SettingsPage() {
                 ))}
               </div>
               {curPreset && (
-                <p className="text-3xs text-mint-400">{t('settings.currentPreset')}：{curPreset.name} · {curPreset.base_url}</p>
+                <p className="text-3xs text-mint-400">{t('settings:currentPreset')}：{curPreset.name} · {curPreset.base_url}</p>
               )}
             </div>
           )}
           <div>
-            <label className="block text-xs font-medium mb-1.5 text-textSecondary">{t('settings.baseUrl')}</label>
+            <label className="block text-xs font-medium mb-1.5 text-textSecondary">{t('settings:baseUrl')}</label>
             <input
               type="text"
               value={apiBaseUrl}
               onChange={(e) => setApiBaseUrl(e.target.value)}
               className="w-full px-3.5 py-2.5 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
-              placeholder={t('settings.baseUrlPlaceholder')}
+              placeholder={t('settings:baseUrlPlaceholder')}
             />
-            <p className="text-3xs text-textMuted mt-1">{t('settings.baseUrlDesc')}</p>
+            <p className="text-3xs text-textMuted mt-1">{t('settings:baseUrlDesc')}</p>
           </div>
           <div>
             <label className="block text-xs font-medium mb-1.5 text-textSecondary flex items-center gap-2">
-              {t('settings.apiKey')}
+              {t('settings:apiKey')}
               {apiBaseUrl && getApiKeyUrl(apiBaseUrl) && (
                 <a
                   href={getApiKeyUrl(apiBaseUrl)}
@@ -641,7 +642,7 @@ export default function SettingsPage() {
                   rel="noopener noreferrer"
                   className="text-3xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 underline underline-offset-2 font-normal"
                 >
-                  获取 API Key →
+                  {t('settings:apiKeyGet')}
                 </a>
               )}
             </label>
@@ -651,7 +652,7 @@ export default function SettingsPage() {
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
                 className="w-full px-3.5 py-2.5 pr-10 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
-                placeholder={user?.has_api_key ? t('settings.apiKeyPlaceholderSet') : t('settings.apiKeyPlaceholder')}
+                placeholder={user?.has_api_key ? t('settings:apiKeyPlaceholderSet') : t('settings:apiKeyPlaceholder')}
               />
               <button
                 type="button"
@@ -664,8 +665,8 @@ export default function SettingsPage() {
             <div className="flex items-center justify-between mt-1.5">
               <p className="text-xs text-textMuted">
                 {user?.has_api_key
-                  ? <><CheckCircle size={12} className="inline text-mint-400 mr-1" />{t('settings.apiKeySet')}</>
-                  : <><AlertTriangle size={12} className="inline text-accent-400 mr-1" />{t('settings.apiKeyNotSet')}</>}
+                  ? <><CheckCircle size={12} className="inline text-mint-400 mr-1" />{t('settings:apiKeySet')}</>
+                  : <><AlertTriangle size={12} className="inline text-accent-400 mr-1" />{t('settings:apiKeyNotSet')}</>}
               </p>
               <button
                 onClick={handleTestConnection}
@@ -679,7 +680,7 @@ export default function SettingsPage() {
                 ) : testResult === 'fail' ? (
                   <XCircle size={12} className="text-rose-400" />
                 ) : null}
-                {testing ? t('settings.testing') : testResult === 'success' ? t('settings.testSuccess') : testResult === 'fail' ? t('settings.testFailed') : t('settings.testConnection')}
+                {testing ? t('settings:testing') : testResult === 'success' ? t('settings:testSuccess') : testResult === 'fail' ? t('settings:testFailed') : t('settings:testConnection')}
               </button>
             </div>
           </div>
@@ -688,35 +689,35 @@ export default function SettingsPage() {
           <div className="grid grid-cols-2 gap-3 pt-3 border-t border-border">
             <div>
               <label className="block text-xs font-medium mb-1.5 text-textSecondary">
-                全局默认聊天模型（覆盖）
+                {t('settings:globalChatModelOverride')}
               </label>
               <ComboBox
                 value={globalChatModel}
                 onValueChange={setGlobalChatModel}
                 options={allChatOptions}
-                placeholder="例如：mimo-v2.6-flash"
+                placeholder={t('settings:modelPlaceholderChat')}
               />
-              <p className="text-3xs text-textMuted mt-1">留空则使用系统全局默认</p>
+              <p className="text-3xs text-textMuted mt-1">{t('settings:emptyUsesGlobalDefault')}</p>
             </div>
             <div>
               <label className="block text-xs font-medium mb-1.5 text-textSecondary">
-                全局默认工作模型（覆盖）
+                {t('settings:globalWorkModelOverride')}
               </label>
               <ComboBox
                 value={globalWorkModel}
                 onValueChange={setGlobalWorkModel}
                 options={allWorkOptions}
-                placeholder="例如：mimo-v2.6-pro"
+                placeholder={t('settings:modelPlaceholderWork')}
               />
-              <p className="text-3xs text-textMuted mt-1">留空则使用系统全局默认</p>
+              <p className="text-3xs text-textMuted mt-1">{t('settings:emptyUsesGlobalDefault')}</p>
             </div>
           </div>
 
           {/* 优先使用本人 API Key 开关 */}
           <div className="flex items-center justify-between py-3 border-t border-border mt-3">
             <div className="flex-1">
-              <span className="text-sm font-medium text-textPrimary">优先使用本人 API Key</span>
-              <p className="text-xs text-textMuted mt-0.5">开启后优先使用自己的 API Key，再尝试系统额度</p>
+              <span className="text-sm font-medium text-textPrimary">{t('settings:preferOwnKey')}</span>
+              <p className="text-xs text-textMuted mt-0.5">{t('settings:preferOwnKeyDesc')}</p>
             </div>
             <Toggle
               checked={preferOwnKey}
@@ -733,14 +734,14 @@ export default function SettingsPage() {
           >
             {showAgentApi ? <ChevronDown size={16} className="text-textMuted" /> : <ChevronRight size={16} className="text-textMuted" />}
             <Bot size={16} className="text-primary-400" />
-            <span className="text-sm font-medium text-textPrimary">{t('settings.perAgentTitle')}</span>
-            <span className="text-3xs text-textMuted">{t('settings.perAgentHint')}</span>
+            <span className="text-sm font-medium text-textPrimary">{t('settings:perAgentTitle')}</span>
+            <span className="text-3xs text-textMuted">{t('settings:perAgentHint')}</span>
           </button>
 
           {showAgentApi && (
             <div className="mt-3">
               {agents.length === 0 ? (
-                <p className="text-xs text-textMuted py-4 text-center">{t('settings.noAgentsForApi')}</p>
+                <p className="text-xs text-textMuted py-4 text-center">{t('settings:noAgentsForApi')}</p>
               ) : (
                 <div className="space-y-2">
                   {agents.map((agent: any) => (
@@ -755,7 +756,7 @@ export default function SettingsPage() {
                           </div>
                           {providerPresets.length > 0 && (
                             <>
-                              <label className="block text-xs text-textSecondary mb-1">厂商预设</label>
+                              <label className="block text-xs text-textSecondary mb-1">{t('settings:providerPreset')}</label>
                               <div className="flex flex-wrap gap-1.5 mb-1">
                                 {providerPresets.map(p => (
                                   <button
@@ -772,7 +773,7 @@ export default function SettingsPage() {
                                 ))}
                               </div>
                               {(() => { const cur = providerPresets.find(p => p.base_url === agentApiBaseUrl); return cur ? (
-                                <p className="text-3xs text-mint-400">{t('settings.currentPreset')}：{cur.name}</p>
+                                <p className="text-3xs text-mint-400">{t('settings:currentPreset')}：{cur.name}</p>
                               ) : null })()}
                             </>
                           )}
@@ -781,21 +782,21 @@ export default function SettingsPage() {
                             value={agentApiBaseUrl}
                             onChange={(e) => setAgentApiBaseUrl(e.target.value)}
                             className="w-full px-3 py-1.5 rounded-control border border-border bg-surface text-xs text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-1 focus:ring-primary-500/50"
-                            placeholder={t('settings.agentBaseUrlPlaceholder')}
+                            placeholder={t('settings:agentBaseUrlPlaceholder')}
                           />
                           <input
                             type="password"
                             value={agentApiKey}
                             onChange={(e) => setAgentApiKey(e.target.value)}
                             className="w-full px-3 py-1.5 rounded-control border border-border bg-surface text-xs text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-1 focus:ring-primary-500/50"
-                            placeholder={t('settings.agentApiKeyPlaceholder')}
+                            placeholder={t('settings:agentApiKeyPlaceholder')}
                           />
                           <button
                             onClick={() => handleSaveAgentApi(agent.id)}
                             disabled={agentApiSaving}
                             className="w-full py-1.5 rounded-control bg-primary-500 text-white text-xs font-medium hover:bg-primary-600 disabled:opacity-40 transition-colors"
                           >
-                            {agentApiSaving ? t('settings.agentApiSaving') : t('common.save')}
+                            {agentApiSaving ? t('settings:agentApiSaving') : t('common:save')}
                           </button>
                         </div>
                       ) : (
@@ -804,11 +805,11 @@ export default function SettingsPage() {
                             <span className="text-sm text-textPrimary">{agent.name}</span>
                             {agent.api_base_url ? (
                               <span className="text-3xs px-1.5 py-0.5 rounded bg-primary-500/10 text-primary-400">
-                                {t('settings.independentApiBadge')}
+                                {t('settings:independentApiBadge')}
                               </span>
                             ) : (
                               <span className="text-3xs px-1.5 py-0.5 rounded bg-border/30 text-textMuted">
-                                {t('settings.inheritGlobalBadge')}
+                                {t('settings:inheritGlobalBadge')}
                               </span>
                             )}
                           </div>
@@ -833,9 +834,9 @@ export default function SettingsPage() {
       <div id="settings-timezone" className={(activeTab === 'timezone' ? '' : 'hidden') + ' bg-surface rounded-card border border-border p-3 md:p-6 scroll-mt-16'}>
         <div className="flex items-center gap-2 mb-4">
           <Clock size={18} className="text-primary-400" />
-          <h2 className="font-semibold text-textPrimary">{t('settings.timezone')}</h2>
+          <h2 className="font-semibold text-textPrimary">{t('settings:timezone')}</h2>
         </div>
-        <p className="text-xs text-textMuted mb-3">{t('settings.timezoneDesc')}</p>
+        <p className="text-xs text-textMuted mb-3">{t('settings:timezoneDesc')}</p>
         <select
           value={timezone}
           onChange={(e) => setTimezone(e.target.value)}
@@ -846,7 +847,7 @@ export default function SettingsPage() {
           ))}
         </select>
         <p className="text-xs text-textMuted mt-2">
-          {t('settings.currentTimestamp')} {new Date().toLocaleString('zh-CN', { timeZone: timezone })}
+          {t('settings:currentTimestamp')} {new Date().toLocaleString('zh-CN', { timeZone: timezone })}
         </p>
       </div>
 
@@ -854,9 +855,9 @@ export default function SettingsPage() {
       <div id="settings-language" className={(activeTab === 'language' ? '' : 'hidden') + ' bg-surface rounded-card border border-border p-3 md:p-6 scroll-mt-16'}>
         <div className="flex items-center gap-2 mb-4">
           <Globe size={18} className="text-primary-400" />
-          <h2 className="font-semibold text-textPrimary">{t('settings.language')}</h2>
+          <h2 className="font-semibold text-textPrimary">{t('settings:language')}</h2>
         </div>
-        <p className="text-xs text-textMuted mb-3">{t('settings.languageDesc')}</p>
+        <p className="text-xs text-textMuted mb-3">{t('settings:languageDesc')}</p>
         <select
           value={language}
           onChange={(e) => setLanguage(e.target.value)}
@@ -872,9 +873,9 @@ export default function SettingsPage() {
       <div id="settings-chatstyle" className={(activeTab === 'chatstyle' ? '' : 'hidden') + ' bg-surface rounded-card border border-border p-3 md:p-6 scroll-mt-16'}>
         <div className="flex items-center gap-2 mb-4">
           <Layout size={18} className="text-primary-400" />
-          <h2 className="font-semibold text-textPrimary">{t('settings.chatStyle')}</h2>
+          <h2 className="font-semibold text-textPrimary">{t('settings:chatStyle')}</h2>
         </div>
-        <p className="text-xs text-textMuted mb-3">{t('settings.chatStyleDesc')}</p>
+        <p className="text-xs text-textMuted mb-3">{t('settings:chatStyleDesc')}</p>
         <div className="flex gap-3">
           {CHAT_STYLES.map((s) => (
             <button
@@ -897,15 +898,15 @@ export default function SettingsPage() {
       <div className={(activeTab === 'uiscale' ? '' : 'hidden') + ' bg-surface rounded-card border border-border p-3 md:p-6 scroll-mt-16'}>
         <div className="flex items-center gap-2 mb-4">
           <Layout size={18} className="text-primary-400" />
-          <h2 className="font-semibold text-textPrimary">UI 缩放</h2>
+          <h2 className="font-semibold text-textPrimary">{t('settings:uiScale')}</h2>
         </div>
-        <p className="text-xs text-textMuted mb-3">调整界面文字和元素大小</p>
+        <p className="text-xs text-textMuted mb-3">{t('settings:uiScaleDesc')}</p>
         <div className="flex gap-3">
           {[
-            { value: 0.85, label: '小', desc: '紧凑布局' },
-            { value: 1.0, label: '中', desc: '默认大小' },
-            { value: 1.15, label: '大', desc: '放大显示' },
-            { value: 1.3, label: '超大', desc: '超大显示' },
+            { value: 0.85, labelKey: 'settings:scaleSmall', descKey: 'settings:scaleSmallDesc' },
+            { value: 1.0, labelKey: 'settings:scaleMedium', descKey: 'settings:scaleMediumDesc' },
+            { value: 1.15, labelKey: 'settings:scaleLarge', descKey: 'settings:scaleLargeDesc' },
+            { value: 1.3, labelKey: 'settings:scaleXLarge', descKey: 'settings:scaleXLargeDesc' },
           ].map((s) => (
             <button
               key={s.value}
@@ -916,8 +917,8 @@ export default function SettingsPage() {
                   : 'border-border bg-canvas text-textSecondary hover:border-primary-500/30'
               }`}
             >
-              <div className="font-medium">{s.label}</div>
-              <div className="text-3xs mt-0.5 opacity-70">{s.desc}</div>
+              <div className="font-medium">{t(s.labelKey)}</div>
+              <div className="text-3xs mt-0.5 opacity-70">{t(s.descKey)}</div>
             </button>
           ))}
         </div>
@@ -927,12 +928,12 @@ export default function SettingsPage() {
       <div id="settings-strategy" className={(activeTab === 'strategy' ? '' : 'hidden') + ' bg-surface rounded-card border border-border p-3 md:p-6 scroll-mt-16'}>
         <div className="flex items-center gap-2 mb-4">
           <Zap size={18} className="text-primary-400" />
-          <h2 className="font-semibold text-textPrimary">{t('settings.strategy')}</h2>
+          <h2 className="font-semibold text-textPrimary">{t('settings:strategy')}</h2>
         </div>
         <div className="space-y-4">
           <div>
             <label className="block text-xs font-medium mb-1.5 text-textSecondary">
-              {t('settings.autoApproveTimeout')} {autoTimeout}
+              {t('settings:autoApproveTimeout')} {autoTimeout}
             </label>
             <input
               type="range"
@@ -946,7 +947,7 @@ export default function SettingsPage() {
           </div>
           <div className="flex items-center gap-3">
             <Toggle checked={autoDefault} onChange={setAutoDefault} />
-            <span className="text-sm text-textSecondary">{t('settings.autoApproveDefault')}</span>
+            <span className="text-sm text-textSecondary">{t('settings:autoApproveDefault')}</span>
           </div>
         </div>
       </div>
@@ -955,7 +956,7 @@ export default function SettingsPage() {
       <div id="settings-mermaid" className={(activeTab === 'mermaid' ? '' : 'hidden') + ' bg-surface rounded-card border border-border p-3 md:p-6 scroll-mt-16'}>
         <div className="flex items-center gap-2 mb-4">
           <BarChart3 size={18} className="text-primary-400" />
-          <h2 className="font-semibold text-textPrimary">Mermaid 图表</h2>
+          <h2 className="font-semibold text-textPrimary">{t('settings:mermaidTitle')}</h2>
         </div>
         <div className="space-y-4">
           <div className="flex items-center gap-3">
@@ -963,14 +964,14 @@ export default function SettingsPage() {
               checked={getMermaidSetting('mermaid_collapse', true)}
               onChange={(v) => { try { localStorage.setItem('mermaid_collapse', String(v)); window.location.reload() } catch {} }}
             />
-            <span className="text-sm text-textSecondary">默认折叠图表（点击展开）</span>
+            <span className="text-sm text-textSecondary">{t('settings:mermaidCollapse')}</span>
           </div>
           <div className="flex items-center gap-3">
             <Toggle
               checked={getMermaidSetting('mermaid_collapse_errors', true)}
               onChange={(v) => { try { localStorage.setItem('mermaid_collapse_errors', String(v)); window.location.reload() } catch {} }}
             />
-            <span className="text-sm text-textSecondary">渲染出错时也折叠</span>
+            <span className="text-sm text-textSecondary">{t('settings:mermaidCollapseErrors')}</span>
           </div>
         </div>
       </div>
@@ -979,14 +980,14 @@ export default function SettingsPage() {
       <div id="settings-appearance" className={(activeTab === 'appearance' ? '' : 'hidden') + ' bg-surface rounded-card border border-border p-3 md:p-6 scroll-mt-16'}>
         <div className="flex items-center gap-2 mb-4">
           <Palette size={18} className="text-primary-400" />
-          <h2 className="font-semibold text-textPrimary">{t('settings.appearance')}</h2>
-          <span className="text-3xs px-2 py-0.5 rounded-full bg-mint-400/10 text-mint-400 border border-mint-400/20">{t('settings.instantApplyBadge')}</span>
+          <h2 className="font-semibold text-textPrimary">{t('settings:appearance')}</h2>
+          <span className="text-3xs px-2 py-0.5 rounded-full bg-mint-400/10 text-mint-400 border border-mint-400/20">{t('settings:instantApplyBadge')}</span>
         </div>
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-sm font-medium text-textPrimary">{t('settings.darkMode')}</p>
+            <p className="text-sm font-medium text-textPrimary">{t('settings:darkMode')}</p>
             <p className="text-xs text-textMuted mt-0.5">
-              {theme === 'dark' ? t('settings.darkModeDesc') : t('settings.lightModeDesc')}
+              {theme === 'dark' ? t('settings:darkModeDesc') : t('settings:lightModeDesc')}
             </p>
           </div>
           <Toggle checked={theme === 'dark'} onChange={() => toggleTheme()} />
@@ -1009,21 +1010,21 @@ export default function SettingsPage() {
       <div id="settings-notifications" className={(activeTab === 'notifications' ? '' : 'hidden') + ' bg-surface rounded-card border border-border p-3 md:p-6 scroll-mt-16'}>
         <div className="flex items-center gap-2 mb-4">
           <Bell size={18} className="text-primary-400" />
-          <h2 className="font-semibold text-textPrimary">{t('settings.notifications')}</h2>
-          <span className="text-3xs px-2 py-0.5 rounded-full bg-mint-400/10 text-mint-400 border border-mint-400/20">{t('settings.instantApplyBadge')}</span>
+          <h2 className="font-semibold text-textPrimary">{t('settings:notifications')}</h2>
+          <span className="text-3xs px-2 py-0.5 rounded-full bg-mint-400/10 text-mint-400 border border-mint-400/20">{t('settings:instantApplyBadge')}</span>
         </div>
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-sm font-medium text-textPrimary">{t('settings.notificationsLabel')}</p>
-            <p className="text-xs text-textMuted mt-0.5">{t('settings.notificationsDetailDesc')}</p>
+            <p className="text-sm font-medium text-textPrimary">{t('settings:notificationsLabel')}</p>
+            <p className="text-xs text-textMuted mt-0.5">{t('settings:notificationsDetailDesc')}</p>
           </div>
           <Toggle checked={notifications} onChange={() => handleNotificationToggle(!notifications)} />
         </div>
 
         <div className="flex items-center justify-between mt-4 pt-4 border-t border-border/50">
           <div>
-            <p className="text-sm font-medium text-textPrimary">{t('settings.notificationsPopupLabel')}</p>
-            <p className="text-xs text-textMuted mt-0.5">{t('settings.notificationsPopupDesc')}</p>
+            <p className="text-sm font-medium text-textPrimary">{t('settings:notificationsPopupLabel')}</p>
+            <p className="text-xs text-textMuted mt-0.5">{t('settings:notificationsPopupDesc')}</p>
           </div>
           <Toggle checked={popupNotifications} onChange={() => handlePopupNotificationToggle(!popupNotifications)} />
         </div>
@@ -1034,16 +1035,16 @@ export default function SettingsPage() {
         <div id="settings-desktop" className="bg-surface rounded-card border border-border p-3 md:p-6 scroll-mt-16">
           <div className="flex items-center gap-2 mb-4">
             <Monitor size={18} className="text-primary-400" />
-            <h2 className="font-semibold text-textPrimary">{t('settings.desktopSection')}</h2>
-            <span className="text-3xs px-2 py-0.5 rounded-full bg-accent-500/10 text-accent-500 border border-accent-500/20">{t('settings.desktopSectionDesc')}</span>
+            <h2 className="font-semibold text-textPrimary">{t('settings:desktopSection')}</h2>
+            <span className="text-3xs px-2 py-0.5 rounded-full bg-accent-500/10 text-accent-500 border border-accent-500/20">{t('settings:desktopSectionDesc')}</span>
           </div>
 
           <div className="space-y-4">
             {/* 开机自启动 */}
             <div className="flex items-center justify-between p-3 rounded-card border border-border bg-canvas/50">
               <div>
-                <p className="text-sm font-medium text-textPrimary">{t('settings.autoStart')}</p>
-                <p className="text-xs text-textMuted mt-0.5">{t('settings.autoStartDesc')}</p>
+                <p className="text-sm font-medium text-textPrimary">{t('settings:autoStart')}</p>
+                <p className="text-xs text-textMuted mt-0.5">{t('settings:autoStartDesc')}</p>
               </div>
               <Toggle checked={autoStart} onChange={async (enabled) => {
                 setAutoStart(enabled)
@@ -1056,9 +1057,9 @@ export default function SettingsPage() {
             <div className="p-3 rounded-card border border-border bg-canvas/50">
               <div className="flex items-center gap-2 mb-1">
                 <HardDrive size={14} className="text-textMuted" />
-                <p className="text-sm font-medium text-textPrimary">{t('settings.dataLocation')}</p>
+                <p className="text-sm font-medium text-textPrimary">{t('settings:dataLocation')}</p>
               </div>
-              <p className="text-xs text-textMuted">{t('settings.dataLocationDesc')}</p>
+              <p className="text-xs text-textMuted">{t('settings:dataLocationDesc')}</p>
               <p className="text-xs text-primary-400 font-mono mt-1.5">
                 ~/.copree/data/
               </p>
@@ -1067,21 +1068,21 @@ export default function SettingsPage() {
             {/* 清理缓存 */}
             <div className="flex items-center justify-between p-3 rounded-card border border-border bg-canvas/50">
               <div>
-                <p className="text-sm font-medium text-textPrimary">{t('settings.clearCache')}</p>
-                <p className="text-xs text-textMuted mt-0.5">{t('settings.clearCacheDesc')}</p>
+                <p className="text-sm font-medium text-textPrimary">{t('settings:clearCache')}</p>
+                <p className="text-xs text-textMuted mt-0.5">{t('settings:clearCacheDesc')}</p>
               </div>
               <button
                 onClick={async () => {
                   try {
                     await invoke('clear_cache')
-                    setClearCacheMsg(t('settings.clearCacheSuccess'))
+                    setClearCacheMsg(t('settings:clearCacheSuccess'))
                   } catch { /* Rust 端未实现时静默忽略 */ }
                   setTimeout(() => setClearCacheMsg(''), 3000)
                 }}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-control border border-border hover:bg-elevated text-sm text-textSecondary transition-colors"
               >
                 <Trash2 size={13} />
-                {t('settings.clearCacheBtn')}
+                {t('settings:clearCacheBtn')}
               </button>
             </div>
             {clearCacheMsg && (
@@ -1096,9 +1097,9 @@ export default function SettingsPage() {
               <div>
                 <div className="flex items-center gap-2">
                   <Cpu size={14} className="text-textMuted" />
-                  <p className="text-sm font-medium text-textPrimary">{t('settings.localModelEntry')}</p>
+                  <p className="text-sm font-medium text-textPrimary">{t('settings:localModelEntry')}</p>
                 </div>
-                <p className="text-xs text-textMuted mt-0.5 ml-6">{t('settings.localModelEntryDesc')}</p>
+                <p className="text-xs text-textMuted mt-0.5 ml-6">{t('settings:localModelEntryDesc')}</p>
               </div>
               <ExternalLink size={14} className="text-textMuted shrink-0" />
             </button>
@@ -1111,9 +1112,9 @@ export default function SettingsPage() {
               <div>
                 <div className="flex items-center gap-2">
                   <Globe size={14} className="text-textMuted" />
-                  <p className="text-sm font-medium text-textPrimary">{t('settings.instanceSetupEntry')}</p>
+                  <p className="text-sm font-medium text-textPrimary">{t('settings:instanceSetupEntry')}</p>
                 </div>
-                <p className="text-xs text-textMuted mt-0.5 ml-6">{t('settings.instanceSetupEntryDesc')}</p>
+                <p className="text-xs text-textMuted mt-0.5 ml-6">{t('settings:instanceSetupEntryDesc')}</p>
               </div>
               <ExternalLink size={14} className="text-textMuted shrink-0" />
             </button>
@@ -1127,30 +1128,30 @@ export default function SettingsPage() {
                 <div className="flex items-center gap-2">
                   {buildFactoryExpanded ? <ChevronDown size={14} className="text-textMuted" /> : <ChevronRight size={14} className="text-textMuted" />}
                   <Box size={14} className="text-textMuted" />
-                  <p className="text-sm font-medium text-textPrimary">{t('settings.buildFactory')}</p>
+                  <p className="text-sm font-medium text-textPrimary">{t('settings:buildFactory')}</p>
                   <span className={`text-3xs px-1.5 py-0.5 rounded-full ${
                     buildEnvInstalled
                       ? 'bg-mint-400/10 text-mint-400 border border-mint-400/20'
                       : 'bg-border/30 text-textMuted'
                   }`}>
-                    {buildEnvInstalled ? t('settings.buildFactoryInstalled') : t('settings.buildFactoryNotInstalled')}
+                    {buildEnvInstalled ? t('settings:buildFactoryInstalled') : t('settings:buildFactoryNotInstalled')}
                   </span>
                 </div>
               </button>
 
               {buildFactoryExpanded && (
                 <div className="mt-3 space-y-3">
-                  <p className="text-xs text-textMuted">{t('settings.buildFactoryDesc')}</p>
+                  <p className="text-xs text-textMuted">{t('settings:buildFactoryDesc')}</p>
 
                   {!buildEnvInstalled ? (
                     <div className="bg-canvas rounded-control p-4 border border-border">
                       <div className="flex items-center gap-2 mb-3">
                         <XCircle size={14} className="text-textMuted" />
                         <span className="text-sm text-textPrimary">
-                          {t('settings.buildFactoryNotInstalled')}
+                          {t('settings:buildFactoryNotInstalled')}
                         </span>
                       </div>
-                      <p className="text-xs text-textMuted mb-3">{t('settings.buildFactoryRequired')}</p>
+                      <p className="text-xs text-textMuted mb-3">{t('settings:buildFactoryRequired')}</p>
                       <div className="flex gap-2">
                         <button
                           onClick={async () => {
@@ -1165,10 +1166,10 @@ export default function SettingsPage() {
                           className="flex items-center gap-1.5 px-3 py-1.5 rounded-control bg-primary-500 text-white text-xs font-medium hover:bg-primary-600 disabled:opacity-30 transition-colors"
                         >
                           {installingEnv ? <Loader2 size={12} className="animate-spin" /> : <Wrench size={12} />}
-                          {installingEnv ? t('settings.buildFactoryInstalling') : t('settings.buildFactoryInstall')}
+                          {installingEnv ? t('settings:buildFactoryInstalling') : t('settings:buildFactoryInstall')}
                         </button>
                         <button className="btn btn-xs btn-outline">
-                          {t('settings.buildFactoryViewDocs')}
+                          {t('settings:buildFactoryViewDocs')}
                         </button>
                       </div>
                     </div>
@@ -1177,7 +1178,7 @@ export default function SettingsPage() {
                       <div className="flex items-center gap-2">
                         <CheckCircle size={14} className="text-mint-400" />
                         <span className="text-sm text-textPrimary">
-                          {t('settings.buildFactoryInstalled')}
+                          {t('settings:buildFactoryInstalled')}
                         </span>
                         {buildEnvVersion && (
                           <span className="text-xs text-textMuted">{buildEnvVersion}</span>
@@ -1186,7 +1187,7 @@ export default function SettingsPage() {
 
                       {/* 构建目标 */}
                       <div>
-                        <p className="text-xs font-medium text-textSecondary mb-2">{t('settings.buildFactoryBuildTarget')}</p>
+                        <p className="text-xs font-medium text-textSecondary mb-2">{t('settings:buildFactoryBuildTarget')}</p>
                         <div className="flex flex-wrap gap-2">
                           {[
                             { label: 'Windows (.exe)', plat: 'windows' as const },
@@ -1199,7 +1200,7 @@ export default function SettingsPage() {
                               <button
                                 key={plat}
                                 disabled={!available}
-                                title={available ? '' : t('settings.buildFactoryCrossPlatformHint')}
+                                title={available ? '' : t('settings:buildFactoryCrossPlatformHint')}
                                 className={`px-3 py-1.5 rounded-control text-xs font-medium transition-colors ${
                                   available
                                     ? 'bg-primary-500 text-white hover:bg-primary-600'
@@ -1227,22 +1228,22 @@ export default function SettingsPage() {
                           className="flex items-center gap-1.5 px-3 py-1.5 rounded-control bg-mint-500 text-white text-xs font-medium hover:bg-mint-400 disabled:opacity-30 transition-colors"
                         >
                           {building ? <Loader2 size={12} className="animate-spin" /> : <Wrench size={12} />}
-                          {building ? t('settings.buildFactoryBuilding') : t('settings.buildFactoryBuild')}
+                          {building ? t('settings:buildFactoryBuilding') : t('settings:buildFactoryBuild')}
                         </button>
                         <button className="btn btn-xs btn-outline">
-                          {t('settings.buildFactoryViewLog')}
+                          {t('settings:buildFactoryViewLog')}
                         </button>
                       </div>
 
                       {lastBuild && (
                         <div className="text-xs text-textMuted">
-                          {t('settings.buildFactoryLastBuild')}：{lastBuild}
+                          {t('settings:buildFactoryLastBuild')}：{lastBuild}
                         </div>
                       )}
 
                       {downloadLink && (
                         <div className="text-xs">
-                          <span className="text-textMuted">{t('settings.buildFactoryDownloadLink')}：</span>
+                          <span className="text-textMuted">{t('settings:buildFactoryDownloadLink')}：</span>
                           <span className="text-primary-400 font-mono">{downloadLink}</span>
                         </div>
                       )}
@@ -1259,13 +1260,9 @@ export default function SettingsPage() {
 
   const renderSaveFooter = () => (
     <div className="sticky bottom-0 z-10 bg-gradient-to-t from-canvas via-canvas/95 to-transparent pt-6 pb-2 px-3 md:px-6">
-      {message && (
-        <div className={`text-sm px-3 py-2 rounded-card mb-3 ${
-          message.includes('失败') || message.includes('错误')
-            ? 'bg-rose-500/10 border border-rose-500/20 text-rose-400'
-            : 'bg-mint-400/10 border border-mint-400/20 text-mint-400'
-        }`}>
-          {message}
+      {saveNotice && (
+        <div className={`text-sm px-3 py-2 rounded-card mb-3 ${NOTICE_BOX_CLASS[saveNotice.tone]}`}>
+          {saveNotice.text}
         </div>
       )}
       <button
@@ -1274,9 +1271,9 @@ export default function SettingsPage() {
         className="btn btn-md btn-primary gap-2"
       >
         <Save size={16} />
-        {saving ? t('settings.saving') : t('settings.save')}
+        {saving ? t('settings:saving') : t('settings:save')}
       </button>
-      <p className="text-xs text-textMuted mt-2">{t('settings.saveHint')}</p>
+      <p className="text-xs text-textMuted mt-2">{t('settings:saveHint')}</p>
     </div>
   )
 
@@ -1295,12 +1292,12 @@ export default function SettingsPage() {
           <button
             onClick={() => navigate('/me')}
             className="md:hidden p-1.5 -ml-1 rounded-control hover:bg-elevated text-textSecondary transition-colors"
-            title={t('nav.me')}
+            title={t('nav:me')}
           >
             <ArrowLeft size={18} />
           </button>
         )}
-        <h1 className="font-semibold text-textPrimary text-sm">{t('settings.title')}</h1>
+        <h1 className="font-semibold text-textPrimary text-sm">{t('settings:title')}</h1>
       </div>
 
       {/* ── 移动端：分类导航列表 ── */}
@@ -1312,7 +1309,7 @@ export default function SettingsPage() {
               className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-card bg-primary-500/10 border border-primary-500/20 text-primary-400 hover:bg-primary-500/15 text-sm font-medium transition-colors"
             >
               <Shield size={16} />
-              {t('settings.adminButton')}
+              {t('settings:adminButton')}
             </button>
           )}
           {[...new Set(NAV_SECTIONS.map(s => s.category))].map(cat => {
@@ -1356,7 +1353,7 @@ export default function SettingsPage() {
                 style={{ width: 'calc(100% - 16px)' }}
               >
                 <Shield size={14} />
-                {t('settings.adminButton')}
+                {t('settings:adminButton')}
               </button>
             )}
 
@@ -1411,7 +1408,7 @@ export default function SettingsPage() {
                 className="md:hidden w-full flex items-center justify-center gap-2 px-4 py-3 mb-4 rounded-card bg-primary-500/10 border border-primary-500/20 text-primary-400 hover:bg-primary-500/15 text-sm font-medium transition-colors"
               >
                 <Shield size={16} />
-                {t('settings.adminButton')}
+                {t('settings:adminButton')}
               </button>
             )}
 
@@ -1425,16 +1422,16 @@ export default function SettingsPage() {
       {showBindEmail && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-modal p-4">
           <div className="bg-surface border border-border rounded-dialog p-6 w-full max-w-sm shadow-2xl shadow-black/30">
-            <h3 className="text-lg font-semibold text-textPrimary mb-4">{t('auth.bindEmailTitle')}</h3>
+            <h3 className="text-lg font-semibold text-textPrimary mb-4">{t('auth:bindEmailTitle')}</h3>
             <div className="space-y-3">
               <div>
-                <label className="block text-xs text-textSecondary mb-1">{t('auth.email')}</label>
+                <label className="block text-xs text-textSecondary mb-1">{t('auth:email')}</label>
                 <input
                   type="email"
                   value={bindEmail}
                   onChange={e => setBindEmail(e.target.value)}
                   className="w-full px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
-                  placeholder={t('auth.emailPlaceholder')}
+                  placeholder={t('auth:emailPlaceholder')}
                 />
               </div>
               <button
@@ -1442,10 +1439,10 @@ export default function SettingsPage() {
                 disabled={!bindEmail || bindSendCooldown > 0}
                 className="w-full py-2 text-xs rounded-card border border-border text-textSecondary hover:text-textPrimary hover:bg-elevated disabled:opacity-30 transition-colors"
               >
-                {bindSendCooldown > 0 ? `${t('auth.codeResendIn')} ${bindSendCooldown}s` : bindCodeSent ? t('auth.codeSent') : t('auth.sendCode')}
+                {bindSendCooldown > 0 ? `${t('auth:codeResendIn')} ${bindSendCooldown}s` : bindCodeSent ? t('auth:codeSent') : t('auth:sendCode')}
               </button>
               <div>
-                <label className="block text-xs text-textSecondary mb-2 text-center">{t('auth.codePlaceholder')}</label>
+                <label className="block text-xs text-textSecondary mb-2 text-center">{t('auth:codePlaceholder')}</label>
                 <VerificationCodeInput
                   value={bindCode}
                   onChange={setBindCode}
@@ -1458,14 +1455,14 @@ export default function SettingsPage() {
                   onClick={() => setShowBindEmail(false)}
                   className="flex-1 py-2 text-sm border border-border rounded-card hover:bg-elevated text-textSecondary transition-colors font-medium"
                 >
-                  {t('common.cancel')}
+                  {t('common:cancel')}
                 </button>
                 <button
                   onClick={handleBind}
                   disabled={!bindEmail || !bindCode || bindLoading}
                   className="btn btn-sm btn-primary flex-1"
                 >
-                  {bindLoading ? t('common.saving') : t('common.confirm')}
+                  {bindLoading ? t('common:saving') : t('common:confirm')}
                 </button>
               </div>
             </div>
@@ -1482,8 +1479,8 @@ export default function SettingsPage() {
                 <AlertTriangle size={20} className="text-rose-400" />
               </div>
               <div className="flex-1 min-w-0">
-                <h3 className="text-lg font-semibold text-textPrimary">{t('settings.removeEmailTitle')}</h3>
-                <p className="text-sm text-textSecondary mt-1">{t('settings.removeEmailDesc')}</p>
+                <h3 className="text-lg font-semibold text-textPrimary">{t('settings:removeEmailTitle')}</h3>
+                <p className="text-sm text-textSecondary mt-1">{t('settings:removeEmailDesc')}</p>
               </div>
             </div>
             <div className="flex gap-3 mt-5">
@@ -1491,13 +1488,13 @@ export default function SettingsPage() {
                 onClick={() => setRemoveConfirm(false)}
                 className="flex-1 py-2.5 text-sm border border-border rounded-card hover:bg-elevated text-textSecondary transition-colors font-medium"
               >
-                {t('common.cancel')}
+                {t('common:cancel')}
               </button>
               <button
                 onClick={handleRemoveEmail}
                 className="flex-1 py-2.5 text-sm bg-rose-500 text-white rounded-card hover:bg-rose-400 font-medium transition-all"
               >
-                {t('common.confirm')}
+                {t('common:confirm')}
               </button>
             </div>
           </div>
@@ -1513,8 +1510,8 @@ export default function SettingsPage() {
                 <AlertTriangle size={20} className="text-accent-500" />
               </div>
               <div className="flex-1 min-w-0">
-                <h3 className="text-lg font-semibold text-textPrimary">{t('settings.unsavedTitle')}</h3>
-                <p className="text-sm text-textSecondary mt-1">{t('settings.unsavedDesc')}</p>
+                <h3 className="text-lg font-semibold text-textPrimary">{t('settings:unsavedTitle')}</h3>
+                <p className="text-sm text-textSecondary mt-1">{t('settings:unsavedDesc')}</p>
               </div>
             </div>
             <div className="flex gap-3 mt-5">
@@ -1522,13 +1519,13 @@ export default function SettingsPage() {
                 onClick={() => blocker.reset?.()}
                 className="flex-1 py-2.5 text-sm border border-border rounded-card hover:bg-elevated text-textSecondary transition-colors font-medium"
               >
-                {t('settings.continueEditing')}
+                {t('settings:continueEditing')}
               </button>
               <button
                 onClick={() => blocker.proceed?.()}
                 className="flex-1 py-2.5 text-sm bg-rose-500 text-white rounded-card hover:bg-rose-400 font-medium transition-all"
               >
-                {t('settings.discardChanges')}
+                {t('settings:discardChanges')}
               </button>
             </div>
           </div>

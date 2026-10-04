@@ -33,18 +33,18 @@ export interface NavItem {
  * 避免侧边栏/手机底部占用主要位置。
  */
 export const mainNavItems: NavItem[] = [
-  { path: '/chat', i18nKey: 'nav.chat', icon: MessageCircle, matchSubPaths: true },
-  { path: '/worlds', i18nKey: 'nav.worlds', icon: Globe },
-  { path: '/list', i18nKey: 'nav.list', icon: Users },
-  { path: '/agents', i18nKey: 'nav.ai', icon: Bot },
-  { path: '/me', i18nKey: 'nav.me', icon: User },
+  { path: '/chat', i18nKey: 'nav:chat', icon: MessageCircle, matchSubPaths: true },
+  { path: '/worlds', i18nKey: 'nav:worlds', icon: Globe },
+  { path: '/list', i18nKey: 'nav:list', icon: Users },
+  { path: '/agents', i18nKey: 'nav:ai', icon: Bot },
+  { path: '/me', i18nKey: 'nav:me', icon: User },
 ]
 
 /**
  * 次要导航项（只在 Sidebar 展开时显示）
  */
 export const secondaryNavItems: NavItem[] = [
-  { path: '/settings', i18nKey: 'nav.settings', icon: User },
+  { path: '/settings', i18nKey: 'nav:settings', icon: User },
 ]
 
 /**
@@ -52,7 +52,7 @@ export const secondaryNavItems: NavItem[] = [
  */
 export const adminNavItem: NavItem = {
   path: '/admin',
-  i18nKey: 'nav.admin',
+  i18nKey: 'nav:admin',
   icon: User,  // Shield icon used inline in Sidebar
   adminOnly: true,
 }

@@ -200,7 +200,7 @@ export default function ForwardFileModal({ file, onClose }: ForwardFileModalProp
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder={t('forward.searchPlaceholder')}
+              placeholder={t('forward:searchPlaceholder')}
               className="flex-1 bg-transparent text-sm text-textPrimary placeholder:text-textMuted focus:outline-none"
               autoFocus
             />
@@ -214,11 +214,11 @@ export default function ForwardFileModal({ file, onClose }: ForwardFileModalProp
               <Loader2 size={20} className="animate-spin text-textMuted" />
             </div>
           ) : groups.length === 0 && dmContacts.length === 0 ? (
-            <p className="text-center text-sm text-textMuted py-12">{t('forward.noTargets')}</p>
+            <p className="text-center text-sm text-textMuted py-12">{t('forward:noTargets')}</p>
           ) : (
             <>
-              {renderList(filteredGroups, <Users size={12} />, t('forward.groupsLabel'))}
-              {renderList(filteredDms, <MessageSquare size={12} />, t('forward.dmLabel'))}
+              {renderList(filteredGroups, <Users size={12} />, t('forward:groupsLabel'))}
+              {renderList(filteredDms, <MessageSquare size={12} />, t('forward:dmLabel'))}
             </>
           )}
         </div>
@@ -227,16 +227,16 @@ export default function ForwardFileModal({ file, onClose }: ForwardFileModalProp
         <div className="px-3 py-2.5 border-t border-border shrink-0 flex items-center gap-2">
           <span className="text-xs text-textMuted flex-1">
             {done
-              ? t('forward.sent')
+              ? t('forward:sent')
               : selected.size > 0
-              ? t('forward.selectedCount').replace('{n}', String(selected.size))
-              : t('forward.selectHint')}
+              ? t('forward:selectedCount').replace('{n}', String(selected.size))
+              : t('forward:selectHint')}
           </span>
           <button
             onClick={onClose}
             className="px-3 py-1.5 rounded-control text-xs text-textSecondary hover:bg-elevated transition-colors"
           >
-            {done ? t('common.close') : t('common.cancel')}
+            {done ? t('common:close') : t('common:cancel')}
           </button>
           <button
             onClick={handleSend}
@@ -248,7 +248,7 @@ export default function ForwardFileModal({ file, onClose }: ForwardFileModalProp
             ) : (
               <Send size={14} />
             )}
-            {t('forward.send')}
+            {t('forward:send')}
           </button>
         </div>
       </div>

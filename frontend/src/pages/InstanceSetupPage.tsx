@@ -24,7 +24,7 @@ export default function InstanceSetupPage() {
   const handleTest = async () => {
     const trimmed = url.trim().replace(/\/+$/, '')
     if (!trimmed) {
-      setError(t('desktop.testFailed'))
+      setError(t('desktop:testFailed'))
       return
     }
     setTesting(true)
@@ -43,11 +43,11 @@ export default function InstanceSetupPage() {
         setTestResult('success')
       } else {
         setTestResult('fail')
-        setError(t('desktop.testFailed'))
+        setError(t('desktop:testFailed'))
       }
     } catch {
       setTestResult('fail')
-      setError(t('desktop.testFailed'))
+      setError(t('desktop:testFailed'))
     } finally {
       setTesting(false)
     }
@@ -56,7 +56,7 @@ export default function InstanceSetupPage() {
   const handleSave = () => {
     const trimmed = url.trim().replace(/\/+$/, '')
     if (!trimmed) {
-      setError(t('desktop.testFailed'))
+      setError(t('desktop:testFailed'))
       return
     }
     setSaving(true)
@@ -80,18 +80,18 @@ export default function InstanceSetupPage() {
           <div className="flex items-center gap-2 mb-2">
             <Globe size={20} className="text-primary-400" />
             <h2 className="text-lg font-semibold text-textPrimary">
-              {t('desktop.instanceSetupTitle')}
+              {t('desktop:instanceSetupTitle')}
             </h2>
           </div>
           <p className="text-sm text-textMuted mb-6">
-            {t('desktop.instanceSetupDesc')}
+            {t('desktop:instanceSetupDesc')}
           </p>
 
           {/* 输入框 */}
           <div className="space-y-4">
             <div>
               <label className="block text-xs font-medium mb-1.5 text-textSecondary">
-                {t('desktop.instanceUrlLabel')}
+                {t('desktop:instanceUrlLabel')}
               </label>
               <input
                 type="text"
@@ -102,7 +102,7 @@ export default function InstanceSetupPage() {
                   setError('')
                 }}
                 className="w-full px-3.5 py-2.5 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
-                placeholder={t('desktop.instanceUrlPlaceholder')}
+                placeholder={t('desktop:instanceUrlPlaceholder')}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') handleTest()
                 }}
@@ -130,10 +130,10 @@ export default function InstanceSetupPage() {
                 <XCircle size={16} className="text-rose-400" />
               ) : null}
               {testing
-                ? t('desktop.testing')
+                ? t('desktop:testing')
                 : testResult === 'success'
-                  ? t('desktop.testSuccess')
-                  : t('desktop.testConnection')}
+                  ? t('desktop:testSuccess')
+                  : t('desktop:testConnection')}
             </button>
           </div>
 
@@ -143,7 +143,7 @@ export default function InstanceSetupPage() {
               onClick={handleSkip}
               className="btn btn-md btn-outline flex-1 text-textMuted"
             >
-              {t('desktop.skip')}
+              {t('desktop:skip')}
             </button>
             <button
               onClick={handleSave}
@@ -155,7 +155,7 @@ export default function InstanceSetupPage() {
               ) : (
                 <ArrowRight size={16} />
               )}
-              {t('desktop.saveAndContinue')}
+              {t('desktop:saveAndContinue')}
             </button>
           </div>
         </div>

@@ -20,7 +20,7 @@ import WorldPreviewFrame, { WorldPreviewActions } from '../components/world/Worl
 import { getCodeLang, isMarkdownFile } from '../utils/mime'
 import { useResizableSidebar } from '../hooks/useResizableSidebar'
 import { useElementWidth } from '../hooks/useElementWidth'
-import { Button, Dialog, IconButton, Input, MenuPanel, MenuItem } from '../components/ui'
+import { Button, Dialog, IconButton, Input, MenuPanel, MenuItem, UnderlineTabs } from '../components/ui'
 import { useT } from '../i18n/I18nContext'
 
 /**
@@ -190,7 +190,7 @@ export default function WorldDesignPage() {
     try {
       const r = await api.get<{ content: string }>(`/kb/${id}`)
       setDocsContent(r.content || '')
-    } catch { setDocsContent('（文档读取失败）') } finally { setDocsLoading(false) }
+    } catch { setDocsContent(t('tool:world.docs.readFailed')) } finally { setDocsLoading(false) }
   }
   // 下载文档（md 文件）：本地内容落盘走 utils/download（唯一入口）
   const downloadDoc = (content: string, filename: string) => {
@@ -213,7 +213,7 @@ export default function WorldDesignPage() {
       // docx 转换：POST 拿二进制（download 支持 POST），取回+落盘走唯一入口
       await api.download('/kb/convert', filename.endsWith('.docx') ? filename : filename + '.docx',
                          { method: 'POST', body: { md, filename } })
-    } catch (e: any) { setMsg(`docx 导出失败: ${e?.message || e}`) }
+    } catch (e: any) { setMsg(t('tool:world.docs.exportFailed', { error: e?.message || e })) }
   }
   // 下载弹窗确认：按格式执行
   const doDownload = async (format: 'md' | 'docx') => {
@@ -287,7 +287,7 @@ export default function WorldDesignPage() {
         selectFile(f.files[0].path)
       }
     } catch (e: any) {
-      setMsg(`加载失败: ${e?.message || e}`)
+      setMsg(t('tool:world.editor.loadFailed', { error: e?.message || e }))
     } finally {
       setLoading(false)
     }
@@ -309,7 +309,7 @@ export default function WorldDesignPage() {
       const r = await api.get<{ content: string | null; binary: boolean }>(
         `/worlds/${wid}/files/content?path=${encodeURIComponent(path)}`,
       )
-      setContent(r.binary ? '(二进制文件，不可编辑)' : (r.content || ''))
+      setContent(r.binary ? t('tool:world.editor.binaryNotEditable') : (r.content || ''))
     } catch { setContent('') }
   }, [wid])
 
@@ -326,11 +326,11 @@ export default function WorldDesignPage() {
     setSaving(true)
     try {
       await api.put(`/worlds/${wid}/files`, { path: currentFile, content })
-      await pushNotice(currentFile, 'manual-edit', `用户手动编辑了 ${currentFile}`)
+      await pushNotice(currentFile, 'manual-edit', t('tool:world.editor.noticeManualEdit', { file: currentFile }))
       setPreviewKey((k) => k + 1) // 刷新预览
-      setMsg('已保存')
+      setMsg(t('tool:world.editor.saved'))
     } catch (e: any) {
-      const errMsg = `保存失败: ${e?.message || e}`
+      const errMsg = t('tool:world.editor.saveFailed', { error: e?.message || e })
       // 报错也进懒通知，agent 下次对话能看到
       await pushNotice(currentFile || 'unknown', 'save-error', errMsg)
       setMsg(errMsg)
@@ -340,14 +340,14 @@ export default function WorldDesignPage() {
   }
 
   const createFile = async () => {
-    const name = prompt('新文件名（如 about.html）：')
+    const name = prompt(t('tool:world.editor.newFilePrompt'))
     if (!name) return
     try {
       await api.put(`/worlds/${wid}/files`, { path: name, content: '' })
       await load()
       selectFile(name)
     } catch (e: any) {
-      setMsg(`创建失败: ${e?.message || e}`)
+      setMsg(t('tool:world.editor.createFailed', { error: e?.message || e }))
     }
   }
 
@@ -361,9 +361,9 @@ export default function WorldDesignPage() {
       await api.post(`/worlds/${wid}/files/upload`, fd)
       await load()
       selectFile(targetPath.replace(/^\/+/, ''))
-      setMsg('已上传')
+      setMsg(t('tool:world.editor.uploaded'))
     } catch (err: any) {
-      setMsg(`上传失败: ${err?.message || err}`)
+      setMsg(t('tool:world.editor.uploadFailed', { error: err?.message || err }))
     }
   }
   const handleUploadPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -380,7 +380,7 @@ export default function WorldDesignPage() {
     }
     // 桌面端：prompt 输入目标路径（默认当前选中文件所在目录）
     const dir = currentFile?.includes('/') ? currentFile.slice(0, currentFile.lastIndexOf('/') + 1) : ''
-    const target = prompt(`上传到哪个路径？（当前目录：${dir || '/'}）`, dir + f.name)
+    const target = prompt(t('tool:world.editor.uploadPathPrompt', { dir: dir || '/' }), dir + f.name)
     if (!target) return
     await uploadFile(f, target)
   }
@@ -403,14 +403,14 @@ export default function WorldDesignPage() {
 
   // ── 删除（AI 侧已有 file_delete 工具，这里补前端入口） ──
   const deleteFile = useCallback(async (path: string) => {
-    if (!confirm(`删除 ${path}？`)) return
+    if (!confirm(t('tool:world.editor.confirmDelete', { path }))) return
     try {
       await api.delete(`/worlds/${wid}/files?path=${encodeURIComponent(path)}`)
       if (currentFile === path) setCurrentFile('')
       await load()
-      setMsg(`已删除 ${path}`)
+      setMsg(t('tool:world.editor.deleted', { path }))
     } catch (e: any) {
-      setMsg(`删除失败: ${e?.message || e}`)
+      setMsg(t('tool:world.editor.deleteFailed', { error: e?.message || e }))
     }
     // currentFile 进了依赖：删掉的正好是当前文件时要清掉选中
   }, [wid, currentFile, load])
@@ -463,8 +463,8 @@ export default function WorldDesignPage() {
     setWorldZipOpen(false)
     try {
       await api.download(`/worlds/${worldId}/export?include_content=${includeContent}`, `world_${worldId}.zip`)
-      setMsg(includeContent ? '已下载世界包（含数据文件）' : '已下载世界包（不含数据文件）')
-    } catch (err: any) { setMsg(`下载失败: ${err?.message || err}`) }
+      setMsg(includeContent ? t('tool:world.zip.downloadedWithData') : t('tool:world.zip.downloadedNoData'))
+    } catch (err: any) { setMsg(t('tool:world.zip.downloadFailed', { error: err?.message || err })) }
   }
   const importZipRef = useRef<HTMLInputElement>(null)
   const [importMode, setImportMode] = useState<'safe' | 'full'>('safe')
@@ -472,16 +472,16 @@ export default function WorldDesignPage() {
     const f = e.target.files?.[0]
     e.target.value = ''  // 允许重复选同一文件
     if (!f) return
-    if (!f.name.toLowerCase().endsWith('.zip')) { setMsg('请选择 zip 文件'); return }
+    if (!f.name.toLowerCase().endsWith('.zip')) { setMsg(t('tool:world.import.needZip')); return }
     setWorldImportOpen(false)
     try {
       const fd = new FormData()
       fd.append('file', f)
       fd.append('exclude_content', String(importMode === 'safe'))
       const r = await api.post<{ imported: number; skipped_content?: number }>(`/worlds/${worldId}/files/import`, fd)
-      setMsg(`导入成功：${r?.imported ?? 0} 个文件${r?.skipped_content ? `（跳过数据文件 ${r.skipped_content}）` : ''}`)
+      setMsg(t('tool:world.import.done', { n: r?.imported ?? 0 }) + (r?.skipped_content ? t('tool:world.import.skipped', { n: r.skipped_content }) : ''))
       load()
-    } catch (err: any) { setMsg(`导入失败: ${err?.message || err}`) }
+    } catch (err: any) { setMsg(t('tool:world.import.failed', { error: err?.message || err })) }
   }
 
   const publishToMarket = () => {
@@ -578,7 +578,7 @@ export default function WorldDesignPage() {
     <>
       <div className="flex items-center gap-2 px-3 h-9 border-b border-border shrink-0">
         <MessageCircle size={14} className="text-textMuted shrink-0" />
-        <span className="text-sm font-medium truncate">{world.creator?.name || '群视界机器人'}</span>
+        <span className="text-sm font-medium truncate">{world.creator?.name || t('tool:world.creator.nameFallback')}</span>
         {chatUnreadCount > 0 && (
           <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-3xs font-bold animate-pulse">
             {chatUnreadCount > 99 ? '99+' : chatUnreadCount}
@@ -626,8 +626,8 @@ export default function WorldDesignPage() {
     )
   }
 
-  if (loading) return <div className="flex items-center justify-center h-screen text-textMuted">加载中...</div>
-  if (!world) return <div className="p-8 text-textMuted">世界不存在</div>
+  if (loading) return <div className="flex items-center justify-center h-screen text-textMuted">{t('common:loading')}</div>
+  if (!world) return <div className="p-8 text-textMuted">{t('tool:world.notFound')}</div>
 
   return (
     <div className="h-full bg-canvas text-textPrimary">
@@ -637,40 +637,40 @@ export default function WorldDesignPage() {
         <div className="flex items-center gap-2 px-3 py-2 bg-surface border-b border-border">
           <button onClick={() => navigate('/worlds')} className="inline-flex items-center gap-1 text-sm text-textMuted hover:text-textPrimary transition-colors shrink-0">
             <ChevronLeft size={14} />
-            世界
+            {t('tool:world.top.back')}
           </button>
           <span className="font-semibold truncate">{world.name}</span>
           <span className={`hidden sm:inline-flex text-xs px-2 py-0.5 rounded-full shrink-0 ${world.status === 'active' ? 'bg-mint-500/20 text-mint-400' : 'bg-elevated text-textMuted'}`}>
-            {world.status === 'active' ? '活跃' : '休眠'}
+            {world.status === 'active' ? t('tool:world.top.status.active') : t('tool:world.top.status.hibernating')}
           </span>
           <div className="flex-1" />
           <button
             onClick={() => setShowCreatorForm((v) => !v)}
             className={`shrink-0 p-1.5 transition-colors ${showCreatorForm ? 'text-primary-400' : 'text-textMuted hover:text-textPrimary'}`}
-            title="世界 AI 配置（单独表单，不属于 agent）"
+            title={t('tool:world.top.configTitle')}
           >
             <Settings size={14} />
           </button>
-          <button onClick={openDocs} className="shrink-0 p-1.5 text-textMuted hover:text-textPrimary transition-colors" title="接口文档（发给世界 AI 的 md）">
+          <button onClick={openDocs} className="shrink-0 p-1.5 text-textMuted hover:text-textPrimary transition-colors" title={t('tool:world.top.docsHint')}>
             <BookOpen size={14} />
           </button>
-          <button onClick={() => setWorldZipOpen(true)} className="shrink-0 p-1.5 text-textMuted hover:text-textPrimary transition-colors" title="下载世界包（zip）">
+          <button onClick={() => setWorldZipOpen(true)} className="shrink-0 p-1.5 text-textMuted hover:text-textPrimary transition-colors" title={t('tool:world.top.exportHint')}>
             <Download size={14} />
           </button>
-          <button onClick={() => setWorldImportOpen(true)} className="shrink-0 p-1.5 text-textMuted hover:text-textPrimary transition-colors" title="导入世界包（zip 批量导入，不动数据文件）">
+          <button onClick={() => setWorldImportOpen(true)} className="shrink-0 p-1.5 text-textMuted hover:text-textPrimary transition-colors" title={t('tool:world.top.importHint')}>
             <FolderInput size={14} />
           </button>
-          <button onClick={publishToMarket} className="shrink-0 inline-flex items-center gap-1 text-xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 transition-colors px-2 py-1 whitespace-nowrap" title="发布到世界商城">
-            <Upload size={13} /> 发布
+          <button onClick={publishToMarket} className="shrink-0 inline-flex items-center gap-1 text-xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 transition-colors px-2 py-1 whitespace-nowrap" title={t('tool:world.top.publish')}>
+            <Upload size={13} /> {t('tool:world.top.publishShort')}
           </button>
-          <button onClick={() => setGroupManagerOpen(true)} className="shrink-0 p-1.5 text-textMuted hover:text-textPrimary transition-colors" title="群类型与群助手">
+          <button onClick={() => setGroupManagerOpen(true)} className="shrink-0 p-1.5 text-textMuted hover:text-textPrimary transition-colors" title={t('tool:world.top.groups')}>
             <MoreHorizontal size={16} />
           </button>
           {mobileTab === 'files' && (
             <div className="relative shrink-0">
-              <button onClick={() => setUploadMenuOpen((v) => !v)} className="inline-flex items-center gap-1 text-xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 transition-colors px-2 py-1 whitespace-nowrap" title="上传文件">
+              <button onClick={() => setUploadMenuOpen((v) => !v)} className="inline-flex items-center gap-1 text-xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 transition-colors px-2 py-1 whitespace-nowrap" title={t('tool:world.files.uploadFile')}>
                 <Upload size={14} />
-                上传
+                {t('tool:world.files.upload')}
               </button>
               {uploadMenuOpen && (
                 <MenuPanel className="absolute right-0 top-full mt-1 w-56 p-1 z-modal">
@@ -686,27 +686,19 @@ export default function WorldDesignPage() {
           )}
         </div>
 
-        {/* tab：文件 / 对话 / 预览（对话默认打开） */}
-        <div className="flex items-stretch bg-surface border-b border-border">
-          <button
-            onClick={() => setMobileTab('files')}
-            className={`flex-1 inline-flex items-center justify-center gap-1.5 py-2 text-sm transition-colors ${mobileTab === 'files' ? 'text-primary-400 border-b-2 border-primary-500 font-medium' : 'text-textMuted'}`}
-          >
-            <Folder size={14} /> 文件
-          </button>
-          <button
-            onClick={() => setMobileTab('chat')}
-            className={`flex-1 inline-flex items-center justify-center gap-1.5 py-2 text-sm transition-colors ${mobileTab === 'chat' ? 'text-primary-400 border-b-2 border-primary-500 font-medium' : 'text-textMuted'}`}
-          >
-            <MessageCircle size={14} /> 对话
-          </button>
-          <button
-            onClick={() => setMobileTab('preview')}
-            className={`flex-1 inline-flex items-center justify-center gap-1.5 py-2 text-sm transition-colors ${mobileTab === 'preview' ? 'text-primary-400 border-b-2 border-primary-500 font-medium' : 'text-textMuted'}`}
-          >
-            <Eye size={14} /> 预览
-          </button>
-        </div>
+        {/* tab：工作区 / 会话 / 预览（会话默认打开）。文案与桌面左栏同一批 key：
+            同两个视图不该在移动端叫"文件/对话"、在桌面叫"工作区/会话" */}
+        <UnderlineTabs
+          grow
+          className="bg-surface"
+          items={[
+            { key: 'files', label: t('tool:world.rail.tab.files'), icon: <Folder size={14} /> },
+            { key: 'chat', label: t('tool:world.rail.tab.chat'), icon: <MessageCircle size={14} /> },
+            { key: 'preview', label: t('tool:world.pane.preview'), icon: <Eye size={14} /> },
+          ]}
+          value={mobileTab}
+          onChange={setMobileTab}
+        />
 
         {/* 内容区：对话 tab（默认）/ 预览 tab（iframe）/ 文件 tab（目录导航 → 编辑器） */}
         {mobileTab === 'chat' ? (
@@ -728,21 +720,21 @@ export default function WorldDesignPage() {
             <div className="px-3 py-1.5 text-xs text-textSecondary bg-surface/60 border-b border-border flex items-center gap-2">
               <button onClick={() => setMobileView('dirs')} className="inline-flex items-center gap-0.5 text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 transition-colors shrink-0">
                 <ChevronLeft size={13} />
-                返回
+                {t('common:back')}
               </button>
-              <span className="truncate flex-1">{currentFile || '未选择文件'}</span>
+              <span className="truncate flex-1">{currentFile || t('tool:world.pane.noSelection')}</span>
               {canRender && (
                 <button
                   onClick={() => setViewMode((v) => (v === 'render' ? 'edit' : 'render'))}
                   className="text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 transition-colors shrink-0"
-                  title={viewMode === 'render' ? '切到原文/编辑' : '切到渲染视图'}
+                  title={viewMode === 'render' ? t('tool:world.editor.switchToSource') : t('tool:world.editor.switchToRender')}
                 >
-                  {viewMode === 'render' ? (isMdFile ? '查看原文' : '编辑') : '渲染'}
+                  {viewMode === 'render' ? (isMdFile ? t('tool:world.pane.viewSource') : t('tool:world.pane.edit')) : t('tool:world.pane.render')}
                 </button>
               )}
               {viewMode !== 'render' && (
                 <button onClick={saveFile} disabled={saving} className="text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 transition-colors shrink-0">
-                  {saving ? '保存中...' : (<span className="inline-flex items-center gap-1"><Save size={12} /> 保存</span>)}
+                  {saving ? t('tool:world.pane.saving') : (<span className="inline-flex items-center gap-1"><Save size={12} /> {t('tool:world.pane.save')}</span>)}
                 </button>
               )}
             </div>
@@ -773,7 +765,7 @@ export default function WorldDesignPage() {
             <div className="flex-1 overflow-y-auto p-2">
               {mobileDirNode.children.length === 0 && (
                 <div className="text-xs text-textMuted text-center mt-10 px-4">
-                  空目录<br />点右上角「上传」放文件，或去「对话」让机器人生成
+                  {t('tool:world.editor.emptyDirHint')}
                 </div>
               )}
               {mobileDirNode.children.map((n) => n.isDir ? (
@@ -798,7 +790,7 @@ export default function WorldDesignPage() {
                   <button
                     onClick={() => deleteFile(n.path)}
                     className="shrink-0 w-8 h-8 flex items-center justify-center text-textMuted hover:text-rose-400 transition-colors"
-                    title="删除此文件"
+                    title={t('tool:world.editor.deleteFile')}
                   >
                     <Trash2 size={14} />
                   </button>
@@ -813,8 +805,8 @@ export default function WorldDesignPage() {
           <div className="absolute inset-0 z-modal bg-black/50 flex items-end">
             <div className="w-full bg-surface rounded-t-2xl border-t border-border flex flex-col max-h-[75%]">
               <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
-                <span className="text-sm font-semibold flex-1">选择上传位置</span>
-                <button onClick={() => setUploadDirPickerOpen(false)} className="text-xs text-textMuted hover:text-textPrimary px-2 py-1">取消</button>
+                <span className="text-sm font-semibold flex-1">{t('tool:world.editor.uploadDirTitle')}</span>
+                <button onClick={() => setUploadDirPickerOpen(false)} className="text-xs text-textMuted hover:text-textPrimary px-2 py-1">{t('common:cancel')}</button>
               </div>
               <div className="flex items-center gap-0.5 px-4 py-2 overflow-x-auto text-xs border-b border-border/60">
                 <button onClick={() => setUploadNavDir('')} className="text-primary-400 hover:underline shrink-0">/</button>
@@ -836,7 +828,7 @@ export default function WorldDesignPage() {
               </div>
               <div className="flex-1 overflow-y-auto p-2">
                 {uploadDirNode.children.filter((n) => n.isDir).length === 0 && (
-                  <div className="text-xs text-textMuted text-center mt-8">当前目录没有子文件夹</div>
+                  <div className="text-xs text-textMuted text-center mt-8">{t('tool:world.editor.noSubdirs')}</div>
                 )}
                 {uploadDirNode.children.filter((n) => n.isDir).map((n) => (
                   <button
@@ -852,7 +844,7 @@ export default function WorldDesignPage() {
               </div>
               <div className="p-3 border-t border-border">
                 <button onClick={mobileUploadToNavDir} className="btn btn-md btn-primary w-full">
-                  上传到此位置（{uploadNavDir || '/'}）
+                  {t('tool:world.files.uploadHere', { dir: uploadNavDir || '/' })}
                 </button>
               </div>
             </div>
@@ -890,7 +882,7 @@ export default function WorldDesignPage() {
           <button
             onClick={() => setShowCreatorForm((v) => !v)}
             className={`shrink-0 inline-flex items-center gap-1 h-7 px-2 rounded-control text-xs transition-colors ${showCreatorForm ? 'bg-primary-500/15 text-primary-400' : 'bg-elevated hover:bg-border text-textSecondary'}`}
-            title="世界 AI 配置（单独表单，不属于 agent）"
+            title={t('tool:world.top.configTitle')}
           >
             <Settings size={12} /> {t('tool:world.top.config')}
           </button>
@@ -1061,7 +1053,7 @@ export default function WorldDesignPage() {
                       <button
                         onClick={() => setViewMode((v) => (v === 'render' ? 'edit' : 'render'))}
                         className="inline-flex items-center gap-0.5 text-xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 transition-colors"
-                        title={viewMode === 'render' ? '切到原文/编辑' : '切到渲染视图'}
+                        title={viewMode === 'render' ? t('tool:world.editor.switchToSource') : t('tool:world.editor.switchToRender')}
                       >
                         {viewMode === 'render' ? (isMdFile ? (
                           <><FileText size={12} /> {t('tool:world.pane.viewSource')}</>
@@ -1120,10 +1112,10 @@ export default function WorldDesignPage() {
             <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
               <div className="flex items-center gap-2 min-w-0">
                 <BookOpen size={15} className="text-primary-400 shrink-0" />
-                <span className="text-sm font-semibold text-textPrimary truncate">世界 API 接口文档</span>
-                <span className="text-3xs text-textMuted hidden sm:inline">发给世界 AI 的 md（view_api_doc 同源）</span>
+                <span className="text-sm font-semibold text-textPrimary truncate">{t('tool:world.docs.title')}</span>
+                <span className="text-3xs text-textMuted hidden sm:inline">{t('tool:world.docs.subtitle')}</span>
               </div>
-              <button onClick={() => setDocsOpen(false)} className="p-1 text-textMuted hover:text-textPrimary transition-colors shrink-0" title="关闭"><X size={16} /></button>
+              <button onClick={() => setDocsOpen(false)} className="p-1 text-textMuted hover:text-textPrimary transition-colors shrink-0" title={t('common:close')}><X size={16} /></button>
             </div>
             <div className="flex flex-1 min-h-0 flex-col md:flex-row">
               {/* 分区列表：手机顶部横向滚动条，桌面左侧栏 */}
@@ -1143,25 +1135,25 @@ export default function WorldDesignPage() {
               <div className="flex-1 flex flex-col min-w-0 min-h-0">
                 <div className="flex items-center gap-2 px-4 py-2 border-b border-border shrink-0 flex-wrap">
                   <span className="text-xs text-textSecondary truncate flex-1 min-w-0">
-                    {docsSections.find((s) => s.id === docsActive)?.title || '接口文档'}
+                    {docsSections.find((s) => s.id === docsActive)?.title || t('tool:world.docs.title')}
                   </span>
                   <button
-                    onClick={() => setDownloadTarget({ scope: 'section', title: '下载此分区' })}
+                    onClick={() => setDownloadTarget({ scope: 'section', title: t('tool:world.docs.downloadSection') })}
                     disabled={!docsContent || docsLoading}
                     className="btn btn-sm btn-secondary shrink-0"
                   >
-                    <Download size={12} /> 下载此分区
+                    <Download size={12} /> {t('tool:world.docs.downloadSection')}
                   </button>
                   <button
-                    onClick={() => setDownloadTarget({ scope: 'all', title: '下载全部' })}
+                    onClick={() => setDownloadTarget({ scope: 'all', title: t('tool:world.docs.downloadAll') })}
                     className="btn btn-sm btn-secondary shrink-0"
                   >
-                    <Download size={12} /> 下载全部
+                    <Download size={12} /> {t('tool:world.docs.downloadAll')}
                   </button>
                 </div>
                 <div className="flex-1 overflow-y-auto p-4 min-w-0">
                 {docsLoading ? (
-                  <div className="flex items-center justify-center py-16 text-textMuted text-sm">加载中…</div>
+                  <div className="flex items-center justify-center py-16 text-textMuted text-sm">{t('common:loading')}</div>
                 ) : (
                   <div className="max-w-none prose prose-sm dark:prose-invert [&_pre]:!bg-transparent [&_pre]:!p-0 [&_pre]:!m-0 [&_pre]:!rounded-none [&_pre]:!border-0">
                     <MarkdownContent content={docsContent} isMine={false} />
@@ -1180,30 +1172,30 @@ export default function WorldDesignPage() {
           <div className="w-full md:max-w-xs bg-surface border-t md:border border-border md:rounded-dialog rounded-none p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="text-sm font-semibold text-textPrimary mb-1">{downloadTarget.title}</div>
             <div className="text-3xs text-textMuted mb-3">
-              {downloadTarget.scope === 'section' ? `当前分区：${docsSections.find((s) => s.id === docsActive)?.title || docsActive || '文档'}` : '全部分区合并'}
+              {downloadTarget.scope === 'section' ? t('tool:world.docs.currentSection', { title: docsSections.find((s) => s.id === docsActive)?.title || docsActive || t('tool:world.docs.title') }) : t('tool:world.docs.allSections')}
             </div>
             <div className="space-y-2">
               <button
                 onClick={() => doDownload('md')}
                 className="btn btn-md btn-secondary w-full"
               >
-                <FileText size={13} /> 下载 .md
+                <FileText size={13} /> {t('tool:world.docs.downloadMd')}
               </button>
               {docxAvailable && (
                 <button
                   onClick={() => doDownload('docx')}
                   className="btn btn-md btn-primary w-full"
                 >
-                  <FileText size={13} /> 下载 .docx（Word）
+                  <FileText size={13} /> {t('tool:world.docs.downloadDocx')}
                 </button>
               )}
             </div>
             {!docxAvailable && isAdminUser && (
               <div className="mt-3 text-3xs text-accent-400/90 leading-relaxed">
-                如需下载为 docx（Word），请前往管理页安装 pandoc 插件后重启后端。
+                {t('tool:world.docs.docxNeedsPandoc')}
               </div>
             )}
-            <button onClick={() => setDownloadTarget(null)} className="btn btn-md btn-ghost w-full mt-2">取消</button>
+            <button onClick={() => setDownloadTarget(null)} className="btn btn-md btn-ghost w-full mt-2">{t('common:cancel')}</button>
           </div>
         </div>
       )}
@@ -1214,26 +1206,26 @@ export default function WorldDesignPage() {
           <div className="w-full max-w-xs bg-surface border border-border rounded-dialog p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-2 mb-1">
               <Download size={15} className="text-primary-400" />
-              <span className="text-sm font-semibold text-textPrimary">下载世界包</span>
+              <span className="text-sm font-semibold text-textPrimary">{t('tool:world.top.export')}</span>
             </div>
-            <div className="text-xs text-textMuted mb-4">导出为 zip 压缩包，Windows 可直接解压。</div>
+            <div className="text-xs text-textMuted mb-4">{t('tool:world.zip.hint')}</div>
             <div className="space-y-2">
               <button
                 onClick={() => downloadWorldZip(true)}
                 className="w-full text-left px-3.5 py-3 rounded-card border border-border bg-elevated/40 hover:bg-elevated transition-colors"
               >
-                <div className="flex items-center gap-2 text-sm text-textPrimary"><Download size={13} className="text-primary-400" /> 完整备份（含数据文件）</div>
-                <div className="text-3xs text-textMuted mt-1 pl-5">代码 + 资源 + 运行数据（content/）</div>
+                <div className="flex items-center gap-2 text-sm text-textPrimary"><Download size={13} className="text-primary-400" /> {t('tool:world.zip.full')}</div>
+                <div className="text-3xs text-textMuted mt-1 pl-5">{t('tool:world.zip.fullDesc')}</div>
               </button>
               <button
                 onClick={() => downloadWorldZip(false)}
                 className="w-full text-left px-3.5 py-3 rounded-card border border-border bg-elevated/40 hover:bg-elevated transition-colors"
               >
-                <div className="flex items-center gap-2 text-sm text-textPrimary"><Download size={13} className="text-primary-400" /> 仅代码与资源</div>
-                <div className="text-3xs text-textMuted mt-1 pl-5">不含运行数据，适合分享给他人</div>
+                <div className="flex items-center gap-2 text-sm text-textPrimary"><Download size={13} className="text-primary-400" /> {t('tool:world.zip.codeOnly')}</div>
+                <div className="text-3xs text-textMuted mt-1 pl-5">{t('tool:world.zip.codeOnlyDesc')}</div>
               </button>
             </div>
-            <button onClick={() => setWorldZipOpen(false)} className="w-full mt-3 py-1.5 text-xs text-textMuted hover:text-textPrimary transition-colors">取消</button>
+            <button onClick={() => setWorldZipOpen(false)} className="w-full mt-3 py-1.5 text-xs text-textMuted hover:text-textPrimary transition-colors">{t('common:cancel')}</button>
           </div>
         </Dialog>
       )}
@@ -1244,26 +1236,26 @@ export default function WorldDesignPage() {
           <div className="w-full max-w-xs bg-surface border border-border rounded-dialog p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-2 mb-1">
               <FolderInput size={15} className="text-primary-400" />
-              <span className="text-sm font-semibold text-textPrimary">导入世界包</span>
+              <span className="text-sm font-semibold text-textPrimary">{t('tool:world.top.import')}</span>
             </div>
-            <div className="text-xs text-textMuted mb-4">从 zip 导入：已存在的同名文件会被替换，其余文件保持不变。</div>
+            <div className="text-xs text-textMuted mb-4">{t('tool:world.import.hint')}</div>
             <div className="space-y-2">
               <button
                 onClick={() => { setImportMode('safe'); importZipRef.current?.click() }}
                 className="w-full text-left px-3.5 py-3 rounded-card border border-primary-500/40 bg-primary-500/10 hover:bg-primary-500/15 transition-colors"
               >
-                <div className="flex items-center gap-2 text-sm text-textPrimary"><FolderInput size={13} className="text-primary-400" /> 保留数据文件</div>
-                <div className="text-3xs text-textMuted mt-1 pl-5">只替换代码与资源，运行数据（content/）不动 · 推荐</div>
+                <div className="flex items-center gap-2 text-sm text-textPrimary"><FolderInput size={13} className="text-primary-400" /> {t('tool:world.import.keepData')}</div>
+                <div className="text-3xs text-textMuted mt-1 pl-5">{t('tool:world.import.keepDataDesc')}</div>
               </button>
               <button
                 onClick={() => { setImportMode('full'); importZipRef.current?.click() }}
                 className="w-full text-left px-3.5 py-3 rounded-card border border-border bg-elevated/40 hover:bg-elevated transition-colors"
               >
-                <div className="flex items-center gap-2 text-sm text-textPrimary"><FolderInput size={13} className="text-primary-400" /> 连同数据文件替换</div>
-                <div className="text-3xs text-textMuted mt-1 pl-5">代码、资源、运行数据全部按包内版本替换</div>
+                <div className="flex items-center gap-2 text-sm text-textPrimary"><FolderInput size={13} className="text-primary-400" /> {t('tool:world.import.withData')}</div>
+                <div className="text-3xs text-textMuted mt-1 pl-5">{t('tool:world.import.withDataDesc')}</div>
               </button>
             </div>
-            <button onClick={() => setWorldImportOpen(false)} className="w-full mt-3 py-1.5 text-xs text-textMuted hover:text-textPrimary transition-colors">取消</button>
+            <button onClick={() => setWorldImportOpen(false)} className="w-full mt-3 py-1.5 text-xs text-textMuted hover:text-textPrimary transition-colors">{t('common:cancel')}</button>
           </div>
         </Dialog>
       )}
@@ -1292,7 +1284,7 @@ export default function WorldDesignPage() {
               </span>
               <div className="flex-1" />
               <WorldPreviewActions wid={wid} onRefresh={() => setPreviewKey((k) => k + 1)} />
-              <IconButton size="sm" icon={<X size={16} />} label={t('common.close')} onClick={() => setPreviewOpen(false)} />
+              <IconButton size="sm" icon={<X size={16} />} label={t('common:close')} onClick={() => setPreviewOpen(false)} />
             </div>
             <div className="flex-1 min-h-0">
               <WorldPreviewFrame wid={wid} previewKey={previewKey} />
@@ -1316,8 +1308,8 @@ export default function WorldDesignPage() {
               hint={t('tool:world.session.renameHint')}
             />
             <div className="flex justify-end gap-2">
-              <Button size="sm" variant="outline" onClick={() => setRenaming(null)}>{t('common.cancel')}</Button>
-              <Button size="sm" onClick={submitRename}>{t('common.save')}</Button>
+              <Button size="sm" variant="outline" onClick={() => setRenaming(null)}>{t('common:cancel')}</Button>
+              <Button size="sm" onClick={submitRename}>{t('common:save')}</Button>
             </div>
           </div>
         </Dialog>

@@ -204,13 +204,13 @@ const ChatInputFunc = ({ conversationType, conversationId, t, onSend, onSendFile
       {/* 没 @ 到人的提醒：@ 是全字匹配，漏了括号后缀对方根本收不到；给一键补全 */}
       {mentionFix && (
         <div className="absolute bottom-full left-4 mb-1 flex items-center gap-2 rounded-control border border-border bg-elevated px-3 py-1.5 text-2xs text-textSecondary shadow-lg z-modal">
-          <span>{t('chat.mentionHint', { token: mentionFix.token, name: mentionFix.name })}</span>
+          <span>{t('chat:mentionHint', { token: mentionFix.token, name: mentionFix.name })}</span>
           <button
             type="button"
             className="btn btn-xs btn-outline"
             onMouseDown={(e) => { e.preventDefault(); applyMentionFix() }}
           >
-            {t('chat.mentionHintFix')}
+            {t('chat:mentionHintFix')}
           </button>
         </div>
       )}
@@ -234,7 +234,7 @@ const ChatInputFunc = ({ conversationType, conversationId, t, onSend, onSendFile
       <button
         onClick={() => onSendFile?.()}
         className="p-2.5 rounded-card border border-border bg-canvas text-textMuted hover:text-textPrimary hover:border-primary-500/30 hover:bg-elevated transition-colors shrink-0"
-        title={t('chat.addAttachment')}
+        title={t('chat:addAttachment')}
       >
         <Paperclip size={18} />
       </button>
@@ -249,13 +249,13 @@ const ChatInputFunc = ({ conversationType, conversationId, t, onSend, onSendFile
                 ? 'border-primary-500/30 bg-elevated text-primary-500'
                 : 'border-border bg-canvas text-textMuted hover:text-textPrimary hover:border-primary-500/30 hover:bg-elevated'
             }`}
-            title={t('chat.addEmoji')}
+            title={t('chat:addEmoji')}
           >
             <Smile size={18} />
           </button>
           {emojiOpen && (
             <MenuPanel className="absolute bottom-full left-0 mb-1 w-72 max-h-64 overflow-y-auto p-2 z-modal">
-              <div className="text-3xs text-textMuted px-1 pb-1">{t('chat.emojiPacks')}</div>
+              <div className="text-3xs text-textMuted px-1 pb-1">{t('chat:emojiPacks')}</div>
               {emojiPacks.map((pack) => (
                 <div key={pack.id} className="mb-2 last:mb-0">
                   <div className="text-3xs text-textMuted px-1 mb-1" title={pack.usage}>{pack.name}</div>
@@ -286,7 +286,7 @@ const ChatInputFunc = ({ conversationType, conversationId, t, onSend, onSendFile
         value={value}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
-        placeholder={conversationType === 'dm' ? t('chat.dmInputPlaceholder') : t('chat.groupInputPlaceholder')}
+        placeholder={conversationType === 'dm' ? t('chat:dmInputPlaceholder') : t('chat:groupInputPlaceholder')}
         rows={1}
         className="flex-1 min-w-0 resize-none rounded-card border border-border bg-canvas px-4 py-2.5 text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50 focus:border-primary-500/30 transition-shadow min-h-[40px]"
       />
@@ -294,7 +294,7 @@ const ChatInputFunc = ({ conversationType, conversationId, t, onSend, onSendFile
         onClick={doSend}
         disabled={(!value.trim() && !hasAttachments) || !connected}
         className="icon-btn-lg icon-btn-primary shrink-0"
-        title={t('chat.send')}
+        title={t('chat:send')}
       >
         <Send size={16} />
       </button>

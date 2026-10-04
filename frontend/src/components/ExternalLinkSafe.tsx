@@ -64,8 +64,8 @@ export default function ExternalLinkSafe({ href, children, className, skipConfir
                   <ShieldAlert size={20} className="text-accent-400" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-semibold text-textPrimary">{t('externalLink.title')}</h3>
-                  <p className="text-xs text-textMuted mt-0.5">{t('externalLink.hint')}</p>
+                  <h3 className="text-sm font-semibold text-textPrimary">{t('externalLink:title')}</h3>
+                  <p className="text-xs text-textMuted mt-0.5">{t('externalLink:hint')}</p>
                 </div>
               </div>
 
@@ -74,7 +74,7 @@ export default function ExternalLinkSafe({ href, children, className, skipConfir
               </div>
 
               <p className="text-xs text-textMuted mb-4">
-                {t('externalLink.warning')}
+                {t('externalLink:warning')}
               </p>
             </div>
 
@@ -83,13 +83,13 @@ export default function ExternalLinkSafe({ href, children, className, skipConfir
                 onClick={() => setShowConfirm(false)}
                 className="flex-1 py-3 text-sm text-textSecondary hover:text-textPrimary font-medium transition-colors rounded-bl-2xl"
               >
-                {t('common.cancel')}
+                {t('common:cancel')}
               </button>
               <button
                 onClick={handleConfirm}
                 className="flex-1 py-3 text-sm text-primary-400 hover:text-primary-500 font-semibold border-l border-border transition-colors rounded-br-2xl"
               >
-                {t('externalLink.confirm')}
+                {t('externalLink:confirm')}
               </button>
             </div>
           </div>

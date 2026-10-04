@@ -63,9 +63,9 @@ export default function BalancePromptModal() {
             <AlertTriangle size={20} className="text-accent-400" />
           </div>
           <div className="flex-1 min-w-0">
-            <h3 className="text-sm font-semibold text-textPrimary">{t('balance.title')}</h3>
+            <h3 className="text-sm font-semibold text-textPrimary">{t('balance:title')}</h3>
             <p className="text-xs text-textSecondary mt-1">
-              {t('balance.useOwnKeyPrompt').replace('{name}', prompt.agent_name)}
+              {t('balance:useOwnKeyPrompt').replace('{name}', prompt.agent_name)}
             </p>
           </div>
           <button onClick={handleCancel} className="icon-btn-sm text-textMuted shrink-0">
@@ -77,7 +77,7 @@ export default function BalancePromptModal() {
             onClick={handleCancel}
             className="btn btn-md btn-outline flex-1"
           >
-            {t('balance.cancel')}
+            {t('balance:cancel')}
           </button>
           <button
             onClick={handleConfirm}
@@ -85,7 +85,7 @@ export default function BalancePromptModal() {
             className="btn btn-md btn-primary flex-1 gap-2"
           >
             <Key size={14} />
-            {loading ? '...' : t('balance.useOwnKey')}
+            {loading ? '...' : t('balance:useOwnKey')}
           </button>
         </div>
       </div>

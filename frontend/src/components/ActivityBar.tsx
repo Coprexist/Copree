@@ -26,7 +26,7 @@ export default function ActivityBar({ users }: ActivityBarProps) {
 
   const MAX = 3
   const hasTyping = users.some(u => u.status === 'typing')
-  const statusLabel = hasTyping ? t('chat.typing') : t('chat.thinking')
+  const statusLabel = hasTyping ? t('chat:typing') : t('chat:thinking')
   const overflow = users.length > MAX
 
   // 最多展示 MAX 个头像，溢出时最后一个显示省略号

@@ -109,12 +109,12 @@ export default function AvatarCropModal({ file, onConfirm, onCancel, cropShape }
         >
           <X size={22} />
         </button>
-        <span className="text-white/80 text-sm font-medium">{t('avatarCrop.adjustAvatar')}</span>
+        <span className="text-white/80 text-sm font-medium">{t('avatarCrop:adjustAvatar')}</span>
         <button
           onClick={handleConfirm}
           className="px-4 py-1.5 rounded-full bg-mint-400 hover:bg-mint-500 text-white text-sm font-medium transition-colors"
         >
-          {t('common.confirm')}
+          {t('common:confirm')}
         </button>
       </div>
 

@@ -8,6 +8,7 @@
 import { memo, useMemo } from 'react'
 import { ChevronRight, Folder, FolderOpen, Trash2 } from 'lucide-react'
 import { fileTypeIcon } from './FileContentPane'
+import { useT } from '../../i18n/I18nContext'
 
 export interface WorldFile {
   path: string
@@ -78,6 +79,7 @@ interface TreeFileRowProps {
 
 /** 文件行：只吃原始值 + 稳定回调，memo 才有意义（key 也是稳定 path，不用下标） */
 const TreeFileRow = memo(function TreeFileRow({ path, name, depth, active, onSelect, onDelete }: TreeFileRowProps) {
+  const t = useT()
   return (
     <div className="group flex items-stretch">
       <button
@@ -96,7 +98,7 @@ const TreeFileRow = memo(function TreeFileRow({ path, name, depth, active, onSel
       <button
         onClick={(ev) => { ev.stopPropagation(); onDelete(path) }}
         className="hidden group-hover:flex shrink-0 items-center justify-center w-6 text-textMuted hover:text-rose-400 transition-colors"
-        title="删除此文件"
+        title={t('tool:world.editor.deleteFile')}
       >
         <Trash2 size={13} />
       </button>

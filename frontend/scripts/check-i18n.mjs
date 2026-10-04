@@ -59,16 +59,32 @@ function loadDictFile(file) {
   return out
 }
 
-const NS_FILES = ['translations.ts', 'tool.ts', 'admin_config.ts', 'logs.ts']
+// 自动发现命名空间字典：src/i18n/ns/ 下一个 ns 一个文件，新增分区不用改本脚本。
+// 每个文件导出 <ns>Zh / <ns>En / <ns>Ja，loadDictFile 从导出名反推 ns。
+const NS_DIR = join(SRC, 'i18n', 'ns')
+const NS_FILES = readdirSync(NS_DIR).filter(f => f.endsWith('.ts')).sort()
 /** dicts[ns][lang] = { 'key': 'value' } */
 const dicts = {}
 for (const f of NS_FILES) {
-  const loaded = loadDictFile(join(SRC, 'i18n', f))
+  const loaded = loadDictFile(join(NS_DIR, f))
   for (const [ns, byLang] of Object.entries(loaded)) {
     dicts[ns] = { ...(dicts[ns] || {}), ...byLang }
   }
 }
 const NS = Object.keys(dicts)
+
+// ── 1b. 注册表一致性 ──────────────────────────────────────────
+// 字典文件存在 ≠ 运行时取得到：translations.ts 是唯一注册入口，漏登记的下场是整段裸 key，
+// 而下面的比对只看字典文件、看不见这一层，所以单独核一遍。
+const registrySrc = readFileSync(join(SRC, 'i18n', 'translations.ts'), 'utf8')
+const registered = {}
+for (const lang of LANGS) {
+  const suffix = lang[0].toUpperCase() + lang.slice(1)
+  const re = new RegExp(`([A-Za-z_]\\w*):\\s*[A-Za-z_]\\w*${suffix}\\b`, `g`)
+  registered[lang] = new Set([...registrySrc.matchAll(re)].map(m => m[1]))
+}
+const unregistered = NS.filter(n => LANGS.some(l => !registered[l].has(n)))
+
 
 // ── 2. 扫描源码里的调用点 ──────────────────────────────────────
 /** 局部包装函数 → 命名空间（在组件内部把 ns 前缀写死的地方） */
@@ -168,6 +184,7 @@ if (existsSync(CONFIG_SCHEMA)) {
 
 // ── 5. 反向：字典里有、源码里没直接用到的 key（仅供参考，模板串会误报） ──
 const report = []
+  if (unregistered.length) report.push('✗ 字典已存在但未在 translations.ts 注册（界面整段裸 key）:' + '\n' + unregistered.map(n => '  ' + n).join('\n'))
 const fmt = r => `  ${r.file.replace(FRONTEND + '/', '')}:${r.line}  ${r.id ?? r.ns + ':' + r.key}${r.lacks ? '  [缺 ' + r.lacks.join('/') + ']' : ''}`
 if (missingAll.length) report.push('✗ 三语都缺（界面会显示裸 key）:\n' + missingAll.map(fmt).join('\n'))
 if (missingSome.length) report.push('✗ 部分语言缺:\n' + missingSome.map(fmt).join('\n'))
@@ -178,8 +195,8 @@ for (const u of usages) counts[u.ns] = (counts[u.ns] || 0) + 1
 report.push('统计: ' + Object.entries(counts).map(([k, v]) => `${k}=${v}`).join(' ') + ` | 字典 ${NS.map(n => n + '=' + Object.keys(dicts[n].zh || {}).length).join(' ')}`)
 
 if (process.argv.includes('--json')) {
-  console.log(JSON.stringify({ missingAll, missingSome, dynamic }, null, 0))
+  console.log(JSON.stringify({ missingAll, missingSome, dynamic, unregistered }, null, 0))
 } else {
   console.log(report.join('\n\n'))
 }
-process.exit(missingAll.length || missingSome.length ? 1 : 0)
+process.exit(missingAll.length || missingSome.length || unregistered.length ? 1 : 0)

@@ -4,8 +4,9 @@ import { api } from '../api/client'
 import { fetchPendingRequests } from '../hooks/usePendingRequests'
 import { useT } from '../i18n/I18nContext'
 import { getStateDotColor } from '../constants'
-import { X, Bell, Pause, BellOff, LogOut, UserX, Shield, ShieldOff, UserPlus, Volume2, VolumeX, Download, Clock, Globe, Loader2, ArrowLeft, Crown, Pin, PinOff, Image, Camera, Users, CheckCircle2 } from 'lucide-react'
+import { X, Bell, Pause, BellOff, LogOut, UserX, Shield, ShieldOff, UserPlus, Volume2, VolumeX, Download, Clock, Globe, Loader2, ArrowLeft, Crown, Pin, PinOff, Image, Camera, Users, CheckCircle2, MessageSquare, RefreshCw } from 'lucide-react'
 import Toggle from './Toggle'
+import { UnderlineTabs } from './ui'
 import AvatarPickerModal from './AvatarPickerModal'
 
 // ── 联邦共享状态（v0.2.0: 群主/AI制作者按群控制联邦共享） ──
@@ -75,12 +76,12 @@ function FederationShareSection({ groupId }: { groupId: number }) {
         <div>
           <div className="text-sm text-textPrimary font-medium flex items-center gap-1">
             <Globe size={14} className="text-textMuted shrink-0" />
-            {t('groupSettings.federationShare')}
+            {t('groupSettings:federationShare')}
           </div>
           <div className="text-xs text-textMuted">
             {sharedCount > 0
-              ? `${t('groupSettings.sharedTo')}${sharedCount}${t('groupSettings.autoForward')}`
-              : t('groupSettings.federationShareHint')}
+              ? `${t('groupSettings:sharedTo')}${sharedCount}${t('groupSettings:autoForward')}`
+              : t('groupSettings:federationShareHint')}
           </div>
         </div>
         <button
@@ -88,20 +89,20 @@ function FederationShareSection({ groupId }: { groupId: number }) {
           disabled={loading}
           className="text-xs text-textMuted hover:text-textSecondary transition-colors"
         >
-          {loading ? <Loader2 size={14} className="animate-spin" /> : t('common.refresh')}
+          {loading ? <Loader2 size={14} className="animate-spin" /> : t('common:refresh')}
         </button>
       </div>
 
       {!myDisplayName && loaded && (
         <div className="bg-accent-400/10 text-accent-400 rounded-control px-3 py-2 text-xs">
-          {t('groupSettings.federationNoDisplayName')}
+          {t('groupSettings:federationNoDisplayName')}
         </div>
       )}
 
       {loaded && peers.length === 0 && (
         <div className="bg-elevated rounded-control px-3 py-3 text-xs text-textMuted text-center">
-          <p className="font-medium text-textSecondary mb-1">{t('groupSettings.federationNoPeers')}</p>
-          <p>{t('groupSettings.federationNoPeersHint')}</p>
+          <p className="font-medium text-textSecondary mb-1">{t('groupSettings:federationNoPeers')}</p>
+          <p>{t('groupSettings:federationNoPeersHint')}</p>
         </div>
       )}
 
@@ -122,8 +123,8 @@ function FederationShareSection({ groupId }: { groupId: number }) {
                   <div className="text-sm text-textPrimary truncate">{peer.display_name}</div>
                   <div className="text-3xs text-textMuted">
                     {peer.is_connected
-                      ? t('groupSettings.federationPeerConnected')
-                      : t('groupSettings.federationPeerDisconnected')}
+                      ? t('groupSettings:federationPeerConnected')
+                      : t('groupSettings:federationPeerDisconnected')}
                   </div>
                 </div>
               </div>
@@ -159,6 +160,7 @@ interface GroupSettings {
   is_vector_accelerated: boolean
   is_paused: boolean
   announcement: string | null
+  bio?: string | null
   speak_limit_per_minute: number
   speak_limit_window_seconds: number
   concurrent_ai_limit: number
@@ -171,6 +173,10 @@ interface GroupSettings {
   searchable?: boolean
   auto_approve_join?: boolean
   approve_invites?: boolean
+  // 群名跟随外部渠道（QQ 群名），以及这个群接没接渠道（没接就不显示那一块）
+  name_from_channel?: boolean
+  channel_bound?: boolean
+  channel_labels?: string[]
 }
 
 interface Props {
@@ -193,6 +199,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
   // 表单状态
   const [name, setName] = useState(group?.name || '')
   const [announcement, setAnnouncement] = useState(group?.announcement || '')
+  const [bio, setBio] = useState(group?.bio || '')
   const [pinned, setPinned] = useState(false)
   const [speakLimit, setSpeakLimit] = useState(group?.speak_limit_per_minute === -1 ? -1 : (group?.speak_limit_per_minute || 0))
   const [speakWindow, setSpeakWindow] = useState(group?.speak_limit_window_seconds || 120)
@@ -215,6 +222,12 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
   const [searchable, setSearchable] = useState(group?.searchable ?? false)
   const [autoApproveJoin, setAutoApproveJoin] = useState(group?.auto_approve_join ?? true)
   const [approveInvites, setApproveInvites] = useState(group?.approve_invites ?? false)
+  const [nameFromChannel, setNameFromChannel] = useState(group?.name_from_channel ?? false)
+  const [pullingChannel, setPullingChannel] = useState(false)
+  const [pulledChannel, setPulledChannel] = useState<Record<string, any> | null>(null)
+  const [pulledEmpty, setPulledEmpty] = useState(false)
+  // 上一次「刷新」到底改了什么（只填输入框会让人以为没保存）
+  const [pullResult, setPullResult] = useState<{ name?: boolean; bio?: boolean; none?: boolean } | null>(null)
   const [pendingApprovals, setPendingApprovals] = useState(0)
 
   // 转让群主状态
@@ -236,6 +249,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
     if (!group) return
     setName(group.name)
     setAnnouncement(group.announcement || '')
+    setBio(group.bio || '')
     // 从 group 获取 is_pinned（已经在 GET /groups 中返回）
     if (group.is_pinned !== undefined) {
       setPinned(group.is_pinned)
@@ -249,6 +263,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
     setSearchable(group.searchable ?? false)
     setAutoApproveJoin(group.auto_approve_join ?? true)
     setApproveInvites(group.approve_invites ?? false)
+    setNameFromChannel(group.name_from_channel ?? false)
     loadMembers()
     loadDndStatus()
     loadPendingApprovals()
@@ -285,17 +300,67 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
   }
 
   const saveSettings = async (updates: Record<string, any>) => {
-    if (!group) return
+    if (!group) return null
     setSaving(true)
     setError('')
     try {
-      await api.patch(`/groups/${group.id}`, updates)
+      // 返回响应：打开"群名跟随渠道"时后端会立刻对齐一次群名，界面要拿到那个新名字
+      const data = await api.patch(`/groups/${group.id}`, updates)
       onUpdate(updates)
       window.dispatchEvent(new CustomEvent('groupListRefresh'))
+      return data
     } catch (e: any) {
-      setError(e?.detail || t('error.saveFailed'))
+      setError(e?.detail || t('error:saveFailed'))
+      return null
     } finally {
       setSaving(false)
+    }
+  }
+
+  /** 群名跟随渠道：打开时后端立刻抄一次渠道群名，所以要把新名字回显出来 */
+  const toggleNameFromChannel = async (next: boolean) => {
+    setNameFromChannel(next)
+    const data: any = await saveSettings({ name_from_channel: next })
+    if (next && data?.name) setName(data.name)
+  }
+
+  /** 通道那边这个群现在叫什么：打开面板先读一次（按钮负责"重新拉"），拿不到就显示"还没报过" */
+  useEffect(() => {
+    if (!group?.channel_bound) { setPulledChannel(null); return }
+    api.get<{ channels?: Record<string, any>[] }>(`/groups/${group.id}`)
+      .then(d => setPulledChannel((d?.channels || [])[0] || null))
+      .catch(() => setPulledChannel(null))
+  }, [group?.id, group?.channel_bound])
+
+  /** 手动拉一次渠道那边这个群的信息（群主/管理员）：拉到的群名顺带回显，打开的群后端也会对齐 */
+  const pullChannelInfo = async () => {
+    if (!group) return
+    setPullingChannel(true)
+    setError('')
+    setPulledEmpty(false)
+    setPullResult(null)
+    try {
+      const data: any = await api.post(`/groups/${group.id}/channel/refresh`)
+      const info = (data?.channels || [])[0]
+      if (!info) {
+        setPulledChannel(null)
+        setPulledEmpty(true)
+      } else {
+        setPulledChannel(info)
+        // 后端已经这次同步就把群名/群简介写进群了：界面跟上，并且明说"已保存"——
+        // 只把新名字填进输入框的话，保存按钮就在旁边，看起来像"只填了框没生效"
+        const changedName = !!data?.name && data.name !== String(group.name || '')
+        const changedBio = !!data?.bio && data.bio !== String(group.bio || '')
+        setPullResult(changedName || changedBio ? { name: changedName, bio: changedBio } : { none: true })
+        if (data?.name) setName(data.name)
+        if (typeof data?.bio === 'string') setBio(data.bio)
+        onUpdate({ name: data?.name, bio: data?.bio, name_from_channel: data?.name_from_channel })
+      }
+      window.dispatchEvent(new CustomEvent('groupListRefresh'))
+    } catch (e: any) {
+      setError(e?.detail || t('error:operationFailed'))
+    } finally {
+      setPullingChannel(false)
     }
   }
 
@@ -306,7 +371,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
       const until = minutes === null ? 'permanent' : new Date(Date.now() + minutes * 60_000).toISOString()
       setDndUntil(until)
     } catch (e: any) {
-      setError(e?.detail || t('error.operationFailed'))
+      setError(e?.detail || t('error:operationFailed'))
     }
   }
 
@@ -314,11 +379,11 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
     if (!group) return
     const mins = parseInt(customDndMinutes, 10)
     if (isNaN(mins) || mins <= 0) {
-      setError(t('error.invalidMinutes'))
+      setError(t('error:invalidMinutes'))
       return
     }
     if (mins > 10080) {
-      setError(t('error.dndMaxDuration'))
+      setError(t('error:dndMaxDuration'))
       return
     }
     await handleSetDnd(mins)
@@ -331,7 +396,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
       await api.post(`/groups/${group.id}/dnd/cancel`)
       setDndUntil(null)
     } catch (e: any) {
-      setError(e?.detail || t('error.operationFailed'))
+      setError(e?.detail || t('error:operationFailed'))
     }
   }
 
@@ -341,40 +406,40 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
       await api.patch(`/groups/${group.id}/members/${m.type}/${m.id}/role`, { role: newRole })
       setMembers(prev => prev.map(x => x.id === m.id && x.type === m.type ? { ...x, role: newRole } : x))
     } catch (e: any) {
-      setError(e?.detail || t('error.operationFailed'))
+      setError(e?.detail || t('error:operationFailed'))
     }
   }
 
   const handleKick = async (m: GroupMember) => {
     if (!group) return
-    if (!confirm(t('groupSettings.confirmKick') + m.name + t('groupSettings.confirmKickEnd'))) return
+    if (!confirm(t('groupSettings:confirmKick') + m.name + t('groupSettings:confirmKickEnd'))) return
     try {
       await api.delete(`/groups/${group.id}/members/${m.type}/${m.id}`)
       setMembers(prev => prev.filter(x => !(x.id === m.id && x.type === m.type)))
     } catch (e: any) {
-      setError(e?.detail || t('error.operationFailed'))
+      setError(e?.detail || t('error:operationFailed'))
     }
   }
 
   const handleLeave = async () => {
     if (!group) return
-    if (!confirm(t('groupSettings.confirmLeave'))) return
+    if (!confirm(t('groupSettings:confirmLeave'))) return
     try {
       await api.post(`/groups/${group.id}/leave`)
       onLeave()
     } catch (e: any) {
-      setError(e?.detail || t('error.leaveFailed'))
+      setError(e?.detail || t('error:leaveFailed'))
     }
   }
 
   const handleDisband = async () => {
     if (!group) return
-    if (!confirm(t('groupSettings.confirmDisband'))) return
+    if (!confirm(t('groupSettings:confirmDisband'))) return
     try {
       await api.delete(`/groups/${group.id}`)
       onLeave()  // 复用退出逻辑：关闭面板 + 刷新列表
     } catch (e: any) {
-      setError(e?.detail || t('error.operationFailed'))
+      setError(e?.detail || t('error:operationFailed'))
     }
   }
 
@@ -449,10 +514,10 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
   if (!group) return null
 
   const tabs: { key: Tab; keyLabel: string; show: boolean }[] = [
-    { key: 'general', keyLabel: 'groupSettings.tabGeneral', show: true },
-    { key: 'members', keyLabel: 'groupSettings.tabMembers', show: true },
-    { key: 'speak', keyLabel: 'groupSettings.tabSpeak', show: isAdmin },
-    { key: 'export', keyLabel: 'groupSettings.tabExport', show: true },
+    { key: 'general', keyLabel: 'groupSettings:tabGeneral', show: true },
+    { key: 'members', keyLabel: 'groupSettings:tabMembers', show: true },
+    { key: 'speak', keyLabel: 'groupSettings:tabSpeak', show: isAdmin },
+    { key: 'export', keyLabel: 'groupSettings:tabExport', show: true },
   ]
 
   return (
@@ -470,7 +535,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
             >
               <ArrowLeft size={20} />
             </button>
-            <h2 className="font-semibold text-sm text-textPrimary">{t('groupSettings.title')}</h2>
+            <h2 className="font-semibold text-sm text-textPrimary">{t('groupSettings:title')}</h2>
           </div>
           <button onClick={onClose} className="icon-btn-sm text-textMuted hidden md:block">
             <X size={16} />
@@ -478,21 +543,14 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
         </div>
 
         {/* Tab 切换 */}
-        <div className="flex border-b border-border shrink-0">
-          {tabs.filter(item => item.show).map(item => (
-            <button
-              key={item.key}
-              onClick={() => setTab(item.key)}
-              className={`flex-1 py-2.5 text-xs font-medium transition-colors ${
-                tab === item.key
-                  ? 'text-primary-400 border-b-2 border-primary-400'
-                  : 'text-textMuted hover:text-textSecondary'
-              }`}
-            >
-              {t(item.keyLabel)}
-            </button>
-          ))}
-        </div>
+        <UnderlineTabs
+          grow
+          size="panel"
+          className="shrink-0"
+          items={tabs.filter(item => item.show).map(item => ({ key: item.key, label: t(item.keyLabel) }))}
+          value={tab}
+          onChange={setTab}
+        />
 
         {/* 内容区 */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-[var(--safe-bottom)] md:pb-4">
@@ -505,7 +563,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
             <>
               {/* 群名称 */}
               <div>
-                <label className="text-xs font-medium text-textSecondary">{t('groupSettings.groupName')}</label>
+                <label className="text-xs font-medium text-textSecondary">{t('groupSettings:groupName')}</label>
                 <div className="flex gap-2 mt-1">
                   <input
                     value={name}
@@ -515,25 +573,53 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                   />
                   {isAdmin && (
                     <button
-                      onClick={() => saveSettings({ name })}
+                      // 手动改群名 = 收回所有权：后端会把"跟随渠道"关掉，这里同步回显
+                      onClick={() => { setNameFromChannel(false); saveSettings({ name }) }}
                       disabled={saving || name === group.name}
                       className="px-3 py-2 bg-primary-500 text-white rounded-control text-xs font-medium hover:bg-primary-600 disabled:opacity-50 transition-colors"
                     >
-                      {t('common.save')}
+                      {t('common:save')}
                     </button>
                   )}
                 </div>
               </div>
 
+              {/* 群简介：资料卡上那句"这个群是干嘛的"（没写时资料卡退回通道侧的群简介） */}
+              <div>
+                <label className="text-xs font-medium text-textSecondary">{t('groupSettings:bio')}</label>
+                {isAdmin ? (
+                  <div className="mt-1 space-y-2">
+                    <textarea
+                      value={bio}
+                      onChange={e => setBio(e.target.value)}
+                      placeholder={t('groupSettings:bioPlaceholder')}
+                      rows={2}
+                      maxLength={300}
+                      className="w-full bg-elevated border border-border rounded-control px-3 py-2 text-sm text-textPrimary outline-none focus:border-primary-400 resize-none"
+                    />
+                    <div className="text-3xs text-textMuted">{t('groupSettings:bioHint')}</div>
+                    <button
+                      onClick={() => saveSettings({ bio })}
+                      disabled={saving || bio === (group.bio || '')}
+                      className="px-3 py-1.5 bg-primary-500 text-white rounded-control text-xs font-medium hover:bg-primary-600 disabled:opacity-50 transition-colors"
+                    >
+                      {t('common:save')}
+                    </button>
+                  </div>
+                ) : (
+                  <p className="mt-1 text-xs text-textMuted">{group.bio || t('groupSettings:bioEmpty')}</p>
+                )}
+              </div>
+
               {/* 群公告 */}
               <div>
-                <label className="text-xs font-medium text-textSecondary">{t('groupSettings.announcement')}</label>
+                <label className="text-xs font-medium text-textSecondary">{t('groupSettings:announcement')}</label>
                 {isAdmin ? (
                   <div className="mt-1 space-y-2">
                     <textarea
                       value={announcement}
                       onChange={e => setAnnouncement(e.target.value)}
-                      placeholder={t('groupSettings.announcementPlaceholder')}
+                      placeholder={t('groupSettings:announcementPlaceholder')}
                       rows={3}
                       className="w-full bg-elevated border border-border rounded-control px-3 py-2 text-sm text-textPrimary outline-none focus:border-primary-400 resize-none"
                     />
@@ -543,7 +629,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                         disabled={saving}
                         className="px-3 py-1.5 bg-primary-500 text-white rounded-control text-xs font-medium hover:bg-primary-600 disabled:opacity-50 transition-colors"
                       >
-                        {t('groupSettings.updateAnnouncement')}
+                        {t('groupSettings:updateAnnouncement')}
                       </button>
                       {group.announcement && (
                         <button
@@ -552,18 +638,18 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                               await api.delete(`/groups/${group.id}/announcement`)
                               setAnnouncement('')
                               onUpdate({ announcement: null })
-                            } catch (e: any) { setError(e?.detail || t('error.operationFailed')) }
+                            } catch (e: any) { setError(e?.detail || t('error:operationFailed')) }
                           }}
                           className="px-3 py-1.5 bg-rose-400/10 text-rose-400 rounded-control text-xs font-medium hover:bg-rose-400/20 transition-colors"
                         >
-                          {t('groupSettings.deleteAnnouncement')}
+                          {t('groupSettings:deleteAnnouncement')}
                         </button>
                       )}
                     </div>
                   </div>
                 ) : (
                   <p className="mt-1 text-sm text-textSecondary bg-elevated rounded-control px-3 py-2">
-                    {group.announcement || t('groupSettings.noAnnouncement')}
+                    {group.announcement || t('groupSettings:noAnnouncement')}
                   </p>
                 )}
               </div>
@@ -572,7 +658,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
               <>
               {/* 群头像设置 */}
               <div>
-                <label className="text-xs font-medium text-textSecondary mb-3 block">{t('groupSettings.groupAvatar')}</label>
+                <label className="text-xs font-medium text-textSecondary mb-3 block">{t('groupSettings:groupAvatar')}</label>
                 <div className="grid grid-cols-3 gap-2">
                   {/* default 模式 */}
                   <button
@@ -586,7 +672,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                     <div className="w-10 h-10 mx-auto rounded-control bg-primary-500/10 dark:bg-primary-900/30 flex items-center justify-center mb-1.5">
                       <Users size={18} className="text-primary-400/60 dark:text-primary-300/60" />
                     </div>
-                    <div className={`text-2xs font-medium ${avatarMode === 'default' ? 'text-textSecondary dark:text-primary-200' : 'text-textSecondary'}`}>{t('groupSettings.avatarModeDefault')}</div>
+                    <div className={`text-2xs font-medium ${avatarMode === 'default' ? 'text-textSecondary dark:text-primary-200' : 'text-textSecondary'}`}>{t('groupSettings:avatarModeDefault')}</div>
                     <div className={`text-3xs ${avatarMode === 'default' ? 'text-textMuted dark:text-primary-300/80' : 'text-textMuted'}`}>固定图标</div>
                     {avatarMode === 'default' && (
                       <CheckCircle2 size={14} className="absolute top-1.5 right-1.5 text-primary-400" />
@@ -605,8 +691,8 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                     <div className="w-10 h-10 mx-auto rounded-control bg-elevated flex items-center justify-center mb-1.5">
                       <Users size={18} className="text-textSecondary" />
                     </div>
-                    <div className={`text-2xs font-medium ${avatarMode === 'members' ? 'text-textSecondary dark:text-primary-200' : 'text-textSecondary'}`}>{t('groupSettings.avatarModeMembers')}</div>
-                    <div className={`text-3xs ${avatarMode === 'members' ? 'text-textMuted dark:text-primary-300/80' : 'text-textMuted'}`}>{t('common.grid')}</div>
+                    <div className={`text-2xs font-medium ${avatarMode === 'members' ? 'text-textSecondary dark:text-primary-200' : 'text-textSecondary'}`}>{t('groupSettings:avatarModeMembers')}</div>
+                    <div className={`text-3xs ${avatarMode === 'members' ? 'text-textMuted dark:text-primary-300/80' : 'text-textMuted'}`}>{t('common:grid')}</div>
                     {avatarMode === 'members' && (
                       <CheckCircle2 size={14} className="absolute top-1.5 right-1.5 text-primary-400" />
                     )}
@@ -628,8 +714,8 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                         <Image size={18} className="text-textMuted" />
                       )}
                     </div>
-                    <div className={`text-2xs font-medium ${avatarMode === 'custom' ? 'text-textSecondary dark:text-primary-200' : 'text-textSecondary'}`}>{t('groupSettings.avatarModeCustom')}</div>
-                    <div className={`text-3xs ${avatarMode === 'custom' ? 'text-textMuted dark:text-primary-300/80' : 'text-textMuted'}`}>{t('common.uploadImage')}</div>
+                    <div className={`text-2xs font-medium ${avatarMode === 'custom' ? 'text-textSecondary dark:text-primary-200' : 'text-textSecondary'}`}>{t('groupSettings:avatarModeCustom')}</div>
+                    <div className={`text-3xs ${avatarMode === 'custom' ? 'text-textMuted dark:text-primary-300/80' : 'text-textMuted'}`}>{t('common:uploadImage')}</div>
                     {avatarMode === 'custom' && (
                       <CheckCircle2 size={14} className="absolute top-1.5 right-1.5 text-primary-400" />
                     )}
@@ -640,8 +726,8 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                 {avatarMode === 'members' && isAdmin && (
                   <div className="flex items-center justify-between mt-3 px-1">
                     <div>
-                      <div className="text-xs text-textPrimary font-medium">{t('groupSettings.includeAiInAvatar')}</div>
-                      <div className="text-3xs text-textMuted">{t('groupSettings.includeAiInAvatarDesc')}</div>
+                      <div className="text-xs text-textPrimary font-medium">{t('groupSettings:includeAiInAvatar')}</div>
+                      <div className="text-3xs text-textMuted">{t('groupSettings:includeAiInAvatarDesc')}</div>
                     </div>
                     <Toggle
                       checked={includeAiAvatar}
@@ -662,7 +748,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                       className="flex items-center justify-center gap-2 px-4 py-2.5 bg-elevated hover:bg-canvas border border-border border-dashed rounded-control w-full text-sm text-textSecondary hover:text-textPrimary transition-colors disabled:opacity-50"
                     >
                       <Camera size={16} />
-                      {uploadingAvatar ? t('common.uploading') : t('groupSettings.customAvatar')}
+                      {uploadingAvatar ? t('common:uploading') : t('groupSettings:customAvatar')}
                     </button>
                   </div>
                 )}
@@ -700,32 +786,32 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
               <div>
                 <h3 className="text-sm font-medium text-textPrimary flex items-center gap-2 mb-3">
                   <Bell size={14} className="text-textMuted" />
-                  {t('groupSettings.dnd')}
+                  {t('groupSettings:dnd')}
                 </h3>
                 {dndUntil ? (
                   <div className="space-y-3">
                     <div className="bg-mint-400/10 text-mint-400 rounded-control px-3 py-2 text-xs flex items-center gap-2">
                       <BellOff size={14} />
-                      {t('groupSettings.dndEnabled')}
+                      {t('groupSettings:dndEnabled')}
                     </div>
                     <button
                       onClick={handleCancelDnd}
                       className="btn btn-md btn-primary w-full"
                     >
-                      {t('groupSettings.dndCancel')}
+                      {t('groupSettings:dndCancel')}
                     </button>
                   </div>
                 ) : (
                   <div className="space-y-2">
-                    <p className="text-xs text-textMuted">{t('groupSettings.dndHint')}</p>
+                    <p className="text-xs text-textMuted">{t('groupSettings:dndHint')}</p>
                     <div className="grid grid-cols-2 gap-2">
                       {[
-                        { key: 'groupSettings.dnd15min', minutes: 15 },
-                        { key: 'groupSettings.dnd30min', minutes: 30 },
-                        { key: 'groupSettings.dnd1hour', minutes: 60 },
-                        { key: 'groupSettings.dnd4hours', minutes: 240 },
-                        { key: 'groupSettings.dnd8hours', minutes: 480 },
-                        { key: 'groupSettings.dndForever', minutes: null as unknown as number },
+                        { key: 'groupSettings:dnd15min', minutes: 15 },
+                        { key: 'groupSettings:dnd30min', minutes: 30 },
+                        { key: 'groupSettings:dnd1hour', minutes: 60 },
+                        { key: 'groupSettings:dnd4hours', minutes: 240 },
+                        { key: 'groupSettings:dnd8hours', minutes: 480 },
+                        { key: 'groupSettings:dndForever', minutes: null as unknown as number },
                       ].map((d) => (
                         <button
                           key={d.key}
@@ -742,7 +828,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                         type="number"
                         value={customDndMinutes}
                         onChange={(e) => setCustomDndMinutes(e.target.value)}
-                        placeholder={t('groupSettings.dndCustomPlaceholder')}
+                        placeholder={t('groupSettings:dndCustomPlaceholder')}
                         min={1}
                         max={10080}
                         onKeyDown={(e) => { if (e.key === 'Enter') handleCustomDnd() }}
@@ -753,7 +839,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                         disabled={!customDndMinutes.trim()}
                         className="btn btn-xs btn-primary shrink-0"
                       >
-                        {t('common.set')}
+                        {t('common:set')}
                       </button>
                     </div>
                   </div>
@@ -764,24 +850,82 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
               {isAdmin && (
                 <div className="flex items-center justify-between">
                   <div>
-                    <div className="text-sm text-textPrimary font-medium">{t('groupSettings.vectorAccel')}</div>
+                    <div className="text-sm text-textPrimary font-medium">{t('groupSettings:vectorAccel')}</div>
                     <div className="text-xs text-textMuted">
-                      {isAiOwned ? t('groupSettings.vectorAccelAiOwned') : t('groupSettings.vectorAccelHybridSearch')}
+                      {isAiOwned ? t('groupSettings:vectorAccelAiOwned') : t('groupSettings:vectorAccelHybridSearch')}
                     </div>
                   </div>
                   <Toggle checked={vectorAccel} onChange={(next) => { setVectorAccel(next); saveSettings({ is_vector_accelerated: next }) }} />
                 </div>
               )}
 
+              {/* 接进外部通道的群才有：通道那边它叫什么/多少人 + 群名是否跟随（只有管理员能改） */}
+              {group.channel_bound && (
+                <div className="space-y-2">
+                  {/* 与「联邦共享」同一套：标题 + 说明一行，动作是右侧的轻量刷新 */}
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1 text-sm text-textPrimary font-medium">
+                        <MessageSquare size={14} className="text-textMuted shrink-0" />
+                        {t('groupSettings:channelSection', { label: (group.channel_labels || []).join('/') })}
+                      </div>
+                      <div className="text-xs text-textMuted truncate">
+                        {pulledChannel
+                          ? t('groupSettings:pullChannelInfoDone', {
+                              name: String(pulledChannel.name || ''),
+                              n: String(pulledChannel.member_num || 0),
+                            }) + (pulledChannel.memo ? ' · ' + pulledChannel.memo : '')
+                          : t('groupSettings:channelUnknown')}
+                      </div>
+                    </div>
+                    {isAdmin && (
+                      <button
+                        onClick={pullChannelInfo}
+                        disabled={pullingChannel || saving}
+                        className="flex items-center gap-1 text-xs text-textMuted hover:text-textSecondary transition-colors disabled:opacity-50 shrink-0"
+                      >
+                        {pullingChannel ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                        {t('common:refresh')}
+                      </button>
+                    )}
+                  </div>
+                  {isAdmin && (
+                    <>
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <div className="text-xs text-textSecondary">{t('groupSettings:nameFromChannel')}</div>
+                          <div className="text-3xs text-textMuted">{t('groupSettings:nameFromChannelHint')}</div>
+                        </div>
+                        <Toggle checked={nameFromChannel} onChange={toggleNameFromChannel} />
+                      </div>
+                      {pulledEmpty && (
+                        <div className="text-3xs text-textMuted">{t('groupSettings:pullChannelInfoEmpty')}</div>
+                      )}
+                      {/* 本次同步的结果：明确"哪些已经写进群里了"，不用再点保存 */}
+                      {pullResult && (
+                        <div className="text-3xs text-mint-400">
+                          {pullResult.none
+                            ? t('groupSettings:pullUpToDate')
+                            : [
+                                pullResult.name ? t('groupSettings:pullAppliedName') : '',
+                                pullResult.bio ? t('groupSettings:pullAppliedBio') : '',
+                              ].filter(Boolean).join(' · ')}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+
               {/* 发现与入群（仅管理员可见） */}
               {isAdmin && (
                 <div className="space-y-3">
-                  <div className="text-sm text-textPrimary font-medium">{t('groupSettings.discovery')}</div>
+                  <div className="text-sm text-textPrimary font-medium">{t('groupSettings:discovery')}</div>
 
                   <div className="flex items-center justify-between gap-3">
                     <div>
-                      <div className="text-xs text-textSecondary">{t('groupSettings.searchable')}</div>
-                      <div className="text-3xs text-textMuted">{t('groupSettings.searchableHint')}</div>
+                      <div className="text-xs text-textSecondary">{t('groupSettings:searchable')}</div>
+                      <div className="text-3xs text-textMuted">{t('groupSettings:searchableHint')}</div>
                     </div>
                     <Toggle
                       checked={searchable}
@@ -791,8 +935,8 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
 
                   <div className="flex items-center justify-between gap-3">
                     <div>
-                      <div className="text-xs text-textSecondary">{t('groupSettings.autoApproveJoin')}</div>
-                      <div className="text-3xs text-textMuted">{t('groupSettings.autoApproveJoinHint')}</div>
+                      <div className="text-xs text-textSecondary">{t('groupSettings:autoApproveJoin')}</div>
+                      <div className="text-3xs text-textMuted">{t('groupSettings:autoApproveJoinHint')}</div>
                     </div>
                     <Toggle
                       checked={autoApproveJoin}
@@ -802,8 +946,8 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
 
                   <div className="flex items-center justify-between gap-3">
                     <div>
-                      <div className="text-xs text-textSecondary">{t('groupSettings.approveInvites')}</div>
-                      <div className="text-3xs text-textMuted">{t('groupSettings.approveInvitesHint')}</div>
+                      <div className="text-xs text-textSecondary">{t('groupSettings:approveInvites')}</div>
+                      <div className="text-3xs text-textMuted">{t('groupSettings:approveInvitesHint')}</div>
                     </div>
                     <Toggle
                       checked={approveInvites}
@@ -816,7 +960,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                     onClick={() => navigate('/list?tab=requests')}
                     className="w-full flex items-center justify-between px-3 py-2 rounded-control bg-elevated hover:bg-canvas text-xs text-textSecondary transition-colors"
                   >
-                    <span>{t('groupSettings.pendingApprovals')}</span>
+                    <span>{t('groupSettings:pendingApprovals')}</span>
                     <span className={pendingApprovals > 0 ? 'text-primary-400 font-medium' : 'text-textMuted'}>
                       {pendingApprovals}
                     </span>
@@ -852,7 +996,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                   <button
                     onClick={() => {
                       if (members.filter(m => m.role === 'admin' || m.role === 'member').length === 0) {
-                        alert(t('groupSettings.noTransferTarget'))
+                        alert(t('groupSettings:noTransferTarget'))
                         return
                       }
                       setTransferModalOpen(true)
@@ -861,7 +1005,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                     className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-primary-500/10 text-primary-400 rounded-control text-sm font-medium hover:bg-primary-500/20 border border-primary-400/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                   >
                     <Crown size={16} />
-                    {t('groupSettings.transferOwner')}
+                    {t('groupSettings:transferOwner')}
                   </button>
 
                   {/* 转让确认弹窗 */}
@@ -869,14 +1013,14 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                     <div className="fixed inset-0 z-toast flex items-center justify-center">
                       <div className="absolute inset-0 bg-black/40" onClick={() => setTransferModalOpen(false)} />
                       <div className="relative bg-surface border border-border rounded-card shadow-2xl p-4 w-80 max-w-[90vw]">
-                        <h3 className="text-sm font-semibold text-textPrimary mb-3">{t('groupSettings.transferOwnerTitle')}</h3>
-                        <p className="text-xs text-textMuted mb-3">{t('groupSettings.transferOwnerHint')}</p>
+                        <h3 className="text-sm font-semibold text-textPrimary mb-3">{t('groupSettings:transferOwnerTitle')}</h3>
+                        <p className="text-xs text-textMuted mb-3">{t('groupSettings:transferOwnerHint')}</p>
                         <div className="space-y-1 max-h-48 overflow-y-auto mb-3">
                           {members.filter(m => m.role !== 'owner').map(m => (
                             <button
                               key={`${m.type}:${m.id}`}
                               onClick={() => {
-                                if (confirm(`${t('groupSettings.confirmTransfer')}「${m.name}」？`)) {
+                                if (confirm(`${t('groupSettings:confirmTransfer')}「${m.name}」？`)) {
                                   handleTransferOwner(m.type, m.id)
                                 }
                               }}
@@ -886,7 +1030,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                               <span className={`w-2 h-2 rounded-full shrink-0 ${getStateDotColor(m.state)}`} />
                               <span className="text-sm text-textPrimary truncate">{m.name}</span>
                               {m.role === 'admin' && (
-                                <span className="text-3xs text-primary-400 ml-auto shrink-0">{t('groupSettings.roleAdmin')}</span>
+                                <span className="text-3xs text-primary-400 ml-auto shrink-0">{t('groupSettings:roleAdmin')}</span>
                               )}
                             </button>
                           ))}
@@ -895,7 +1039,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                           onClick={() => setTransferModalOpen(false)}
                           className="w-full px-3 py-2 text-xs text-textMuted hover:text-textSecondary rounded-control hover:bg-elevated transition-colors"
                         >
-                          {t('common.cancel')}
+                          {t('common:cancel')}
                         </button>
                       </div>
                     </div>
@@ -908,10 +1052,10 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                 onClick={handleLeave}
                 disabled={isOwner && !group.name.startsWith('DM:')}
                 className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-rose-400/10 text-rose-400 rounded-control text-sm font-medium hover:bg-rose-400/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                title={isOwner && !group.name.startsWith('DM:') ? t('groupSettings.ownerLeaveHint') : t('groupSettings.leaveGroup')}
+                title={isOwner && !group.name.startsWith('DM:') ? t('groupSettings:ownerLeaveHint') : t('groupSettings:leaveGroup')}
               >
                 <LogOut size={16} />
-                {isOwner && !group.name.startsWith('DM:') ? t('groupSettings.ownerCannotLeave') : t('groupSettings.leaveGroup')}
+                {isOwner && !group.name.startsWith('DM:') ? t('groupSettings:ownerCannotLeave') : t('groupSettings:leaveGroup')}
               </button>
 
               {/* 解散群聊（仅群主可见） */}
@@ -920,7 +1064,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                   onClick={handleDisband}
                   className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-rose-500/10 text-rose-500 rounded-control text-sm font-medium hover:bg-rose-500/20 transition-colors border border-rose-500/20"
                 >
-                  {t('groupSettings.disbandGroup')}
+                  {t('groupSettings:disbandGroup')}
                 </button>
               )}
             </>
@@ -931,7 +1075,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
             <>
               <div className="flex items-center justify-between">
                 <span className="text-sm text-textPrimary font-medium">
-                  {t('groupSettings.memberCount')} ({members.length})
+                  {t('groupSettings:memberCount')} ({members.length})
                 </span>
                 <button
                   onClick={() => {
@@ -942,7 +1086,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                   className="flex items-center gap-1 px-2 py-1 text-xs text-primary-400 hover:bg-primary-400/10 rounded-control transition-colors"
                 >
                   <UserPlus size={14} />
-                  {t('groupSettings.invite')}
+                  {t('groupSettings:invite')}
                 </button>
               </div>
 
@@ -959,15 +1103,15 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                         <div className="text-sm text-textPrimary truncate flex items-center gap-1.5">
                           {m.name}
                           {m.role === 'owner' && (
-                            <span className="text-3xs text-accent-400 font-medium flex items-center gap-0.5"><Crown size={10} />{t('groupSettings.roleOwner')}</span>
+                            <span className="text-3xs text-accent-400 font-medium flex items-center gap-0.5"><Crown size={10} />{t('groupSettings:roleOwner')}</span>
                           )}
                           {m.type === 'ai' && (
-                            <span className="text-3xs text-primary-400 font-medium">{t('chatlist.ai')}</span>
+                            <span className="text-3xs text-primary-400 font-medium">{t('chatlist:ai')}</span>
                           )}
                         </div>
                         <div className="text-3xs text-textMuted">
-                          {m.role === 'owner' ? t('groupSettings.roleOwner') : m.role === 'admin' ? t('groupSettings.roleAdmin') : t('groupSettings.roleMember')}
-                          {m.dnd_until && ' · ' + t('dm.shortDnd')}
+                          {m.role === 'owner' ? t('groupSettings:roleOwner') : m.role === 'admin' ? t('groupSettings:roleAdmin') : t('groupSettings:roleMember')}
+                          {m.dnd_until && ' · ' + t('dm:shortDnd')}
                         </div>
                       </div>
                     </div>
@@ -979,7 +1123,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                           <button
                             onClick={() => handleRoleChange(m, m.role === 'admin' ? 'member' : 'admin')}
                             className="p-1 rounded hover:bg-elevated text-textMuted hover:text-primary-400 transition-colors"
-                            title={m.role === 'admin' ? t('groupSettings.demoteToMember') : t('groupSettings.promoteToAdmin')}
+                            title={m.role === 'admin' ? t('groupSettings:demoteToMember') : t('groupSettings:promoteToAdmin')}
                           >
                             {m.role === 'admin' ? <ShieldOff size={14} /> : <Shield size={14} />}
                           </button>
@@ -987,7 +1131,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                         <button
                           onClick={() => handleKick(m)}
                           className="p-1 rounded hover:bg-rose-400/10 text-textMuted hover:text-rose-400 transition-colors"
-                          title={t('groupSettings.kick')}
+                          title={t('groupSettings:kick')}
                         >
                           <UserX size={14} />
                         </button>
@@ -1005,10 +1149,10 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
               {isAiOwned ? (
                 <div className="text-center py-8">
                   <Volume2 size={32} className="mx-auto text-mint-400 mb-3" />
-                  <p className="text-sm text-textPrimary font-medium">{t('groupSettings.aiManagedGroup')}</p>
+                  <p className="text-sm text-textPrimary font-medium">{t('groupSettings:aiManagedGroup')}</p>
                   <p className="text-xs text-textMuted mt-1">
-                    {t('groupSettings.aiManagedDesc1')}<br />
-                    {t('groupSettings.aiManagedDesc2')}
+                    {t('groupSettings:aiManagedDesc1')}<br />
+                    {t('groupSettings:aiManagedDesc2')}
                   </p>
                 </div>
               ) : (
@@ -1016,10 +1160,10 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                   <div>
                     <div className="flex items-center justify-between mb-1">
                       <label className="text-xs font-medium text-textSecondary">
-                        {t('groupSettings.speakLimit')}
+                        {t('groupSettings:speakLimit')}
                       </label>
                       <span className="text-xs text-primary-400 font-medium">
-                        {speakLimit === 0 ? t('groupSettings.unlimited') : `${speakLimit} ${t('groupSettings.perMinute')}`}
+                        {speakLimit === 0 ? t('groupSettings:unlimited') : `${speakLimit} ${t('groupSettings:perMinute')}`}
                       </span>
                     </div>
                     <input
@@ -1031,7 +1175,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                       className="w-full accent-primary-500"
                     />
                     <div className="flex justify-between text-3xs text-textMuted">
-                      <span>{t('groupSettings.unlimitedLabel')}</span>
+                      <span>{t('groupSettings:unlimitedLabel')}</span>
                       <span>60</span>
                     </div>
                   </div>
@@ -1039,7 +1183,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                   <div>
                     <div className="flex items-center justify-between mb-1">
                       <label className="text-xs font-medium text-textSecondary">
-                        {t('groupSettings.speakWindow')}
+                        {t('groupSettings:speakWindow')}
                       </label>
                       <span className="text-xs text-primary-400 font-medium">{speakWindow}s</span>
                     </div>
@@ -1060,17 +1204,17 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
 
                   {/* 预览 */}
                   <div className="bg-elevated rounded-control px-3 py-2.5 text-xs text-textSecondary space-y-1">
-                    <div className="font-medium text-textPrimary">{t('groupSettings.preview')}</div>
+                    <div className="font-medium text-textPrimary">{t('groupSettings:preview')}</div>
                     {speakLimit > 0 ? (
                       <div>
-                        {t('groupSettings.speakPreviewPer')} {speakWindow} {t('groupSettings.speakPreviewAllow')} <span className="text-primary-400 font-medium">{speakLimit * 2}</span> {t('groupSettings.speakPreviewRounds')}
+                        {t('groupSettings:speakPreviewPer')} {speakWindow} {t('groupSettings:speakPreviewAllow')} <span className="text-primary-400 font-medium">{speakLimit * 2}</span> {t('groupSettings:speakPreviewRounds')}
                         <br />
                         <span className="text-textMuted">
-                          {t('groupSettings.speakPreviewBufferNote')}
+                          {t('groupSettings:speakPreviewBufferNote')}
                         </span>
                       </div>
                     ) : (
-                      <div>{t('groupSettings.speakPreviewUnlimitedDesc')}</div>
+                      <div>{t('groupSettings:speakPreviewUnlimitedDesc')}</div>
                     )}
                   </div>
                   <div>
@@ -1092,7 +1236,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                     disabled={saving}
                     className="w-full px-4 py-2.5 bg-primary-500 text-white rounded-control text-sm font-medium hover:bg-primary-600 disabled:opacity-50 transition-colors"
                   >
-                    {saving ? t('common.saving') : t('groupSettings.saveSpeakLimit')}
+                    {saving ? t('common:saving') : t('groupSettings:saveSpeakLimit')}
                   </button>
                 </>
               )}
@@ -1103,12 +1247,12 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
           {tab === 'export' && (
             <>
               <div>
-                <label className="text-xs font-medium text-textSecondary">{t('groupSettings.exportFormat')}</label>
+                <label className="text-xs font-medium text-textSecondary">{t('groupSettings:exportFormat')}</label>
                 <div className="flex gap-2 mt-1">
                   {[
-                    { key: 'json', labelKey: 'JSON', descKey: 'groupSettings.exportJsonDesc' },
-                    { key: 'txt', labelKey: 'TXT', descKey: 'groupSettings.exportTxtDesc' },
-                    { key: 'html', labelKey: 'HTML', descKey: 'groupSettings.exportHtmlDesc' },
+                    { key: 'json', labelKey: 'JSON', descKey: 'groupSettings:exportJsonDesc' },
+                    { key: 'txt', labelKey: 'TXT', descKey: 'groupSettings:exportTxtDesc' },
+                    { key: 'html', labelKey: 'HTML', descKey: 'groupSettings:exportHtmlDesc' },
                   ].map(f => (
                     <button
                       key={f.key}
@@ -1127,7 +1271,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
               </div>
 
               <div>
-                <label className="text-xs font-medium text-textSecondary">{t('groupSettings.dateRange')}</label>
+                <label className="text-xs font-medium text-textSecondary">{t('groupSettings:dateRange')}</label>
                 <div className="flex items-center gap-2 mt-1">
                   <input
                     type="date"
@@ -1135,7 +1279,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                     onChange={e => setDateFrom(e.target.value)}
                     className="flex-1 bg-elevated border border-border rounded-control px-3 py-2 text-sm text-textPrimary"
                   />
-                  <span className="text-textMuted text-xs">{t('common.to')}</span>
+                  <span className="text-textMuted text-xs">{t('common:to')}</span>
                   <input
                     type="date"
                     value={dateTo}
@@ -1151,7 +1295,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                 className="btn btn-md btn-primary w-full gap-2"
               >
                 <Download size={16} />
-                {exporting ? t('common.exporting') : t('groupSettings.downloadExport')}
+                {exporting ? t('common:exporting') : t('groupSettings:downloadExport')}
               </button>
 
               {exportError && <div className="text-xs text-rose-400">{exportError}</div>}

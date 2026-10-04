@@ -163,7 +163,7 @@ export default function ProviderPresetSelector() {
   }
 
   const handleDelete = async (name: string) => {
-    if (!confirm(t('admin.confirmDeleteProvider'))) return
+    if (!confirm(t('admin:confirmDeleteProvider'))) return
     try {
       await api.delete(`/admin/provider-presets/${encodeURIComponent(name)}`)
       await load()
@@ -183,7 +183,7 @@ export default function ProviderPresetSelector() {
     <section className="bg-surface border border-border rounded-card p-5 space-y-4">
       <h3 className="text-sm font-semibold text-textPrimary flex items-center gap-2">
         <Server size={16} className="text-accent-400" />
-        {t('admin.llmProvider')}
+        {t('admin:llmProvider')}
       </h3>
 
       {/* 已配置的供应商列表 */}
@@ -202,19 +202,19 @@ export default function ProviderPresetSelector() {
                     {p.name}
                     <span className="text-xs text-textMuted">({p.provider})</span>
                     {p.thinking_supported && (
-                      <span className="chip chip-primary shrink-0">{t('admin.thinkingSupported')}</span>
+                      <span className="chip chip-primary shrink-0">{t('admin:thinkingSupported')}</span>
                     )}
                   </button>
                   <div className="flex items-center gap-2">
                     {p.is_default && (
                       <span className="chip chip-accent shrink-0">
-                        {t('admin.defaultProvider')}
+                        {t('admin:defaultProvider')}
                       </span>
                     )}
                     <button
                       onClick={() => handleDelete(p.name)}
                       className="p-1 text-textMuted hover:text-rose-400 transition-colors"
-                      title={t('common.delete')}
+                      title={t('common:delete')}
                     >
                       <Trash2 size={14} />
                     </button>
@@ -252,7 +252,7 @@ export default function ProviderPresetSelector() {
       )}
 
       {providers.length === 0 && (
-        <div className="text-xs text-textMuted py-4 text-center">{t('admin.noProvidersYet')}</div>
+        <div className="text-xs text-textMuted py-4 text-center">{t('admin:noProvidersYet')}</div>
       )}
 
       {/* 添加新供应商 */}
@@ -260,13 +260,13 @@ export default function ProviderPresetSelector() {
         <div className="border border-primary-500/40 rounded-control p-4 bg-primary-500/5 space-y-3">
           <div className="flex items-center justify-between">
             <h4 className="text-sm font-medium text-textPrimary">
-              {t('admin.addProvider')}
+              {t('admin:addProvider')}
             </h4>
             <button
               onClick={() => setAdding(false)}
               className="text-xs text-textMuted hover:text-textPrimary"
             >
-              {t('common.cancel')}
+              {t('common:cancel')}
             </button>
           </div>
 
@@ -296,7 +296,7 @@ export default function ProviderPresetSelector() {
               }`}
             >
               <Settings size={12} className="inline mr-1" />
-              {t('admin.manualConfig')}
+              {t('admin:manualConfig')}
             </button>
           </div>
 
@@ -325,7 +325,7 @@ export default function ProviderPresetSelector() {
           className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-control border border-dashed border-border text-textMuted hover:text-primary-500 hover:border-primary-500/40 transition-colors"
         >
           <Plus size={14} />
-          {t('admin.addProvider')}
+          {t('admin:addProvider')}
         </button>
       )}
     </section>
@@ -377,10 +377,10 @@ function ProviderEditForm({
       )
       if (r.models && r.models.length > 0) {
         setEditModels(JSON.stringify(r.models, null, 2))
-        const okText = t('admin.fetchModelsOk')
+        const okText = t('admin:fetchModelsOk')
         setFetchMsg({ ok: true, text: okText.replace('{n}', String(r.models.length)) })
       } else {
-        setFetchMsg({ ok: r.ok, text: r.message || t('admin.fetchModelsEmpty') })
+        setFetchMsg({ ok: r.ok, text: r.message || t('admin:fetchModelsEmpty') })
       }
     } catch (e: any) {
       setFetchMsg({ ok: false, text: e?.detail || e?.message || '获取失败' })
@@ -392,7 +392,7 @@ function ProviderEditForm({
     <div className="space-y-3 mt-3">
       {isNew && (
         <div>
-          <label className="block text-xs text-textSecondary mb-1">{t('admin.providerName')}</label>
+          <label className="block text-xs text-textSecondary mb-1">{t('admin:providerName')}</label>
           <input
             type="text" value={editName}
             onChange={e => setEditName(e.target.value)}
@@ -411,7 +411,7 @@ function ProviderEditForm({
           />
         </div>
         <div>
-          <label className="block text-xs text-textSecondary mb-1">{t('admin.defaultChatModel')}</label>
+          <label className="block text-xs text-textSecondary mb-1">{t('admin:defaultChatModel')}</label>
           <input
             type="text" value={editChat}
             onChange={e => setEditChat(e.target.value)}
@@ -419,7 +419,7 @@ function ProviderEditForm({
           />
         </div>
         <div>
-          <label className="block text-xs text-textSecondary mb-1">{t('admin.defaultWorkModel')}</label>
+          <label className="block text-xs text-textSecondary mb-1">{t('admin:defaultWorkModel')}</label>
           <input
             type="text" value={editWork}
             onChange={e => setEditWork(e.target.value)}
@@ -465,7 +465,7 @@ function ProviderEditForm({
             onChange={e => setEditThinking(e.target.checked)}
             className="rounded"
           />
-          {t('admin.thinkingSupported')}
+          {t('admin:thinkingSupported')}
         </label>
         <label className="flex items-center gap-2 text-xs text-textSecondary cursor-pointer">
           <input
@@ -473,17 +473,17 @@ function ProviderEditForm({
             onChange={e => setEditIsDefault(e.target.checked)}
             className="rounded"
           />
-          <Star size={12} className="fill-current" /> {t('admin.setAsDefault')}
+          <Star size={12} className="fill-current" /> {t('admin:setAsDefault')}
         </label>
       </div>
       <div>
         <div className="flex items-center justify-between gap-2 mb-1 flex-wrap">
-          <label className="block text-xs text-textSecondary">{t('admin.modelOptionsJson')}</label>
+          <label className="block text-xs text-textSecondary">{t('admin:modelOptionsJson')}</label>
           <div className="flex items-center gap-2">
             <input
               type="text" value={fetchKey}
               onChange={e => setFetchKey(e.target.value)}
-              placeholder={t('admin.fetchModelsHint')}
+              placeholder={t('admin:fetchModelsHint')}
               className="w-56 px-2 py-1 rounded-control border border-border bg-canvas text-textPrimary text-2xs font-mono focus:outline-none focus:ring-2 focus:ring-primary-500/60"
             />
             <button
@@ -493,7 +493,7 @@ function ProviderEditForm({
               className="btn btn-xs btn-outline gap-1 bg-canvas hover:text-primary-500 hover:border-primary-500/40 disabled:hover:text-textSecondary shrink-0"
             >
               {fetching ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
-              {t('admin.fetchModels')}
+              {t('admin:fetchModels')}
             </button>
           </div>
         </div>
@@ -514,10 +514,10 @@ function ProviderEditForm({
           className="btn btn-sm btn-primary gap-1.5"
         >
           {saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
-          {saving ? t('common.saving') : t('common.save')}
+          {saving ? t('common:saving') : t('common:save')}
         </button>
         {saved && (
-          <span className="text-xs text-mint-400 animate-pulse">{t('common.saved')}</span>
+          <span className="text-xs text-mint-400 animate-pulse">{t('common:saved')}</span>
         )}
       </div>
     </div>

@@ -217,7 +217,7 @@ const MessageBubble = memo(function MessageBubble({
           <div
             onClick={() => { if (onAvatarClick && senderType && senderId && senderType !== 'system') onAvatarClick(senderType, senderId, senderName, state) }}
             className={`relative ${avatarSize} rounded-full overflow-hidden ${senderType !== 'system' ? 'cursor-pointer hover:scale-105 transition-transform' : ''} shadow ${avatarGradientShadow}`}
-            title={t('chat.viewProfile').replace('{name}', senderName)}
+            title={t('chat:viewProfile').replace('{name}', senderName)}
           >
             <div className={`absolute inset-px rounded-full ${avatarGradient(senderType, isMine, true)}`} />
             <img src={senderAvatarUrl ?? undefined} alt={senderName} className="relative w-full h-full rounded-full object-cover" loading="lazy" decoding="async" onError={() => setAvatarBroken(true)} />
@@ -226,7 +226,7 @@ const MessageBubble = memo(function MessageBubble({
           <div
             onClick={() => { if (onAvatarClick && senderType && senderId && senderType !== 'system') onAvatarClick(senderType, senderId, senderName, state) }}
             className={`relative ${avatarSize} rounded-full flex items-center justify-center ${avatarTextSize} font-bold ${avatarGradient(senderType, isMine, false)} ${senderType !== 'system' ? 'cursor-pointer hover:scale-105 transition-transform' : ''} shadow ${avatarGradientShadow} overflow-hidden`}
-            title={senderType === 'system' ? '系统通知' : thinking ? t('chat.thinking') : isTyping ? t('chat.typing') : t('chat.viewProfile').replace('{name}', senderName)}
+            title={senderType === 'system' ? '系统通知' : thinking ? t('chat:thinking') : isTyping ? t('chat:typing') : t('chat:viewProfile').replace('{name}', senderName)}
           >
             {senderType === 'system' ? <ShieldAlert size={16} className="text-white" />
               : (thinking || isTyping) ? <BouncingDots className="text-white/80" />
@@ -239,18 +239,18 @@ const MessageBubble = memo(function MessageBubble({
         <div className={`flex items-center gap-2 mb-1 flex-wrap ${isMine ? 'flex-row-reverse' : ''}`}>
           <span className={`text-xs font-medium ${senderType === 'system' ? 'text-rose-500' : 'text-textSecondary'}`}>{senderName}</span>
           {via === 'qq' && (
-            <span className="chip chip-primary shrink-0" title={t('chat.fromQq')}>
-              <MessageSquare size={10} className="inline" /> {t('chat.fromQq')}
+            <span className="chip chip-primary shrink-0" title={t('chat:fromQq')}>
+              <MessageSquare size={10} className="inline" /> {t('chat:fromQq')}
             </span>
           )}
           {sourcePublicId && (
-            <span className="chip chip-primary shrink-0" title={t('chat.fromInstance').replace('{publicId}', sourcePublicId)}>
+            <span className="chip chip-primary shrink-0" title={t('chat:fromInstance').replace('{publicId}', sourcePublicId)}>
               <Globe size={10} className="inline" /> {sourcePublicId.length > 15 ? sourcePublicId.slice(0, 15) + '...' : sourcePublicId}
             </span>
           )}
           <span className="text-3xs text-textMuted">{formatMessageTime(createdAt, lang)}</span>
-          {thinking && <span className="text-3xs text-primary-400 animate-pulse font-medium">{t('chat.thinking')}</span>}
-          {isTyping && <span className="text-3xs text-mint-400 animate-pulse font-medium">{t('chat.typing')}</span>}
+          {thinking && <span className="text-3xs text-primary-400 animate-pulse font-medium">{t('chat:thinking')}</span>}
+          {isTyping && <span className="text-3xs text-mint-400 animate-pulse font-medium">{t('chat:typing')}</span>}
         </div>
         <div className={`relative ${thinking || isTyping ? 'opacity-70' : ''}`}>
           {/* 背景层：只上色/圆角/边框/阴影，不含图片 → 天然被魔视界选中旋转；尺寸由外层决定 */}
@@ -276,7 +276,7 @@ const MessageBubble = memo(function MessageBubble({
           )}
           {revoked ? (
             <span className={`text-xs italic ${isMine ? 'text-white/60' : 'text-textMuted'}`}>
-              {t('chat.revokedMessage', { name: senderName })}
+              {t('chat:revokedMessage', { name: senderName })}
             </span>
           ) : isInvitation && invAtt ? (
             <InvitationCard invitationId={invAtt.invitation_id!} groupName={invAtt.group_name || ''} inviterName={invAtt.inviter_name || ''} message={undefined} status={currentStatus as 'pending' | 'accepted' | 'rejected'} onAccept={handleAcceptInvitation} onReject={handleRejectInvitation} isMine={isMine} />
@@ -321,7 +321,7 @@ const MessageBubble = memo(function MessageBubble({
               <button
                 onClick={() => setMenuOpen(v => !v)}
                 className="p-1 rounded-control bg-elevated border border-border shadow-lg hover:bg-surface text-textMuted hover:text-primary-400"
-                title={t('chat.actions')}
+                title={t('chat:actions')}
               >
                 <MoreHorizontal size={12} />
               </button>
@@ -329,15 +329,15 @@ const MessageBubble = memo(function MessageBubble({
                 <MenuPanel className={`absolute top-full mt-1 w-24 z-modal ${isMine ? 'left-0' : 'right-0'}`}>
                   {onReply && (
                     <MenuItem onClick={() => { setMenuOpen(false); onReply(messageId, senderName, content) }}>
-                      {t('chat.reply')}
+                      {t('chat:reply')}
                     </MenuItem>
                   )}
                   {!!content && (
-                    <MenuItem onClick={handleCopy}>{copied ? t('chat.copied') : t('chat.copy')}</MenuItem>
+                    <MenuItem onClick={handleCopy}>{copied ? t('chat:copied') : t('chat:copy')}</MenuItem>
                   )}
                   {onRevoke && (
                     <MenuItem onClick={() => { setMenuOpen(false); onRevoke(messageId) }}>
-                      {t('chat.revoke')}
+                      {t('chat:revoke')}
                     </MenuItem>
                   )}
                 </MenuPanel>

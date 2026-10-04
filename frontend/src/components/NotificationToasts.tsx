@@ -61,8 +61,8 @@ function joinParts(...parts: (string | null | undefined)[]): string {
  */
 function withMention(item: NotificationItem, title: string, t: (k: string) => string): string {
   const label = item.mentionedMe
-    ? t('notify.mentionedYou')
-    : (item.mentionedAll ? t('notify.mentionedAll') : '')
+    ? t('notify:mentionedYou')
+    : (item.mentionedAll ? t('notify:mentionedAll') : '')
   return label ? (joinParts(label, title) || title) : title
 }
 
@@ -70,45 +70,45 @@ function describe(item: NotificationItem, t: (k: string) => string): { title: st
   const { kind, place, sender, preview } = item
   switch (kind) {
     case 'group_message':
-      return { title: withMention(item, place || t('notify.groupMessage'), t), body: joinParts(sender, preview) }
+      return { title: withMention(item, place || t('notify:groupMessage'), t), body: joinParts(sender, preview) }
     case 'dm_message':
-      return { title: withMention(item, place || t('notify.dmMessage'), t), body: preview || '' }
+      return { title: withMention(item, place || t('notify:dmMessage'), t), body: preview || '' }
     case 'announcement':
       return {
         // 目前公告都是经 push 以 group_message 落下来的（见 connection_manager._push_to_scopes），
         // 走不到这个分支；真收到裸 announcement 帧时也照挂点名说明，别把"这事和你有关"吞掉
-        title: withMention(item, joinParts(place, t('notify.announcement')) || t('notify.announcement'), t),
+        title: withMention(item, joinParts(place, t('notify:announcement')) || t('notify:announcement'), t),
         body: preview || '',
       }
     case 'group_invite_card':
-      return { title: t('notify.groupInviteCard'), body: joinParts(place, preview) }
+      return { title: t('notify:groupInviteCard'), body: joinParts(place, preview) }
     case 'friend_request':
-      return { title: t('notify.friendRequest'), body: joinParts(sender, preview) }
+      return { title: t('notify:friendRequest'), body: joinParts(sender, preview) }
     case 'friend_accepted':
-      return { title: t('notify.friendAccepted'), body: sender || '' }
+      return { title: t('notify:friendAccepted'), body: sender || '' }
     case 'friend_rejected':
-      return { title: t('notify.friendRejected'), body: sender || '' }
+      return { title: t('notify:friendRejected'), body: sender || '' }
     case 'group_join_requested':
-      return { title: t('notify.groupJoinRequested'), body: joinParts(sender, place) }
+      return { title: t('notify:groupJoinRequested'), body: joinParts(sender, place) }
     case 'group_join_approved':
-      return { title: t('notify.groupJoinApproved'), body: place || '' }
+      return { title: t('notify:groupJoinApproved'), body: place || '' }
     case 'group_join_rejected':
-      return { title: t('notify.groupJoinRejected'), body: place || '' }
+      return { title: t('notify:groupJoinRejected'), body: place || '' }
     case 'group_invite_approved':
-      return { title: t('notify.groupInviteApproved'), body: joinParts(sender, place) }
+      return { title: t('notify:groupInviteApproved'), body: joinParts(sender, place) }
     case 'group_invite_denied':
-      return { title: t('notify.groupInviteDenied'), body: joinParts(sender, place) }
+      return { title: t('notify:groupInviteDenied'), body: joinParts(sender, place) }
     case 'group_invite_accepted':
-      return { title: t('notify.groupInviteAccepted'), body: joinParts(sender, place) }
+      return { title: t('notify:groupInviteAccepted'), body: joinParts(sender, place) }
     case 'group_invite_declined':
-      return { title: t('notify.groupInviteDeclined'), body: joinParts(sender, place) }
+      return { title: t('notify:groupInviteDeclined'), body: joinParts(sender, place) }
     case 'system':
-      return { title: t('notify.system'), body: preview || '' }
+      return { title: t('notify:system'), body: preview || '' }
     default: {
       // 新增 kind 忘了加分支时这里编译不过（KIND_STYLE 那张表靠 Record 守住，这张靠 never 守）；
       // 真到了运行时（新后端 + 老前端）给个兜底标题，别白屏
       const _exhaustive: never = kind
-      return { title: t('notify.system'), body: preview || '' }
+      return { title: t('notify:system'), body: preview || '' }
     }
   }
 }
@@ -163,7 +163,7 @@ function Toast({ item, onDismiss, onOpen }: {
       <button
         onClick={(e) => { e.stopPropagation(); onDismiss(item.id) }}
         className="p-0.5 rounded text-textMuted hover:text-textSecondary shrink-0"
-        title={t('notify.close')}
+        title={t('notify:close')}
       >
         <X size={12} />
       </button>

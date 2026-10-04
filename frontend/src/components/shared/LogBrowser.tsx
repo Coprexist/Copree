@@ -152,7 +152,7 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
   if (loading) {
     return (
       <div className="flex items-center gap-2 text-sm text-textMuted py-6 justify-center">
-        <Loader2 size={14} className="animate-spin will-change-transform" /> {t('common.loading')}
+        <Loader2 size={14} className="animate-spin will-change-transform" /> {t('common:loading')}
       </div>
     )
   }
@@ -302,7 +302,7 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
           <div className="min-h-0 flex flex-col">
           {bodyLoading ? (
             <div className="flex items-center gap-2 text-xs text-textMuted py-6 justify-center">
-              <Loader2 size={13} className="animate-spin will-change-transform" /> {t('common.loading')}
+              <Loader2 size={13} className="animate-spin will-change-transform" /> {t('common:loading')}
             </div>
           ) : showDelta && comparable ? (
             // 改变量：按原顺序摆——相同的那几段折叠成一行，多出来/没了的各自成截

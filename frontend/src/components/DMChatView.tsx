@@ -81,7 +81,7 @@ export default function DMChatView({ sessionId, onMobileBack }: DMChatViewProps)
         <button
           onClick={() => navigate('/chat')}
           className="md:hidden p-1.5 -ml-1 rounded-control hover:bg-elevated text-textSecondary transition-colors"
-          title={t('dm.sessionList')}
+          title={t('dm:sessionList')}
         >
           <ArrowLeft size={20} />
         </button>
@@ -90,7 +90,7 @@ export default function DMChatView({ sessionId, onMobileBack }: DMChatViewProps)
         <button
           onClick={() => partner && setShowProfile(true)}
           className="shrink-0"
-          title={t('profileCard.viewProfile')}
+          title={t('profileCard:viewProfile')}
         >
           {partner?.avatar_url ? (
             <div className="relative w-8 h-8 rounded-full overflow-hidden shrink-0">
@@ -116,16 +116,16 @@ export default function DMChatView({ sessionId, onMobileBack }: DMChatViewProps)
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="font-semibold text-textPrimary text-sm truncate">
-              {partner?.name || t('dm.loading')}
+              {partner?.name || t('dm:loading')}
             </span>
           </div>
           <span className="text-3xs text-textMuted">
             {partner?.type === 'system' ? <><ShieldAlert size={12} className="inline text-rose-400" /> 系统通知</>
-            : partner?.type === 'ai' ? <><Bot size={12} className="inline" /> {t('dm.ai')}</>
-            : <><User size={12} className="inline" /> {t('dm.user')}</>}
-            {partner?.type !== 'system' && isActive && ` · ${t('dm.online')}`}
-            {partner?.type !== 'system' && partner?.state === 'dnd' && ` · ${t('dm.dnd')}`}
-            {partner?.type !== 'system' && (!partner?.state || partner?.state === 'inactive') && ` · ${t('dm.offline')}`}
+            : partner?.type === 'ai' ? <><Bot size={12} className="inline" /> {t('dm:ai')}</>
+            : <><User size={12} className="inline" /> {t('dm:user')}</>}
+            {partner?.type !== 'system' && isActive && ` · ${t('dm:online')}`}
+            {partner?.type !== 'system' && partner?.state === 'dnd' && ` · ${t('dm:dnd')}`}
+            {partner?.type !== 'system' && (!partner?.state || partner?.state === 'inactive') && ` · ${t('dm:offline')}`}
             {tokenUsage && tokenUsage.total_tokens > 0 && (
               <span className="ml-2 text-textMuted">
                 · {tokenUsage.total_tokens >= 1000 ? `${(tokenUsage.total_tokens / 1000).toFixed(1)}k` : tokenUsage.total_tokens} tokens
@@ -137,16 +137,16 @@ export default function DMChatView({ sessionId, onMobileBack }: DMChatViewProps)
         {/* 联邦标签 */}
         {partner?.is_federated && (
           <span className="chip chip-primary shrink-0"
-                title={t('chat.federatedGroup')}>
+                title={t('chat:federatedGroup')}>
             <Globe size={11} />
-            {t('chat.federated')}
+            {t('chat:federated')}
           </span>
         )}
 
         {/* 在线状态指示 */}
         <span className={`inline-flex items-center gap-1 text-3xs font-medium ${isActive ? 'text-mint-400' : partner?.state === 'dnd' ? 'text-rose-400' : 'text-textMuted'}`}>
           <span className={`w-1.5 h-1.5 rounded-full ${stateColor}`} />
-          {isActive ? t('dm.online') : partner?.state === 'dnd' ? t('dm.shortDnd') : partner?.last_active_at ? `${t('dm.lastActive')} ${formatMessageTime(partner.last_active_at, lang)}` : t('dm.offline')}
+          {isActive ? t('dm:online') : partner?.state === 'dnd' ? t('dm:shortDnd') : partner?.last_active_at ? `${t('dm:lastActive')} ${formatMessageTime(partner.last_active_at, lang)}` : t('dm:offline')}
         </span>
 
         {/* 免打扰按钮 */}
@@ -157,7 +157,7 @@ export default function DMChatView({ sessionId, onMobileBack }: DMChatViewProps)
               ? 'text-rose-400 hover:bg-rose-400/10'
               : 'text-textMuted hover:text-rose-400 hover:bg-elevated'
           }`}
-          title={myDndUntil ? t('dm.unmute') : t('dm.mute')}
+          title={myDndUntil ? t('dm:unmute') : t('dm:mute')}
         >
           {myDndUntil ? <BellOff size={14} /> : <Bell size={14} />}
         </button>
@@ -166,7 +166,7 @@ export default function DMChatView({ sessionId, onMobileBack }: DMChatViewProps)
         <button
           onClick={() => setShowSettings(true)}
           className="p-1 rounded-control hover:bg-elevated text-textMuted hover:text-textSecondary transition-colors"
-          title={t('dm.dmSettings')}
+          title={t('dm:dmSettings')}
         >
           <Settings size={14} />
         </button>

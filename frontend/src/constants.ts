@@ -50,9 +50,9 @@ export const STATE_TAG_COLORS: Record<string, string> = {
 
 /** AI 类型 → i18n 键名 + Tailwind 颜色 */
 export const AI_TYPE_LABEL: Record<string, { key: string; cls: string }> = {
-  resonance: { key: 'aiType.resonance', cls: 'bg-violet-500/10 text-violet-400' },
-  general: { key: 'aiType.general', cls: 'bg-primary-500/10 text-primary-400' },
-  semi_general: { key: 'aiType.semiGeneral', cls: 'bg-amber-500/10 text-amber-400' },
+  resonance: { key: 'aiType:resonance', cls: 'bg-violet-500/10 text-violet-400' },
+  general: { key: 'aiType:general', cls: 'bg-primary-500/10 text-primary-400' },
+  semi_general: { key: 'aiType:semiGeneral', cls: 'bg-amber-500/10 text-amber-400' },
 }
 
 // ============================================================

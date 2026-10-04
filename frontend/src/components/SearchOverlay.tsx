@@ -108,7 +108,7 @@ export default function SearchOverlay() {
         setQuery('')
       }
     } catch (err: any) {
-      alert(err.message || t('search.sendDMFailed'))
+      alert(err.message || t('search:sendDMFailed'))
     } finally {
       setSendingDM(null)
     }
@@ -128,9 +128,9 @@ export default function SearchOverlay() {
       ))
       setAddFriendTarget(null)
       setFriendMessage('')
-      alert(t('search.addFriendSuccess'))
+      alert(t('search:addFriendSuccess'))
     } catch (err: any) {
-      alert(err.message || t('search.addFriendFailed'))
+      alert(err.message || t('search:addFriendFailed'))
     } finally {
       setAddingFriend(false)
     }
@@ -146,9 +146,9 @@ export default function SearchOverlay() {
         return
       }
       setRequestedGroups(prev => [...prev, group.id])
-      alert(t('search.joinRequested'))
+      alert(t('search:joinRequested'))
     } catch (err: any) {
-      alert(err.message || t('search.joinFailed'))
+      alert(err.message || t('search:joinFailed'))
     } finally {
       setJoiningGroup(null)
     }
@@ -208,7 +208,7 @@ export default function SearchOverlay() {
             )}
           </div>
           {item.owner_name && (
-            <div className="text-xs text-textMuted truncate">{t('search.creator')} {item.owner_name}</div>
+            <div className="text-xs text-textMuted truncate">{t('search:creator')} {item.owner_name}</div>
           )}
         </button>
 
@@ -220,7 +220,7 @@ export default function SearchOverlay() {
             className="flex items-center gap-1 px-2 py-1 text-xs rounded-control bg-primary-500/10 text-primary-400 hover:bg-primary-500/20 shrink-0 transition-colors disabled:opacity-50"
           >
             <MessageSquare size={12} />
-            {sendingDM === key ? '...' : t('search.sendDM')}
+            {sendingDM === key ? '...' : t('search:sendDM')}
           </button>
         ) : isAddingThis ? (
           <div className="shrink-0 flex items-center gap-1">
@@ -229,7 +229,7 @@ export default function SearchOverlay() {
               value={friendMessage}
               onChange={(e) => setFriendMessage(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') handleAddFriend(item) }}
-              placeholder={t('profileCard.friendMessagePlaceholder')}
+              placeholder={t('profileCard:friendMessagePlaceholder')}
               maxLength={200}
               className="w-24 md:w-32 px-2 py-1 rounded-control border border-border bg-canvas text-xs text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-1 focus:ring-primary-500/50"
               autoFocus
@@ -254,7 +254,7 @@ export default function SearchOverlay() {
             className="flex items-center gap-1 px-2 py-1 text-xs rounded-control bg-mint-400/10 text-mint-400 hover:bg-mint-400/20 shrink-0 transition-colors"
           >
             <UserPlus size={12} />
-            {t('search.addFriend')}
+            {t('search:addFriend')}
           </button>
         )}
       </div>
@@ -277,7 +277,7 @@ export default function SearchOverlay() {
       <div className="flex-1 min-w-0">
         <span className="text-sm font-medium text-textPrimary truncate block">{group.name}</span>
         <span className="text-xs text-textMuted">
-          <Users size={12} className="inline" /> {group.member_count} {t('search.members')}
+          <Users size={12} className="inline" /> {group.member_count} {t('search:members')}
         </span>
       </div>
 
@@ -286,10 +286,10 @@ export default function SearchOverlay() {
           onClick={() => openGroup(group.id)}
           className="px-2 py-1 text-xs rounded-control bg-primary-500/10 text-primary-400 hover:bg-primary-500/20 shrink-0 transition-colors"
         >
-          {t('search.enterGroup')}
+          {t('search:enterGroup')}
         </button>
       ) : requestedGroups.includes(group.id) ? (
-        <span className="text-xs text-textMuted shrink-0">{t('search.requested')}</span>
+        <span className="text-xs text-textMuted shrink-0">{t('search:requested')}</span>
       ) : (
         <button
           onClick={() => handleJoinGroup(group)}
@@ -297,7 +297,7 @@ export default function SearchOverlay() {
           className="flex items-center gap-1 px-2 py-1 text-xs rounded-control bg-mint-400/10 text-mint-400 hover:bg-mint-400/20 shrink-0 transition-colors disabled:opacity-50"
         >
           <UserPlus size={12} />
-          {joiningGroup === group.id ? '...' : group.auto_approve_join ? t('search.joinGroup') : t('search.requestJoin')}
+          {joiningGroup === group.id ? '...' : group.auto_approve_join ? t('search:joinGroup') : t('search:requestJoin')}
         </button>
       )}
     </div>
@@ -314,7 +314,7 @@ export default function SearchOverlay() {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onFocus={() => (results.length > 0 || groups.length > 0) && setShowDropdown(true)}
-          placeholder={t('search.placeholder')}
+          placeholder={t('search:placeholder')}
           className="flex-1 bg-transparent text-sm text-textPrimary placeholder:text-textMuted focus:outline-none"
         />
         {query && (
@@ -331,20 +331,20 @@ export default function SearchOverlay() {
       {showDropdown && (
         <MenuPanel className="absolute top-full left-0 right-0 mt-1 max-h-80 overflow-y-auto z-modal">
           {loading ? (
-            <div className="p-3 text-sm text-textMuted text-center">{t('search.searching')}</div>
+            <div className="p-3 text-sm text-textMuted text-center">{t('search:searching')}</div>
           ) : results.length === 0 && groups.length === 0 ? (
-            <div className="p-3 text-sm text-textMuted text-center">{t('search.noResults')}</div>
+            <div className="p-3 text-sm text-textMuted text-center">{t('search:noResults')}</div>
           ) : (
             <>
               {results.length > 0 && (
                 <>
-                  {groups.length > 0 && <SectionLabel label={t('search.sectionPeople')} />}
+                  {groups.length > 0 && <SectionLabel label={t('search:sectionPeople')} />}
                   {results.map(renderPersonRow)}
                 </>
               )}
               {groups.length > 0 && (
                 <>
-                  <SectionLabel label={t('search.sectionGroups')} />
+                  <SectionLabel label={t('search:sectionGroups')} />
                   {groups.map(renderGroupRow)}
                 </>
               )}

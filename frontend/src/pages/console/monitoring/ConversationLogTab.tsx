@@ -129,9 +129,9 @@ export default function ConversationLogTab() {
         {/* Section tabs */}
         <div className="flex gap-2 bg-canvas border border-border rounded-card p-1 w-full">
         {[
-          { k: 'config', label: t('admin.convlogGlobal'), icon: Settings },
-          { k: 'agents', label: t('admin.convlogPerAgent'), icon: Sliders },
-          { k: 'viewer', label: t('admin.convlogViewer'), icon: Eye },
+          { k: 'config', label: t('admin:convlogGlobal'), icon: Settings },
+          { k: 'agents', label: t('admin:convlogPerAgent'), icon: Sliders },
+          { k: 'viewer', label: t('admin:convlogViewer'), icon: Eye },
         ].map(s => (
           <button
             key={s.k}
@@ -149,14 +149,14 @@ export default function ConversationLogTab() {
       {section === 'config' && (
         <div className="bg-elevated border border-border rounded-card p-5 max-w-xl">
           <h3 className="text-sm font-semibold text-textPrimary mb-4 flex items-center gap-2">
-            <Settings size={16} className="text-primary-400" /> {t('admin.convlogConfigTitle')}
+            <Settings size={16} className="text-primary-400" /> {t('admin:convlogConfigTitle')}
           </h3>
           {configLoading ? (
             <div className="flex justify-center py-8"><Loader2 className="animate-spin" size={20} /></div>
           ) : config ? (
             <div className="space-y-4">
               <div>
-                <label className="block text-xs font-medium text-textSecondary mb-1">{t('admin.convlogHardLimit')}</label>
+                <label className="block text-xs font-medium text-textSecondary mb-1">{t('admin:convlogHardLimit')}</label>
                 <input
                   type="number" min={1} max={500}
                   value={config.max_conversation_logs}
@@ -165,7 +165,7 @@ export default function ConversationLogTab() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-textSecondary mb-1">{t('admin.convlogDefaultLimit')}</label>
+                <label className="block text-xs font-medium text-textSecondary mb-1">{t('admin:convlogDefaultLimit')}</label>
                 <input
                   type="number" min={1} max={config.max_conversation_logs}
                   value={config.default_user_conversation_logs}
@@ -174,19 +174,19 @@ export default function ConversationLogTab() {
                 />
               </div>
               <div className="flex items-center justify-between">
-                <label className="text-xs font-medium text-textSecondary">{t('admin.convlogDefaultAccess')}</label>
+                <label className="text-xs font-medium text-textSecondary">{t('admin:convlogDefaultAccess')}</label>
                 <Toggle checked={config.default_user_log_access} onChange={(v) => setConfig({ ...config, default_user_log_access: v })} />
               </div>
               <div className="flex items-center justify-between">
                 <div>
-                  <label className="text-xs font-medium text-textSecondary">{t('admin.convlogDefaultDelay')}</label>
-                  <p className="text-3xs text-textMuted mt-0.5">{t('admin.convlogDefaultDelayDesc')}</p>
+                  <label className="text-xs font-medium text-textSecondary">{t('admin:convlogDefaultDelay')}</label>
+                  <p className="text-3xs text-textMuted mt-0.5">{t('admin:convlogDefaultDelayDesc')}</p>
                 </div>
                 <Toggle checked={config.default_delay_reply_enabled} onChange={(v) => setConfig({ ...config, default_delay_reply_enabled: v })} />
               </div>
               <div>
                 <label className="block text-xs font-medium text-textSecondary mb-1">
-                  {t('admin.convlogCompressThreshold')} ({config.compression_threshold || 60}%)
+                  {t('admin:convlogCompressThreshold')} ({config.compression_threshold || 60}%)
                 </label>
                 <input
                   type="range" min={5} max={100} step={5}
@@ -194,11 +194,11 @@ export default function ConversationLogTab() {
                   onChange={e => setConfig({ ...config, compression_threshold: parseInt(e.target.value) })}
                   className="w-full accent-primary-500"
                 />
-                <p className="text-3xs text-textMuted mt-0.5">{t('admin.convlogCompressThresholdDesc')}</p>
+                <p className="text-3xs text-textMuted mt-0.5">{t('admin:convlogCompressThresholdDesc')}</p>
               </div>
               <div>
                 <label className="block text-xs font-medium text-textSecondary mb-1">
-                  {t('admin.convlogIdleThreshold')} ({config.idle_threshold_percent ?? 37}%)
+                  {t('admin:convlogIdleThreshold')} ({config.idle_threshold_percent ?? 37}%)
                 </label>
                 <input
                   type="range" min={1} max={99} step={1}
@@ -206,11 +206,11 @@ export default function ConversationLogTab() {
                   onChange={e => setConfig({ ...config, idle_threshold_percent: parseInt(e.target.value) })}
                   className="w-full accent-primary-500"
                 />
-                <p className="text-3xs text-textMuted mt-0.5">{t('admin.convlogIdleThresholdDesc')}</p>
+                <p className="text-3xs text-textMuted mt-0.5">{t('admin:convlogIdleThresholdDesc')}</p>
               </div>
               <div>
                 <label className="block text-xs font-medium text-textSecondary mb-1">
-                  {t('admin.convlogTargetPercent')} ({config.compress_target_percent ?? 20}%)
+                  {t('admin:convlogTargetPercent')} ({config.compress_target_percent ?? 20}%)
                 </label>
                 <input
                   type="range" min={1} max={99} step={1}
@@ -218,14 +218,14 @@ export default function ConversationLogTab() {
                   onChange={e => setConfig({ ...config, compress_target_percent: parseInt(e.target.value) })}
                   className="w-full accent-primary-500"
                 />
-                <p className="text-3xs text-textMuted mt-0.5">{t('admin.convlogTargetPercentDesc')}</p>
+                <p className="text-3xs text-textMuted mt-0.5">{t('admin:convlogTargetPercentDesc')}</p>
               </div>
               <button
                 onClick={saveConfig}
                 disabled={configSaving}
                 className="btn btn-sm btn-primary gap-2"
               >
-                <Save size={14} /> {configSaving ? t('common.saving') : t('admin.saveConfig')}
+                <Save size={14} /> {configSaving ? t('common:saving') : t('admin:saveConfig')}
               </button>
             </div>
           ) : null}
@@ -236,11 +236,11 @@ export default function ConversationLogTab() {
       {section === 'agents' && (
         <div className="bg-elevated border border-border rounded-card p-5 max-w-xl">
           <h3 className="text-sm font-semibold text-textPrimary mb-4 flex items-center gap-2">
-            <Bot size={16} className="text-primary-400" /> {t('admin.perAgentSettings')}
+            <Bot size={16} className="text-primary-400" /> {t('admin:perAgentSettings')}
           </h3>
           <div className="space-y-4">
             <div>
-              <label className="block text-xs font-medium text-textSecondary mb-1">{t('admin.selectAi')}</label>
+              <label className="block text-xs font-medium text-textSecondary mb-1">{t('admin:selectAi')}</label>
               <div className="relative">
                 <div className="flex gap-2">
                   <input
@@ -250,7 +250,7 @@ export default function ConversationLogTab() {
                       setAgentSearch(e.target.value)
                       loadAgents(e.target.value)
                     }}
-                    placeholder={t('admin.searchAiPlaceholder')}
+                    placeholder={t('admin:searchAiPlaceholder')}
                     className="flex-1 px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
                   />
                   <select
@@ -258,9 +258,9 @@ export default function ConversationLogTab() {
                     onChange={e => setSelectedAgentId(e.target.value ? parseInt(e.target.value) : null)}
                     className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50 min-w-0"
                   >
-                    <option value="">{t('admin.selectAiPlaceholder')}</option>
+                    <option value="">{t('admin:selectAiPlaceholder')}</option>
                     {agentSearching ? (
-                      <option disabled>{t('common.loading')}</option>
+                      <option disabled>{t('common:loading')}</option>
                     ) : (
                       agents.map(a => (
                         <option key={a.id} value={a.id}>{a.name} (ID: {a.id})</option>
@@ -276,27 +276,27 @@ export default function ConversationLogTab() {
                 <div
                   className="p-3 rounded-control bg-canvas text-xs text-textSecondary"
                   dangerouslySetInnerHTML={{
-                    __html: t('admin.currentEffective')
+                    __html: t('admin:currentEffective')
                       .replace('{retention}', `<b class="text-textPrimary">${agentSettings.effective_limit}</b>`)
-                      .replace('{access}', `<b class="${agentSettings.effective_user_access ? 'text-mint-400' : 'text-rose-400'}">${agentSettings.effective_user_access ? t('common.enabled') : t('common.disabled')}</b>`)
+                      .replace('{access}', `<b class="${agentSettings.effective_user_access ? 'text-mint-400' : 'text-rose-400'}">${agentSettings.effective_user_access ? t('common:enabled') : t('common:disabled')}</b>`)
                   }}
                 />
                 <div>
                   <label className="block text-xs font-medium text-textSecondary mb-1">
-                    {t('admin.retentionLimit').replace('{max}', String(agentSettings.system_max))}
+                    {t('admin:retentionLimit').replace('{max}', String(agentSettings.system_max))}
                   </label>
                   <input
                     type="number" min={1} max={agentSettings.system_max}
                     value={agentLimit}
                     onChange={e => setAgentLimit(e.target.value)}
-                    placeholder={t('admin.retentionLimit').replace('{max}', String(agentSettings.system_max))}
+                    placeholder={t('admin:retentionLimit').replace('{max}', String(agentSettings.system_max))}
                     className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
                   />
                 </div>
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-medium text-textSecondary">
-                    {t('admin.allowUserViewLogs')}
-                    <span className="text-textMuted ml-1">（{agentSettings.system_default_access ? t('admin.defaultOn') : t('admin.defaultOff')}）</span>
+                    {t('admin:allowUserViewLogs')}
+                    <span className="text-textMuted ml-1">（{agentSettings.system_default_access ? t('admin:defaultOn') : t('admin:defaultOff')}）</span>
                   </label>
                   <button
                     onClick={() => {
@@ -322,7 +322,7 @@ export default function ConversationLogTab() {
                   disabled={agentSaving}
                   className="btn btn-sm btn-primary gap-2"
                 >
-                  <Save size={14} /> {agentSaving ? t('common.saving') : t('admin.saveSettings')}
+                  <Save size={14} /> {agentSaving ? t('common:saving') : t('admin:saveSettings')}
                 </button>
               </>
             )}
@@ -341,7 +341,7 @@ export default function ConversationLogTab() {
                 setAgentSearch(e.target.value)
                 loadAgents(e.target.value)
               }}
-              placeholder={t('admin.searchAiPlaceholder')}
+              placeholder={t('admin:searchAiPlaceholder')}
               className="flex-1 px-3 py-2 rounded-control border border-border bg-elevated text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
             />
             <select
@@ -349,9 +349,9 @@ export default function ConversationLogTab() {
               onChange={e => setViewAgentId(e.target.value ? parseInt(e.target.value) : null)}
               className="px-3 py-2 rounded-control border border-border bg-elevated text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
             >
-              <option value="">{t('admin.selectAiPlaceholder')}</option>
+              <option value="">{t('admin:selectAiPlaceholder')}</option>
               {agentSearching ? (
-                <option disabled>{t('common.loading')}</option>
+                <option disabled>{t('common:loading')}</option>
               ) : (
                 agents.map(a => (
                   <option key={a.id} value={a.id}>{a.name}</option>
@@ -364,7 +364,7 @@ export default function ConversationLogTab() {
           {viewAgentId ? (
             <LogBrowser agentId={viewAgentId} basePath="/admin/conversation-log" />
           ) : (
-            <p className="text-sm text-textMuted py-4 text-center">{t('admin.selectAiPlaceholder')}</p>
+            <p className="text-sm text-textMuted py-4 text-center">{t('admin:selectAiPlaceholder')}</p>
           )}
         </div>
       )}

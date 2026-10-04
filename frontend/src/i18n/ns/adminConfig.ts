@@ -8,7 +8,7 @@
  * 后端 CONFIG_GROUPS schema 只下发 label_key/hint_key（同样是裸名），前端 t() 翻译。
  */
 
-import type { TranslationDict } from './translations'
+import type { TranslationDict } from '../types'
 
 export const adminConfigZh: TranslationDict = {
   // ── 配置组通用 UI ──

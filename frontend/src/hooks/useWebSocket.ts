@@ -181,7 +181,7 @@ export function useWebSocket(
 
         // 闪烁文案（带发送者昵称）：标题格式由 docTitle 统一拼
         const sender = msg.data?.sender_name || ''
-        startTitleFlash(sender ? `${sender} · ${t('chat.newMessages')}` : t('chat.newMessages'))
+        startTitleFlash(sender ? `${sender} · ${t('chat:newMessages')}` : t('chat:newMessages'))
 
         // Favicon 红点
         try {
@@ -195,7 +195,7 @@ export function useWebSocket(
         // 桌面通知
         if ('Notification' in window && Notification.permission === 'granted') {
           try {
-            new Notification(BASE_TITLE, { body: t('chat.newMessages'), tag: 'copree_msg' })
+            new Notification(BASE_TITLE, { body: t('chat:newMessages'), tag: 'copree_msg' })
           } catch {}
         } else if ('Notification' in window && Notification.permission !== 'denied') {
           Notification.requestPermission()

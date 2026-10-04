@@ -46,6 +46,10 @@ interface Group {
   searchable?: boolean
   auto_approve_join?: boolean
   approve_invites?: boolean
+  // 外部通道（QQ）相关：群名是否跟随通道、接没接通道、通道叫什么
+  name_from_channel?: boolean
+  channel_bound?: boolean
+  channel_labels?: string[]
 }
 
 interface ChatAreaProps {
@@ -152,16 +156,16 @@ export default function ChatArea({ groupId, dmSessionId }: ChatAreaProps) {
         >
           <div className="text-center px-4">
             <MessageBubblePlaceholder />
-            <p className="mt-4 text-base md:text-lg text-textSecondary font-medium">{t('chat.selectConversation')}</p>
+            <p className="mt-4 text-base md:text-lg text-textSecondary font-medium">{t('chat:selectConversation')}</p>
             {groups.length === 0 ? (
               <button
                 onClick={(e) => { e.stopPropagation(); setShowCreateGroup(true) }}
                 className="mt-5 px-5 py-2.5 bg-primary-500 text-white rounded-card hover:bg-primary-600 text-sm font-medium transition-all shadow-lg shadow-primary-500/20"
               >
-                {t('chat.createFirstGroup')}
+                {t('chat:createFirstGroup')}
               </button>
             ) : (
-              <p className="mt-2 text-xs text-textMuted">{t('chat.selectFromListHint')}</p>
+              <p className="mt-2 text-xs text-textMuted">{t('chat:selectFromListHint')}</p>
             )}
           </div>
         </div>
@@ -172,7 +176,7 @@ export default function ChatArea({ groupId, dmSessionId }: ChatAreaProps) {
             <button
               onClick={() => navigate('/chat')}
               className="md:hidden p-1.5 -ml-1 rounded-control hover:bg-elevated text-textSecondary transition-colors"
-              title={t('chat.sessionList')}
+              title={t('chat:sessionList')}
             >
               <ArrowLeft size={20} />
             </button>
@@ -180,24 +184,24 @@ export default function ChatArea({ groupId, dmSessionId }: ChatAreaProps) {
               <GroupAvatarHeader g={currentGroup} onClick={() => setProfileGroup(currentGroup)} />
             )}
             <h2 className="font-semibold text-textPrimary text-sm truncate">
-              # {currentGroup?.name || t('chat.loading')}
+              # {currentGroup?.name || t('chat:loading')}
             </h2>
             {currentGroup?.is_federated && (
               <span className="chip chip-primary shrink-0"
-                    title={t('chat.federatedGroup')}>
+                    title={t('chat:federatedGroup')}>
                 <Globe size={11} />
-                {t('chat.federated')}
+                {t('chat:federated')}
               </span>
             )}
             <button
               onClick={() => setShowInvite(true)}
               className="p-1 rounded-control hover:bg-elevated text-textMuted hover:text-primary-400 transition-colors"
-              title={t('chat.inviteMembers')}
+              title={t('chat:inviteMembers')}
             >
               <UserPlus size={16} />
             </button>
             <span className={`inline-flex items-center gap-1 text-3xs font-medium ${(currentGroup?.online_count ?? 0) === 0 ? 'text-slate-400' : 'text-mint-400'}`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${(currentGroup?.online_count ?? 0) === 0 ? 'bg-slate-400' : 'bg-mint-400'}`} /> {t('chat.onlineCount')}: {currentGroup?.online_count ?? 0}
+              <span className={`w-1.5 h-1.5 rounded-full ${(currentGroup?.online_count ?? 0) === 0 ? 'bg-slate-400' : 'bg-mint-400'}`} /> {t('chat:onlineCount')}: {currentGroup?.online_count ?? 0}
             </span>
             <button
               onClick={async () => {
@@ -217,7 +221,7 @@ export default function ChatArea({ groupId, dmSessionId }: ChatAreaProps) {
                   ? 'text-rose-400 hover:bg-rose-400/10'
                   : 'text-textMuted hover:text-rose-400 hover:bg-elevated'
               }`}
-              title={currentGroup?.dnd_until ? t('chat.unmute') : t('chat.mute')}
+              title={currentGroup?.dnd_until ? t('chat:unmute') : t('chat:mute')}
             >
               {currentGroup?.dnd_until ? <BellOff size={14} /> : <Bell size={14} />}
             </button>
@@ -225,7 +229,7 @@ export default function ChatArea({ groupId, dmSessionId }: ChatAreaProps) {
               <button
                 onClick={() => setShowSettings(true)}
                 className="p-1 rounded-control hover:bg-elevated text-textMuted hover:text-textSecondary transition-colors"
-                title={t('chat.groupSettings')}
+                title={t('chat:groupSettings')}
               >
                 <Settings size={14} />
               </button>
@@ -248,7 +252,7 @@ export default function ChatArea({ groupId, dmSessionId }: ChatAreaProps) {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold text-textPrimary">{t('list.add')}</h2>
+              <h2 className="text-lg font-semibold text-textPrimary">{t('list:add')}</h2>
               <button onClick={() => setShowAddFriend(false)} className="p-1 hover:bg-canvas rounded-control text-textMuted hover:text-textSecondary">
                 <X size={18} />
               </button>
@@ -293,23 +297,13 @@ export default function ChatArea({ groupId, dmSessionId }: ChatAreaProps) {
       {/* 群设置面板 */}
       {showSettings && currentGroup && (
         <GroupSettingsPanel
+          // 整份透传：面板要用的字段由服务端那份 JSON 说了算。这里手抄字段清单，
+          // 就等于每次加设置项都得记得回来补一笔——漏一个的表现正是"设置项没出现"
           group={{
-            id: currentGroup.id,
-            name: currentGroup.name,
-            owner_type: currentGroup.owner_type,
-            owner_id: currentGroup.owner_id,
-            is_vector_accelerated: currentGroup.is_vector_accelerated,
-            is_paused: currentGroup.is_paused,
+            ...currentGroup,
             is_pinned: currentGroup.is_pinned ?? false,
-            concurrent_ai_limit: currentGroup.concurrent_ai_limit,
-            announcement: currentGroup.announcement,
-            speak_limit_per_minute: currentGroup.speak_limit_per_minute,
-            speak_limit_window_seconds: currentGroup.speak_limit_window_seconds,
-            my_role: currentGroup.my_role,
             avatar_mode: currentGroup.avatar_mode || 'default',
-            avatar_url: currentGroup.avatar_url,
             include_ai_in_avatar: currentGroup.include_ai_in_avatar ?? true,
-            // 发现与入群三开关：设置面板回显要用，别在这里漏字段（漏了开关永远是默认值）
             searchable: currentGroup.searchable ?? false,
             auto_approve_join: currentGroup.auto_approve_join ?? true,
             approve_invites: currentGroup.approve_invites ?? false,
@@ -398,7 +392,7 @@ function CreateGroupModal({
       const newGroup = await api.post('/groups', { name: name.trim(), initial_members: initialMembers })
       onCreated(newGroup)
     } catch (err: any) {
-      setError(err.message || t('chat.createFailed'))
+      setError(err.message || t('chat:createFailed'))
     } finally {
       setLoading(false)
     }
@@ -410,16 +404,16 @@ function CreateGroupModal({
         className="bg-elevated border border-border rounded-dialog p-6 w-full max-w-md mx-4 shadow-2xl shadow-black/30"
         onClick={(e) => e.stopPropagation()}
       >
-        <h2 className="text-lg font-semibold mb-4 text-textPrimary">{t('chat.createNewGroup')}</h2>
+        <h2 className="text-lg font-semibold mb-4 text-textPrimary">{t('chat:createNewGroup')}</h2>
         <div className="mb-3">
-          <label className="block text-xs font-medium mb-1.5 text-textSecondary">{t('chat.groupName')}</label>
+          <label className="block text-xs font-medium mb-1.5 text-textSecondary">{t('chat:groupName')}</label>
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
             className="w-full px-3.5 py-2.5 rounded-card border border-border bg-canvas text-textPrimary placeholder:text-textMuted text-sm focus:outline-none focus:ring-2 focus:ring-primary-500/50"
-            placeholder={t('chat.groupNamePlaceholder')}
+            placeholder={t('chat:groupNamePlaceholder')}
             autoFocus
           />
         </div>
@@ -427,13 +421,13 @@ function CreateGroupModal({
         {/* 成员搜索 */}
         <div className="mb-2">
           <label className="block text-xs font-medium mb-1.5 text-textSecondary">
-            {t('chat.addMembers')} <span className="text-rose-400">*</span>
+            {t('chat:addMembers')} <span className="text-rose-400">*</span>
           </label>
           <input
             type="text" value={memberQuery}
             onChange={(e) => setMemberQuery(e.target.value)}
             className="w-full px-3.5 py-2 rounded-card border border-border bg-canvas text-textPrimary placeholder:text-textMuted text-sm focus:outline-none focus:ring-2 focus:ring-primary-500/50"
-            placeholder={t('chat.searchMembers')}
+            placeholder={t('chat:searchMembers')}
           />
           {memberResults.length > 0 && (
             <div className="mt-1 border border-border rounded-card bg-canvas max-h-40 overflow-y-auto">
@@ -447,13 +441,13 @@ function CreateGroupModal({
                       {sel && <Check size={10} className="text-white" />}
                     </span>
                     <span className="text-textPrimary truncate flex-1">{r.name}</span>
-                    <span className="text-3xs text-textMuted shrink-0">{r.type === 'ai' ? 'AI' : t('chat.human')}</span>
+                    <span className="text-3xs text-textMuted shrink-0">{r.type === 'ai' ? 'AI' : t('chat:human')}</span>
                   </button>
                 )
               })}
             </div>
           )}
-          {memberSearchLoading && <div className="mt-1 text-xs text-textMuted">{t('common.searching')}...</div>}
+          {memberSearchLoading && <div className="mt-1 text-xs text-textMuted">{t('common:searching')}...</div>}
         </div>
 
         {/* 已选成员 */}
@@ -475,14 +469,14 @@ function CreateGroupModal({
             onClick={onClose}
             className="btn btn-md btn-outline flex-1"
           >
-            {t('common.cancel')}
+            {t('common:cancel')}
           </button>
           <button
             onClick={handleCreate}
             disabled={!canCreate}
             className="btn btn-md btn-primary flex-1"
           >
-            {loading ? t('chat.creating') : t('chat.create')}
+            {loading ? t('chat:creating') : t('chat:create')}
           </button>
         </div>
       </div>
@@ -607,15 +601,15 @@ function InviteMemberModal({
         const entry = selectedEntries.get(key)
         const name = entry?.name || `${member_type}:${idStr}`
         if (res.method === 'invitation') {
-          ok.push(`${name} ${t('chat.invitationSent')}`)
+          ok.push(`${name} ${t('chat:invitationSent')}`)
         } else {
-          ok.push(`${name} ${t('chat.joined')}`)
+          ok.push(`${name} ${t('chat:joined')}`)
         }
       } catch (err: any) {
         const entry = selectedEntries.get(key)
         const name = entry?.name || `${member_type}:${idStr}`
-        const msg = err.message || t('chat.inviteFailed')
-        const reason = msg.includes('已在群聊') || msg.includes('already') ? t('chat.alreadyInGroup') : msg
+        const msg = err.message || t('chat:inviteFailed')
+        const reason = msg.includes('已在群聊') || msg.includes('already') ? t('chat:alreadyInGroup') : msg
         failedNames.push(`${name} ${reason}`)
       }
     }
@@ -633,7 +627,7 @@ function InviteMemberModal({
   const handleManualInvite = async () => {
     const id = parseInt(manualId)
     if (!id || id <= 0) {
-      setError(t('chat.enterValidId'))
+      setError(t('chat:enterValidId'))
       return
     }
     setLoading(true)
@@ -646,9 +640,9 @@ function InviteMemberModal({
       setSuccess([`${manualType}:${id}`])
       setTimeout(onClose, 1000)
     } catch (err: any) {
-      const msg = err.message || t('chat.inviteFailed')
+      const msg = err.message || t('chat:inviteFailed')
       // 后端返回"该成员已在群聊中" → 友好显示
-      setError(msg.includes('已在群聊') || msg.includes('already') ? `${manualType === 'ai' ? 'AI' : '用户'} ID:${id} ${t('chat.alreadyInGroup')}` : msg)
+      setError(msg.includes('已在群聊') || msg.includes('already') ? `${manualType === 'ai' ? 'AI' : '用户'} ID:${id} ${t('chat:alreadyInGroup')}` : msg)
     } finally {
       setLoading(false)
     }
@@ -700,8 +694,8 @@ function InviteMemberModal({
         className="bg-elevated border border-border rounded-dialog p-6 w-full max-w-md mx-4 shadow-2xl shadow-black/30 max-h-[80vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
-        <h2 className="text-lg font-semibold mb-1 text-textPrimary">{t('chat.inviteMembers')}</h2>
-        <p className="text-xs text-textMuted mb-4">{t('chat.inviteSearchHint')}</p>
+        <h2 className="text-lg font-semibold mb-1 text-textPrimary">{t('chat:inviteMembers')}</h2>
+        <p className="text-xs text-textMuted mb-4">{t('chat:inviteSearchHint')}</p>
 
         {/* 搜索框 */}
         <div className="relative mb-3">
@@ -709,7 +703,7 @@ function InviteMemberModal({
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder={t('chat.searchNamePlaceholder')}
+            placeholder={t('chat:searchNamePlaceholder')}
             className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
           />
         </div>
@@ -731,7 +725,7 @@ function InviteMemberModal({
               </div>
             ) : friends.length === 0 ? (
               <div className="py-6 text-center text-xs text-textMuted">
-                {t('chat.inviteSearchPrompt')}
+                {t('chat:inviteSearchPrompt')}
               </div>
             ) : (
               friends.map(renderEntry)
@@ -741,7 +735,7 @@ function InviteMemberModal({
               <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-primary-500" />
             </div>
           ) : results.length === 0 ? (
-            <div className="py-6 text-center text-xs text-textMuted">{t('common.noResults')}</div>
+            <div className="py-6 text-center text-xs text-textMuted">{t('common:noResults')}</div>
           ) : (
             results.map(renderEntry)
           )}
@@ -754,7 +748,7 @@ function InviteMemberModal({
         {/* 已选成员列表（独立区域，搜索不影响） */}
         {selected.size > 0 && (
           <div className="mb-3">
-            <div className="text-xs text-textMuted mb-1.5">{t('chat.selectedMembers').replace('{size}', String(selected.size))}</div>
+            <div className="text-xs text-textMuted mb-1.5">{t('chat:selectedMembers').replace('{size}', String(selected.size))}</div>
             <div className="flex flex-wrap gap-1.5">
               {Array.from(selectedEntries.entries()).map(([key, r]) => (
                 <span key={key} className="inline-flex items-center gap-1 px-2 py-1 bg-primary-500/10 border border-primary-500/20 rounded-control text-xs text-textPrimary">
@@ -772,7 +766,7 @@ function InviteMemberModal({
             onClick={() => setShowManual(true)}
             className="text-xs text-textMuted hover:text-primary-400 mb-3 self-start"
           >
-            {t('chat.manualId')}
+            {t('chat:manualId')}
           </button>
         ) : (
           <div className="space-y-2 mb-3 border border-dashed border-border rounded-card p-3">
@@ -787,7 +781,7 @@ function InviteMemberModal({
                       : 'border-border text-textSecondary hover:bg-elevated'
                   }`}
                 >
-                  {type === 'ai' ? <><Bot size={12} className="inline" /> AI</> : <><User size={12} className="inline" /> {t('list.human')}</>}
+                  {type === 'ai' ? <><Bot size={12} className="inline" /> AI</> : <><User size={12} className="inline" /> {t('list:human')}</>}
                 </button>
               ))}
             </div>
@@ -798,7 +792,7 @@ function InviteMemberModal({
                 onChange={(e) => setManualId(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleManualInvite()}
                 className="flex-1 px-3 py-1.5 rounded-control border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
-                placeholder={t('chat.manualIdPlaceholder')}
+                placeholder={t('chat:manualIdPlaceholder')}
                 min={1}
               />
               <button
@@ -806,11 +800,11 @@ function InviteMemberModal({
                 disabled={!manualId.trim() || loading}
                 className="px-3 py-1.5 text-xs bg-elevated text-textSecondary rounded-control hover:bg-border disabled:opacity-30"
               >
-                {t('chat.invite')}
+                {t('chat:invite')}
               </button>
             </div>
             <button onClick={() => setShowManual(false)} className="text-xs text-textMuted hover:text-textSecondary">
-              {t('common.collapse')}
+              {t('common:collapse')}
             </button>
           </div>
         )}
@@ -822,7 +816,7 @@ function InviteMemberModal({
           </div>
         )}
         {success.length > 0 && (
-          <div className="text-sm text-mint-400 mb-2">{t('chat.inviteSuccess').replace('{success}', String(success.length))}</div>
+          <div className="text-sm text-mint-400 mb-2">{t('chat:inviteSuccess').replace('{success}', String(success.length))}</div>
         )}
 
         <div className="flex gap-2">
@@ -830,14 +824,14 @@ function InviteMemberModal({
             onClick={onClose}
             className="btn btn-md btn-outline flex-1"
           >
-            {t('common.cancel')}
+            {t('common:cancel')}
           </button>
           <button
             onClick={handleInviteSelected}
             disabled={selected.size === 0 || loading}
             className="btn btn-md btn-primary flex-1"
           >
-            {loading ? t('chat.inviting') : t('chat.inviteCount').replace('{count}', String(selected.size))}
+            {loading ? t('chat:inviting') : t('chat:inviteCount').replace('{count}', String(selected.size))}
           </button>
         </div>
       </div>

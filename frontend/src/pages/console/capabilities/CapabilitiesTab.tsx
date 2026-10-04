@@ -120,33 +120,33 @@ function ToolRegistryTab() {
       {/* 筛选 */}
       <div className="flex flex-wrap gap-3 items-center">
         <div className="flex items-center gap-1.5">
-          <label className="text-xs text-textSecondary">{t('admin.toolsFilterSegment')}:</label>
+          <label className="text-xs text-textSecondary">{t('admin:toolsFilterSegment')}:</label>
           <select
             value={filterSegment}
             onChange={e => setFilterSegment(e.target.value)}
             className="text-sm border border-border rounded-control px-2.5 py-1.5 bg-surface text-textPrimary"
           >
-            <option value="all">{t('admin.toolsFilterAll')}</option>
+            <option value="all">{t('admin:toolsFilterAll')}</option>
             {data.segments.map(seg => (
               <option key={seg.key} value={seg.key}>{seg.name}</option>
             ))}
           </select>
         </div>
         <div className="flex items-center gap-1.5">
-          <label className="text-xs text-textSecondary">{t('admin.toolsFilterState')}:</label>
+          <label className="text-xs text-textSecondary">{t('admin:toolsFilterState')}:</label>
           <select
             value={filterState}
             onChange={e => setFilterState(e.target.value)}
             className="text-sm border border-border rounded-control px-2.5 py-1.5 bg-surface text-textPrimary"
           >
-            <option value="all">{t('admin.toolsFilterAll')}</option>
+            <option value="all">{t('admin:toolsFilterAll')}</option>
             {stateOptions.filter(s => s !== 'all').map(s => (
               <option key={s} value={s}>{STATE_LABELS[s] || s}</option>
             ))}
           </select>
         </div>
         <span className="text-xs text-textSecondary ml-auto">
-          {filtered.length} / {data.total} {t('admin.total')}
+          {filtered.length} / {data.total} {t('admin:total')}
         </span>
       </div>
 
@@ -170,7 +170,7 @@ function ToolRegistryTab() {
             <div className="px-4 pb-3 border-t border-border pt-2 space-y-2">
               <p className="text-xs text-textSecondary leading-relaxed">{tool.description}</p>
               <div>
-                <span className="text-xs font-medium text-textPrimary">{t('admin.toolsParamSchema')}:</span>
+                <span className="text-xs font-medium text-textPrimary">{t('admin:toolsParamSchema')}:</span>
                 <pre className="mt-1 text-xs bg-canvas rounded p-2 overflow-x-auto text-textSecondary max-h-48">
                   {JSON.stringify({ properties: tool.parameters, required: tool.required }, null, 2)}
                 </pre>
@@ -230,7 +230,7 @@ function SkillManagementTab() {
         s.id === skillId ? { ...s, is_enabled: !currentEnabled } : s
       ))
     } catch {
-      alert(t('admin.skillsToggleFailed'))
+      alert(t('admin:skillsToggleFailed'))
     }
   }
 
@@ -240,7 +240,7 @@ function SkillManagementTab() {
     <div className="space-y-4">
       {/* AI 选择 */}
       <div className="flex items-center gap-3">
-        <label className="text-sm text-textSecondary whitespace-nowrap">{t('admin.skillsSelectAgent')}:</label>
+        <label className="text-sm text-textSecondary whitespace-nowrap">{t('admin:skillsSelectAgent')}:</label>
         <select
           value={selectedAgent ?? ''}
           onChange={e => setSelectedAgent(Number(e.target.value) || null)}
@@ -256,7 +256,7 @@ function SkillManagementTab() {
 
       {/* 技能列表 */}
       {!selectedAgent ? (
-        <div className="text-center py-8 text-textSecondary text-sm">{t('admin.skillsNoAgent')}</div>
+        <div className="text-center py-8 text-textSecondary text-sm">{t('admin:skillsNoAgent')}</div>
       ) : loadingSkills ? (
         <div className="text-center py-8 text-textSecondary text-sm">加载中...</div>
       ) : skills.length === 0 ? (
@@ -266,11 +266,11 @@ function SkillManagementTab() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border text-left text-textSecondary text-xs uppercase tracking-wider">
-                <th className="px-3 py-2">{t('admin.skillsColName')}</th>
-                <th className="px-3 py-2">{t('admin.skillsColType')}</th>
-                <th className="px-3 py-2">{t('admin.skillsColEnabled')}</th>
-                <th className="px-3 py-2">{t('admin.skillsColConfig')}</th>
-                <th className="px-3 py-2">{t('admin.skillsColAction')}</th>
+                <th className="px-3 py-2">{t('admin:skillsColName')}</th>
+                <th className="px-3 py-2">{t('admin:skillsColType')}</th>
+                <th className="px-3 py-2">{t('admin:skillsColEnabled')}</th>
+                <th className="px-3 py-2">{t('admin:skillsColConfig')}</th>
+                <th className="px-3 py-2">{t('admin:skillsColAction')}</th>
               </tr>
             </thead>
             <tbody>
@@ -323,10 +323,10 @@ export default function CapabilitiesTab() {
   const [subTab, setSubTab] = useState<SubTab>('plugins')
 
   const subTabs: { key: SubTab; label: string; icon: React.ElementType }[] = [
-    { key: 'plugins', label: t('admin.capabilitiesPlugins'), icon: Plug },
-    { key: 'registry', label: t('admin.toolRegistry'), icon: Wrench },
-    { key: 'skills', label: t('admin.skillManagement'), icon: Brain },
-    { key: 'backpack', label: t('admin.skillBackpack'), icon: Backpack },
+    { key: 'plugins', label: t('admin:capabilitiesPlugins'), icon: Plug },
+    { key: 'registry', label: t('admin:toolRegistry'), icon: Wrench },
+    { key: 'skills', label: t('admin:skillManagement'), icon: Brain },
+    { key: 'backpack', label: t('admin:skillBackpack'), icon: Backpack },
   ]
 
   return (

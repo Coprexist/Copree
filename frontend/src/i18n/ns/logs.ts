@@ -7,7 +7,7 @@
  * key 在分区内不重复写前缀。
  */
 
-import type { TranslationDict } from './translations'
+import type { TranslationDict } from '../types'
 
 export const logsZh: TranslationDict = {
   latestRequest: '最新一次请求体',

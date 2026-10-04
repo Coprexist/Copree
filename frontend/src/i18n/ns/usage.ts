@@ -1,0 +1,100 @@
+/**
+ * usage 命名空间字典（i18n 分区）
+ *
+ * 从原 translations.ts 主字典按 key 首个点分段拆出；本文件内 key 不带命名空间前缀，
+ * 调用点写 t('usage:key')。字段内容与拆分前逐字节一致。
+ */
+
+import type { TranslationDict } from '../types'
+
+export const usageZh: TranslationDict = {
+
+  // ======================== 用量页面 / Usage ========================
+  'title': 'API 用量详情',
+  'daysSuffix': '天',
+  'totalTokens': '总 Token',
+  'calls': '调用次数',
+  'cacheHitRate': '缓存命中率',
+  'thinkingTokens': '思考 Token',
+  'noData': '暂无用量数据。',
+  'noDataHint': 'AI 对话后数据会出现在这里。',
+  'selectAiLabel': '查看 AI：',
+  'allAi': '全部 AI',
+  'modelLabel': '模型:',
+  'callsLabel': '次调用',
+  'defaultModel': '默认',
+  'noDailyData': '该 AI 暂无每日用量数据',
+  'thinkingLegend': '思考',
+  'promptLegend': '提示 Token',
+  'completionLegend': '完成 Token',
+  'cacheLegend': '缓存',
+  'dailyTrend': '每日趋势（平滑曲线）',
+  'agentDetailTableTitle': 'AI 用量明细',
+  'tableHeaderAI': 'AI',
+  'tableHeaderModel': '模型',
+  'tableHeaderTokens': '总 Token',
+  'tableHeaderPrompt': '提示 Token',
+  'tableHeaderCompletion': '完成 Token',
+  'tableHeaderReasoning': '思考',
+  'tableHeaderCalls': '调用',
+}
+
+export const usageEn: TranslationDict = {
+  'title': 'API Usage Details',
+  'daysSuffix': 'd',
+  'totalTokens': 'Total Tokens',
+  'calls': 'Calls',
+  'cacheHitRate': 'Cache Hit Rate',
+  'thinkingTokens': 'Thinking Tokens',
+  'noData': 'No usage data yet.',
+  'noDataHint': 'Data will appear here after AI conversations.',
+  'selectAiLabel': 'View AI:',
+  'allAi': 'All AI',
+  'modelLabel': 'Model:',
+  'callsLabel': 'calls',
+  'defaultModel': 'Default',
+  'noDailyData': 'No daily usage data for this AI',
+  'thinkingLegend': 'Thinking',
+  'promptLegend': 'Prompt',
+  'completionLegend': 'Completion',
+  'cacheLegend': 'Cache',
+  'dailyTrend': 'Daily Trend (Smooth Curve)',
+  'agentDetailTableTitle': 'AI Usage Details',
+  'tableHeaderAI': 'AI',
+  'tableHeaderModel': 'Model',
+  'tableHeaderTokens': 'Total Tokens',
+  'tableHeaderPrompt': 'Prompt Tokens',
+  'tableHeaderCompletion': 'Completion Tokens',
+  'tableHeaderReasoning': 'Thinking',
+  'tableHeaderCalls': 'Calls',
+}
+
+export const usageJa: TranslationDict = {
+  'title': 'API使用量詳細',
+  'daysSuffix': '日',
+  'totalTokens': '総トークン',
+  'calls': '呼び出し回数',
+  'cacheHitRate': 'キャッシュヒット率',
+  'thinkingTokens': '思考トークン',
+  'noData': 'まだ使用量データがありません。',
+  'noDataHint': 'AIと会話するとデータが表示されます。',
+  'selectAiLabel': '表示AI：',
+  'allAi': 'すべてのAI',
+  'modelLabel': 'モデル:',
+  'callsLabel': '回の呼び出し',
+  'defaultModel': 'デフォルト',
+  'noDailyData': 'このAIの日次データはありません',
+  'thinkingLegend': '思考',
+  'promptLegend': 'プロンプト',
+  'completionLegend': '補完',
+  'cacheLegend': 'キャッシュ',
+  'dailyTrend': '日次トレンド（平滑曲線）',
+  'agentDetailTableTitle': 'AI使用量明細',
+  'tableHeaderAI': 'AI',
+  'tableHeaderModel': 'モデル',
+  'tableHeaderTokens': '総トークン',
+  'tableHeaderPrompt': 'プロンプトトークン',
+  'tableHeaderCompletion': '補完トークン',
+  'tableHeaderReasoning': '思考',
+  'tableHeaderCalls': '呼び出し',
+}

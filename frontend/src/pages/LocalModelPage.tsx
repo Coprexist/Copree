@@ -87,7 +87,7 @@ export default function LocalModelPage() {
       await new Promise((r) => setTimeout(r, 2000))
       await detectOllama()
     } catch (e: any) {
-      setError(e?.message || String(e) || t('error.saveFailed'))
+      setError(e?.message || String(e) || t('error:saveFailed'))
     } finally {
       setStarting(false)
     }
@@ -102,7 +102,7 @@ export default function LocalModelPage() {
       setOllamaRunning(false)
       setModels([])
     } catch (e: any) {
-      setError(e?.message || String(e) || t('error.saveFailed'))
+      setError(e?.message || String(e) || t('error:saveFailed'))
     } finally {
       setStopping(false)
     }
@@ -120,7 +120,7 @@ export default function LocalModelPage() {
         title={
           <span className="flex items-center gap-2">
             <Cpu size={18} className="text-primary-400" />
-            {t('desktop.localModelTitle')}
+            {t('desktop:localModelTitle')}
           </span>
         }
         onBack={() => navigate('/settings')}
@@ -147,15 +147,15 @@ export default function LocalModelPage() {
                 <div>
                   <p className="text-sm font-medium text-textPrimary">
                     Ollama {detecting
-                      ? t('desktop.detecting')
+                      ? t('desktop:detecting')
                       : ollamaRunning
-                        ? t('desktop.connected')
-                        : t('desktop.disconnected')}
+                        ? t('desktop:connected')
+                        : t('desktop:disconnected')}
                   </p>
                   <p className="text-xs text-textMuted">
                     {ollamaRunning
                       ? `http://localhost:11434`
-                      : t('desktop.ollamaNotRunning')}
+                      : t('desktop:ollamaNotRunning')}
                   </p>
                 </div>
               </div>
@@ -164,7 +164,7 @@ export default function LocalModelPage() {
                   onClick={detectOllama}
                   disabled={detecting}
                   className="icon-btn text-textMuted"
-                  title={t('desktop.refresh')}
+                  title={t('desktop:refresh')}
                 >
                   <RefreshCw size={15} className={detecting ? 'animate-spin' : ''} />
                 </button>
@@ -175,7 +175,7 @@ export default function LocalModelPage() {
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-control border border-rose-500/20 text-rose-400 hover:bg-rose-500/10 text-xs font-medium transition-colors disabled:opacity-30"
                   >
                     {stopping ? <Loader2 size={13} className="animate-spin" /> : <Square size={13} />}
-                    {t('desktop.stopService')}
+                    {t('desktop:stopService')}
                   </button>
                 ) : (
                   <button
@@ -184,7 +184,7 @@ export default function LocalModelPage() {
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-control bg-mint-400/10 border border-mint-400/20 text-mint-400 hover:bg-mint-400/20 text-xs font-medium transition-colors disabled:opacity-30"
                   >
                     {starting ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}
-                    {t('desktop.startService')}
+                    {t('desktop:startService')}
                   </button>
                 )}
               </div>
@@ -201,7 +201,7 @@ export default function LocalModelPage() {
           {/* 已安装模型列表 */}
           <div className="bg-surface rounded-card border border-border p-4">
             <h3 className="text-sm font-semibold text-textPrimary mb-3">
-              {t('desktop.installedModels')}
+              {t('desktop:installedModels')}
             </h3>
             {detecting ? (
               <div className="flex items-center justify-center py-8">
@@ -209,7 +209,7 @@ export default function LocalModelPage() {
               </div>
             ) : models.length === 0 ? (
               <p className="text-sm text-textMuted text-center py-8">
-                {ollamaRunning ? t('desktop.noModels') : t('desktop.ollamaNotRunning')}
+                {ollamaRunning ? t('desktop:noModels') : t('desktop:ollamaNotRunning')}
               </p>
             ) : (
               <div className="space-y-2">
@@ -225,7 +225,7 @@ export default function LocalModelPage() {
                         </p>
                         {model.name === defaultModel && (
                           <span className="chip chip-primary shrink-0">
-                            {t('desktop.isDefault')}
+                            {t('desktop:isDefault')}
                           </span>
                         )}
                       </div>
@@ -239,7 +239,7 @@ export default function LocalModelPage() {
                         className="flex items-center gap-1 px-2.5 py-1.5 rounded-control hover:bg-elevated text-textMuted hover:text-primary-400 transition-colors text-xs"
                       >
                         <Star size={13} />
-                        {t('desktop.defaultModel')}
+                        {t('desktop:defaultModel')}
                       </button>
                     )}
                   </div>

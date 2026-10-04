@@ -6,7 +6,8 @@ import { api } from '../api/client'
 import { Dialog, PageShell } from '../components/ui'
 import ExternalLinkSafe from '../components/ExternalLinkSafe'
 import { AI_TYPE_LABEL } from '../constants'
-import { fmtTokenNum } from '../utils/format'
+import { fmtTokenNum, cacheHitRatePct } from '../utils/format'
+import { NOTICE_TEXT_CLASS, useNotice } from '../hooks/useNotice'
 import { getStatusTextStyle, STATUS_COLORS, BG_SURFACE_LIGHT, BG_SURFACE_DARK } from '../utils/statusColor'
 import VerificationCodeInput from '../components/VerificationCodeInput'
 import { useTheme } from '../context/ThemeContext'
@@ -68,7 +69,7 @@ export default function MePage() {
   const [usage, setUsage] = useState<UsageOverview[]>([])
   const [usageLoading, setUsageLoading] = useState(true)
   const [redeemCode, setRedeemCode] = useState('')
-  const [redeemMsg, setRedeemMsg] = useState('')
+  const { notice: redeemNotice, ok: redeemOk, fail: redeemFail, clear: clearRedeemNotice } = useNotice()
   const [redeeming, setRedeeming] = useState(false)
 
   // 存储概览
@@ -180,7 +181,8 @@ export default function MePage() {
   const totalCalls = usage.reduce((s, u) => s + (u.total_calls || 0), 0)
   const totalReasoning = usage.reduce((s, u) => s + (u.reasoning_tokens || 0), 0)
   const totalCached = usage.reduce((s, u) => s + (u.cached_tokens || 0), 0)
-  const cacheRate = totalTokens > 0 ? Math.round(totalCached / totalTokens * 100) : 0
+  const totalPrompt = usage.reduce((s, u) => s + (u.prompt_tokens || 0), 0)
+  const cacheRate = cacheHitRatePct(totalPrompt, totalCached)
 
   // 上线天数
   const daysSince = user?.created_at
@@ -191,14 +193,14 @@ export default function MePage() {
   const handleRedeem = async () => {
     if (!redeemCode.trim()) return
     setRedeeming(true)
-    setRedeemMsg('')
+    clearRedeemNotice()
     try {
       const res = await api.post<{ message: string }>('/user/redeem', { code: redeemCode.trim().toUpperCase() })
-      setRedeemMsg(res.message || t('common.redeemSuccess'))
+      redeemOk(res.message || t('common:redeemSuccess'))
       setRedeemCode('')
       refreshUser?.()
     } catch (err: any) {
-      setRedeemMsg(err.message || t('common.redeemFailed'))
+      redeemFail(err.message || t('common:redeemFailed'))
     } finally { setRedeeming(false) }
   }
 
@@ -217,7 +219,7 @@ export default function MePage() {
       setBindCodeSent(true)
       setBindSendCooldown(60)
     } catch (err: any) {
-      setBindError(err.message || t('common.error'))
+      setBindError(err.message || t('common:error'))
     }
   }
 
@@ -232,16 +234,16 @@ export default function MePage() {
       setBindCode('')
       setBindCodeSent(false)
     } catch (err: any) {
-      setBindError(err.message || t('common.error'))
+      setBindError(err.message || t('common:error'))
     } finally { setBindLoading(false) }
   }
 
   const handleRemoveEmail = async () => {
-    if (!confirm(t('auth.removeEmail') + '?')) return
+    if (!confirm(t('auth:removeEmail') + '?')) return
     try {
       await removeEmail()
     } catch (err: any) {
-      alert(err.message || t('common.error'))
+      alert(err.message || t('common:error'))
     }
   }
 
@@ -277,14 +279,14 @@ export default function MePage() {
       await refreshUser?.()
       setShowEditProfile(false)
     } catch (err: any) {
-      alert(err.message || t('error.saveFailed'))
+      alert(err.message || t('error:saveFailed'))
     } finally { setEditSaving(false) }
   }
 
   if (!user) return null
 
   return (
-    <PageShell title={t('me.title')} width="content" contentClassName="space-y-5">
+    <PageShell title={t('me:title')} width="content" contentClassName="space-y-5">
 
       {/* ====== 个人资料卡 ====== */}
       <div className="bg-surface rounded-dialog border border-border p-5">
@@ -307,12 +309,12 @@ export default function MePage() {
             <div className="flex items-center gap-2">
               <h2 className="text-lg font-semibold text-textPrimary truncate">{user.username}</h2>
               {user.role === 'admin' && (
-                <span className="chip chip-accent shrink-0">{t('me.adminBadge')}</span>
+                <span className="chip chip-accent shrink-0">{t('me:adminBadge')}</span>
               )}
             </div>
             <div className="flex items-center gap-3 mt-1 text-xs text-textMuted">
               <span className="flex items-center gap-1"><Bot size={12} /> AI {agents.length}</span>
-              <span>{t('me.daysOnline')} {daysSince} {t('me.daysSuffix')}</span>
+              <span>{t('me:daysOnline')} {daysSince} {t('me:daysSuffix')}</span>
               {user.status_text && (
                 <span className="font-medium" style={user.status_color
                   ? getStatusTextStyle(user.status_color, theme === 'dark' ? BG_SURFACE_DARK : BG_SURFACE_LIGHT)
@@ -325,36 +327,36 @@ export default function MePage() {
               onClick={openEditProfile}
               className="mt-2 text-xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 flex items-center gap-1 transition-colors"
             >
-              <Edit3 size={12} /> {t('me.editProfile')}
+              <Edit3 size={12} /> {t('me:editProfile')}
             </button>
             {/* 邮箱 */}
             <div className="mt-3 pt-3 border-t border-border/60">
-              <span className="text-3xs text-textMuted uppercase tracking-wider">{t('auth.email')}</span>
+              <span className="text-3xs text-textMuted uppercase tracking-wider">{t('auth:email')}</span>
               <div className="flex items-center gap-2 mt-1">
                 {user?.email ? (
                   <>
                     <span className="text-sm text-textPrimary truncate">{user.email}</span>
                     {user.email_verified ? (
-                      <span className="chip chip-mint shrink-0">{t('auth.emailVerified')}</span>
+                      <span className="chip chip-mint shrink-0">{t('auth:emailVerified')}</span>
                     ) : (
-                      <span className="chip chip-accent shrink-0">{t('auth.emailNotVerified')}</span>
+                      <span className="chip chip-accent shrink-0">{t('auth:emailNotVerified')}</span>
                     )}
                   </>
                 ) : (
-                  <span className="text-sm text-textMuted">{t('auth.noEmailBound')}</span>
+                  <span className="text-sm text-textMuted">{t('auth:noEmailBound')}</span>
                 )}
                 <button
                   onClick={() => setShowBindEmail(true)}
                   className="text-3xs text-primary-400 hover:text-primary-500 transition-colors"
                 >
-                  {user?.email ? t('auth.changeEmail') : t('auth.bindEmailTitle')}
+                  {user?.email ? t('auth:changeEmail') : t('auth:bindEmailTitle')}
                 </button>
                 {user?.email && (
                   <button
                     onClick={handleRemoveEmail}
                     className="text-3xs text-rose-400 hover:text-rose-500 dark:hover:text-rose-300 transition-colors"
                   >
-                    {t('auth.removeEmail')}
+                    {t('auth:removeEmail')}
                   </button>
                 )}
               </div>
@@ -397,28 +399,28 @@ export default function MePage() {
           <StatCard
             icon={<Bot size={18} className="text-primary-400" />}
             value={stats?.ai_count ?? '...'}
-            label={t('me.aiCountCard')}
+            label={t('me:aiCountCard')}
             bg="bg-primary-500/5"
             onClick={() => navigate('/agents')}
           />
           <StatCard
             icon={<Users size={18} className="text-mint-400" />}
             value={stats?.friend_count ?? '...'}
-            label={t('me.friendCountCard')}
+            label={t('me:friendCountCard')}
             bg="bg-mint-500/5"
             onClick={() => navigate('/list')}
           />
           <StatCard
             icon={<MessageSquare size={18} className="text-accent-400" />}
             value={stats?.group_count ?? '...'}
-            label={t('me.groupCountCard')}
+            label={t('me:groupCountCard')}
             bg="bg-accent-500/5"
             onClick={() => navigate('/chat')}
           />
           <StatCard
             icon={<HardDrive size={18} className="text-accent-400" />}
             value={stats ? formatSize(stats.storage_used) : '...'}
-            label={t('me.storageUsedCard')}
+            label={t('me:storageUsedCard')}
             bg="bg-accent-500/5"
             onClick={() => navigate('/me/storage')}
           />
@@ -429,14 +431,14 @@ export default function MePage() {
       <div className="bg-surface rounded-dialog border border-border p-5">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold text-textPrimary flex items-center gap-2">
-            <Bot size={16} className="text-primary-400" /> {t('me.myAiSection')}
+            <Bot size={16} className="text-primary-400" /> {t('me:myAiSection')}
           </h3>
           <Link to="/agents" className="text-xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 flex items-center gap-1 transition-colors">
-            {t('me.viewAll')} <ArrowRight size={12} />
+            {t('me:viewAll')} <ArrowRight size={12} />
           </Link>
         </div>
         {agents.length === 0 ? (
-          <p className="text-sm text-textMuted py-3 text-center">{t('me.noAiLink')}<Link to="/agents" className="text-primary-400">{t('me.goCreate')}</Link></p>
+          <p className="text-sm text-textMuted py-3 text-center">{t('me:noAiLink')}<Link to="/agents" className="text-primary-400">{t('me:goCreate')}</Link></p>
         ) : (
           <div className="flex gap-3 overflow-x-auto pb-1">
             {agents.map(a => (
@@ -456,7 +458,7 @@ export default function MePage() {
                   </div>
                 )}
                 <div className="text-xs font-medium text-textPrimary truncate">{a.name}</div>
-                <div className="text-3xs text-textMuted mt-0.5">{a.state === 'active' ? t('me.stateActive') : a.state === 'dnd' ? t('me.stateDnd') : t('me.stateOffline')}</div>
+                <div className="text-3xs text-textMuted mt-0.5">{a.state === 'active' ? t('me:stateActive') : a.state === 'dnd' ? t('me:stateDnd') : t('me:stateOffline')}</div>
                 {(AI_TYPE_LABEL[a.ai_type]) && (
                   <span className={`inline-block text-[9px] px-1.5 py-0.5 rounded-full mt-1 font-medium ${AI_TYPE_LABEL[a.ai_type].cls}`}>
                     {t(AI_TYPE_LABEL[a.ai_type].key)}
@@ -472,10 +474,10 @@ export default function MePage() {
       <div className="bg-surface rounded-dialog border border-border p-5">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold text-textPrimary flex items-center gap-2">
-            <BarChart3 size={16} className="text-primary-400" /> {t('me.apiUsage30d')}
+            <BarChart3 size={16} className="text-primary-400" /> {t('me:apiUsage30d')}
           </h3>
           <Link to="/me/usage" className="text-xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 flex items-center gap-1 transition-colors">
-            {t('me.viewDetails')} <ArrowRight size={12} />
+            {t('me:viewDetails')} <ArrowRight size={12} />
           </Link>
         </div>
         {usageLoading ? (
@@ -483,10 +485,10 @@ export default function MePage() {
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             {[
-              { key: 'me.totalTokens', value: fmtTokenNum(totalTokens, lang), icon: Activity, color: 'text-primary-400' },
-              { key: 'me.calls', value: totalCalls, icon: BarChart3, color: 'text-mint-400' },
-              { key: 'me.cacheHitRate', value: `${cacheRate}%`, icon: FileText, color: 'text-accent-400' },
-              { key: 'me.thinkingTokens', value: fmtTokenNum(totalReasoning, lang), icon: Activity, color: 'text-accent-400' },
+              { key: 'me:totalTokens', value: fmtTokenNum(totalTokens, lang), icon: Activity, color: 'text-primary-400' },
+              { key: 'me:calls', value: totalCalls, icon: BarChart3, color: 'text-mint-400' },
+              { key: 'me:cacheHitRate', value: `${cacheRate}%`, icon: FileText, color: 'text-accent-400' },
+              { key: 'me:thinkingTokens', value: fmtTokenNum(totalReasoning, lang), icon: Activity, color: 'text-accent-400' },
             ].map(item => (
               <div key={item.key} className="bg-canvas rounded-card p-3 text-center">
                 <item.icon size={16} className={`${item.color} mx-auto mb-1`} />
@@ -502,7 +504,7 @@ export default function MePage() {
       <a href="/me/storage" className="block bg-surface rounded-dialog border border-border p-5 hover:bg-elevated transition-colors">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold text-textPrimary flex items-center gap-2">
-            <HardDrive size={16} className="text-primary-400" /> {t('me.storageSection')}
+            <HardDrive size={16} className="text-primary-400" /> {t('me:storageSection')}
           </h3>
           <span className="text-xs text-primary-400">查看存储 →</span>
         </div>
@@ -511,7 +513,7 @@ export default function MePage() {
         ) : storage ? (
           <div className="space-y-2">
             <div className="flex items-center justify-between text-xs text-textMuted">
-              <span>{t('me.used')} {storage.total_used >= 1048576 ? `${(storage.total_used / 1048576).toFixed(1)}MB` : `${(storage.total_used / 1024).toFixed(0)}KB`}</span>
+              <span>{t('me:used')} {storage.total_used >= 1048576 ? `${(storage.total_used / 1048576).toFixed(1)}MB` : `${(storage.total_used / 1024).toFixed(0)}KB`}</span>
               <span className={storage.usage_percent > 90 ? 'text-rose-400 font-medium' : storage.usage_percent > 70 ? 'text-accent-400 font-medium' : ''}>
                 {storage.usage_percent}%
               </span>
@@ -525,29 +527,29 @@ export default function MePage() {
               />
             </div>
             <div className="flex items-center justify-between text-3xs text-textMuted">
-              <span>{storage.total_files} {t('me.fileCountSuffix')}</span>
-              <span>{t('me.quota')} {storage.quota_mb}MB</span>
+              <span>{storage.total_files} {t('me:fileCountSuffix')}</span>
+              <span>{t('me:quota')} {storage.quota_mb}MB</span>
             </div>
             {storage.usage_percent > 90 && (
-              <p className="text-xs text-rose-400">{t('me.storageWarning')}</p>
+              <p className="text-xs text-rose-400">{t('me:storageWarning')}</p>
             )}
           </div>
         ) : (
-          <p className="text-sm text-textMuted py-3 text-center">{t('me.noStorageData')}</p>
+          <p className="text-sm text-textMuted py-3 text-center">{t('me:noStorageData')}</p>
         )}
       </a>
 
       {/* ====== 兑换码 ====== */}
       <div id="redeem-section" className="bg-surface rounded-dialog border border-border p-5">
         <h3 className="text-sm font-semibold text-textPrimary mb-3 flex items-center gap-2">
-          <Gift size={16} className="text-primary-400" /> {t('me.redeemSection')}
+          <Gift size={16} className="text-primary-400" /> {t('me:redeemSection')}
         </h3>
         <div className="flex gap-2">
           <input
             type="text"
             value={redeemCode}
             onChange={e => setRedeemCode(e.target.value)}
-            placeholder={t('me.redeemPlaceholder')}
+            placeholder={t('me:redeemPlaceholder')}
             className="flex-1 px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50 font-mono"
           />
           <button
@@ -555,12 +557,12 @@ export default function MePage() {
             disabled={redeeming || !redeemCode.trim()}
             className="btn btn-sm btn-primary"
           >
-            {redeeming ? <Loader2 size={14} className="animate-spin" /> : t('me.redeemButton')}
+            {redeeming ? <Loader2 size={14} className="animate-spin" /> : t('me:redeemButton')}
           </button>
         </div>
-        {redeemMsg && (
-          <p className={`text-xs mt-2 ${redeemMsg.includes('失败') || redeemMsg.includes('无效') ? 'text-rose-400' : 'text-mint-400'}`}>
-            {redeemMsg}
+        {redeemNotice && (
+          <p className={`text-xs mt-2 ${NOTICE_TEXT_CLASS[redeemNotice.tone]}`}>
+            {redeemNotice.text}
           </p>
         )}
       </div>
@@ -574,8 +576,8 @@ export default function MePage() {
           >
             <Shield size={16} className="text-accent-400 shrink-0" />
             <div className="flex-1 min-w-0">
-              <div className="text-sm text-textPrimary">{t('me.managementSection')}</div>
-              <div className="text-xs text-textMuted">{t('me.managementDesc')}</div>
+              <div className="text-sm text-textPrimary">{t('me:managementSection')}</div>
+              <div className="text-xs text-textMuted">{t('me:managementDesc')}</div>
             </div>
             <ChevronRight size={14} className="text-textMuted shrink-0" />
           </Link>
@@ -589,7 +591,7 @@ export default function MePage() {
       >
         <Settings size={18} className="text-textMuted shrink-0" />
         <div className="flex-1 min-w-0">
-          <div className="text-sm text-textPrimary">{t('me.settings')}</div>
+          <div className="text-sm text-textPrimary">{t('me:settings')}</div>
         </div>
         <ChevronRight size={14} className="text-textMuted shrink-0" />
       </Link>
@@ -599,7 +601,7 @@ export default function MePage() {
         onClick={logout}
         className="w-full py-3 rounded-card border border-rose-500/20 text-rose-400 hover:bg-rose-500/5 text-sm font-medium transition-colors flex items-center justify-center gap-2"
       >
-        <LogOut size={14} /> {t('me.logout')}
+        <LogOut size={14} /> {t('me:logout')}
       </button>
 
       {/* ====== 编辑资料弹窗 ====== */}
@@ -610,7 +612,7 @@ export default function MePage() {
             onClick={e => e.stopPropagation()}
           >
             <div className="flex items-center justify-between px-5 py-4 border-b border-border">
-              <h3 className="text-sm font-semibold text-textPrimary">{t('me.editProfileModalTitle')}</h3>
+              <h3 className="text-sm font-semibold text-textPrimary">{t('me:editProfileModalTitle')}</h3>
               <button onClick={() => setShowEditProfile(false)} className="p-1 rounded-control hover:bg-elevated text-textMuted">
                 <X size={16} />
               </button>
@@ -630,11 +632,11 @@ export default function MePage() {
                   className="flex items-center gap-1 text-xs text-primary-400 hover:text-primary-500 transition-colors"
                 >
                   <Camera size={12} />
-                  {t('me.changeAvatar')}
+                  {t('me:changeAvatar')}
                 </button>
               </div>
               <div>
-                <label className="block text-xs font-medium text-textSecondary mb-1">{t('me.usernameField')}</label>
+                <label className="block text-xs font-medium text-textSecondary mb-1">{t('me:usernameField')}</label>
                 <input
                   type="text"
                   value={editUsername}
@@ -644,28 +646,28 @@ export default function MePage() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-textSecondary mb-1">{t('me.bioField')}</label>
+                <label className="block text-xs font-medium text-textSecondary mb-1">{t('me:bioField')}</label>
                 <textarea
                   value={editBio}
                   onChange={e => setEditBio(e.target.value)}
-                  placeholder={t('me.bioPlaceholder')}
+                  placeholder={t('me:bioPlaceholder')}
                   rows={3}
                   className="w-full px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50 resize-none"
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-textSecondary mb-1">{t('me.statusTextField')}</label>
+                <label className="block text-xs font-medium text-textSecondary mb-1">{t('me:statusTextField')}</label>
                 <input
                   type="text"
                   value={editStatusText}
                   onChange={e => setEditStatusText(e.target.value)}
-                  placeholder={t('me.statusTextPlaceholder')}
+                  placeholder={t('me:statusTextPlaceholder')}
                   className="w-full px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
                 />
                 <p className="text-3xs text-textMuted mt-1">{editStatusText.length} 字</p>
               </div>
               <div>
-                <label className="block text-xs font-medium text-textSecondary mb-1">{t('me.statusColorLabel')}</label>
+                <label className="block text-xs font-medium text-textSecondary mb-1">{t('me:statusColorLabel')}</label>
                 <div className="flex items-center gap-2 flex-wrap">
                   {STATUS_COLORS.map(c => (
                     <button
@@ -691,18 +693,18 @@ export default function MePage() {
                       value={editStatusColor || '#000000'}
                       onChange={e => setEditStatusColor(e.target.value)}
                       className="w-6 h-6 rounded-full cursor-pointer border-2 border-border hover:border-primary-400 transition-colors"
-                      title={t('me.statusColorCustom')}
+                      title={t('me:statusColorCustom')}
                     />
                   </div>
                 </div>
               </div>
               <div>
-                <label className="block text-xs font-medium text-textSecondary mb-1">{t('me.passwordField')}</label>
+                <label className="block text-xs font-medium text-textSecondary mb-1">{t('me:passwordField')}</label>
                 <input
                   type="password"
                   value={editPassword}
                   onChange={e => setEditPassword(e.target.value)}
-                  placeholder={t('me.passwordMinHint')}
+                  placeholder={t('me:passwordMinHint')}
                   className="w-full px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
                 />
               </div>
@@ -712,7 +714,7 @@ export default function MePage() {
                 className="btn btn-md btn-primary w-full gap-2"
               >
                 {editSaving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
-                {editSaving ? t('me.savingProfile') : t('me.saveButton')}
+                {editSaving ? t('me:savingProfile') : t('me:saveButton')}
               </button>
             </div>
           </div>
@@ -724,7 +726,7 @@ export default function MePage() {
         <AvatarPickerModal
           onUpload={handleAvatarPickerUpload}
           onClose={() => setAvatarPickerOpen(false)}
-          title={t('me.changeAvatar')}
+          title={t('me:changeAvatar')}
         />
       )}
 
@@ -735,16 +737,16 @@ export default function MePage() {
       {showBindEmail && (
         <Dialog onClose={() =>  setShowBindEmail(false)} className="flex items-center justify-center p-4">
           <div className="bg-surface border border-border rounded-dialog p-6 w-full max-w-sm shadow-2xl" onClick={e => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold text-textPrimary mb-4">{t('auth.bindEmailTitle')}</h3>
+            <h3 className="text-lg font-semibold text-textPrimary mb-4">{t('auth:bindEmailTitle')}</h3>
             <div className="space-y-3">
               <div>
-                <label className="block text-xs text-textSecondary mb-1">{t('auth.email')}</label>
+                <label className="block text-xs text-textSecondary mb-1">{t('auth:email')}</label>
                 <input
                   type="email"
                   value={bindEmail}
                   onChange={e => { setBindEmail(e.target.value); setBindCodeSent(false) }}
                   className="w-full px-3 py-2 rounded-card border border-border bg-canvas text-textPrimary text-sm focus:outline-none focus:ring-2 focus:ring-primary-500/60"
-                  placeholder={t('auth.emailPlaceholder')}
+                  placeholder={t('auth:emailPlaceholder')}
                 />
               </div>
               <button
@@ -754,13 +756,13 @@ export default function MePage() {
                 className="w-full py-2 text-sm font-medium rounded-card border border-primary-500/30 text-primary-500 hover:bg-primary-500/10 disabled:opacity-40 transition-colors"
               >
                 {bindSendCooldown > 0
-                  ? t('auth.codeResendIn').replace('{seconds}', String(bindSendCooldown))
-                  : bindCodeSent ? t('auth.codeSent') : t('auth.sendCode')
+                  ? t('auth:codeResendIn').replace('{seconds}', String(bindSendCooldown))
+                  : bindCodeSent ? t('auth:codeSent') : t('auth:sendCode')
                 }
               </button>
               {bindCodeSent && (
                 <div>
-                  <label className="block text-xs text-textSecondary mb-2 text-center">{t('auth.codePlaceholder')}</label>
+                  <label className="block text-xs text-textSecondary mb-2 text-center">{t('auth:codePlaceholder')}</label>
                   <VerificationCodeInput
                     value={bindCode}
                     onChange={setBindCode}
@@ -772,13 +774,13 @@ export default function MePage() {
                 <div className="text-sm text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-card px-3 py-2">{bindError}</div>
               )}
               <div className="flex gap-2 pt-2">
-                <button onClick={() => setShowBindEmail(false)} className="flex-1 py-2 text-sm rounded-card border border-border text-textSecondary hover:text-textPrimary transition-colors">{t('common.cancel')}</button>
+                <button onClick={() => setShowBindEmail(false)} className="flex-1 py-2 text-sm rounded-card border border-border text-textSecondary hover:text-textPrimary transition-colors">{t('common:cancel')}</button>
                 <button
                   onClick={handleConfirmBind}
                   disabled={!bindEmail || !bindCode || bindLoading}
                   className="btn btn-sm btn-primary flex-1"
                 >
-                  {bindLoading ? t('auth.verifying') : t('common.confirm')}
+                  {bindLoading ? t('auth:verifying') : t('common:confirm')}
                 </button>
               </div>
             </div>

@@ -79,15 +79,15 @@ export default function ConsolePage() {
       {/* 头部：控制台标题 + 工作区页签（桌面端）+ 手册入口 */}
       <div className="px-4 md:px-6 h-12 border-b border-border bg-surface shrink-0 flex items-center gap-2">
         {mobileView === 'detail' ? (
-          <button onClick={() => setMobileView('list')} className="icon-btn-sm md:hidden -ml-1 text-textSecondary" title={t('admin.backToList')}>
+          <button onClick={() => setMobileView('list')} className="icon-btn-sm md:hidden -ml-1 text-textSecondary" title={t('admin:backToList')}>
             <ArrowLeft size={20} />
           </button>
         ) : (
-          <button onClick={() => navigate('/me')} className="icon-btn-sm md:hidden -ml-1 text-textSecondary" title={t('admin.backToMe')}>
+          <button onClick={() => navigate('/me')} className="icon-btn-sm md:hidden -ml-1 text-textSecondary" title={t('admin:backToMe')}>
             <ArrowLeft size={20} />
           </button>
         )}
-        <h1 className="text-sm font-semibold text-textPrimary shrink-0">{t('admin.title')}</h1>
+        <h1 className="text-sm font-semibold text-textPrimary shrink-0">{t('admin:title')}</h1>
 
         <nav className="hidden md:flex items-center gap-0.5 ml-3 min-w-0 overflow-x-auto">
           {CONSOLE_WORKSPACES.map(w => (
@@ -107,10 +107,10 @@ export default function ConsolePage() {
 
         <div className="ml-auto flex items-center gap-2 shrink-0">
           <Link to={MANUAL_URL} className="hidden sm:inline-flex items-center gap-1 text-xs text-textMuted hover:text-textPrimary transition-colors">
-            <BookOpen size={13} /> {t('nav.manual')}
+            <BookOpen size={13} /> {t('nav:manual')}
           </Link>
           <Link to={ADMIN_MANUAL_URL} className="hidden sm:inline-flex items-center gap-1 text-xs text-textMuted hover:text-textPrimary transition-colors">
-            <BookOpen size={13} /> {t('nav.adminManual')}
+            <BookOpen size={13} /> {t('nav:adminManual')}
           </Link>
         </div>
       </div>
@@ -130,17 +130,17 @@ export default function ConsolePage() {
             <div className={'flex items-center border-b border-border shrink-0 mt-1 ' + (collapsed ? '' : 'pr-1.5')}>
               <button
                 onClick={() => navigate('/chat')}
-                title={t('admin.backToApp')}
+                title={t('admin:backToApp')}
                 className={'flex-1 min-w-0 flex items-center gap-2 py-2 text-sm text-textSecondary hover:bg-elevated hover:text-textPrimary transition-colors ' +
                   (collapsed ? 'justify-center px-0' : 'px-3')}
               >
                 <ArrowLeft size={16} className="shrink-0" />
-                {!collapsed && <span className="truncate">{t('admin.backToApp')}</span>}
+                {!collapsed && <span className="truncate">{t('admin:backToApp')}</span>}
               </button>
               <button
                 onClick={toggleRail}
                 className="icon-btn-sm text-textMuted hover:text-textPrimary"
-                title={collapsed ? t('admin.expandRail') : t('admin.collapseRail')}
+                title={collapsed ? t('admin:expandRail') : t('admin:collapseRail')}
               >
                 {collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
               </button>

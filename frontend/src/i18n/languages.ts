@@ -7,7 +7,7 @@ export type Lang = 'zh' | 'en' | 'ja'
 export interface LangMeta {
   code: Lang
   nativeName: string       // 本族语名称，如「中文（简体）」
-  i18nKey: string          // translations.ts 中的 key，如 'settings.chinese'
+  i18nKey: string          // t() 的命名空间键，如 'settings:chinese'（无冒号＝common 命名空间）
   locale: string           // toLocaleTimeString 等使用的 locale
   // 相对时间文本（非 i18n 场景使用，如格式化工具函数）
   yesterday: string
@@ -19,7 +19,7 @@ export const LANGUAGES: LangMeta[] = [
   {
     code: 'zh',
     nativeName: '中文（简体）',
-    i18nKey: 'settings.chinese',
+    i18nKey: 'settings:chinese',
     locale: 'zh-CN',
     yesterday: '昨天',
     daysAgo: (n) => `${n}天前`,
@@ -28,7 +28,7 @@ export const LANGUAGES: LangMeta[] = [
   {
     code: 'en',
     nativeName: 'English',
-    i18nKey: 'settings.english',
+    i18nKey: 'settings:english',
     locale: 'en-US',
     yesterday: 'Yesterday',
     daysAgo: (n) => `${n} days ago`,
@@ -37,7 +37,7 @@ export const LANGUAGES: LangMeta[] = [
   {
     code: 'ja',
     nativeName: '日本語',
-    i18nKey: 'settings.japanese',
+    i18nKey: 'settings:japanese',
     locale: 'ja-JP',
     yesterday: '昨日',
     daysAgo: (n) => `${n}日前`,

@@ -6,6 +6,7 @@ import Toggle from '../../../components/Toggle'
 import { useT } from '../../../i18n/I18nContext'
 import { LANGUAGES } from '../../../i18n/languages'
 import ConfigGroupCard from '../../../components/ConfigGroupCard'
+import { NOTICE_TEXT_CLASS, useNotice } from '../../../hooks/useNotice'
 
 export default function SystemSettingsTab() {
   const t = useT()
@@ -28,7 +29,7 @@ export default function SystemSettingsTab() {
   const [bulking, setBulking] = useState(false)
   const [hasActiveKeys, setHasActiveKeys] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [msg, setMsg] = useState('')
+  const { notice, ok: noticeOk, fail: noticeFail, clear: clearNotice } = useNotice()
 
   useEffect(() => {
     Promise.all([
@@ -56,7 +57,7 @@ export default function SystemSettingsTab() {
 
   const handleSave = async (field: string, value: any) => {
     setSaving(true)
-    setMsg('')
+    clearNotice()
     try {
       const payload: any = {}
       if (field === 'language') payload.default_language = value
@@ -72,9 +73,9 @@ export default function SystemSettingsTab() {
       else if (field === 'geoip_url') payload.geoip_provider_url = value || null
       const updated = await api.put('/admin/system-settings', payload)
       setConfig(updated)
-      setMsg(t('admin.saveSuccess'))
+      noticeOk(t('admin:saveSuccess'))
     } catch (err: any) {
-      setMsg(err?.message || err?.detail || t('admin.saveFailed'))
+      noticeFail(err?.message || err?.detail || t('admin:saveFailed'))
     }
     setSaving(false)
   }
@@ -83,31 +84,31 @@ export default function SystemSettingsTab() {
     const old = config?.default_platform_credit || 0
     if (platformCredit === old) return
     if (platformCredit > 0 && !hasActiveKeys) {
-      setMsg(t('admin.platformCreditNoActiveKey'))
+      noticeFail(t('admin:platformCreditNoActiveKey'))
       return
     }
     const delta = platformCredit - old
     const confirmed = confirm(
-      t('admin.platformCreditConfirm')
+      t('admin:platformCreditConfirm')
         .replace('{old}', String(old))
         .replace('{new}', String(platformCredit))
         .replace('{delta}', (delta >= 0 ? '+' : '') + delta)
-        .replace('{userCount}', t('admin.allUsers'))
+        .replace('{userCount}', t('admin:allUsers'))
     )
     if (!confirmed) return
     handleSave('platform_credit', platformCredit)
   }
 
-  if (!config) return <p className="text-textMuted p-6">{t('common.loading')}</p>
+  if (!config) return <p className="text-textMuted p-6">{t('common:loading')}</p>
 
   return (
     <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-      <h3 className="xl:col-span-2 font-semibold text-textPrimary">{t('admin.systemSettings')}</h3>
+      <h3 className="xl:col-span-2 font-semibold text-textPrimary">{t('admin:systemSettings')}</h3>
 
       {/* 默认语言 */}
       <div className="bg-surface rounded-card border border-border p-4">
-        <label className="block text-sm font-medium mb-1 text-textSecondary">{t('admin.defaultLanguage')}</label>
-        <p className="text-xs text-textMuted mb-2">{t('admin.defaultLanguageDesc')}</p>
+        <label className="block text-sm font-medium mb-1 text-textSecondary">{t('admin:defaultLanguage')}</label>
+        <p className="text-xs text-textMuted mb-2">{t('admin:defaultLanguageDesc')}</p>
         <select
           value={lang}
           onChange={(e) => {
@@ -126,8 +127,8 @@ export default function SystemSettingsTab() {
       <div className="bg-surface rounded-card border border-border p-4">
         <div className="flex items-center justify-between">
           <div>
-            <label className="text-sm font-medium text-textSecondary">{t('admin.registrationEnabled')}</label>
-            <p className="text-xs text-textMuted mt-0.5">{t('admin.registrationEnabledDesc')}</p>
+            <label className="text-sm font-medium text-textSecondary">{t('admin:registrationEnabled')}</label>
+            <p className="text-xs text-textMuted mt-0.5">{t('admin:registrationEnabledDesc')}</p>
           </div>
           <Toggle
             checked={registrationEnabled}
@@ -143,8 +144,8 @@ export default function SystemSettingsTab() {
 
       {/* 平台赠送额度 */}
       <div className="bg-surface rounded-card border border-border p-4">
-        <label className="block text-sm font-medium mb-1 text-textSecondary">{t('admin.defaultPlatformCredit')}</label>
-        <p className="text-xs text-textMuted mb-2">{t('admin.defaultPlatformCreditDesc')}</p>
+        <label className="block text-sm font-medium mb-1 text-textSecondary">{t('admin:defaultPlatformCredit')}</label>
+        <p className="text-xs text-textMuted mb-2">{t('admin:defaultPlatformCreditDesc')}</p>
         <div className="flex items-center gap-2">
           <input
             type="number"
@@ -160,18 +161,18 @@ export default function SystemSettingsTab() {
             disabled={saving || platformCredit === (config?.default_platform_credit || 0)}
             className="btn btn-sm btn-primary"
           >
-            {t('settings.save')}
+            {t('settings:save')}
           </button>
         </div>
         {!hasActiveKeys && (
-          <p className="text-xs text-accent-400 mt-1.5">{t('admin.platformCreditNoActiveKey')}</p>
+          <p className="text-xs text-accent-400 mt-1.5">{t('admin:platformCreditNoActiveKey')}</p>
         )}
       </div>
 
       {/* 用户默认文件配额 */}
       <div className="bg-surface rounded-card border border-border p-4">
-        <label className="block text-sm font-medium mb-1 text-textSecondary">{t('admin.defaultFileQuota')}</label>
-        <p className="text-xs text-textMuted mb-2">{t('admin.defaultFileQuotaDesc')}</p>
+        <label className="block text-sm font-medium mb-1 text-textSecondary">{t('admin:defaultFileQuota')}</label>
+        <p className="text-xs text-textMuted mb-2">{t('admin:defaultFileQuotaDesc')}</p>
         <div className="flex items-center gap-2">
           <input
             type="number"
@@ -189,8 +190,8 @@ export default function SystemSettingsTab() {
               const delta = fileQuota - old
               const confirmed = confirm(
                 (fileQuota > old
-                  ? t('admin.fileQuotaIncreaseConfirm')
-                  : t('admin.fileQuotaDecreaseConfirm')
+                  ? t('admin:fileQuotaIncreaseConfirm')
+                  : t('admin:fileQuotaDecreaseConfirm')
                 )
                   .replace('{old}', String(old))
                   .replace('{new}', String(fileQuota))
@@ -202,7 +203,7 @@ export default function SystemSettingsTab() {
             disabled={saving || fileQuota === (config?.default_file_quota_mb ?? 100)}
             className="px-3 py-2 bg-primary-500 text-white rounded-card hover:bg-primary-600 text-sm disabled:opacity-40 transition-colors"
           >
-            {t('settings.save')}
+            {t('settings:save')}
           </button>
         </div>
       </div>
@@ -221,13 +222,13 @@ export default function SystemSettingsTab() {
               setSaving(true)
               try {
                 await api.put('/admin/upload-limits', { upload_max_size_mb: uploadMaxSizeMb })
-                setMsg('上传大小限制已更新')
-              } catch (e: any) { setMsg(e?.detail || '更新失败') }
+                noticeOk(t('admin:uploadLimitUpdated'))
+              } catch (e: any) { noticeFail(e?.detail || t('admin:updateFailed')) }
               finally { setSaving(false) }
             }}
             disabled={saving}
             className="px-3 py-2 bg-primary-500 text-white rounded-card hover:bg-primary-600 text-sm disabled:opacity-40 transition-colors"
-          >{t('settings.save')}</button>
+          >{t('settings:save')}</button>
         </div>
       </div>
 
@@ -245,13 +246,13 @@ export default function SystemSettingsTab() {
               setSaving(true)
               try {
                 await api.put('/admin/upload-limits', { avatar_max_size_mb: avatarMaxSizeMb })
-                setMsg('头像大小限制已更新')
-              } catch (e: any) { setMsg(e?.detail || '更新失败') }
+                noticeOk(t('admin:avatarLimitUpdated'))
+              } catch (e: any) { noticeFail(e?.detail || t('admin:updateFailed')) }
               finally { setSaving(false) }
             }}
             disabled={saving}
             className="px-3 py-2 bg-primary-500 text-white rounded-card hover:bg-primary-600 text-sm disabled:opacity-40 transition-colors"
-          >{t('settings.save')}</button>
+          >{t('settings:save')}</button>
         </div>
       </div>
 
@@ -283,7 +284,7 @@ export default function SystemSettingsTab() {
           <button onClick={() => handleSave('audit_retention', auditRetention)}
             disabled={saving || auditRetention === (config?.audit_log_retention_days ?? 90)}
             className="px-3 py-2 bg-primary-500 text-white rounded-card hover:bg-primary-600 text-sm disabled:opacity-40 transition-colors"
-          >{t('settings.save')}</button>
+          >{t('settings:save')}</button>
         </div>
       </div>
 
@@ -298,7 +299,7 @@ export default function SystemSettingsTab() {
           <button onClick={() => handleSave('message_retention', messageRetention)}
             disabled={saving || messageRetention === (config?.message_retention_days ?? 0)}
             className="px-3 py-2 bg-primary-500 text-white rounded-card hover:bg-primary-600 text-sm disabled:opacity-40 transition-colors"
-          >{t('settings.save')}</button>
+          >{t('settings:save')}</button>
         </div>
       </div>
 
@@ -312,7 +313,7 @@ export default function SystemSettingsTab() {
           <button onClick={() => handleSave('daily_backup_enabled', !dailyBackupEnabled)}
             disabled={saving}
             className={`relative w-11 h-6 rounded-full transition-colors ${dailyBackupEnabled ? 'bg-primary-500' : 'bg-gray-600'}`}
-            title={t('settings.enable')}
+            title={t('settings:enable')}
           >
             <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${dailyBackupEnabled ? 'left-[22px]' : 'left-0.5'}`} />
           </button>
@@ -325,7 +326,7 @@ export default function SystemSettingsTab() {
           <button onClick={() => handleSave('daily_backup_keep', dailyBackupKeep)}
             disabled={saving || dailyBackupKeep === (config?.daily_backup_keep ?? 7)}
             className="px-3 py-2 bg-primary-500 text-white rounded-card hover:bg-primary-600 text-sm disabled:opacity-40 transition-colors"
-          >{t('settings.save')}</button>
+          >{t('settings:save')}</button>
         </div>
       </div>
 
@@ -345,7 +346,7 @@ export default function SystemSettingsTab() {
             onClick={() => handleSave('geoip_url', geoipUrl)}
             disabled={saving}
             className="px-3 py-2 bg-primary-500 text-white rounded-card hover:bg-primary-600 text-sm disabled:opacity-40 transition-colors"
-          >{t('settings.save')}</button>
+          >{t('settings:save')}</button>
         </div>
       </div>
 
@@ -361,7 +362,7 @@ export default function SystemSettingsTab() {
             onClick={() => handleSave('concurrent_ai_limit', defaultConcurrentAiLimit)}
             disabled={saving || defaultConcurrentAiLimit === (config?.default_concurrent_ai_limit ?? 3)}
             className="px-3 py-2 bg-primary-500 text-white rounded-card hover:bg-primary-600 text-sm disabled:opacity-40 transition-colors"
-          >{t('settings.save')}</button>
+          >{t('settings:save')}</button>
         </div>
       </div>
 
@@ -375,17 +376,17 @@ export default function SystemSettingsTab() {
             className="w-32 px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50" />
           <button
             onClick={async () => {
-              if (!confirm(`确定将所有群的 AI 并发数设为 ${bulkConcurrency}？此操作不可撤销。`)) return
+              if (!confirm(t('admin:bulkConcurrencyConfirm', { n: bulkConcurrency }))) return
               setBulking(true)
               try {
                 await api.put('/admin/groups/concurrency', { concurrent_ai_limit: bulkConcurrency })
-                setMsg(`已将所有群并发数设为 ${bulkConcurrency}`)
-              } catch (e: any) { setMsg(e?.detail || '批量修改失败') }
+                noticeOk(t('admin:bulkConcurrencySet', { n: bulkConcurrency }))
+              } catch (e: any) { noticeFail(e?.detail || t('admin:bulkUpdateFailed')) }
               finally { setBulking(false) }
             }}
             disabled={bulking}
             className="px-3 py-2 bg-accent-500 text-white rounded-card hover:bg-accent-400 text-sm disabled:opacity-40 transition-colors"
-          >{bulking ? '执行中...' : '批量应用'}</button>
+          >{bulking ? t('admin:bulkApplyRunning') : t('admin:bulkApply')}</button>
         </div>
       </div>
 
@@ -394,7 +395,7 @@ export default function SystemSettingsTab() {
 
       <ConfigGroupCard groupKey="runtime" />
 
-      {msg && <p className={`xl:col-span-2 text-sm ${msg.includes('失败') || msg.includes('无法') || msg.includes('No active') ? 'text-rose-400' : 'text-mint-400'}`}>{msg}</p>}
+      {notice && <p className={`xl:col-span-2 text-sm ${NOTICE_TEXT_CLASS[notice.tone]}`}>{notice.text}</p>}
 
     </div>
   )

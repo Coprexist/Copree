@@ -257,7 +257,7 @@ export default function MaintenanceMsgEditor() {
             <button onClick={load} className="btn btn-xs btn-outline ml-auto hover:text-textPrimary">重试</button>
           </div>
         ) : (
-          <p className="text-xs text-textMuted">{t('common.loading')}</p>
+          <p className="text-xs text-textMuted">{t('common:loading')}</p>
         )}
       </div>
     )
@@ -288,7 +288,7 @@ export default function MaintenanceMsgEditor() {
         <div className="flex flex-wrap items-center gap-2">
           <select value={selPreset} onChange={e => { const v = e.target.value; if (v) applyPreset(v); else setSelPreset('') }}
             className="flex-1 min-w-[140px] px-3 py-1.5 rounded-control border border-border bg-canvas text-xs text-textPrimary focus:outline-none focus:ring-1 focus:ring-primary-500/50">
-            <option value="">{t('admin.presets')} ···</option>
+            <option value="">{t('admin:presets')} ···</option>
             {presets.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
           </select>
           <div className="flex items-center gap-1.5">

@@ -2956,14 +2956,15 @@ from datetime import datetime, timedelta, timezone as tz
 @router.get("/usage/global")
 async def get_global_usage(
     days: int = Query(30, ge=1, le=365),
+    scope: str = Query("all", pattern="^(all|residents|worlds)$"),
     admin: dict = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """全站 token 消耗总览"""
+    """全站 token 消耗总览（scope：居民 AI / 群视界 AI，控制台两个版面各取自己那一半）"""
     from app.services.content.conversation_log_service import get_admin_global_token_stats
     end_date = datetime.now(tz.utc).replace(tzinfo=None)
     start_date = end_date - timedelta(days=days)
-    return await get_admin_global_token_stats(SQLAlchemyContentRepository(db), start_date, end_date)
+    return await get_admin_global_token_stats(SQLAlchemyContentRepository(db), start_date, end_date, scope)
 
 
 @router.get("/usage/by-user")
@@ -2996,14 +2997,45 @@ async def get_agent_daily_usage_admin(
 @router.get("/usage/global/daily")
 async def get_global_daily_usage_admin(
     days: int = Query(30, ge=1, le=365),
+    scope: str = Query("all", pattern="^(all|residents|worlds)$"),
     admin: dict = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """获取全站每日 token 消耗分布"""
+    """获取全站每日 token 消耗分布（scope 同 /usage/global）"""
     from app.services.content.conversation_log_service import get_admin_global_token_daily
     end_date = datetime.now(tz.utc).replace(tzinfo=None)
     start_date = end_date - timedelta(days=days)
-    return await get_admin_global_token_daily(SQLAlchemyContentRepository(db), start_date, end_date)
+    return await get_admin_global_token_daily(SQLAlchemyContentRepository(db), start_date, end_date, scope)
+
+
+@router.get("/usage/worlds")
+async def get_worlds_usage_admin(
+    days: int = Query(30, ge=1, le=365),
+    admin: dict = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """按世界聚合的群视界 LLM 用量
+
+    世界 AI 的账记在 world_llm_usage（带 world_id）：usage_daily 里那截 agent_id=0
+    只够看「群视界一共烧了多少」，看不出是哪个世界烧的。
+    """
+    from app.services.world.world_usage_service import worlds_usage_overview
+    end_date = datetime.now(tz.utc).replace(tzinfo=None)
+    start_date = end_date - timedelta(days=days)
+    return await worlds_usage_overview(db, start_date, end_date)
+
+
+@router.get("/usage/worlds/daily")
+async def get_worlds_daily_usage_admin(
+    days: int = Query(30, ge=1, le=365),
+    admin: dict = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """群视界每日 token 消耗分布（形状与 /usage/global/daily 一致）"""
+    from app.services.world.world_usage_service import worlds_usage_daily
+    end_date = datetime.now(tz.utc).replace(tzinfo=None)
+    start_date = end_date - timedelta(days=days)
+    return await worlds_usage_daily(db, start_date, end_date)
 
 
 # ══════════════════════════════════════════════════════════════

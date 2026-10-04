@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.repositories.world_repo import WorldRepository
 from app.utils.auth import get_current_user
+from app.services.world.world_usage_service import world_usage_totals
 from app.routers.deps import get_world_repo
 
 logger = logging.getLogger(__name__)
@@ -416,26 +417,7 @@ async def world_api_usage(
 ):
     """受控 API：LLM 用量与缓存命中率（与设计页 /worlds/{id}/usage 同一口径）"""
     await _authorize_world_api(db, world_id, request)
-    from sqlalchemy import func as _func
-    from app.models.world import WorldLLMUsage
-    row = (await db.execute(
-        select(
-            _func.count(WorldLLMUsage.id),
-            _func.coalesce(_func.sum(WorldLLMUsage.prompt_tokens), 0),
-            _func.coalesce(_func.sum(WorldLLMUsage.completion_tokens), 0),
-            _func.coalesce(_func.sum(WorldLLMUsage.cached_tokens), 0),
-        ).where(WorldLLMUsage.world_id == world_id)
-    )).one()
-    calls, prompt, completion, cached = row
-    hit_rate = round(cached / prompt * 100, 1) if prompt else 0.0
-    return {
-        "world_id": world_id,
-        "total_calls": calls,
-        "prompt_tokens": prompt,
-        "completion_tokens": completion,
-        "cached_tokens": cached,
-        "cache_hit_rate_pct": hit_rate,
-    }
+    return {"world_id": world_id, **await world_usage_totals(db, world_id)}
 
 
 @router.post("/{world_id}/api/state")

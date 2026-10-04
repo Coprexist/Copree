@@ -60,7 +60,7 @@ export default function BackupTab() {
   }
 
   const handleRestoreLocal = async (filename: string) => {
-    if (!confirm(t('admin.restoreWarning'))) return
+    if (!confirm(t('admin:restoreWarning'))) return
     setRestoringLocal(filename)
     setError('')
     setMessage('')
@@ -73,10 +73,10 @@ export default function BackupTab() {
       })
       if (!res.ok) {
         const err = await res.json()
-        throw new Error(err.detail || t('admin.restoreFailed'))
+        throw new Error(err.detail || t('admin:restoreFailed'))
       }
       const data = await res.json()
-      setMessage(data.restart_required ? t('admin.dbRestoreRestart') : t('admin.dbRestoreSuccess'))
+      setMessage(data.restart_required ? t('admin:dbRestoreRestart') : t('admin:dbRestoreSuccess'))
     } catch (e: any) {
       setError(e.message)
     } finally {
@@ -93,7 +93,7 @@ export default function BackupTab() {
       // 文件名（含 .sql/.db 扩展名）由后端 Content-Disposition 决定，前端不再猜
       await api.download('/admin/backup/download',
                          `copree_backup_${new Date().toISOString().slice(0, 10)}${dbExt}`)
-      setMessage(t('admin.dbBackupSuccess'))
+      setMessage(t('admin:dbBackupSuccess'))
     } catch (e: any) {
       setError(e.message)
     } finally {
@@ -109,7 +109,7 @@ export default function BackupTab() {
     try {
       await api.download('/admin/backup/full/download',
                          `copree_full_${new Date().toISOString().slice(0, 10)}.tar.gz`)
-      setMessage(t('admin.fullBackupSuccess'))
+      setMessage(t('admin:fullBackupSuccess'))
     } catch (e: any) {
       setError(e.message)
     } finally {
@@ -121,7 +121,7 @@ export default function BackupTab() {
   const handleRestore = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    if (!confirm(t('admin.restoreWarning'))) return
+    if (!confirm(t('admin:restoreWarning'))) return
     setRestoring(true)
     setError('')
     setMessage('')
@@ -136,10 +136,10 @@ export default function BackupTab() {
       })
       if (!res.ok) {
         const err = await res.json()
-        throw new Error(err.detail || t('admin.restoreFailed'))
+        throw new Error(err.detail || t('admin:restoreFailed'))
       }
       const data = await res.json()
-      setMessage(data.restart_required ? t('admin.dbRestoreRestart') : t('admin.dbRestoreSuccess'))
+      setMessage(data.restart_required ? t('admin:dbRestoreRestart') : t('admin:dbRestoreSuccess'))
     } catch (e: any) {
       setError(e.message)
     } finally {
@@ -152,7 +152,7 @@ export default function BackupTab() {
   const handleFullRestore = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    if (!confirm(t('admin.restoreWarning'))) return
+    if (!confirm(t('admin:restoreWarning'))) return
     setRestoringFull(true)
     setError('')
     setMessage('')
@@ -167,10 +167,10 @@ export default function BackupTab() {
       })
       if (!res.ok) {
         const err = await res.json()
-        throw new Error(err.detail || t('admin.restoreFailed'))
+        throw new Error(err.detail || t('admin:restoreFailed'))
       }
       const data = await res.json()
-      setMessage(data.restart_required ? t('admin.fullRestoreRestart') : t('admin.fullRestoreSuccess'))
+      setMessage(data.restart_required ? t('admin:fullRestoreRestart') : t('admin:fullRestoreSuccess'))
     } catch (e: any) {
       setError(e.message)
     } finally {
@@ -187,8 +187,8 @@ export default function BackupTab() {
           <AlertTriangle size={18} className="text-amber-400 shrink-0 mt-0.5" />
           <div className="flex-1 min-w-0">
             <p className="text-sm text-textPrimary">
-              {t('admin.currentDbBackend')}: <span className="font-semibold text-amber-400">{dbLabel}</span>
-              <span className="text-xs text-textMuted ml-2">({t('admin.backupFileExt')}: {dbExt})</span>
+              {t('admin:currentDbBackend')}: <span className="font-semibold text-amber-400">{dbLabel}</span>
+              <span className="text-xs text-textMuted ml-2">({t('admin:backupFileExt')}: {dbExt})</span>
             </p>
             <p className="text-xs text-amber-400/80 mt-1">{backupInfo.warning}</p>
           </div>
@@ -197,23 +197,23 @@ export default function BackupTab() {
 
       {/* ========== 导出区 ========== */}
       <div className="bg-surface rounded-card border border-border p-5">
-        <h3 className="font-semibold text-textPrimary mb-1">{t('admin.exportTitle')}</h3>
-        <p className="text-sm text-textMuted mb-5">{t('admin.exportDesc')}</p>
+        <h3 className="font-semibold text-textPrimary mb-1">{t('admin:exportTitle')}</h3>
+        <p className="text-sm text-textMuted mb-5">{t('admin:exportDesc')}</p>
 
         {/* 完整备份 */}
         <div className="bg-mint-400/5 border border-mint-400/20 rounded-card p-4 mb-3">
           <div className="flex items-start gap-3">
             <Database size={20} className="text-mint-400 shrink-0" />
             <div className="flex-1 min-w-0">
-              <h4 className="text-sm font-semibold text-mint-400">{t('admin.fullBackup')}</h4>
-              <p className="text-xs text-textSecondary mt-1" dangerouslySetInnerHTML={{ __html: t('admin.fullBackupDesc') }} />
+              <h4 className="text-sm font-semibold text-mint-400">{t('admin:fullBackup')}</h4>
+              <p className="text-xs text-textSecondary mt-1" dangerouslySetInnerHTML={{ __html: t('admin:fullBackupDesc') }} />
             </div>
             <button
               onClick={handleFullBackup}
               disabled={downloadingFull}
               className="shrink-0 px-4 py-2 bg-mint-400 text-white rounded-card hover:bg-mint-500 disabled:opacity-40 text-sm font-medium transition-colors"
             >
-              {downloadingFull ? t('admin.packing') : t('admin.downloadFullBackup')}
+              {downloadingFull ? t('admin:packing') : t('admin:downloadFullBackup')}
             </button>
           </div>
         </div>
@@ -223,15 +223,15 @@ export default function BackupTab() {
           <div className="flex items-start gap-3">
             <Database size={20} className="text-textSecondary shrink-0" />
             <div className="flex-1 min-w-0">
-              <h4 className="text-sm font-semibold text-textPrimary">{t('admin.dbOnly')}</h4>
-              <p className="text-xs text-textSecondary mt-1" dangerouslySetInnerHTML={{ __html: t('admin.dbOnlyDesc') }} />
+              <h4 className="text-sm font-semibold text-textPrimary">{t('admin:dbOnly')}</h4>
+              <p className="text-xs text-textSecondary mt-1" dangerouslySetInnerHTML={{ __html: t('admin:dbOnlyDesc') }} />
             </div>
             <button
               onClick={handleBackup}
               disabled={downloading}
               className="btn btn-sm btn-primary shrink-0"
             >
-              {downloading ? t('admin.exporting') : t('admin.downloadDbOnly')}
+              {downloading ? t('admin:exporting') : t('admin:downloadDbOnly')}
             </button>
           </div>
         </div>
@@ -272,16 +272,16 @@ export default function BackupTab() {
 
       {/* ========== 导入区 ========== */}
       <div className="bg-surface rounded-card border border-rose-500/30 p-5">
-        <h3 className="font-semibold text-textPrimary mb-1">{t('admin.restoreTitle')}</h3>
-        <p className="text-sm text-rose-400 mb-5">{t('admin.restoreWarning')}</p>
+        <h3 className="font-semibold text-textPrimary mb-1">{t('admin:restoreTitle')}</h3>
+        <p className="text-sm text-rose-400 mb-5">{t('admin:restoreWarning')}</p>
 
         {/* 完整恢复 */}
         <div className="bg-rose-400/5 border border-rose-400/20 rounded-card p-4 mb-3">
           <div className="flex items-start gap-3">
             <Database size={20} className="text-rose-400 shrink-0" />
             <div className="flex-1 min-w-0">
-              <h4 className="text-sm font-semibold text-rose-400">{t('admin.fullRestore')}</h4>
-              <p className="text-xs text-textSecondary mt-1" dangerouslySetInnerHTML={{ __html: t('admin.fullRestoreDesc') }} />
+              <h4 className="text-sm font-semibold text-rose-400">{t('admin:fullRestore')}</h4>
+              <p className="text-xs text-textSecondary mt-1" dangerouslySetInnerHTML={{ __html: t('admin:fullRestoreDesc') }} />
               <input
                 ref={fullFileInputRef}
                 type="file"
@@ -290,7 +290,7 @@ export default function BackupTab() {
                 disabled={restoringFull}
                 className="block mt-2 text-sm text-textPrimary file:mr-3 file:py-2 file:px-4 file:rounded-card file:border-0 file:text-sm file:bg-elevated file:text-textPrimary hover:file:bg-border"
               />
-              {restoringFull && <p className="text-sm text-textMuted mt-2">{t('admin.restoringFull')}</p>}
+              {restoringFull && <p className="text-sm text-textMuted mt-2">{t('admin:restoringFull')}</p>}
             </div>
           </div>
         </div>
@@ -300,8 +300,8 @@ export default function BackupTab() {
           <div className="flex items-start gap-3">
             <Database size={20} className="text-textSecondary shrink-0" />
             <div className="flex-1 min-w-0">
-              <h4 className="text-sm font-semibold text-textPrimary">{t('admin.dbRestore')}</h4>
-              <p className="text-xs text-textSecondary mt-1" dangerouslySetInnerHTML={{ __html: t('admin.dbRestoreDesc') }} />
+              <h4 className="text-sm font-semibold text-textPrimary">{t('admin:dbRestore')}</h4>
+              <p className="text-xs text-textSecondary mt-1" dangerouslySetInnerHTML={{ __html: t('admin:dbRestoreDesc') }} />
               <input
                 ref={fileInputRef}
                 type="file"
@@ -310,7 +310,7 @@ export default function BackupTab() {
                 disabled={restoring}
                 className="block mt-2 text-sm text-textPrimary file:mr-3 file:py-2 file:px-4 file:rounded-card file:border-0 file:text-sm file:bg-elevated file:text-textPrimary hover:file:bg-border"
               />
-              {restoring && <p className="text-sm text-textMuted mt-2">{t('admin.restoring')}</p>}
+              {restoring && <p className="text-sm text-textMuted mt-2">{t('admin:restoring')}</p>}
             </div>
           </div>
         </div>

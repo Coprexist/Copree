@@ -276,6 +276,8 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
   const recent: {
     origin: string; last_at: number; count: number; allowed: boolean;
     copree_group_id?: number | null; mapped?: boolean;
+    // 插件今天从通道那边拉到的群名/人数（没拉到就是空）：有就显示真名，比 openid 好认
+    name?: string; member_num?: number;
   }[] = (view?.detail?.recent_groups as any[]) || []
   /** 每个 QQ 群选了哪个落点（未提交前的本地值）：键是群 openid */
   const [mapDraft, setMapDraft] = useState<Record<string, Record<string, string>>>({})
@@ -649,9 +651,14 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
               <div key={g.origin} className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-2 bg-canvas border border-border rounded-control px-3 py-2">
                 <span className={'w-1.5 h-1.5 rounded-full shrink-0 ' + (g.allowed ? 'bg-mint-400' : 'bg-amber-400')} />
                 <div className="min-w-0">
-                  <div className="text-3xs text-textPrimary truncate font-mono">{g.origin}</div>
-                  <div className="text-3xs text-textMuted">
+                  {/* 通道那边报过群名就显示真名（下一行留 openid 当身份）；没有就只显示 openid */}
+                  <div className={g.name ? 'text-3xs text-textPrimary truncate' : 'text-3xs text-textPrimary truncate font-mono'}>
+                    {g.name || g.origin}
+                  </div>
+                  <div className="text-3xs text-textMuted truncate">
                     {t('tool:channel.recentGroupMeta', { count: String(g.count), time: new Date(g.last_at * 1000).toLocaleString() })}
+                    {g.name ? ' · ' + g.origin : ''}
+                    {g.member_num ? ' · ' + t('tool:channel.recentGroupMembers', { n: String(g.member_num) }) : ''}
                   </div>
                 </div>
                 {/* 这个群落到哪个 Copree 群：一个群一个落点，选完立即保存（映射表说了算） */}

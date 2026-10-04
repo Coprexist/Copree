@@ -34,7 +34,7 @@ export default function CleanupTab() {
       const result = await api.post('/admin/cleanup/files')
       setStats(result)
     } catch (e: any) {
-      setError(e?.detail || e?.message || t('common.error'))
+      setError(e?.detail || e?.message || t('common:error'))
     } finally {
       setRunning(false)
     }
@@ -49,8 +49,8 @@ export default function CleanupTab() {
             <Eraser size={20} className="text-primary-400" />
           </div>
           <div>
-            <h3 className="font-semibold text-textPrimary">{t('admin.cleanup')}</h3>
-            <p className="text-xs text-textMuted mt-0.5">{t('admin.cleanupDesc')}</p>
+            <h3 className="font-semibold text-textPrimary">{t('admin:cleanup')}</h3>
+            <p className="text-xs text-textMuted mt-0.5">{t('admin:cleanupDesc')}</p>
           </div>
         </div>
 
@@ -65,12 +65,12 @@ export default function CleanupTab() {
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
               </svg>
-              {t('admin.cleanupRunning')}
+              {t('admin:cleanupRunning')}
             </>
           ) : (
             <>
               <Eraser size={16} />
-              {t('admin.cleanupRun')}
+              {t('admin:cleanupRun')}
             </>
           )}
         </button>
@@ -86,17 +86,17 @@ export default function CleanupTab() {
       <div className="bg-surface rounded-card border border-border p-5">
         <div className="flex items-center gap-2 mb-4">
           <Clock size={16} className="text-textSecondary" />
-          <h3 className="font-semibold text-textPrimary">{t('admin.cleanupLastRun')}</h3>
+          <h3 className="font-semibold text-textPrimary">{t('admin:cleanupLastRun')}</h3>
         </div>
 
         {!stats ? (
-          <p className="text-sm text-textMuted">{t('admin.cleanupNever')}</p>
+          <p className="text-sm text-textMuted">{t('admin:cleanupNever')}</p>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="bg-canvas rounded-card border border-border p-4">
               <div className="flex items-center gap-2 mb-2">
                 <File size={16} className="text-mint-400" />
-                <span className="text-xs text-textMuted">{t('admin.cleanupFilesDeleted')}</span>
+                <span className="text-xs text-textMuted">{t('admin:cleanupFilesDeleted')}</span>
               </div>
               <p className="text-2xl font-bold text-textPrimary">{stats.cleaned_files ?? 0}</p>
             </div>
@@ -104,7 +104,7 @@ export default function CleanupTab() {
             <div className="bg-canvas rounded-card border border-border p-4">
               <div className="flex items-center gap-2 mb-2">
                 <FileX2 size={16} className="text-accent-400" />
-                <span className="text-xs text-textMuted">{t('admin.cleanupOrphansDeleted')}</span>
+                <span className="text-xs text-textMuted">{t('admin:cleanupOrphansDeleted')}</span>
               </div>
               <p className="text-2xl font-bold text-textPrimary">{stats.orphan_cleaned ?? 0}</p>
             </div>
@@ -112,12 +112,12 @@ export default function CleanupTab() {
             <div className="bg-canvas rounded-card border border-border p-4">
               <div className="flex items-center gap-2 mb-2">
                 <Clock size={16} className="text-textSecondary" />
-                <span className="text-xs text-textMuted">{t('admin.cleanupLastRun')}</span>
+                <span className="text-xs text-textMuted">{t('admin:cleanupLastRun')}</span>
               </div>
               <p className="text-sm font-medium text-textPrimary">
                 {stats.run_at
                   ? new Date(stats.run_at).toLocaleString(locale)
-                  : t('admin.cleanupNever')}
+                  : t('admin:cleanupNever')}
               </p>
             </div>
           </div>

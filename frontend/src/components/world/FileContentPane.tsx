@@ -6,6 +6,7 @@ import { memo } from 'react'
 import { FileText, FileCode, FileJson, FileImage, FileAudio, FileVideo, File } from 'lucide-react'
 import CodeRenderer from '../shared/CodeRenderer'
 import MarkdownContent from '../shared/MarkdownContent'
+import { useT } from '../../i18n/I18nContext'
 
 // 文件类型图标（与主界面风格一致）
 export function fileTypeIcon(name: string) {
@@ -32,6 +33,7 @@ function FileContentPane({ wid, currentFile, content, setContent, viewMode, canR
   fileCodeLang: string
   isImgFile: boolean
 }) {
+  const t = useT()
   if (viewMode === 'render' && canRender) {
     if (isImgFile) {
       return (
@@ -62,7 +64,7 @@ function FileContentPane({ wid, currentFile, content, setContent, viewMode, canR
       onChange={(e) => setContent(e.target.value)}
       spellCheck={false}
       className="flex-1 bg-canvas text-sm text-textPrimary p-3 font-mono outline-none resize-none"
-      placeholder="在这里编辑代码…"
+      placeholder={t('tool:world.editor.codePlaceholder')}
     />
   )
 }

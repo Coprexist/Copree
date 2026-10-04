@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "build:demo": "vite build --mode demo",
     "preview": "vite preview",
-    "i18n:check": "node scripts/check-i18n.mjs"
+    "i18n:check": "node scripts/check-i18n.mjs && node scripts/check-i18n-keys.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",

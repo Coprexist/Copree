@@ -49,7 +49,7 @@ export default function SubOptionModal({
         <div className="flex-1 overflow-y-auto md:overflow-visible pb-[var(--safe-bottom)] md:pb-0">
         <p className="text-xs text-textMuted mb-4">{t(preset.descKey)}</p>
         <p className="text-xs text-textMuted mb-4 italic text-center bg-canvas/50 rounded-control py-2">
-          {t('modal.createAgentPresetHint')}
+          {t('modal:createAgentPresetHint')}
         </p>
         <div className="space-y-3">
           {subOptions.map(sub => (

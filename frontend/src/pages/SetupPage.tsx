@@ -23,14 +23,14 @@ interface StepDef {
 }
 
 const ALL_STEPS: StepDef[] = [
-  { key: 'language',           labelKey: 'setup.stepLanguage',          icon: Globe },
-  { key: 'instanceDefaults',   labelKey: 'setup.stepInstanceDefaults',  icon: Server },
-  { key: 'profile',            labelKey: 'setup.stepProfile',           icon: User },
-  { key: 'apiConfig',          labelKey: 'setup.stepApiConfig',         icon: Key },
-  { key: 'createAI',           labelKey: 'setup.stepCreateAI',          icon: Bot },
-  { key: 'smtp',               labelKey: 'setup.stepSmtp',              icon: Mail },
-  { key: 'keyPool',            labelKey: 'setup.stepKeyPool',           icon: Shield },
-  { key: 'complete',           labelKey: 'setup.stepComplete',          icon: Sparkles },
+  { key: 'language',           labelKey: 'setup:stepLanguage',          icon: Globe },
+  { key: 'instanceDefaults',   labelKey: 'setup:stepInstanceDefaults',  icon: Server },
+  { key: 'profile',            labelKey: 'setup:stepProfile',           icon: User },
+  { key: 'apiConfig',          labelKey: 'setup:stepApiConfig',         icon: Key },
+  { key: 'createAI',           labelKey: 'setup:stepCreateAI',          icon: Bot },
+  { key: 'smtp',               labelKey: 'setup:stepSmtp',              icon: Mail },
+  { key: 'keyPool',            labelKey: 'setup:stepKeyPool',           icon: Shield },
+  { key: 'complete',           labelKey: 'setup:stepComplete',          icon: Sparkles },
 ]
 
 // Admin-only step keys
@@ -295,7 +295,7 @@ export default function SetupPage() {
         setCurrentIdx(prev => prev + 1)
       }
     } catch (err: any) {
-      setError(err?.detail || err?.message || t('common.error'))
+      setError(err?.detail || err?.message || t('common:error'))
     } finally {
       setSaving(false)
     }
@@ -319,7 +319,7 @@ export default function SetupPage() {
     const file = e.target.files?.[0]
     if (!file) return
     if (!['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(file.type)) {
-      setError(t('me.avatarTypeError'))
+      setError(t('me:avatarTypeError'))
       return
     }
     setCropFile(file)
@@ -390,9 +390,9 @@ export default function SetupPage() {
         <div>
           <div className="flex items-center gap-2 mb-2">
             <Globe size={20} className="text-primary-400" />
-            <h2 className="text-lg font-semibold text-textPrimary">{t('setup.step1Title')}</h2>
+            <h2 className="text-lg font-semibold text-textPrimary">{t('setup:step1Title')}</h2>
           </div>
-          <p className="text-sm text-textMuted mb-6">{t('setup.step1Desc')}</p>
+          <p className="text-sm text-textMuted mb-6">{t('setup:step1Desc')}</p>
           <div className="space-y-3">
             {LANGUAGES.map((l) => (
               <button
@@ -426,12 +426,12 @@ export default function SetupPage() {
         <div>
           <div className="flex items-center gap-2 mb-2">
             <Server size={20} className="text-primary-400" />
-            <h2 className="text-lg font-semibold text-textPrimary">{t('setup.step2Title')}</h2>
+            <h2 className="text-lg font-semibold text-textPrimary">{t('setup:step2Title')}</h2>
           </div>
-          <p className="text-sm text-textMuted mb-6">{t('setup.step2Desc')}</p>
+          <p className="text-sm text-textMuted mb-6">{t('setup:step2Desc')}</p>
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup.instanceDefaultLang')}</label>
+              <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup:instanceDefaultLang')}</label>
               <div className="flex gap-2">
                 {LANGUAGES.map(l => (
                   <button
@@ -449,7 +449,7 @@ export default function SetupPage() {
               </div>
             </div>
             <div>
-              <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup.instanceDefaultCredit')}</label>
+              <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup:instanceDefaultCredit')}</label>
               <input
                 type="number" min={0}
                 value={instanceCredit}
@@ -458,7 +458,7 @@ export default function SetupPage() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup.instanceDefaultFileQuota')}</label>
+              <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup:instanceDefaultFileQuota')}</label>
               <input
                 type="number" min={1}
                 value={instanceFileQuota}
@@ -467,7 +467,7 @@ export default function SetupPage() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup.instanceDefaultConcurrency')}</label>
+              <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup:instanceDefaultConcurrency')}</label>
               <input
                 type="number" min={1} max={20}
                 value={instanceConcurrency}
@@ -486,13 +486,13 @@ export default function SetupPage() {
         <div>
           <div className="flex items-center gap-2 mb-2">
             <User size={20} className="text-primary-400" />
-            <h2 className="text-lg font-semibold text-textPrimary">{t('setup.step3Title')}</h2>
+            <h2 className="text-lg font-semibold text-textPrimary">{t('setup:step3Title')}</h2>
           </div>
-          <p className="text-sm text-textMuted mb-6">{t('setup.step3Desc')}</p>
+          <p className="text-sm text-textMuted mb-6">{t('setup:step3Desc')}</p>
 
           {/* 头像 */}
           <div className="mb-5">
-            <label className="block text-sm font-medium text-textSecondary mb-2">{t('setup.avatar')}</label>
+            <label className="block text-sm font-medium text-textSecondary mb-2">{t('setup:avatar')}</label>
             <button
               onClick={() => fileInputRef.current?.click()}
               disabled={avatarUploading}
@@ -505,7 +505,7 @@ export default function SetupPage() {
               ) : (
                 <div className="flex flex-col items-center gap-0.5 text-textMuted">
                   <Upload size={16} />
-                  <span className="text-3xs">{t('setup.avatarUpload')}</span>
+                  <span className="text-3xs">{t('setup:avatarUpload')}</span>
                 </div>
               )}
             </button>
@@ -519,11 +519,11 @@ export default function SetupPage() {
 
           {/* Bio */}
           <div className="mb-4">
-            <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup.bio')}</label>
+            <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup:bio')}</label>
             <textarea
               value={bio}
               onChange={e => setBio(e.target.value)}
-              placeholder={t('setup.bioPlaceholder')}
+              placeholder={t('setup:bioPlaceholder')}
               rows={3}
               className="w-full px-3.5 py-2.5 rounded-card bg-canvas border border-border text-textPrimary text-sm focus:border-primary-400 focus:outline-none resize-none"
             />
@@ -531,11 +531,11 @@ export default function SetupPage() {
 
           {/* 状态文字 */}
           <div className="mb-4">
-            <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup.statusText')}</label>
+            <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup:statusText')}</label>
             <input
               value={statusText}
               onChange={e => setStatusText(e.target.value)}
-              placeholder={t('setup.statusTextPlaceholder')}
+              placeholder={t('setup:statusTextPlaceholder')}
               maxLength={100}
               className="w-full px-3.5 py-2.5 rounded-card bg-canvas border border-border text-textPrimary text-sm focus:border-primary-400 focus:outline-none"
             />
@@ -543,7 +543,7 @@ export default function SetupPage() {
 
           {/* 状态颜色 */}
           <div>
-            <label className="block text-sm font-medium text-textSecondary mb-2">{t('setup.statusColor')}</label>
+            <label className="block text-sm font-medium text-textSecondary mb-2">{t('setup:statusColor')}</label>
             <div className="flex items-center gap-2 flex-wrap">
               {STATUS_COLORS.map(c => (
                 <button
@@ -567,7 +567,7 @@ export default function SetupPage() {
                 <div
                   className="w-6 h-6 rounded-full border-2 border-primary-400 scale-110 shadow-md transition-all relative overflow-hidden"
                   style={{ backgroundColor: statusColor || '#6366f1' }}
-                  title={t('me.statusColorCustom')}
+                  title={t('me:statusColorCustom')}
                 >
                   {/* 居中笔图标表示可自定义 */}
                   <span className="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -593,9 +593,9 @@ export default function SetupPage() {
         <div>
           <div className="flex items-center gap-2 mb-2">
             <Key size={20} className="text-primary-400" />
-            <h2 className="text-lg font-semibold text-textPrimary">{t('setup.step4Title')}</h2>
+            <h2 className="text-lg font-semibold text-textPrimary">{t('setup:step4Title')}</h2>
           </div>
-          <p className="text-sm text-textMuted mb-6">{t('setup.step4Desc')}</p>
+          <p className="text-sm text-textMuted mb-6">{t('setup:step4Desc')}</p>
           <div className="space-y-4">
             {/* 供应商预设 */}
             {providerPresets.length > 0 && (
@@ -619,22 +619,22 @@ export default function SetupPage() {
               </div>
             )}
             <div>
-              <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup.apiBaseUrl')}</label>
+              <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup:apiBaseUrl')}</label>
               <input
                 value={apiBaseUrl}
                 onChange={e => setApiBaseUrl(e.target.value)}
-                placeholder={t('setup.apiBaseUrlPlaceholder')}
+                placeholder={t('setup:apiBaseUrlPlaceholder')}
                 className="w-full px-3.5 py-2.5 rounded-card bg-canvas border border-border text-textPrimary text-sm focus:border-primary-400 focus:outline-none"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup.apiKey')}</label>
+              <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup:apiKey')}</label>
               <div className="relative">
                 <input
                   type={showApiKey ? 'text' : 'password'}
                   value={apiKey}
                   onChange={e => setApiKey(e.target.value)}
-                  placeholder={t('setup.apiKeyPlaceholder')}
+                  placeholder={t('setup:apiKeyPlaceholder')}
                   className="w-full px-3.5 py-2.5 pr-10 rounded-card bg-canvas border border-border text-textPrimary text-sm focus:border-primary-400 focus:outline-none"
                 />
                 <button
@@ -651,13 +651,13 @@ export default function SetupPage() {
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1 text-2xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 underline underline-offset-2 mt-1.5"
                 >
-                  {t('setup.getApiKey')}
+                  {t('setup:getApiKey')}
                   <ExternalLink size={11} />
                 </a>
               )}
             </div>
             {!apiKey && (
-              <p className="text-xs text-textMuted italic">{t('setup.apiSkip')}</p>
+              <p className="text-xs text-textMuted italic">{t('setup:apiSkip')}</p>
             )}
           </div>
         </div>
@@ -670,9 +670,9 @@ export default function SetupPage() {
         <div>
           <div className="flex items-center gap-2 mb-2">
             <Bot size={20} className="text-primary-400" />
-            <h2 className="text-lg font-semibold text-textPrimary">{t('setup.step5Title')}</h2>
+            <h2 className="text-lg font-semibold text-textPrimary">{t('setup:step5Title')}</h2>
           </div>
-          <p className="text-sm text-textMuted mb-6">{t('setup.step5Desc')}</p>
+          <p className="text-sm text-textMuted mb-6">{t('setup:step5Desc')}</p>
 
           {aiCreated ? (
             /* 已创建成功 → 展示摘要 */
@@ -680,8 +680,8 @@ export default function SetupPage() {
               <div className="w-12 h-12 rounded-full bg-mint-400/20 flex items-center justify-center mx-auto mb-3">
                 <Check size={24} className="text-mint-400" />
               </div>
-              <p className="text-sm font-medium text-textPrimary mb-1">{t('setup.aiCreated')}</p>
-              <p className="text-xs text-textMuted">{t('setup.aiCreatedDesc')}</p>
+              <p className="text-sm font-medium text-textPrimary mb-1">{t('setup:aiCreated')}</p>
+              <p className="text-xs text-textMuted">{t('setup:aiCreatedDesc')}</p>
             </div>
           ) : (
             /* 未创建 → 引导按钮 */
@@ -689,17 +689,17 @@ export default function SetupPage() {
               <div className="w-16 h-16 rounded-full bg-primary-500/10 flex items-center justify-center mx-auto mb-4">
                 <Bot size={28} className="text-primary-400" />
               </div>
-              <p className="text-sm text-textSecondary mb-1">{t('setup.aiCreateHint')}</p>
-              <p className="text-xs text-textMuted mb-5">{t('setup.aiCreateHintDesc')}</p>
+              <p className="text-sm text-textSecondary mb-1">{t('setup:aiCreateHint')}</p>
+              <p className="text-xs text-textMuted mb-5">{t('setup:aiCreateHintDesc')}</p>
               <button
                 onClick={() => setShowCreateModal(true)}
                 className="inline-flex items-center gap-2 px-5 py-2.5 rounded-card bg-primary-500 hover:bg-primary-600 text-white text-sm font-semibold transition-all shadow-lg shadow-primary-500/20"
               >
                 <Sparkles size={16} />
-                {t('setup.aiCreateButton')}
+                {t('setup:aiCreateButton')}
               </button>
               {!aiName.trim() && (
-                <p className="text-xs text-textMuted italic mt-4">{t('setup.skipAI')}</p>
+                <p className="text-xs text-textMuted italic mt-4">{t('setup:skipAI')}</p>
               )}
             </div>
           )}
@@ -725,13 +725,13 @@ export default function SetupPage() {
         <div>
           <div className="flex items-center gap-2 mb-2">
             <Mail size={20} className="text-primary-400" />
-            <h2 className="text-lg font-semibold text-textPrimary">{t('setup.step6Title')}</h2>
+            <h2 className="text-lg font-semibold text-textPrimary">{t('setup:step6Title')}</h2>
           </div>
-          <p className="text-sm text-textMuted mb-6">{t('setup.step6Desc')}</p>
+          <p className="text-sm text-textMuted mb-6">{t('setup:step6Desc')}</p>
           <div className="space-y-4">
             <div className="flex gap-3">
               <div className="flex-1">
-                <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup.smtpHost')}</label>
+                <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup:smtpHost')}</label>
                 <input
                   value={smtpHost}
                   onChange={e => setSmtpHost(e.target.value)}
@@ -739,7 +739,7 @@ export default function SetupPage() {
                 />
               </div>
               <div className="w-24">
-                <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup.smtpPort')}</label>
+                <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup:smtpPort')}</label>
                 <input
                   type="number"
                   value={smtpPort}
@@ -749,7 +749,7 @@ export default function SetupPage() {
               </div>
             </div>
             <div>
-              <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup.smtpUsername')}</label>
+              <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup:smtpUsername')}</label>
               <input
                 value={smtpUsername}
                 onChange={e => setSmtpUsername(e.target.value)}
@@ -757,7 +757,7 @@ export default function SetupPage() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup.smtpPassword')}</label>
+              <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup:smtpPassword')}</label>
               <input
                 type="password"
                 value={smtpPassword}
@@ -767,7 +767,7 @@ export default function SetupPage() {
             </div>
             <div className="flex gap-3">
               <div className="flex-1">
-                <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup.smtpFromEmail')}</label>
+                <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup:smtpFromEmail')}</label>
                 <input
                   value={smtpFromEmail}
                   onChange={e => setSmtpFromEmail(e.target.value)}
@@ -775,7 +775,7 @@ export default function SetupPage() {
                 />
               </div>
               <div className="flex-1">
-                <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup.smtpFromName')}</label>
+                <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup:smtpFromName')}</label>
                 <input
                   value={smtpFromName}
                   onChange={e => setSmtpFromName(e.target.value)}
@@ -790,10 +790,10 @@ export default function SetupPage() {
                 onChange={e => setSmtpUseTls(e.target.checked)}
                 className="w-4 h-4 rounded border-border accent-primary-500"
               />
-              {t('setup.smtpUseTls')}
+              {t('setup:smtpUseTls')}
             </label>
             {!smtpHost && (
-              <p className="text-xs text-textMuted italic">{t('setup.skipSmtp')}</p>
+              <p className="text-xs text-textMuted italic">{t('setup:skipSmtp')}</p>
             )}
           </div>
         </div>
@@ -806,21 +806,21 @@ export default function SetupPage() {
         <div>
           <div className="flex items-center gap-2 mb-2">
             <Shield size={20} className="text-primary-400" />
-            <h2 className="text-lg font-semibold text-textPrimary">{t('setup.step7Title')}</h2>
+            <h2 className="text-lg font-semibold text-textPrimary">{t('setup:step7Title')}</h2>
           </div>
-          <p className="text-sm text-textMuted mb-6">{t('setup.step7Desc')}</p>
+          <p className="text-sm text-textMuted mb-6">{t('setup:step7Desc')}</p>
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup.keyPoolName')}</label>
+              <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup:keyPoolName')}</label>
               <input
                 value={poolKeyName}
                 onChange={e => setPoolKeyName(e.target.value)}
-                placeholder={t('setup.keyPoolName')}
+                placeholder={t('setup:keyPoolName')}
                 className="w-full px-3.5 py-2.5 rounded-card bg-canvas border border-border text-textPrimary text-sm focus:border-primary-400 focus:outline-none"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup.keyPoolBaseUrl')}</label>
+              <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup:keyPoolBaseUrl')}</label>
               <input
                 value={poolKeyBaseUrl}
                 onChange={e => setPoolKeyBaseUrl(e.target.value)}
@@ -828,17 +828,17 @@ export default function SetupPage() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup.keyPoolKey')}</label>
+              <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup:keyPoolKey')}</label>
               <input
                 type="password"
                 value={poolKey}
                 onChange={e => setPoolKey(e.target.value)}
-                placeholder={t('setup.keyPoolKey')}
+                placeholder={t('setup:keyPoolKey')}
                 className="w-full px-3.5 py-2.5 rounded-card bg-canvas border border-border text-textPrimary text-sm focus:border-primary-400 focus:outline-none"
               />
             </div>
             {!poolKey && (
-              <p className="text-xs text-textMuted italic">{t('setup.skipKeyPool')}</p>
+              <p className="text-xs text-textMuted italic">{t('setup:skipKeyPool')}</p>
             )}
           </div>
         </div>
@@ -852,8 +852,8 @@ export default function SetupPage() {
           <div className="w-16 h-16 rounded-full bg-mint-400/20 flex items-center justify-center mx-auto mb-4">
             <Sparkles size={32} className="text-mint-400" />
           </div>
-          <h2 className="text-xl font-bold text-textPrimary mb-2">{t('setup.stepCompleteTitle')}</h2>
-          <p className="text-sm text-textMuted max-w-xs mx-auto">{t('setup.stepCompleteDesc')}</p>
+          <h2 className="text-xl font-bold text-textPrimary mb-2">{t('setup:stepCompleteTitle')}</h2>
+          <p className="text-sm text-textMuted max-w-xs mx-auto">{t('setup:stepCompleteDesc')}</p>
         </div>
       )
     }
@@ -875,7 +875,7 @@ export default function SetupPage() {
       <div className="h-full flex items-center justify-center bg-canvas overflow-y-auto">
       <div className="max-w-lg w-full px-4 py-8">
         {/* 标题 */}
-        <h1 className="text-xl font-bold text-textPrimary text-center mb-6">{t('setup.title')}</h1>
+        <h1 className="text-xl font-bold text-textPrimary text-center mb-6">{t('setup:title')}</h1>
 
         {/* 步骤条 */}
         {renderStepBar()}
@@ -900,7 +900,7 @@ export default function SetupPage() {
                 className="btn btn-sm btn-outline gap-1"
               >
                 <ChevronLeft size={16} />
-                {t('setup.back')}
+                {t('setup:back')}
               </button>
 
               <div className="flex items-center gap-2">
@@ -910,7 +910,7 @@ export default function SetupPage() {
                     onClick={handleNext}
                     className="px-4 py-2 rounded-card text-sm text-textMuted hover:text-textSecondary hover:bg-canvas transition-colors"
                   >
-                    {t('setup.skip')}
+                    {t('setup:skip')}
                   </button>
                 )}
 
@@ -923,11 +923,11 @@ export default function SetupPage() {
                   {saving ? (
                     <span className="inline-flex items-center gap-2">
                       <Loader2 size={14} className="animate-spin" />
-                      <span>{t('common.saving')}</span>
+                      <span>{t('common:saving')}</span>
                     </span>
                   ) : (
                     <>
-                      {t('setup.next')}
+                      {t('setup:next')}
                       <ChevronRight size={16} />
                     </>
                   )}
@@ -946,10 +946,10 @@ export default function SetupPage() {
               {saving ? (
                 <span className="inline-flex items-center gap-2">
                   <Loader2 size={16} className="animate-spin" />
-                  {t('common.saving')}
+                  {t('common:saving')}
                 </span>
               ) : (
-                t('setup.complete')
+                t('setup:complete')
               )}
             </button>
           )}

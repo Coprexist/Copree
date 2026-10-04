@@ -113,7 +113,7 @@ export default function SkinPicker() {
       >
         {opts.selected && (
           <span className="absolute -top-2 left-3 px-2 py-0.5 rounded-full bg-mint-500 text-white text-3xs font-medium flex items-center gap-0.5 shadow">
-            <Check size={10} /> {t('settings.skinInUse')}
+            <Check size={10} /> {t('settings:skinInUse')}
           </span>
         )}
         {/* 色板预览（light 主色） */}
@@ -142,14 +142,14 @@ export default function SkinPicker() {
       <div className="flex items-center justify-between mb-1">
         <p className="text-sm font-medium text-textPrimary flex items-center gap-1.5">
           <Palette size={14} className="text-primary-400" />
-          {t('settings.skinTitle')}
+          {t('settings:skinTitle')}
         </p>
       </div>
-      <p className="text-xs text-textMuted mb-1">{t('settings.skinDesc')}</p>
-      <p className="text-2xs text-accent-500 mb-3">{t('settings.skinMutualExclusive')}</p>
+      <p className="text-xs text-textMuted mb-1">{t('settings:skinDesc')}</p>
+      <p className="text-2xs text-accent-500 mb-3">{t('settings:skinMutualExclusive')}</p>
 
       {loading ? (
-        <p className="text-xs text-textMuted">{t('settings.loadingPlugins')}</p>
+        <p className="text-xs text-textMuted">{t('settings:loadingPlugins')}</p>
       ) : error ? (
         <p className="text-xs text-rose-400">{error}</p>
       ) : (
@@ -157,8 +157,8 @@ export default function SkinPicker() {
           {/* 默认卡片 */}
           {renderCard({
             id: 'default',
-            name: t('settings.skinDefault'),
-            desc: t('settings.skinDefaultDesc'),
+            name: t('settings:skinDefault'),
+            desc: t('settings:skinDefaultDesc'),
             swatches: DEFAULT_SWATCHES,
             selected: isDefaultActive,
             onClick: selectDefault,
@@ -173,7 +173,7 @@ export default function SkinPicker() {
               swatches: skin.skin_vars?.light || {},
               selected: skin.effective,
               disabled: !skin.global_enabled,
-              disabledLabel: !skin.global_enabled ? t('settings.skinAdminOff') : undefined,
+              disabledLabel: !skin.global_enabled ? t('settings:skinAdminOff') : undefined,
               onClick: () => selectSkin(skin),
             }),
           )}

@@ -4,6 +4,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ChevronRight, Store, Trash2, Plus, Eye } from 'lucide-react'
+import { useT } from '../i18n/I18nContext'
 import { api } from '../api/client'
 import BindGroupModal from '../components/world/BindGroupModal'
 import { Button, PageShell } from '../components/ui'
@@ -19,6 +20,7 @@ interface World {
 
 export default function WorldsPage() {
   const navigate = useNavigate()
+  const t = useT()
   const [worlds, setWorlds] = useState<World[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
@@ -31,7 +33,7 @@ export default function WorldsPage() {
       const list = await api.get<World[]>('/worlds')
       setWorlds(list || [])
     } catch (e: any) {
-      setMsg(`加载失败: ${e?.message || e}`)
+      setMsg(t('tool:world.editor.loadFailed', { error: e?.message || e }))
     } finally {
       setLoading(false)
     }
@@ -48,7 +50,7 @@ export default function WorldsPage() {
       setDescription('')
       navigate(`/worlds/${w.id}/design`)
     } catch (e: any) {
-      setMsg(`创建失败: ${e?.message || e}`)
+      setMsg(t('tool:world.editor.createFailed', { error: e?.message || e }))
     }
   }
 
@@ -64,31 +66,31 @@ export default function WorldsPage() {
   }
 
   const deleteWorld = async (world: World) => {
-    if (!confirm(`确定删除世界「${world.name}」？\n\n会连同它的全部文件、数据、世界 AI 配置一起删除，不可恢复。`)) return
+    if (!confirm(t('tool:world.list.confirmDelete', { name: world.name }))) return
     try {
       await api.delete(`/worlds/${world.id}`)
-      setMsg(`世界「${world.name}」已删除`)
+      setMsg(t('tool:world.list.deleted', { name: world.name }))
       load()
     } catch (e: any) {
-      setMsg(`删除失败: ${e?.message || e}`)
+      setMsg(t('tool:world.editor.deleteFailed', { error: e?.message || e }))
     }
   }
 
-  if (loading) return <div className="flex items-center justify-center h-screen text-textMuted">加载中...</div>
+  if (loading) return <div className="flex items-center justify-center h-screen text-textMuted">{t('common:loading')}</div>
 
   return (
     <PageShell
-      title="群视界"
-      subtitle="给群聊一个可编程的世界——游戏、聊天室、小说互动，什么都行"
+      title={t('nav:worlds')}
+      subtitle={t('tool:world.list.subtitle')}
       width="content"
       contentClassName=""
       actions={
         <>
-          <Button size="sm" variant="secondary" icon={<Store size={14} />} title="世界商城：浏览 / 一键导入别人发布的世界" onClick={() => navigate('/market')}>
-            商城
+          <Button size="sm" variant="secondary" icon={<Store size={14} />} title={t('tool:world.list.marketTitle')} onClick={() => navigate('/market')}>
+            {t('tool:world.list.market')}
           </Button>
           <Button size="sm" icon={<Plus size={14} />} onClick={() => setShowCreate(!showCreate)}>
-            创建世界
+            {t('tool:world.list.create')}
           </Button>
         </>
       }
@@ -100,24 +102,24 @@ export default function WorldsPage() {
               <input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="世界名称（如：木头大陆）"
+                placeholder={t('tool:world.list.namePlaceholder')}
                 className="w-full bg-elevated text-textPrimary px-3 py-2 rounded text-sm outline-none border border-border focus:border-primary-500/50"
               />
               <textarea
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                placeholder="世界观简介（可选）"
+                placeholder={t('tool:world.list.descPlaceholder')}
                 rows={2}
                 className="w-full bg-elevated text-textPrimary px-3 py-2 rounded text-sm outline-none resize-none border border-border focus:border-primary-500/50"
               />
-              <button onClick={create} className="btn btn-sm btn-primary">创建并进入设计页</button>
+              <button onClick={create} className="btn btn-sm btn-primary">{t('tool:world.list.createAndDesign')}</button>
             </div>
           )}
 
           {worlds.length === 0 && !showCreate && (
             <div className="text-center text-textMuted py-20 text-sm">
-              还没有世界<br />
-              <span className="text-textSecondary text-xs">创建后绑定群聊或 AI，就能进入沉浸界面了</span>
+              {t('tool:world.list.empty')}<br />
+              <span className="text-textSecondary text-xs">{t('tool:world.list.emptyHint')}</span>
             </div>
           )}
 
@@ -128,38 +130,38 @@ export default function WorldsPage() {
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-medium text-textPrimary truncate">{w.name}</span>
                     <span className={`text-3xs px-2 py-0.5 rounded-full shrink-0 ${w.status === 'active' ? 'bg-mint-500/20 text-mint-400' : 'bg-elevated text-textMuted'}`}>
-                      {w.status === 'active' ? '活跃' : '休眠'}
+                      {w.status === 'active' ? t('tool:world.top.status.active') : t('tool:world.top.status.hibernating')}
                     </span>
                   </div>
                   {w.description && <div className="text-xs text-textSecondary truncate mt-0.5">{w.description}</div>}
                   <div className="text-3xs text-textMuted mt-1 truncate">
-                    入口: {w.bindings?.length ? w.bindings.map((b) => `${b.entity_type}#${b.entity_id}`).join(', ') : '未绑定'}
+                    {t('tool:world.list.entry')} {w.bindings?.length ? w.bindings.map((b) => `${b.entity_type}#${b.entity_id}`).join(', ') : t('tool:world.list.unbound')}
                   </div>
                 </div>
                 {/* 操作按钮：统一 .btn .btn-sm 语义类（固定高度严格等高） */}
                 <div className="flex items-center gap-2 shrink-0 flex-wrap">
-                  <button onClick={() => openBindModal(w, 'group')} className="btn btn-sm btn-secondary">绑定群</button>
-                  <button onClick={() => openBindModal(w, 'agent')} className="btn btn-sm btn-secondary">绑定 AI</button>
+                  <button onClick={() => openBindModal(w, 'group')} className="btn btn-sm btn-secondary">{t('tool:world.list.bindGroup')}</button>
+                  <button onClick={() => openBindModal(w, 'agent')} className="btn btn-sm btn-secondary">{t('tool:world.list.bindAgent')}</button>
                   <button onClick={() => toggleStatus(w)} className="btn btn-sm btn-secondary">
-                    {w.status === 'active' ? '休眠' : '唤醒'}
+                    {w.status === 'active' ? t('tool:world.top.status.hibernating') : t('tool:world.list.wake')}
                   </button>
                   <button
                     onClick={() => window.open(`/world/${w.id}/preview`, '_blank')}
                     className="btn btn-sm btn-secondary"
-                    title="打开沉浸界面（无需绑定群，只绑定 AI 也能进）"
+                    title={t('tool:world.list.previewTitle')}
                   >
-                    <Eye size={13} /> 打开
+                    <Eye size={13} /> {t('tool:world.list.open')}
                   </button>
                   <button
                     onClick={() => navigate(`/worlds/${w.id}/design`)}
                     className="btn btn-sm btn-primary"
                   >
-                    设计页 <ChevronRight size={13} />
+                    {t('tool:world.list.design')} <ChevronRight size={13} />
                   </button>
                   <button
                     onClick={() => deleteWorld(w)}
                     className="btn btn-sm btn-danger !w-8 !px-0"
-                    title="删除世界（含文件与数据，不可恢复）"
+                    title={t('tool:world.list.deleteTitle')}
                   >
                     <Trash2 size={13} />
                   </button>

@@ -10,10 +10,10 @@ import VerificationCodeInput from '../components/VerificationCodeInput'
 
 /** 登录方式对应的 provider 标签 */
 const METHOD_LABELS: Record<string, string> = {
-  direct: 'auth.methodDirect',
-  email_code: 'auth.methodEmail',
-  wechat: 'auth.methodWechat',
-  qq: 'auth.methodQQ',
+  direct: 'auth:methodDirect',
+  email_code: 'auth:methodEmail',
+  wechat: 'auth:methodWechat',
+  qq: 'auth:methodQQ',
 }
 
 const SESSION_KEY = 'login_state'
@@ -127,7 +127,7 @@ export default function LoginPage() {
       setCodeSent(true)
       setSendCooldown(60)
     } catch (err: any) {
-      setError(err.message || t('common.error'))
+      setError(err.message || t('common:error'))
     }
   }, [email, sendCooldown, mode, t])
 
@@ -154,7 +154,7 @@ export default function LoginPage() {
       clearSessionState()
       navigate('/chat')
     } catch (err: any) {
-      setError(err.message || t('common.error'))
+      setError(err.message || t('common:error'))
     } finally {
       setLoading(false)
     }
@@ -190,8 +190,8 @@ export default function LoginPage() {
               <img src="/logo.png" alt="Copree" className="w-full h-full object-contain" />
             </div>
           </div>
-          <h1 className="text-2xl font-bold text-textPrimary tracking-tight">{t('auth.title')}</h1>
-          <p className="text-sm text-textSecondary mt-2 font-medium">{t('auth.subtitle')}</p>
+          <h1 className="text-2xl font-bold text-textPrimary tracking-tight">{t('auth:title')}</h1>
+          <p className="text-sm text-textSecondary mt-2 font-medium">{t('auth:subtitle')}</p>
         </div>
 
         {/* 表单卡片 */}
@@ -205,7 +205,7 @@ export default function LoginPage() {
                   mode === 'login' ? 'bg-primary-600/20 text-primary-600 dark:text-primary-300 shadow-sm' : 'text-textMuted hover:text-textSecondary'
                 }`}
               >
-                {t('auth.login')}
+                {t('auth:login')}
               </button>
               <button
                 onClick={() => { setMode('register'); setError('') }}
@@ -213,7 +213,7 @@ export default function LoginPage() {
                   mode === 'register' ? 'bg-primary-600/20 text-primary-600 dark:text-primary-300 shadow-sm' : 'text-textMuted hover:text-textSecondary'
                 }`}
               >
-                {t('auth.register')}
+                {t('auth:register')}
               </button>
             </div>
 
@@ -228,7 +228,7 @@ export default function LoginPage() {
                       loginMethod === m ? 'bg-primary-500/15 text-primary-500' : 'text-textMuted hover:text-textSecondary'
                     }`}
                   >
-                    {t(METHOD_LABELS[m] || 'auth.methodDirect')}
+                    {t(METHOD_LABELS[m] || 'auth:methodDirect')}
                   </button>
                 ))}
               </div>
@@ -241,9 +241,9 @@ export default function LoginPage() {
                   {/* 邮箱（注册时选填，强制验证时必填） */}
                   <div>
                     <label className="block text-xs font-medium text-textSecondary mb-1.5 ml-0.5">
-                      {t('auth.email')}
+                      {t('auth:email')}
                       {!requireEmailVerification && (
-                        <span className="text-textMuted ml-1">{t('auth.emailOptional')}</span>
+                        <span className="text-textMuted ml-1">{t('auth:emailOptional')}</span>
                       )}
                     </label>
                     <input
@@ -252,7 +252,7 @@ export default function LoginPage() {
                       onChange={(e) => { setEmail(e.target.value); setCodeSent(false) }}
                       required={requireEmailVerification}
                       className="w-full px-3.5 py-2.5 rounded-card border border-border bg-canvas text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/60 focus:border-primary-500/40 text-sm transition-shadow"
-                      placeholder={t('auth.emailPlaceholder')}
+                      placeholder={t('auth:emailPlaceholder')}
                     />
                   </div>
 
@@ -265,8 +265,8 @@ export default function LoginPage() {
                       className="w-full py-2 text-sm font-medium rounded-card border border-primary-500/30 text-primary-500 hover:bg-primary-500/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                     >
                       {sendCooldown > 0
-                        ? t('auth.codeResendIn').replace('{seconds}', String(sendCooldown))
-                        : codeSent ? t('auth.codeSent') : t('auth.sendCode')
+                        ? t('auth:codeResendIn').replace('{seconds}', String(sendCooldown))
+                        : codeSent ? t('auth:codeSent') : t('auth:sendCode')
                       }
                     </button>
                   )}
@@ -275,7 +275,7 @@ export default function LoginPage() {
                   {codeSent && (
                     <div>
                       <label className="block text-xs font-medium text-textSecondary mb-2 ml-0.5 text-center">
-                        {t('auth.codePlaceholder')}
+                        {t('auth:codePlaceholder')}
                       </label>
                       <VerificationCodeInput
                         value={code}
@@ -287,7 +287,7 @@ export default function LoginPage() {
                   {/* 用户名 */}
                   <div>
                     <label className="block text-xs font-medium text-textSecondary mb-1.5 ml-0.5">
-                      {t('auth.username')}
+                      {t('auth:username')}
                     </label>
                     <input
                       type="text"
@@ -295,14 +295,14 @@ export default function LoginPage() {
                       onChange={(e) => setUsername(e.target.value)}
                       required minLength={2}
                       className="w-full px-3.5 py-2.5 rounded-card border border-border bg-canvas text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/60 focus:border-primary-500/40 text-sm transition-shadow"
-                      placeholder={t('auth.usernamePlaceholder')}
+                      placeholder={t('auth:usernamePlaceholder')}
                     />
                   </div>
 
                   {/* 密码 */}
                   <div>
                     <label className="block text-xs font-medium text-textSecondary mb-1.5 ml-0.5">
-                      {t('auth.password')}
+                      {t('auth:password')}
                     </label>
                     <input
                       type="password"
@@ -310,7 +310,7 @@ export default function LoginPage() {
                       onChange={(e) => setPassword(e.target.value)}
                       required minLength={6}
                       className="w-full px-3.5 py-2.5 rounded-card border border-border bg-canvas text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/60 focus:border-primary-500/40 text-sm transition-shadow"
-                      placeholder={'••••••••（' + t('auth.passwordHint') + '）'}
+                      placeholder={'••••••••（' + t('auth:passwordHint') + '）'}
                     />
                   </div>
                 </>
@@ -324,7 +324,7 @@ export default function LoginPage() {
                     <>
                       <div>
                         <label className="block text-xs font-medium text-textSecondary mb-1.5 ml-0.5">
-                          {t('auth.username')} / {t('auth.email')}
+                          {t('auth:username')} / {t('auth:email')}
                         </label>
                         <input
                           type="text"
@@ -332,12 +332,12 @@ export default function LoginPage() {
                           onChange={(e) => setUsername(e.target.value)}
                           required
                           className="w-full px-3.5 py-2.5 rounded-card border border-border bg-canvas text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/60 focus:border-primary-500/40 text-sm transition-shadow"
-                          placeholder={t('auth.usernamePlaceholder')}
+                          placeholder={t('auth:usernamePlaceholder')}
                         />
                       </div>
                       <div>
                         <label className="block text-xs font-medium text-textSecondary mb-1.5 ml-0.5">
-                          {t('auth.password')}
+                          {t('auth:password')}
                         </label>
                         <input
                           type="password"
@@ -345,7 +345,7 @@ export default function LoginPage() {
                           onChange={(e) => setPassword(e.target.value)}
                           required minLength={6}
                           className="w-full px-3.5 py-2.5 rounded-card border border-border bg-canvas text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/60 focus:border-primary-500/40 text-sm transition-shadow"
-                          placeholder={'••••••••（' + t('auth.passwordHint') + '）'}
+                          placeholder={'••••••••（' + t('auth:passwordHint') + '）'}
                         />
                       </div>
                     </>
@@ -356,7 +356,7 @@ export default function LoginPage() {
                     <>
                       <div>
                         <label className="block text-xs font-medium text-textSecondary mb-1.5 ml-0.5">
-                          {t('auth.email')}
+                          {t('auth:email')}
                         </label>
                         <input
                           type="email"
@@ -364,7 +364,7 @@ export default function LoginPage() {
                           onChange={(e) => { setEmail(e.target.value); setCodeSent(false) }}
                           required
                           className="w-full px-3.5 py-2.5 rounded-card border border-border bg-canvas text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/60 focus:border-primary-500/40 text-sm transition-shadow"
-                          placeholder={t('auth.emailPlaceholder')}
+                          placeholder={t('auth:emailPlaceholder')}
                         />
                       </div>
                       <button
@@ -374,14 +374,14 @@ export default function LoginPage() {
                         className="w-full py-2 text-sm font-medium rounded-card border border-primary-500/30 text-primary-500 hover:bg-primary-500/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                       >
                         {sendCooldown > 0
-                          ? t('auth.codeResendIn').replace('{seconds}', String(sendCooldown))
-                          : codeSent ? t('auth.codeSent') : t('auth.sendCode')
+                          ? t('auth:codeResendIn').replace('{seconds}', String(sendCooldown))
+                          : codeSent ? t('auth:codeSent') : t('auth:sendCode')
                         }
                       </button>
                       {codeSent && (
                         <div>
                           <label className="block text-xs font-medium text-textSecondary mb-2 ml-0.5 text-center">
-                            {t('auth.codePlaceholder')}
+                            {t('auth:codePlaceholder')}
                           </label>
                           <VerificationCodeInput
                             value={code}
@@ -410,16 +410,16 @@ export default function LoginPage() {
                 {loading ? (
                   <span className="inline-flex items-center gap-2">
                     <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    {t('auth.verifying')}
+                    {t('auth:verifying')}
                   </span>
-                ) : isLogin ? t('auth.enterPlatform') : t('auth.createAccount')}
+                ) : isLogin ? t('auth:enterPlatform') : t('auth:createAccount')}
               </button>
             </form>
 
             {mode === 'register' && hasExistingUsers === false && (
               <p className="text-xs text-textMuted mt-4 text-center leading-relaxed">
-                {t('auth.firstUserAdminPrefix')}
-                <span className="text-accent-400 font-medium">{t('auth.firstUserAdminHighlight')}</span>
+                {t('auth:firstUserAdminPrefix')}
+                <span className="text-accent-400 font-medium">{t('auth:firstUserAdminHighlight')}</span>
               </p>
             )}
           </div>

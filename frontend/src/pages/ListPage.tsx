@@ -10,6 +10,7 @@ import {
 } from '../hooks/usePendingRequests'
 import { getStateDotColor } from '../constants'
 import { getStatusTextStyle, BG_CANVAS_LIGHT, BG_CANVAS_DARK } from '../utils/statusColor.tsx'
+import { UnderlineTabs } from '../components/ui'
 import { useTheme } from '../context/ThemeContext'
 
 interface Friend {
@@ -132,10 +133,10 @@ const GROUP_APPROVAL_PATHS = {
 } as const
 
 const SORT_OPTIONS: { value: SortMode; key: string }[] = [
-  { value: 'smart', key: 'list.smartSort' },
-  { value: 'alpha', key: 'list.sortAlpha' },
-  { value: 'recent_chat', key: 'list.sortRecent' },
-  { value: 'added_time', key: 'list.sortAdded' },
+  { value: 'smart', key: 'list:smartSort' },
+  { value: 'alpha', key: 'list:sortAlpha' },
+  { value: 'recent_chat', key: 'list:sortRecent' },
+  { value: 'added_time', key: 'list:sortAdded' },
 ]
 
 // 状态权重：在线 > 勿扰 > 离线
@@ -264,7 +265,7 @@ export default function ListPage() {
   const handleAccept = async (requestId: number) => {
     const req = requests.find(r => r.id === requestId)
     if (req && req.direction === 'received' && req.auto_respond_friend_request) {
-      if (!confirm(t('list.autoRespondConfirm'))) {
+      if (!confirm(t('list:autoRespondConfirm'))) {
         return
       }
     }
@@ -307,7 +308,7 @@ export default function ListPage() {
       notifyRequestsChanged()
     } catch (err: any) {
       console.error('处理群申请失败:', err)
-      alert(err.message || t('list.actionFailed'))
+      alert(err.message || t('list:actionFailed'))
     }
   }
 
@@ -340,7 +341,7 @@ export default function ListPage() {
         type="text"
         value={searchQuery}
         onChange={(e) => setSearchQuery(e.target.value)}
-        placeholder={t('list.searchPlaceholder')}
+        placeholder={t('list:searchPlaceholder')}
         className="w-full pl-9 pr-8 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
         autoFocus={showSearch}
       />
@@ -362,13 +363,13 @@ export default function ListPage() {
         <button
           onClick={openDrawer}
           className="icon-btn-sm md:hidden -ml-1 text-textSecondary"
-          title={t('chatlist.menu')}
+          title={t('chatlist:menu')}
         >
           <Menu size={18} />
         </button>
         <h1 className="font-semibold text-textPrimary text-sm flex items-center gap-2">
           <Users size={16} className="text-primary-400 hidden md:inline" />
-          {tab === 'list' ? t('list.tabFriends') : t('list.tabRequests')}
+          {tab === 'list' ? t('list:tabFriends') : t('list:tabRequests')}
         </h1>
 
         {/* 排序 + 搜索按钮（仅「列表」Tab） */}
@@ -391,7 +392,7 @@ export default function ListPage() {
             <button
               onClick={() => setShowSearch(true)}
               className="p-1.5 rounded-control hover:bg-elevated text-textMuted hover:text-textSecondary transition-colors"
-              title={t('list.searchButton')}
+              title={t('list:searchButton')}
             >
               <Search size={16} />
             </button>
@@ -400,33 +401,25 @@ export default function ListPage() {
       </div>
 
       {/* Tab 切换 */}
-      <div className="flex border-b border-border bg-surface shrink-0">
-        <button
-          onClick={() => setTab('list')}
-          className={`flex-1 py-2.5 text-xs font-medium transition-colors ${
-            tab === 'list'
-              ? 'text-primary-400 border-b-2 border-primary-400'
-              : 'text-textMuted hover:text-textSecondary'
-          }`}
-        >
-          {t('list.tabFriends')}
-        </button>
-        <button
-          onClick={() => setTab('requests')}
-          className={`flex-1 py-2.5 text-xs font-medium transition-colors relative ${
-            tab === 'requests'
-              ? 'text-primary-400 border-b-2 border-primary-400'
-              : 'text-textMuted hover:text-textSecondary'
-          }`}
-        >
-          {t('list.tabRequests')}
-          {pendingCount > 0 && (
-            <span className="absolute top-1 right-4 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-3xs font-bold text-white bg-rose-500 rounded-full">
-              {pendingCount}
-            </span>
-          )}
-        </button>
-      </div>
+      <UnderlineTabs
+        grow
+        size="panel"
+        className="bg-surface shrink-0"
+        items={[
+          { key: 'list', label: t('list:tabFriends') },
+          {
+            key: 'requests',
+            label: t('list:tabRequests'),
+            badge: pendingCount > 0 ? (
+              <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 text-3xs font-bold text-white bg-rose-500 rounded-full">
+                {pendingCount}
+              </span>
+            ) : undefined,
+          },
+        ]}
+        value={tab}
+        onChange={setTab}
+      />
 
       {/* 内容区 */}
       <div className="flex-1 overflow-y-auto pb-[var(--safe-bottom)] md:pb-0">
@@ -439,14 +432,14 @@ export default function ListPage() {
           friends.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-20 text-textMuted">
               <Users size={40} className="mb-3 opacity-30" />
-              <p className="text-sm">{t('list.noFriends')}</p>
-              <p className="text-xs mt-1">{t('list.noFriendsHint')}</p>
+              <p className="text-sm">{t('list:noFriends')}</p>
+              <p className="text-xs mt-1">{t('list:noFriendsHint')}</p>
             </div>
           ) : sortedFriends.length === 0 && searchQuery ? (
             <div className="flex flex-col items-center justify-center py-20 text-textMuted">
               <Search size={40} className="mb-3 opacity-30" />
-              <p className="text-sm">{t('list.noSearchResults')}</p>
-              <p className="text-xs mt-1">{t('list.tryOtherKeywords')}</p>
+              <p className="text-sm">{t('list:noSearchResults')}</p>
+              <p className="text-xs mt-1">{t('list:tryOtherKeywords')}</p>
             </div>
           ) : (
             <div className="divide-y divide-border/50">
@@ -473,7 +466,7 @@ export default function ListPage() {
                       {stateIcon(f.state)}
                     </div>
                     <span className="text-xs text-textMuted">
-                      {f.friend_type === 'ai' ? <><Bot size={12} className="inline" /> {t('list.friendAi')}</> : <><User size={12} className="inline" /> {t('list.friendHuman')}</>}
+                      {f.friend_type === 'ai' ? <><Bot size={12} className="inline" /> {t('list:friendAi')}</> : <><User size={12} className="inline" /> {t('list:friendHuman')}</>}
                     </span>
                   </div>
                   <MessageSquare size={16} className="text-textMuted shrink-0" />
@@ -486,29 +479,29 @@ export default function ListPage() {
           !hasAnyRequest ? (
             <div className="flex flex-col items-center justify-center py-20 text-textMuted">
               <UserPlus size={40} className="mb-3 opacity-30" />
-              <p className="text-sm">{t('list.noPendingRequests')}</p>
-              <p className="text-xs mt-1">{t('list.pendingHint')}</p>
+              <p className="text-sm">{t('list:noPendingRequests')}</p>
+              <p className="text-xs mt-1">{t('list:pendingHint')}</p>
             </div>
           ) : (
             <div className="divide-y divide-border/50">
               {receivedRequests.length > 0 && (
                 <>
-                  <SectionHeader label={t('list.receivedRequests')} count={receivedRequests.length} />
+                  <SectionHeader label={t('list:receivedRequests')} count={receivedRequests.length} />
                   {receivedRequests.map((req) => (
                     <RequestRow
                       key={`recv-${req.id}`}
-                      name={req.requester_name || `${t('list.userPrefix')}${req.requester_id}`}
+                      name={req.requester_name || `${t('list:userPrefix')}${req.requester_id}`}
                       avatarUrl={req.requester_avatar_url}
-                      note={req.message || t('list.defaultRequestMessage')}
+                      note={req.message || t('list:defaultRequestMessage')}
                       badge={req.auto_respond_friend_request ? (
                         <span className="inline-block mt-0.5 text-3xs text-accent-400 bg-accent-400/10 px-1.5 py-0.5 rounded">
-                          {t('list.autoRespondWarning')}
+                          {t('list:autoRespondWarning')}
                         </span>
                       ) : undefined}
                       onAccept={() => handleAccept(req.id)}
-                      acceptTitle={t('list.accept')}
+                      acceptTitle={t('list:accept')}
                       onReject={() => handleReject(req.id)}
-                      rejectTitle={t('list.reject')}
+                      rejectTitle={t('list:reject')}
                     />
                   ))}
                 </>
@@ -516,17 +509,17 @@ export default function ListPage() {
 
               {joinRequests.length > 0 && (
                 <>
-                  <SectionHeader label={t('list.joinRequests')} count={joinRequests.length} />
+                  <SectionHeader label={t('list:joinRequests')} count={joinRequests.length} />
                   {joinRequests.map((req) => (
                     <RequestRow
                       key={`join-${req.id}`}
-                      name={req.user_name || `${t('list.userPrefix')}${req.user_id}`}
+                      name={req.user_name || `${t('list:userPrefix')}${req.user_id}`}
                       avatarUrl={req.avatar_url}
-                      note={`${req.message ? `${req.message} · ` : ''}${t('list.applyToJoin')}「${req.group_name || ''}」`}
+                      note={`${req.message ? `${req.message} · ` : ''}${t('list:applyToJoin')}「${req.group_name || ''}」`}
                       onAccept={() => handleGroupApproval('group_join', req.id, true)}
-                      acceptTitle={t('list.accept')}
+                      acceptTitle={t('list:accept')}
                       onReject={() => handleGroupApproval('group_join', req.id, false)}
-                      rejectTitle={t('list.reject')}
+                      rejectTitle={t('list:reject')}
                     />
                   ))}
                 </>
@@ -534,17 +527,17 @@ export default function ListPage() {
 
               {inviteRequests.length > 0 && (
                 <>
-                  <SectionHeader label={t('list.inviteApprovals')} count={inviteRequests.length} />
+                  <SectionHeader label={t('list:inviteApprovals')} count={inviteRequests.length} />
                   {inviteRequests.map((req) => (
                     <RequestRow
                       key={`invite-${req.id}`}
-                      name={req.target_name || `${t('list.userPrefix')}${req.target_id}`}
+                      name={req.target_name || `${t('list:userPrefix')}${req.target_id}`}
                       avatarUrl={req.avatar_url}
-                      note={`${req.user_name || ''} ${t('list.invitedToJoin')}「${req.group_name || ''}」`}
+                      note={`${req.user_name || ''} ${t('list:invitedToJoin')}「${req.group_name || ''}」`}
                       onAccept={() => handleGroupApproval('group_invite', req.id, true)}
-                      acceptTitle={t('list.approve')}
+                      acceptTitle={t('list:approve')}
                       onReject={() => handleGroupApproval('group_invite', req.id, false)}
-                      rejectTitle={t('list.deny')}
+                      rejectTitle={t('list:deny')}
                     />
                   ))}
                 </>
@@ -552,15 +545,15 @@ export default function ListPage() {
 
               {sentRequests.length > 0 && (
                 <>
-                  <SectionHeader label={t('list.sentRequests')} count={sentRequests.length} />
+                  <SectionHeader label={t('list:sentRequests')} count={sentRequests.length} />
                   {sentRequests.map((req) => (
                     <RequestRow
                       key={`sent-${req.id}`}
-                      name={req.target_name || `${t('list.userPrefix')}${req.target_id}`}
+                      name={req.target_name || `${t('list:userPrefix')}${req.target_id}`}
                       avatarUrl={req.target_avatar_url}
-                      note={req.message || t('list.sentRequestMessage')}
+                      note={req.message || t('list:sentRequestMessage')}
                       onReject={() => handleCancelSent(req.id)}
-                      rejectTitle={t('list.cancelRequest')}
+                      rejectTitle={t('list:cancelRequest')}
                     />
                   ))}
                 </>
@@ -590,7 +583,7 @@ export default function ListPage() {
               {sortedFriends.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-20 text-textMuted">
                   <Search size={40} className="mb-3 opacity-30" />
-                  <p className="text-sm">{t('list.noSearchResults')}</p>
+                  <p className="text-sm">{t('list:noSearchResults')}</p>
                 </div>
               ) : (
                 sortedFriends.map((f) => (
@@ -610,7 +603,7 @@ export default function ListPage() {
                         {stateIcon(f.state)}
                       </div>
                       <span className="text-xs text-textMuted">
-                        {f.friend_type === 'ai' ? <><Bot size={12} className="inline" /> {t('list.friendAi')}</> : <><User size={12} className="inline" /> {t('list.friendHuman')}</>}
+                        {f.friend_type === 'ai' ? <><Bot size={12} className="inline" /> {t('list:friendAi')}</> : <><User size={12} className="inline" /> {t('list:friendHuman')}</>}
                       </span>
                     </div>
                   </button>
@@ -632,7 +625,7 @@ export default function ListPage() {
                 {searchQuery.trim() && (
                   <div className="max-h-64 overflow-y-auto border-t border-border divide-y divide-border/50">
                     {sortedFriends.length === 0 ? (
-                      <div className="py-6 text-center text-xs text-textMuted">{t('list.searchEmptyDesktop')}</div>
+                      <div className="py-6 text-center text-xs text-textMuted">{t('list:searchEmptyDesktop')}</div>
                     ) : (
                       sortedFriends.slice(0, 8).map((f) => (
                         <button
@@ -651,7 +644,7 @@ export default function ListPage() {
                               {stateIcon(f.state)}
                             </div>
                             <span className="text-3xs text-textMuted">
-                              {f.friend_type === 'ai' ? <><Bot size={12} className="inline" /> {t('list.friendAi')}</> : <><User size={12} className="inline" /> {t('list.friendHuman')}</>}
+                              {f.friend_type === 'ai' ? <><Bot size={12} className="inline" /> {t('list:friendAi')}</> : <><User size={12} className="inline" /> {t('list:friendHuman')}</>}
                             </span>
                           </div>
                         </button>

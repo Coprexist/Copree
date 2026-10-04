@@ -10,6 +10,7 @@ from sqlalchemy import select, delete, func, text
 
 from app.models.conversation_log import ConversationLogConfig, ConversationLog
 from app.repositories.content_repo import ContentRepository
+from app.utils.pure.cache_stats import cache_hit_rate_pct
 from app.utils.pure.state_stack import state_frame_of
 
 logger = logging.getLogger(__name__)
@@ -415,6 +416,21 @@ async def get_agent_log_stats(content_repo: ContentRepository, agent_id: int) ->
 
 # ── Token 用量聚合查询 ──
 
+def _with_cache_hit_rate(rows: list[dict]) -> list[dict]:
+    """给用量行补命中率。口径只在 cache_stats 里定：面板、世界、对话三处各算一遍必然对不上"""
+    for row in rows:
+        row["cache_hit_rate_pct"] = cache_hit_rate_pct(row.get("prompt_tokens"), row.get("cached_tokens"))
+    return rows
+
+
+def _scope_clause(scope: str) -> str | None:
+    """用量账的两个世界：agent_id>0 = 居民 AI；agent_id=0 = 群视界 AI（世界 AI 没有 agent 行，记账归 0）。
+
+    all 不加条件，保持「全站」的旧口径；控制台分成两个版面后各自只取自己那一半。
+    """
+    return {"residents": "ud.agent_id > 0", "worlds": "ud.agent_id = 0"}.get(scope)
+
+
 async def get_user_agents_token_summary(
     content_repo: ContentRepository,
     user_id: int,
@@ -477,7 +493,7 @@ async def get_user_agents_token_summary(
     """)
     result = await content_repo.execute(stmt, params)
     rows = result.mappings().all()
-    return [dict(r) for r in rows]
+    return _with_cache_hit_rate([dict(r) for r in rows])
 
 
 async def get_agent_token_daily(
@@ -518,13 +534,14 @@ async def get_agent_token_daily(
     """)
     result = await content_repo.execute(stmt, params)
     rows = result.mappings().all()
-    return [dict(r) for r in rows]
+    return _with_cache_hit_rate([dict(r) for r in rows])
 
 
 async def get_admin_global_token_daily(
     content_repo: ContentRepository,
     start_date: datetime | None = None,
     end_date: datetime | None = None,
+    scope: str = "all",
 ) -> list[dict]:
     """获取全站每日 token 消耗分布（含世界 AI）
 
@@ -533,6 +550,9 @@ async def get_admin_global_token_daily(
     """
     where_clauses = []
     params: dict = {}
+    clause = _scope_clause(scope)
+    if clause:
+        where_clauses.append(clause)
     if start_date:
         where_clauses.append("ud.stat_date >= :start_date")
         params["start_date"] = _as_date(start_date)
@@ -559,17 +579,21 @@ async def get_admin_global_token_daily(
     """)
     result = await content_repo.execute(stmt, params)
     rows = result.mappings().all()
-    return [dict(r) for r in rows]
+    return _with_cache_hit_rate([dict(r) for r in rows])
 
 
 async def get_admin_global_token_stats(
     content_repo: ContentRepository,
     start_date: datetime | None = None,
     end_date: datetime | None = None,
+    scope: str = "all",
 ) -> dict:
-    """获取全站 token 消耗总览"""
+    """获取全站 token 消耗总览（scope：all 全站 / residents 居民 AI / worlds 群视界 AI）"""
     where_clauses = []
     params: dict = {}
+    clause = _scope_clause(scope)
+    if clause:
+        where_clauses.append(clause)
     if start_date:
         where_clauses.append("ud.stat_date >= :start_date")
         params["start_date"] = _as_date(start_date)
@@ -608,10 +632,11 @@ async def get_admin_global_token_stats(
         d["total_calls"] = d["total_calls"] or 0
         d["unique_agents"] = d["unique_agents"] or 0
         d["unique_users"] = d["unique_users"] or 0
+        d["cache_hit_rate_pct"] = cache_hit_rate_pct(d["prompt_tokens"], d["cached_tokens"])
         return d
     return {"total_tokens": 0, "prompt_tokens": 0, "completion_tokens": 0,
             "reasoning_tokens": 0, "cached_tokens": 0, "total_calls": 0,
-            "unique_agents": 0, "unique_users": 0}
+            "unique_agents": 0, "unique_users": 0, "cache_hit_rate_pct": 0.0}
 
 
 async def get_admin_users_token_summary(
@@ -653,7 +678,7 @@ async def get_admin_users_token_summary(
     """)
     result = await content_repo.execute(stmt, params)
     rows = result.mappings().all()
-    return [dict(r) for r in rows]
+    return _with_cache_hit_rate([dict(r) for r in rows])
 
 
 # ── 权限 ──

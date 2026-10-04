@@ -9,6 +9,16 @@ import { formatMessageTime } from '../utils/time'
 import { useTheme } from '../context/ThemeContext'
 import { Dialog } from './ui'
 
+interface ChannelGroupInfo {
+  kind: string
+  label: string
+  name: string
+  member_num?: number
+  memo?: string
+  class_text?: string
+  tags?: string[]
+}
+
 interface ProfileCardProps {
   entityType: 'human' | 'ai' | 'group'
   entityId: number
@@ -41,6 +51,11 @@ export default function ProfileCard({ entityType, entityId, entityName, state, a
   const { theme } = useTheme()
   const navigate = useNavigate()
   const [profile, setProfile] = useState<ProfileData | null>(null)
+  const [groupDetail, setGroupDetail] = useState<{
+    channels?: ChannelGroupInfo[]
+    announcement?: string | null
+    bio?: string | null
+  } | null>(null)
   const [fullImg, setFullImg] = useState<string | null>(null)
   const isActive = profile?.state === 'active' || state === 'active'
   const [loading, setLoading] = useState(entityType === 'group' ? false : true)
@@ -59,6 +74,14 @@ export default function ProfileCard({ entityType, entityId, entityName, state, a
       .then((data) => { setProfile(data); setIsPriority(data.is_priority || false) })
       .catch(() => setProfile(null))
       .finally(() => setLoading(false))
+  }, [entityType, entityId])
+
+  // 群资料卡：列表里没有通道侧的东西，打开时才拉一次（通道那边这个群叫什么、多少人）
+  useEffect(() => {
+    if (entityType !== 'group') return
+    api.get<{ channels?: ChannelGroupInfo[]; announcement?: string | null; bio?: string | null }>(`/groups/${entityId}`)
+      .then(setGroupDetail)
+      .catch(() => setGroupDetail(null))
   }, [entityType, entityId])
 
   const handleTogglePriority = async () => {
@@ -81,7 +104,7 @@ export default function ProfileCard({ entityType, entityId, entityName, state, a
         navigate(`/chat/dm/${dm.session_id}`)
       }
     } catch (err: any) {
-      alert(err.message || t('error.startDmFailed'))
+      alert(err.message || t('error:startDmFailed'))
     } finally {
       setSending(false)
     }
@@ -98,9 +121,9 @@ export default function ProfileCard({ entityType, entityId, entityName, state, a
       setProfile(prev => prev ? { ...prev, is_friend: true } : null)
       setShowAddFriend(false)
       setFriendMessage('')
-      alert(t('search.addFriendSuccess'))
+      alert(t('search:addFriendSuccess'))
     } catch (err: any) {
-      alert(err.message || t('search.addFriendFailed'))
+      alert(err.message || t('search:addFriendFailed'))
     } finally {
       setAddingFriend(false)
     }
@@ -108,10 +131,10 @@ export default function ProfileCard({ entityType, entityId, entityName, state, a
 
   const getStateText = (s?: string) => {
     switch (s) {
-      case 'active': return t('dm.online')
-      case 'dnd': return t('dm.dnd')
-      case 'inactive': return t('dm.offline')
-      case 'blocked': return t('profileCard.blocked')
+      case 'active': return t('dm:online')
+      case 'dnd': return t('dm:dnd')
+      case 'inactive': return t('dm:offline')
+      case 'blocked': return t('profileCard:blocked')
       default: return ''
     }
   }
@@ -142,6 +165,11 @@ export default function ProfileCard({ entityType, entityId, entityName, state, a
   const createdAt = profile?.created_at
   const isFriend = profile?.is_friend ?? false
   const isGroup = entityType === 'group'
+  // 群的"简介"只有一个来源：通道侧那边的群简介（站内没有这个概念）
+  const groupChannelMemo = (groupDetail?.channels || [])
+    .map((c) => c.memo || '')
+    .filter(Boolean)
+    .join(' / ')
   const avatarShape = isGroup ? 'rounded-card' : 'rounded-full'
 
   return (
@@ -172,7 +200,7 @@ export default function ProfileCard({ entityType, entityId, entityName, state, a
             <div className="min-w-0">
               <h3 className="font-semibold text-textPrimary text-base truncate">{name}</h3>
               <div className="flex items-center gap-1.5 text-sm text-textSecondary">
-                {entityType === 'ai' && <span>{t('profileCard.aiPrefix')}</span>}
+                {entityType === 'ai' && <span>{t('profileCard:aiPrefix')}</span>}
                 {statusText && (
                   <span className="font-medium truncate" style={statusColor
                     ? getStatusTextStyle(statusColor, theme === 'dark' ? BG_ELEVATED_DARK : BG_ELEVATED_LIGHT)
@@ -188,24 +216,53 @@ export default function ProfileCard({ entityType, entityId, entityName, state, a
           </button>
         </div>
 
-        {/* 简介 */}
+        {/* 简介：群自己那份没有就用通道侧的群简介（QQ 群的"群简介"） */}
         <div className="mb-3">
-          <p className="text-sm text-textMuted leading-relaxed italic">{isGroup ? t('profileCard.groupBioEmpty') : (bio || t('profileCard.bioEmpty'))}</p>
+          <p className="text-sm text-textMuted leading-relaxed italic">
+            {isGroup
+              ? (groupDetail?.bio || groupChannelMemo || t('profileCard:groupBioEmpty'))
+              : (bio || t('profileCard:bioEmpty'))}
+          </p>
         </div>
+
+        {/* 群公告：设了才显示（列表里不带，详情里给） */}
+        {isGroup && groupDetail?.announcement && (
+          <div className="mb-3 rounded-card border border-border bg-canvas px-3 py-2">
+            <div className="text-3xs text-textSecondary">{t('groupSettings:announcement')}</div>
+            <div className="text-xs text-textPrimary whitespace-pre-wrap leading-relaxed">{groupDetail.announcement}</div>
+          </div>
+        )}
+
+        {/* 通道那边它是什么样：群名/人数/简介——同一个 AI 接好几个群时，界面靠这个分辨"哪个是哪个" */}
+        {(groupDetail?.channels || []).map((c, i) => (
+          <div key={i} className="mb-3 rounded-card border border-border bg-canvas px-3 py-2">
+            <div className="flex items-center gap-1.5 text-3xs text-textSecondary">
+              <MessageSquare size={12} />
+              {t('profileCard:channelGroup', { label: c.label })}
+            </div>
+            <div className="text-sm text-textPrimary truncate">{c.name}</div>
+            <div className="text-3xs text-textMuted truncate">
+              {c.member_num ? t('profileCard:channelMembers', { n: String(c.member_num) }) : ''}
+              {c.memo ? (c.member_num ? ' · ' : '') + c.memo : ''}
+              {c.class_text ? ' · ' + c.class_text : ''}
+              {c.tags && c.tags.length ? ' · ' + c.tags.join(' / ') : ''}
+            </div>
+          </div>
+        ))}
 
         {/* 详细信息 */}
         <div className="mb-4 space-y-1 text-xs text-textMuted">
           {entityType === 'ai' && ownerName && (
-            <div>{t('profileCard.creator')}: {ownerName}</div>
+            <div>{t('profileCard:creator')}: {ownerName}</div>
           )}
           <div className="flex flex-wrap gap-x-2">
             {createdAt && (
-              <span>{t('profileCard.registeredOn')}: {new Date(createdAt).toLocaleDateString('zh-CN')}</span>
+              <span>{t('profileCard:registeredOn')}: {new Date(createdAt).toLocaleDateString('zh-CN')}</span>
             )}
             {isActive ? (
-              <span className="text-mint-500">{t('dm.online')}</span>
+              <span className="text-mint-500">{t('dm:online')}</span>
             ) : profile?.last_active_at ? (
-              <span>{t('dm.lastActive')} {formatMessageTime(profile.last_active_at, lang)}</span>
+              <span>{t('dm:lastActive')} {formatMessageTime(profile.last_active_at, lang)}</span>
             ) : null}
           </div>
         </div>
@@ -225,7 +282,7 @@ export default function ProfileCard({ entityType, entityId, entityName, state, a
               }`}
             >
               <Star size={16} fill={isPriority ? 'currentColor' : 'none'} />
-              {isPriority ? t('profileCard.priorityOn') : t('profileCard.priorityOff')}
+              {isPriority ? t('profileCard:priorityOn') : t('profileCard:priorityOff')}
             </button>
           )}
 
@@ -236,7 +293,7 @@ export default function ProfileCard({ entityType, entityId, entityName, state, a
                 <textarea
                   value={friendMessage}
                   onChange={(e) => setFriendMessage(e.target.value)}
-                  placeholder={t('profileCard.friendMessagePlaceholder')}
+                  placeholder={t('profileCard:friendMessagePlaceholder')}
                   rows={2}
                   maxLength={200}
                   className="w-full px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50 resize-none"
@@ -247,7 +304,7 @@ export default function ProfileCard({ entityType, entityId, entityName, state, a
                     onClick={() => { setShowAddFriend(false); setFriendMessage('') }}
                     className="flex-1 py-2 text-xs border border-border rounded-control hover:bg-canvas text-textSecondary transition-colors"
                   >
-                    {t('common.cancel')}
+                    {t('common:cancel')}
                   </button>
                   <button
                     onClick={handleAddFriend}
@@ -255,7 +312,7 @@ export default function ProfileCard({ entityType, entityId, entityName, state, a
                     className="flex-1 flex items-center justify-center gap-1.5 py-2 text-xs rounded-control bg-mint-400 text-white hover:bg-mint-500 disabled:opacity-40 transition-colors"
                   >
                     <UserPlus size={12} />
-                    {addingFriend ? '...' : t('profileCard.sendRequest')}
+                    {addingFriend ? '...' : t('profileCard:sendRequest')}
                   </button>
                 </div>
               </div>
@@ -265,7 +322,7 @@ export default function ProfileCard({ entityType, entityId, entityName, state, a
                 className="w-full flex items-center justify-center gap-2 py-2.5 rounded-card bg-mint-400/10 border border-mint-400/20 text-mint-400 hover:bg-mint-400/20 transition-colors text-sm font-medium"
               >
                 <UserPlus size={16} />
-                {t('profileCard.addFriend')}
+                {t('profileCard:addFriend')}
               </button>
             )
           )}
@@ -279,13 +336,13 @@ export default function ProfileCard({ entityType, entityId, entityName, state, a
             className="btn btn-md btn-primary w-full gap-2"
           >
             <MessageSquare size={16} />
-            {sending ? t('profileCard.sending') : isFriend ? t('profileCard.sendDM') : t('profileCard.sendDM')}
+            {sending ? t('profileCard:sending') : isFriend ? t('profileCard:sendDM') : t('profileCard:sendDM')}
           </button>
 
           {/* 群聊信息 */}
           {isGroup && (
             <div className="text-2xs text-textMuted text-center pt-2">
-              {createdAt && <span>{t('profileCard.createdOn')} {new Date(createdAt).toLocaleDateString('zh-CN')}</span>}
+              {createdAt && <span>{t('profileCard:createdOn')} {new Date(createdAt).toLocaleDateString('zh-CN')}</span>}
             </div>
           )}
           </div>
