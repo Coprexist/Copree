@@ -1,6 +1,6 @@
 # 前端界面统一规范（单一来源）
 
-> 版本：v1.0 · 更新：2026-09-15 · 适用：`frontend/`
+> 版本：v1.1 · 更新：2026-10-04 · 适用：`frontend/`
 >
 > 目标：**改一处，全站生效**；新代码不用想样式，照抄下面的模式即可（"无脑"）。
 > 全站视觉只有一个来源——`index.css` 里的语义类 + `tailwind.config.js` 里的尺度令牌；
@@ -50,6 +50,10 @@ src/components/ui/     React 壳：PageShell PageHeader Button IconButton
 
 ## 3. 语义类（写标签时直接用）
 
+下面这些类长什么样，看这张图（用真实 `index.css` 的类当场渲染，不是某个业务页面）：
+
+![语义类速览](../assets/screenshots/ui/ui-components.png)
+
 ### 按钮
 
 ```html
@@ -58,10 +62,17 @@ src/components/ui/     React 壳：PageShell PageHeader Button IconButton
 <button class="btn btn-sm btn-outline">取消</button>
 <button class="btn btn-md btn-danger">删除</button>
 <button class="btn btn-xs btn-ghost">更多</button>
+<!-- 开关 / 分段控件的选中态：同一颗描边按钮切状态 -->
+<button class="btn btn-sm btn-outline is-active">按 AI 设置</button>
 ```
 
 - 尺寸：`btn-xs`=24px · `btn-sm`=32px · `btn-md`=40px · `btn-lg`=48px（**固定高度，同行严格等高**）
-- 变体：`btn-primary` / `btn-accent` / `btn-secondary` / `btn-outline` / `btn-ghost` / `btn-danger`
+- 变体：`btn-primary` / `btn-accent` / `btn-secondary` / `btn-outline` / `btn-ghost` / `btn-danger` / `btn-outline-danger`
+- 选中态：`.btn-outline.is-active`（紫底淡化 + 紫描边 + 紫字）。开关、分段控件、勾选行都用它切状态，
+  **不要**再写 `cond ? 'bg-primary-500/10 …' : 'bg-elevated …'` 这种两套配色——配色一改就得全站找一遍
+- **有描边的次级按钮默认就是白底**（`.btn-secondary` / `.btn-outline`），hover 才落一档灰。
+  `bg-elevated` 只留给"没有描边的安静底色"（标签、hover 态），别拿它当按钮/卡片底色：
+  它比页面底色 `canvas` 还深一档，一整块会像下陷的灰补丁
 - 布局类只加在需要的地方：`flex-1`、`w-full`、`shrink-0`、`mt-3`
 
 ### 图标按钮
@@ -82,13 +93,40 @@ src/components/ui/     React 壳：PageShell PageHeader Button IconButton
 <input class="field field-sm" />   <!-- 32px 紧凑版 -->
 ```
 
+### 滑杆
+
+```tsx
+import { Slider, SliderField } from '../components/ui'
+
+<Slider min={0} max={60} value={limit} onChange={setLimit} />
+<Slider tone="accent" … />        // 金色档（滤镜那类，默认主色）
+<SliderField label="Temperature" value={temp} setValue={setTemp} min={0} max={2} step={0.1} desc="…" />
+```
+
+- **样式只有一份**：`index.css` 里的 `input[type="range"]`（轨道 / 滑钮 / 左侧填充）。
+  左侧填充的比例由组件写成 `--slider-pct`，颜色走 `--slider-c`；几何全由 `--slider-track` /
+  `--slider-thumb` 推出来，别在 JSX 里写死像素（手写 `<input type="range">` 全站只该剩
+  `components/ui/Slider.tsx` 一处，黑底浮层那种要另配轨道色的除外）
+- **左侧填充**：轨道从左边画到滑钮，未填充段是描边色——一眼看出当前值在整段里的位置
+- **拖拽按位移，不按位置**：按下**任何位置都不跳值**，只记起点，之后按沿轨道方向的位移量换值；
+  垂直方向的位移一概不参与。原生 range 是"按下即跳"，手指偏一点就整段跳走（误触的来源）；
+  **双击**才是"跳到这儿"，这是唯一会跳值的动作
+- `touch-action: pan-y`：竖滑交给页面滚动，触屏上碰一下不会顺手改掉值
+- 键盘（方向键 / Home / End / PageUp）仍走原生
+
 ### 卡片 / 徽标
 
 ```html
 <section class="card card-pad">…</section>
 <section class="card card-pad-lg">…</section>
+<!-- 可选卡片（tile）：底色/描边/圆角仍走 .card，只补"可点"的反馈与选中态 -->
+<button class="card card-interactive p-4">未选：白底 + 描边</button>
+<button class="card card-interactive is-active p-4">选中：is-active</button>
 <span class="chip chip-mint shrink-0">在线</span>
 ```
+
+卡片底色是 `surface`（白）：容器底色 / 描边 / 圆角只有 `.card` 一处定义，别再自己拼
+`bg-elevated border border-border rounded-card`——那是比页面底色更深的一层灰。
 
 徽标色：`chip-primary` 紫 · `chip-mint` 绿 · `chip-accent` 琥珀 · `chip-rose` 危险 · `chip-muted` 中性。
 
@@ -97,7 +135,7 @@ src/components/ui/     React 壳：PageShell PageHeader Button IconButton
 ## 4. 组件（写页面时优先用）
 
 ```tsx
-import { PageShell, Button, IconButton, Input, Select, Card, Badge, Modal, Dialog, EmptyState, ListPanel, ExpandPanel, confirmAsync } from '../components/ui'
+import { PageShell, Button, IconButton, Input, Select, Card, Badge, Slider, SliderField, Modal, Dialog, EmptyState, ListPanel, ExpandPanel, confirmAsync } from '../components/ui'
 
 // 页面骨架：根容器 + 标题栏 + 滚动 + 居中等宽，一次搞定
 <PageShell
@@ -164,6 +202,9 @@ if (await confirmAsync({ title: '删除？', message: '不可恢复', danger: tr
 | 页面顶端 | 用 PageHeader（PageShell 已含），不要手写 `h-14 border-b` 的 div |
 | 弹窗 | Modal / Dialog，不要手写 `fixed inset-0` 遮罩（ESC、锁滚动、点遮罩关闭由 Dialog 统一给） |
 | 按钮 | `<Button>` 或 `.btn .btn-md .btn-* ` |
+| 开关 / 分段控件的选中态 | 同一颗 `.btn .btn-sm .btn-outline` 加 `is-active`，别写两套选中/未选配色 |
+| 可选卡片（tile） | `.card .card-interactive`（选中加 `is-active`）；卡片底色一律走 `.card` |
+| 拖动条 | `<Slider>` / `<SliderField>`，别在页面里手写 `<input type="range">` |
 | 控制台（/admin） | 进 /admin 收起应用侧边栏（Layout 按路径判断），宽度全给管理界面；控制台自带可折叠导航栏（收起=只剩图标，`localStorage` 记状态）与顶端「返回应用」出口（和折叠按钮同一排）——侧边栏收起了就必须在这里留出口 |
 | 控制台页签宽度 | 页签的宽度档位**只写在 `pages/console/workspaces.tsx`** 的 `width` 字段（表格/网格 `full`，表单 `wide`/`content` 居中），由 ConsolePage 统一套用 `PAGE_WIDTH`（定义在 `components/ui/PageShell.tsx`，全站仅此一份）；页签里不要再写 `max-w-*` 把内容钉在左边 |
 | 宽屏多列 | 宽屏上靠"列"填满，不靠把一张卡拉长：一组设置用 `grid xl:grid-cols-2 gap-4` 成对排列（同排卡片自动等高，行才对得齐），特别高的卡片并排放一行、独占行的用 `xl:col-span-2`；卡片高低差太大时改用 `columns-1 xl:columns-2` 让两列自然配平（子项加 `break-inside-avoid mb-4`） |
@@ -183,6 +224,12 @@ if (await confirmAsync({ title: '删除？', message: '不可恢复', danger: tr
 | 危险色 | `rose`；成功/在线 `mint`；强调/通知 `accent`；品牌主色 `primary`（紫） |
 | 主题色 | 一律走 `rgb(var(--tw-*))` 对应的 Tailwind 名（`bg-surface` / `text-textSecondary`…），
 不要写死 `#fff` / `bg-gray-100`（深色主题会瞎） |
+
+### 真实页面长什么样（控制台 → 对话日志）
+
+共享下划线页签 + 白卡 + 三条带左侧填充的滑杆：
+
+![控制台对话日志页](../assets/screenshots/ui/ui-convlog.png)
 
 ---
 
@@ -207,9 +254,20 @@ cd frontend/src
 grep -rho "rounded-\(lg\|xl\|2xl\|md\)\b" --include=*.tsx . | wc -l
 grep -rho "z-\[[0-9]*\]\|z-50\b" --include=*.tsx . | wc -l
 grep -rho "text-\[1[0-9]px\]" --include=*.tsx . | wc -l
+
+# 手写滑杆：只该剩 components/ui/Slider.tsx 一处（黑底浮层那类除外）
+grep -rl 'type="range"' --include=*.tsx . | grep -v 'components/ui/Slider.tsx'
+
+# 灰底卡片：数字应逐步降到 0
+grep -rn 'bg-elevated' --include=*.tsx . | grep 'rounded-card' | wc -l
 ```
 
 界面改完还要**截图对比**（`node scripts/screenshot/run.mjs`），别只靠类型检查。
+本文档里那两张配图这样重出（输出到 `docs/assets/screenshots/ui/`）：
+
+```bash
+node scripts/screenshot/run.mjs --only ui-components,ui-convlog
+```
 
 ## 8. 文案与 i18n
 

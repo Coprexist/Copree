@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { launchChrome, Session, sleep } from './cdp.mjs'
 import { rewriteApi, shouldPassThrough } from './rewrite.mjs'
-import { SHOTS, VIEWPORT } from './shots.mjs'
+import { SHOTS, UI_SHOTS, VIEWPORT } from './shots.mjs'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
 const DEFAULT_URL = 'http://127.0.0.1:5227'
@@ -54,8 +54,16 @@ function mintToken(secret) {
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2))
-  const shots = opts.only ? SHOTS.filter((s) => s.name === opts.only) : SHOTS
+  // --only 可以给多个（逗号分隔），在 README 那 8 张与组件规范配图里一起找；
+  // 不给 --only 时只拍 README 那 8 张，组件配图得点名（它们另有输出目录）
+  const all = [...SHOTS, ...UI_SHOTS]
+  const wanted = opts.only ? opts.only.split(',').map((s) => s.trim()).filter(Boolean) : null
+  const shots = wanted ? all.filter((s) => wanted.includes(s.name)) : SHOTS
   if (!shots.length) throw new Error('没有匹配的截图：' + opts.only)
+  if (wanted) {
+    const missing = wanted.filter((n) => !all.some((s) => s.name === n))
+    if (missing.length) console.warn('  ! 清单里没有这些名字：' + missing.join('、'))
+  }
 
   const avatarB64 = readFileSync(AVATAR).toString('base64')
   const token = mintToken(jwtSecret())
@@ -77,6 +85,9 @@ async function main() {
     ],
   })
 
+  // rawApi 的页签按原样看真实接口（控制台这类后台页：演示用户 role=user 会被路由挡回 /chat）
+  let activeShot = null
+
   session.on('Fetch.requestPaused', async (p) => {
     const url = p.request.url
     try {
@@ -97,7 +108,8 @@ async function main() {
       }
       const headers = p.responseHeaders || []
       const contentType = (headers.find((h) => h.name.toLowerCase() === 'content-type') || {}).value || ''
-      if (!contentType.includes('json') || shouldPassThrough(url)) {
+      // rawApi：这一张不换演示数据（只有真页面上才有的后台界面需要，用前先确认图里没有个人数据）
+      if (!contentType.includes('json') || shouldPassThrough(url) || activeShot?.rawApi) {
         await continueResponse(session, p.requestId)
         return
       }
@@ -125,6 +137,7 @@ async function main() {
   await session.eval('localStorage.setItem("access_token", ' + JSON.stringify(token) + ')')
 
   for (const shot of shots) {
+    activeShot = shot
     await session.send('Page.navigate', { url: opts.url + shot.path })
     await sleep(shot.settle || 4000)
     for (const js of [].concat(shot.prepare || [])) await session.eval(js).catch(() => {})
@@ -132,17 +145,34 @@ async function main() {
     // 页面崩了（ErrorBoundary / Vite 报错浮层）照样能截图，但图是废的 —— 必须报出来
     const broken = await session.eval('document.querySelectorAll("vite-error-overlay, [data-error-boundary], .error-boundary").length').catch(() => 0)
     if (broken) console.warn('  ! ' + shot.name + '：页面渲染出错，这张图不可用')
+    // clip：只截某个元素（组件规范配图用）。先滚进视口，再按整页坐标算矩形
+    let clip
+    if (shot.clip) {
+      await session.eval('(() => { const el = document.querySelector(' + JSON.stringify(shot.clip) + '); if (el) el.scrollIntoView({ block: "center", inline: "nearest" }); return !!el })()').catch(() => false)
+      await sleep(400)
+      clip = await session.eval('(() => {' +
+        'const el = document.querySelector(' + JSON.stringify(shot.clip) + ');' +
+        'if (!el) return null;' +
+        'const r = el.getBoundingClientRect();' +
+        'return { x: r.x + window.scrollX, y: r.y + window.scrollY, width: r.width, height: r.height, scale: 1 } })()').catch(() => null)
+      if (!clip) console.warn('  ! ' + shot.name + '：clip 选择器没找到，退回整页')
+    }
     // 满屏插画类页面用 JPEG（PNG 会有 1.5 MB）；文字密集的界面用 PNG（更锐利）
     const format = shot.format || 'png'
     const { data } = await session.send('Page.captureScreenshot', {
       format,
       quality: format === 'jpeg' ? (shot.quality || 88) : undefined,
       fromSurface: true,
+      clip: clip || undefined,
     })
     const ext = format === 'jpeg' ? '.jpg' : '.png'
-    const file = path.join(opts.out, shot.name + ext)
+    // out：这一张自己的子目录（组件规范配图住 docs/assets/screenshots/ui/）
+    const file = path.join(opts.out, shot.out || '', shot.name + ext)
+    mkdirSync(path.dirname(file), { recursive: true })
     writeFileSync(file, Buffer.from(data, 'base64'))
-    console.log('  ✓ ' + shot.name + ext + '  ' + VIEWPORT.width * 2 + 'x' + VIEWPORT.height * 2)
+    console.log('  ✓ ' + shot.name + ext + '  ' + (clip
+      ? Math.round(clip.width * 2) + 'x' + Math.round(clip.height * 2) + '（元素裁切）'
+      : VIEWPORT.width * 2 + 'x' + VIEWPORT.height * 2))
   }
 
   session.close()

@@ -20,9 +20,12 @@
 # 全套（8 张，约 50 秒）
 node scripts/screenshot/run.mjs
 
-# 只重拍某几张
+# 只重拍某几张（--only 认逗号分隔的多个名字）
 node scripts/screenshot/run.mjs --only design
 node scripts/screenshot/run.mjs --only chat
+
+# 组件规范配图（配 docs/dev/ui_system.md，输出到 docs/assets/screenshots/ui/）
+node scripts/screenshot/run.mjs --only ui-components,ui-convlog
 
 # 自定义地址 / 输出目录
 node scripts/screenshot/run.mjs --url http://127.0.0.1:5227 --out docs/assets/screenshots
@@ -51,6 +54,21 @@ JWT 密钥默认从 \`docker exec ai_group_backend printenv JWT_SECRET_KEY\` 读
 
 \`prepare\` 是截图前在页面里跑的脚本（点开文件、滚到底、关弹窗）。
 
+一条记录可用的字段：
+
+| 字段 | 作用 |
+| --- | --- |
+| \`path\` / \`settle\` | 站内路由；等页面稳定的毫秒数 |
+| \`prepare\` | 截图前在页面里跑的脚本，可以给数组 |
+| \`clip\` | CSS 选择器：只截这一个元素（组件规范配图用）；找不到会告警并退回整页 |
+| \`out\` | 输出子目录 —— 组件配图住 \`ui/\`，不跟 README 那 8 张混在一起 |
+| \`rawApi\` | 这一张**不替换**演示数据。控制台这类后台页只认真实登录态（演示用户 \`role=user\` 会被路由挡回 /chat）；**用前先确认图里没有任何个人数据** |
+| \`format\` / \`quality\` | \`png\`（默认，文字密集）/ \`jpeg\`（满屏插画） |
+
+组件规范配图写在另一个清单 \`UI_SHOTS\` 里（同一个 \`shots.mjs\`），不点名不会拍 ——
+其中 \`ui-components\` 不是业务页面，而是用真实 \`index.css\` 的语义类当场渲染一屏控件速览
+（\`prepare\` 里叠一层浮层），CSS 一改这张图就跟着变。
+
 ---
 
 ## English
@@ -72,8 +90,11 @@ code changes, no third-party image assets**.
 # everything (8 shots, ~50s)
 node scripts/screenshot/run.mjs
 
-# re-shoot selected shots
+# re-shoot selected shots (--only takes a comma-separated list)
 node scripts/screenshot/run.mjs --only design
+
+# component spec images for docs/dev/ui_system.md (written to docs/assets/screenshots/ui/)
+node scripts/screenshot/run.mjs --only ui-components,ui-convlog
 
 # custom target / output directory
 node scripts/screenshot/run.mjs --url http://127.0.0.1:5227 --out docs/assets/screenshots
@@ -86,3 +107,9 @@ unless \`JWT_SECRET\` is set in the environment.
 
 Append one entry to \`SHOTS\` in \`shots.mjs\`; \`prepare\` is page script that runs
 right before the capture (open a file, scroll to bottom, dismiss a dialog).
+
+Per-shot fields: \`path\` / \`settle\`, \`prepare\`, \`clip\` (CSS selector — capture just
+that element), \`out\` (output subdirectory), \`rawApi\` (skip the demo-data rewrite — needed
+by admin pages, which bounce a demo \`role=user\` back to /chat; **make sure the image carries
+no personal data**), \`format\` / \`quality\`. Component spec images live in a separate
+\`UI_SHOTS\` list in the same file and are only taken when named.
