@@ -531,7 +531,8 @@ async def _deliver_plan_board(db, agent, context_ref: str) -> None:
     await deliver_plans(db, agent, context_ref)
 
 
-async def _collect_injection_events(db, agent, context_ref: str, entries: list[dict]) -> list[dict]:
+async def _collect_injection_events(db, agent, context_ref: str, entries: list[dict],
+                                     prompt_source: str) -> list[dict]:
     """历史之后、尾部读数之前的一次性事件：便签投递/撤下 + 能力变更通知。
 
     群聊与私信两条路径曾经各抄一遍这几行；语义要求是「紧跟历史」，所以收成一处——
@@ -540,17 +541,77 @@ async def _collect_injection_events(db, agent, context_ref: str, entries: list[d
     from app.utils.pure.history import make_entry
 
     events: list[dict] = await _deliver_frame_notes(db, agent, context_ref, entries)
-    cap_notice = await _build_capability_notice(db, agent)
+    cap_notice = await _build_capability_notice(db, agent, context_ref, prompt_source)
     if cap_notice:
         events.append(make_entry("notice", cap_notice, flags={"drop_on_unlock": True}))
+    events += await _deliver_handover(db, agent, entries)
+    events += await _deliver_focus_notices(db, agent)
     return events
-    from app.utils.pure.history import make_entry
 
-    events: list[dict] = await _deliver_frame_notes(db, agent, context_ref, entries)
-    cap_notice = await _build_capability_notice(db, agent)
-    if cap_notice:
-        events.append(make_entry("notice", cap_notice, flags={"drop_on_unlock": True}))
-    return events
+
+async def _deliver_focus_notices(db, agent) -> list[dict]:
+    """空焦段告知**落历史**：锚在空焦段上的记忆在哪儿都召不回，而 AI 自己看不见这件事。
+
+    为什么不在状态摘要里每轮念：尾部动态块每轮重拼、永远吃不到缓存，而这是一条一次性事实。
+    投递进度借会话帧的 delivered 记（与触发规则共用），解锁归零 → 下段上下文重新提醒。
+    """
+    try:
+        from app.services.agent import focus_service
+        from app.services.agent.state_stack_service import load_trigger_state, save_trigger_state
+        from app.utils.pure.focus import empty_notice_key, format_empty_notice
+        from app.utils.pure.history import make_entry
+
+        state = await load_trigger_state(db, agent.id)
+        pending = await focus_service.empty_pending(db, agent.id, state.get("delivered"))
+        if not pending:
+            return []
+        delivered = dict(state.get("delivered") or {})
+        for focus in pending:
+            delivered[empty_notice_key(focus["id"])] = True
+        state["delivered"] = delivered
+        await save_trigger_state(db, agent.id, state)
+        # 不带 ref：幂等依据是会话帧上的投递键（帧一换/一解锁就重新提醒），ref 在这里只是噪音
+        return [make_entry("notice", format_empty_notice(pending),
+                           flags={"drop_on_unlock": True})]
+    except Exception as e:
+        logger.warning(f"空焦段告知投递失败（非致命）: {e}")
+        return []
+
+
+async def _deliver_handover(db, agent, entries: list[dict]) -> list[dict]:
+    """状态帧后事（待交接清单 + 平台代销告知）**落历史**：一次性条目，按 ref 幂等。
+
+    为什么放这里：一次性事实只有这一个落历史的地方（与便签、能力变更通知同一出口）。
+    为什么不是每轮念：尾部动态块每轮重拼、永远吃不到缓存；落历史写一次，之后每轮命中。
+    """
+    try:
+        from app.services.agent.state_stack_service import (
+            clear_pending_notices, handover_snapshot,
+        )
+        from app.utils.pure.handover import (
+            delivered_refs, drop_ref, format_drop_notice, format_handover_notice, handover_ref,
+        )
+        from app.utils.pure.history import make_entry
+
+        frames, notices = await handover_snapshot(db, agent.id)
+        seen = delivered_refs(entries)
+        out: list[dict] = []
+        for frame in frames:
+            ref = handover_ref(str(frame.get("id") or ""))
+            if str(frame.get("id") or "") and ref not in seen:
+                out.append(make_entry("notice", format_handover_notice(frame), ref=ref,
+                                      flags={"drop_on_unlock": True}))
+        for note in notices:
+            ref = drop_ref(str(note.get("at") or ""))
+            if ref not in seen:
+                out.append(make_entry("notice", format_drop_notice(note), ref=ref,
+                                      flags={"drop_on_unlock": True}))
+        if notices:
+            await clear_pending_notices(db, agent.id)
+        return out
+    except Exception as e:
+        logger.warning(f"状态后事告知投递失败（非致命）: {e}")
+        return []
 
 
 async def _deliver_frame_notes(db, agent, context_ref: str, entries: list[dict]) -> list[dict]:
@@ -583,17 +644,24 @@ async def _deliver_frame_notes(db, agent, context_ref: str, entries: list[dict])
         return []
 
 
-async def _build_capability_notice(db, agent) -> str:
-    """能力变更通知：增量 changelog（known 在这一步推进，与注入同事务）。无变化返回空串。"""
+async def _build_capability_notice(db, agent, context_ref: str, prompt_source: str) -> str:
+    """能力变更通知：按**本状态**的 known 算增量 changelog（与注入同事务）。无变化返回空串。
+
+    三个源都是"每个状态的前缀里装同一份"的全局内容（作用域=全部），所以每个状态各收一次。
+    人格源由调用方传入：它是"本体 / 某个用户的覆盖"两种之一，只有拼前缀的那一层知道这一轮
+    用的是哪个——这里再猜一次，猜错就会出现"通知发对了、解锁点去刷另一个源"的分裂。
+    """
     try:
         from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
         from app.services.capability_versioning import build_change_notice, SOURCE_PLATFORM
         from app.services.capability_versioning import memory_index_source
         notice = await build_change_notice(
             SQLAlchemyCapabilityRepository(db), agent,
-            [SOURCE_PLATFORM, f"agent-prompt-{agent.id}", memory_index_source(agent.id)])
+            [SOURCE_PLATFORM, prompt_source, memory_index_source(agent.id)],
+            state=context_ref, foci=getattr(agent, "foci", None))
         return notice or ""
-    except Exception:
+    except Exception as e:
+        logger.warning(f"能力变更通知失败（非致命）: {e}")
         return ""
 
 
@@ -776,6 +844,7 @@ async def _recall_memory_ids(
     query_text: str,
     api_base_url: str | None, api_key: str | None,
     trigger_user_id: int | None = None,
+    context_ref: str = "",
 ) -> list[int]:
     """本轮该想起哪几条记忆（只要 id）。投不投、投什么由 memory_delivery 按账本比对决定。
 
@@ -783,10 +852,12 @@ async def _recall_memory_ids(
     是哪一版。所以这里只召回，不渲染——渲染是投递那一步的事。
 
     v0.1.3: trigger_user_id 用于通用/半通用 AI 的 per-user 记忆隔离。
+    context_ref + 当前语义焦段：决定哪几条记忆"够得着"（焦段锚点，见 focus_and_memory_reach §九）。
     """
     if not query_text.strip():
         return []
     try:
+        from app.services.agent.state_stack_service import get_active_semantic_focus
         memories = await recall_relevant_memories(
             db, agent.id,
             query=query_text,
@@ -797,6 +868,8 @@ async def _recall_memory_ids(
             user_id=trigger_user_id,
             ai_type=agent.ai_type or "resonance",
             call_count=agent.llm_call_count or 0,
+            context_ref=context_ref,
+            semantic_focus=await get_active_semantic_focus(db, agent.id),
         )
         return [int(m["id"]) for m in memories if m.get("id")]
     except Exception as e:
@@ -816,7 +889,7 @@ async def _build_skill_injection(db: AsyncSession, agent, group_id: int) -> str:
     return ""
 
 
-async def _build_memory_index(db, agent) -> str:
+async def _build_memory_index(db, agent, state: str | None = None) -> str:
     """记忆索引（目录树）：**走版本链冻结**，所以它能安全地待在锁定段里。
 
     为什么必须冻结：索引原本每轮现读 DB，AI 中途 store_memory 一次，下一轮索引文本就变 →
@@ -826,7 +899,7 @@ async def _build_memory_index(db, agent) -> str:
     try:
         from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
         from app.services.capability_versioning import (
-            ensure_text_source_version, get_effective_text, memory_index_source,
+            ensure_text_source_version, get_effective_text, memory_index_source, SCOPE_ALL,
         )
         from app.services.memory.structured_memory_service import format_db_records_for_prompt
 
@@ -835,8 +908,9 @@ async def _build_memory_index(db, agent) -> str:
             return ""
         repo = SQLAlchemyCapabilityRepository(db)
         source = memory_index_source(agent.id)
-        await ensure_text_source_version(repo, source, cur, f"AI{agent.id}记忆索引")
-        return await get_effective_text(repo, agent, source, cur)
+        # 索引是"每个状态的前缀里装同一份"的全局内容 → 作用域全部，变更通知到每个状态
+        await ensure_text_source_version(repo, source, cur, f"AI{agent.id}记忆索引", scope=SCOPE_ALL)
+        return await get_effective_text(repo, agent, source, cur, state=state)
     except Exception as e:
         logger.warning(f"记忆索引注入失败（非致命）: {e}")
         return ""
@@ -893,31 +967,31 @@ async def _build_cross_conversation_context(
     return []
 
 
-async def _versioned_agent_prompt(db: AsyncSession, agent, system_prompt_override: str | None) -> str | None:
-    """前缀文本版本化：personality 源 = agent-prompt-{id}。
+async def _versioned_personality(
+    db: AsyncSession, agent, override: str | None, owner: int | None, state: str,
+) -> tuple[str, str]:
+    """人格段文本版本化：返回（这一轮的版本源, 这一轮用哪份文本）。
 
-    用户/管理员改提示词 → 写新版本（ensure_text_source_version 哈希对比）；
-    锁定态取 effective 快照（前缀缓存稳定，变更只尾部 changelog 告知）；
-    compact/clear 解锁后生效。per-user 覆盖（system_prompt_override）不走版本化——
-    那是用户级配置不是 agent 本体，保持直接生效。
+    **本体与 per-user 覆盖走同一套规矩**：写新版本 → 尾部 changelog 告知 → 各自解锁点换新。
+    区别只有源——本体是 `agent-prompt-{id}`，覆盖是那个用户自己的源（两份文本不同，
+    共用一个源会一轮写一个新版本）。
+    为什么覆盖也进链：以前它是"per-user 配置、直接生效"的特例，而发起对话那一层每次都把
+    **解析好的本体人格**当覆盖传下来，于是整条链在线上一次都没跑过（实证：37 个 AI 里只有 3 个
+    有过 `agent-prompt-*` 版本），人格一改就把它所有会话的前缀一起作废。
     """
-    if system_prompt_override:
-        return system_prompt_override
-    cur = getattr(agent, "current_system_prompt", None) or ""
-    source = f"agent-prompt-{agent.id}"
     from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
     from app.services.capability_versioning import (
-        ensure_text_source_version, get_effective_text,
+        agent_prompt_label, agent_prompt_source, ensure_text_source_version,
+        get_effective_text, SCOPE_ALL,
     )
-    await ensure_text_source_version(SQLAlchemyCapabilityRepository(db), source, cur, f"AI{agent.id}提示词")
-    return await get_effective_text(SQLAlchemyCapabilityRepository(db), agent, source, cur)
-
-
-
-
-
-
-
+    # 人格段是全局内容（每个状态的前缀里装的都是它）→ 作用域全部
+    body = getattr(agent, "current_system_prompt", None) or ""
+    text = override or body
+    source = agent_prompt_source(agent.id, override, owner)
+    cap = SQLAlchemyCapabilityRepository(db)
+    await ensure_text_source_version(
+        cap, source, text, agent_prompt_label(agent.id, override, owner), scope=SCOPE_ALL)
+    return source, await get_effective_text(cap, agent, source, text, state=state)
 
 
 async def build_messages(
@@ -930,6 +1004,7 @@ async def build_messages(
     api_key: str | None = None,
     trigger_user_id: int | None = None,
     system_prompt_override: str | None = None,
+    prompt_owner: int | None = None,
     context_config: ContextConfig | None = None,
 ) -> list[dict]:
     """
@@ -1004,9 +1079,14 @@ async def build_messages(
     # ── 构建六段（应用管理员覆盖 + 配置驱动）──
     enabled_segments = context_config_parser.get_enabled_segments(context_config)
 
-    # 前缀文本版本化：personality（用户可改提示词）走 agent-prompt-{id} 源
-    # 用户/管理员改提示词 → 写新版本 + 尾部 changelog 告知，不碰前缀；compact 后生效
-    eff_personality = await _versioned_agent_prompt(db, agent, system_prompt_override)
+    # 本会话的键：账本、状态帧、前缀里的版本化源（提示词/记忆索引/能力）全按它记账，只拼这一处
+    from app.services.history.context_sync import context_ref as _context_ref
+    session_ref = _context_ref(group_id=group_id)
+
+    # 前缀文本版本化：personality 走版本链（本体 / per-user 覆盖各一个源）
+    # 改了 → 写新版本 + 尾部 changelog 告知增量，不碰前缀；compact 后整体生效
+    personality_source, eff_personality = await _versioned_personality(
+        db, agent, system_prompt_override, prompt_owner, session_ref)
 
     segments = {}
     if "core_identity" in enabled_segments:
@@ -1025,10 +1105,11 @@ async def build_messages(
     # 所以能待在锁定段；技能注入的检索词是「最近 5 条消息」，属于当轮事实，归尾部读数。
     recalled_memory_ids: list[int] = []
     if "injected_skills" in enabled_segments and context_config_parser.should_inject_skills(context_config):
-        segments["injected_skills"] = await _build_memory_index(db, agent)
+        segments["injected_skills"] = await _build_memory_index(db, agent, session_ref)
         # 记忆不走尾部读数：它是账本条目，要落在当轮新消息之前（见下方账本段）
         recalled_memory_ids = await _recall_memory_ids(
-            db, agent, group_id, query_text, api_base_url, api_key, trigger_user_id)
+            db, agent, group_id, query_text, api_base_url, api_key, trigger_user_id,
+            context_ref=session_ref)
 
     order = context_config_parser.parse_segment_order(context_config)
     system_prompt = assemble_system_prompt(segments, order)
@@ -1160,7 +1241,7 @@ async def build_messages(
         min_unread = msg_window["min_unread_messages"]
         
         from app.models.message import Message as MessageModel
-        from app.services.history.context_sync import append_events, context_ref, sync_group_history
+        from app.services.history.context_sync import append_events, sync_group_history
         from app.utils.pure.history import FOLD_LIMIT, ROLE_BY_ACTOR, latest_message_ref, make_entry
 
         # 群设置优先；没设过就用折叠默认值。0 是"不折叠"，不能当假值兜掉
@@ -1168,7 +1249,7 @@ async def build_messages(
         if max_len is None:
             max_len = FOLD_LIMIT
 
-        group_ref = context_ref(group_id=group_id)  # 会话键只在这里拼一次
+        group_ref = session_ref
 
         # 记忆条目**必须排在当轮新消息之前**：「先想起这个人，再读他说的话」。
         # 所以它抢在 sync 之前落账本——sync 一追加，新消息就压到它前面去了。
@@ -1185,7 +1266,7 @@ async def build_messages(
         # 一次性事件（能力变更通知 / 便签撤下）**落成条目**：它们属于「外界带来了什么」，
         # 必须紧跟历史——落在尾部读数之前，否则下一轮它们会从末尾跑到中间（顺序变 = 断缓存）。
         # 便签投递（逐条条目、幂等）+ 撤下通知：投过没有以账本为准
-        events = await _collect_injection_events(db, agent, group_ref, ledger)
+        events = await _collect_injection_events(db, agent, group_ref, ledger, personality_source)
         if _env_entry:
             events.append(_env_entry)
         ledger = ledger + await append_events(db, agent, group_ref, events)
@@ -1284,7 +1365,7 @@ async def build_messages(
     # 撤下的便签 / 能力变更通知都在上面落成账本条目了——**这里不再当轮 append**（说完就没了正是要修的）
 
     # 📎 上一段对话的原文尾巴（切会话时的临时交接，只出现一轮）
-    await _inject_cross_state_context(db, agent, f"group:{group_id}", messages)
+    await _inject_cross_state_context(db, agent, session_ref, messages)
 
     # 当前时间放在最后（每次变化，放末尾不影响前缀cache）
     current_ctx = await _build_current_context(db, agent, group_id, group_name, is_dm)
@@ -1356,7 +1437,9 @@ async def build_messages(
                 # 世界源能力变更通知（版本化懒加载：增量 changelog，known 更新同轮）
                 from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
                 from app.services.capability_versioning import build_change_notice
-                notice = await build_change_notice(SQLAlchemyCapabilityRepository(db), agent, [f"world-{w.id}"])
+                notice = await build_change_notice(
+                    SQLAlchemyCapabilityRepository(db), agent, [f"world-{w.id}"],
+                    state=session_ref, foci=getattr(agent, "foci", None))
                 if notice:
                     messages.append({"role": "system", "content": notice})
                     await db.commit()
@@ -1374,6 +1457,7 @@ async def build_dm_messages(
     api_key: str | None = None,
     trigger_user_id: int | None = None,
     system_prompt_override: str | None = None,
+    prompt_owner: int | None = None,
 ) -> list[dict]:
     """构建 DM 私信的消息列表（6 段系统提示词 + DM 历史消息）"""
     from app.models.dm import DMMessage, DMSession
@@ -1437,20 +1521,24 @@ async def build_dm_messages(
         dm_protocol += MULTI_SESSION
         dm_protocol += PRIVACY_RULES
         dm_protocol += CHAT_CHAIN_RULES
-    # 前缀文本版本化（同 build_messages）：personality 走 agent-prompt-{id} 源
-    eff_personality = await _versioned_agent_prompt(db, agent, system_prompt_override)
+    # 前缀文本版本化（同 build_messages）：personality 走版本链
+    # 本会话的键：与群路径同一个口径（私信的键就是 session_id），只拼这一处
+    from app.services.history.context_sync import context_ref as _context_ref
+    dm_ref = _context_ref(session_id=session_id)
+    personality_source, eff_personality = await _versioned_personality(
+        db, agent, system_prompt_override, prompt_owner, dm_ref)
     segments = {
         "core_identity": overrides.get("core_identity") or CORE_IDENTITY,
         "personality": build_personality_segment(agent, language, eff_personality),
         "protocol": dm_protocol,
         "tools": await _build_tools_segment(db, agent, is_dm=True),
-        "injected_skills": await _build_memory_index(db, agent),  # 索引（冻结）进锁定段
+        "injected_skills": await _build_memory_index(db, agent, dm_ref),  # 索引（冻结）进锁定段
     }
     # 记忆不走这里：它是账本条目，落在当轮新消息之前（见下方账本段）
     recalled_memory_ids = await _recall_memory_ids(
         db, agent, group_id=0,  # group_id=0 表示非群聊上下文
         query_text=query_text, api_base_url=api_base_url, api_key=api_key,
-        trigger_user_id=trigger_user_id,
+        trigger_user_id=trigger_user_id, context_ref=dm_ref,
     )
 
     order = await _get_segment_order(db)
@@ -1555,10 +1643,9 @@ async def build_dm_messages(
 
     # ── DM 历史消息：账本（只追加 + 缺口）——与群聊同一套入口 ──
     from app.models.dm import DMMessage as DMMessageModel
-    from app.services.history.context_sync import append_events, context_ref, sync_dm_history
+    from app.services.history.context_sync import append_events, sync_dm_history
     from app.utils.pure.history import ROLE_BY_ACTOR, make_entry
 
-    dm_ref = context_ref(session_id=session_id)  # 会话键只在这里拼一次
 
     # 记忆条目抢在 sync 之前落账本：位置就是"当轮新消息之前"（同群聊）
     from app.services.memory.memory_delivery import deliver_memories
@@ -1569,7 +1656,7 @@ async def build_dm_messages(
     ledger = await sync_dm_history(db, agent, session_id, cap=limit)
 
     # 一次性事件（能力变更通知 / 便签撤下）落成条目：紧跟历史、排在尾部读数之前
-    events = await _collect_injection_events(db, agent, dm_ref, ledger)
+    events = await _collect_injection_events(db, agent, dm_ref, ledger, personality_source)
     ledger = ledger + await append_events(db, agent, dm_ref, events)
 
     last_user_idx = None
@@ -1635,7 +1722,7 @@ async def build_dm_messages(
     # 撤下的便签通知也在上面的历史段落成账本条目了
 
     # 📎 上一段对话的原文尾巴（切会话时的临时交接，只出现一轮）
-    await _inject_cross_state_context(db, agent, session_id, messages)
+    await _inject_cross_state_context(db, agent, dm_ref, messages)
 
     # 当前时间放在最后（每次变化，放末尾不影响前缀cache）
     dm_ctx = await _build_current_context(db, agent, 0, partner_name or "私信", is_dm=True)

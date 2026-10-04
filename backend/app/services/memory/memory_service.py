@@ -286,6 +286,8 @@ async def recall_relevant_memories(
     ai_type: str = "resonance",
     call_count: int = 0,
     only_injectable: bool = True,
+    context_ref: str = "",
+    semantic_focus: str = "",
 ) -> list[dict]:
     """
     检索与当前对话相关的记忆（关键词优先 + 向量补位，对齐 dsh-mneme）。
@@ -413,6 +415,9 @@ async def recall_relevant_memories(
     # ═══ 合并：关键词优先 + 向量补位 ═══
     memories, _mode = merge_keyword_and_vector(keyword_memories, vector_memories, fetch_k)
 
+    # 焦段可达性：够不着的丢掉，命中元素多的排前面
+    memories = await _apply_reach(db, agent_id, memories, context_ref, semantic_focus)
+
     # 有效权重过滤：自动注入只收「inject」档，筛完再截回 top_k
     from app.utils.pure.timeutil import utc_now
 
@@ -423,6 +428,151 @@ async def recall_relevant_memories(
     # 被想起过就重新计时（设定权值不动）
     await _touch_memories(db, [m["id"] for m in memories], call_count, now)
     return memories
+
+
+async def _apply_reach(db, agent_id: int, memories: list[dict],
+                      context_ref: str, semantic_focus: str) -> list[dict]:
+    """按焦段锚点过滤 + 排序（见 docs/memory_system/design/focus_and_memory_reach.md §九）。
+
+    锚点在此之前只写不读，于是"换个地方就找不到"只是工具里的一句警告，实际处处可见——
+    等于隐式全局，与第六节相悖。这里一次读回候选行的锚点，够不着的丢掉；
+    命中的元素多的排前面（§九），同命中数保持原来的相关性顺序。
+    """
+    if not memories:
+        return memories
+    from sqlalchemy import select
+
+    from app.models.memory import RoughMemory
+    from app.services.agent import focus_service
+    from app.utils.pure import focus as pure_focus
+
+    ids = [m["id"] for m in memories if m.get("id")]
+    rows = (await db.execute(
+        select(RoughMemory.id, RoughMemory.session_refs,
+               RoughMemory.session_foci, RoughMemory.semantic_foci)
+        .where(RoughMemory.id.in_(ids))
+    )).all()
+    anchors = {r.id: (r.session_refs, r.session_foci, r.semantic_foci) for r in rows}
+    foci = await focus_service.load(getattr(db, "session", db), agent_id)
+
+    out: list[dict] = []
+    for m in memories:
+        refs, s_foci, m_foci = anchors.get(m.get("id"), ([], [], []))
+        reach = pure_focus.memory_reach(
+            refs, s_foci, m_foci,
+            context_ref=context_ref, semantic_focus=semantic_focus, foci=foci)
+        if pure_focus.reachable(reach):
+            out.append({**m, "reach": reach})
+    out.sort(key=lambda m: -m["reach"])
+    return out
+
+
+# ══════════════════════════════════════════════════════════════
+# 整理已有记忆（改 / 删）
+# ══════════════════════════════════════════════════════════════
+
+async def owned_memory(db, agent_id: int, memory_id: int):
+    """按 id 取一条**属于这个 AI** 的向量记忆；别人的记忆一律当不存在。
+
+    所有权收在这一处：改与删都从这里取行，就不会出现"某一处忘了判 owner"的越权口子。
+    """
+    from sqlalchemy import select
+
+    from app.models.memory import RoughMemory
+
+    return (await db.execute(select(RoughMemory).where(
+        RoughMemory.id == memory_id,
+        RoughMemory.owner_type == "ai",
+        RoughMemory.owner_id == agent_id,
+    ))).scalar_one_or_none()
+
+
+async def update_memory(
+    db, agent_id: int, memory_id: int, *,
+    title: str | None = None,
+    content: str | None = None,
+    mem_type: str | None = None,
+    weight: int | None = None,
+    scope: str | None = None,
+    group_id: int | None = None,
+    anchors: tuple | None = None,
+    api_base_url: str = "https://api.deepseek.com",
+    api_key: str | None = None,
+) -> dict:
+    """改一条已有记忆（只改传了的字段）：标题 / 正文 / 类型 / 权值 / 可见范围 / 锚点。
+
+    几个口径跟写入侧对齐，别在这里另立一套：
+    - 锚点由调用方先过 `focus_service.resolve_anchors`（空集物化成"当前会话 + 当前语义焦段"）；
+    - 权值过 `clamp_weight`；正文写进 detail 行（没有就补一条）；
+    - **标题改了要重算向量**：向量就是标题的，留着旧向量比没有更糟——相似度检索会命中一条
+      已经改了题的记忆。算不出来就清空向量，并把这件事如实回话（文本检索照常）。
+    - 他亲自动手改过 = 认这条：挂账待归档的转正，别让每日整理再把它收拾掉。
+    """
+    from sqlalchemy import select
+
+    from app.models.memory import DetailMemory
+    from app.utils.pure.memory_weight import clamp_weight
+
+    row = await owned_memory(db, agent_id, memory_id)
+    if row is None:
+        return {"ok": False, "message": f"没找到属于你的记忆 {memory_id}（id 用 recall_memory 查）"}
+
+    changed: list[str] = []
+    notes: list[str] = []
+
+    if title and str(title) != row.title:
+        row.title = str(title)
+        from app.services.memory.memory_buffer import get_embedding_safe
+
+        row.embedding = await get_embedding_safe(row.title, api_base_url, api_key)
+        if row.embedding is None:
+            notes.append("向量没更新（Embedding 不可用），这条暂时只能靠文字检索")
+        changed.append("title")
+
+    if content:
+        detail = (await db.execute(
+            select(DetailMemory).where(DetailMemory.rough_id == row.id)
+            .order_by(DetailMemory.id)
+        )).scalars().first()
+        if detail is None:
+            db.add(DetailMemory(rough_id=row.id, content=str(content)))
+        else:
+            detail.content = str(content)
+        changed.append("content")
+
+    if mem_type:
+        row.mem_type = str(mem_type)
+        changed.append("mem_type")
+    if weight:
+        row.value_score = clamp_weight(weight)
+        changed.append("weight")
+    if scope:
+        row.scope = scope
+        row.group_id = group_id if scope == "group" else None
+        changed.append("scope")
+    if anchors is not None:
+        row.session_refs, row.session_foci, row.semantic_foci = anchors
+        changed.append("anchors")
+    if row.status == "pending_archive":
+        row.status = "active"
+        changed.append("status")
+
+    await db.commit()
+    return {"ok": True, "id": row.id, "title": row.title, "changed": changed, "notes": notes}
+
+
+async def forget_memory(db, agent_id: int, memory_id: int) -> dict:
+    """删掉一条自己的向量记忆（rough 行；detail 随外键级联走）。
+
+    删是彻底的：daily 流水那档本来就靠每日整理退场，这里是"他明确不要了"的那条路。
+    """
+    row = await owned_memory(db, agent_id, memory_id)
+    if row is None:
+        return {"ok": False, "message": f"没找到属于你的记忆 {memory_id}（id 用 recall_memory 查）"}
+    title = row.title
+    await db.delete(row)
+    await db.commit()
+    return {"ok": True, "id": memory_id, "title": title}
 
 
 async def auto_store_memory(

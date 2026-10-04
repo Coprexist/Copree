@@ -78,6 +78,28 @@ async def leave_session(db: AsyncSession, agent_id: int, focus_id: str, context_
     return await _mutate(db, agent_id, lambda f: pure.leave(f, focus_id, context_ref))
 
 
+async def forget_session(db: AsyncSession, agent_id: int, context_ref: str) -> int:
+    """把一个会话从所有会话焦段里摘掉（会话消失时的收尾）。返回摘掉的处数。
+
+    会话没了，焦段元素里留着它就是死引用：归属复述会念一个不存在的会话，
+    而它本该命中不了任何东西。
+    """
+    foci = await _read(db, agent_id)
+    hits = [f["id"] for f in foci
+            if f.get("axis") == pure.SESSION and context_ref in (f.get("elements") or [])]
+    if not hits:
+        return 0
+    for fid in hits:
+        foci, _ = pure.leave(foci, fid, context_ref)
+    await _write(db, agent_id, foci)
+    return len(hits)
+
+
+async def empty_pending(db: AsyncSession, agent_id: int, delivered) -> list[dict]:
+    """空掉、且本会话还没告诉过他的会话焦段（构建提示词那一步据此落历史条目）。"""
+    return pure.empty_pending(await _read(db, agent_id), delivered)
+
+
 async def anchored_memories(db: AsyncSession, agent_id: int, focus_id: str,
                             limit: int = 50) -> list[dict]:
     """锚在某个焦段上的记忆（合并前要先让 AI 看这两摞都是什么）。
@@ -135,6 +157,30 @@ async def merge(db: AsyncSession, agent_id: int, keep_id: str, drop_id: str):
         if moved:
             msg += f"（{moved} 处记忆锚点已改指）"
     return foci, msg
+
+
+async def resolve_anchors(db: AsyncSession, agent_id: int, group_id: int | None,
+                         context: dict, session_foci, semantic_foci):
+    """锚点解析（写入侧唯一入口）：校验焦段 + 空集物化。
+
+    返回 (session_refs, session_foci, semantic_foci, notes)。
+
+    空集为什么必须物化：第六节的空集语义是"只在本会话与当前语义焦段下能被想起"，
+    而空集落库后，读侧无从知道"本会话"指哪一个——那条记忆就成了处处可见，
+    即第六节明令禁止的隐式全局（召回只写不读时看不出来，一旦读起来就露馅）。
+    写入这一刻把会话与当前语义焦段定下来，读侧才只需一条规则。
+    """
+    from app.services.agent.state_stack_service import get_active_semantic_focus
+
+    s_foci, m_foci, problems = await check_anchors(db, agent_id, session_foci, semantic_foci)
+    refs: list[str] = []
+    if not s_foci and not m_foci:
+        ref = current_ref(group_id, context or {})
+        if ref:
+            refs = [ref]
+        if semantic := await get_active_semantic_focus(db, agent_id):
+            m_foci = [semantic]
+    return refs, s_foci, m_foci, problems
 
 
 async def check_anchors(db: AsyncSession, agent_id: int,

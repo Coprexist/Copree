@@ -602,6 +602,7 @@ async def _tool_call_loop(
                     db, agent, group_id=group_id, session_id=session_id,
                     conversation_type=conversation_type,
                     summary=(compress_stats.get("summary") or ""),
+                    trigger_user_id=trigger_user_id,
                 )
     except Exception as e:
         logger.warning(f"调用前空闲压缩跳过（非致命）: {e}")
@@ -820,6 +821,7 @@ async def _tool_call_loop(
                                     db, agent, group_id=group_id, session_id=session_id,
                                     conversation_type=conversation_type,
                                     summary=(compress_stats.get("summary") or ""),
+                                    trigger_user_id=trigger_user_id,
                                 )
                                 await db.commit()
                             except Exception:
@@ -1384,7 +1386,7 @@ async def _seal_turn(db, agent, *, group_id, session_id, conversation_type,
 
 
 async def _unlock_context(db, agent, *, group_id, session_id, conversation_type,
-                          summary: str) -> tuple[str, ...]:
+                          summary: str, trigger_user_id: int | None = None) -> tuple[str, ...]:
     """解锁点（压缩成功）的一整套收尾：按 `UNLOCK_STEPS` 顺序执行，返回实际执行的步骤名。
 
     为什么必须重写账本：不重写的话，下一轮 build_messages 又从账本把原文端回来——
@@ -1411,10 +1413,19 @@ async def _unlock_context(db, agent, *, group_id, session_id, conversation_type,
         await apply_pending_config(db, agent)
 
     async def _apply_pending_changes():
-        # 前缀版本化：compact 解锁，effective 对齐最新（工具定义 + agent 提示词 + 绑定的世界源）
+        # 前缀版本化：compact 解锁，**本状态**的 effective 对齐最新（工具定义 + 提示词 + 记忆索引 + 世界源）
         from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
-        from app.services.capability_versioning import apply_pending_changes, SOURCE_PLATFORM
-        sources = [SOURCE_PLATFORM, f"agent-prompt-{agent.id}"]
+        from app.services.agent.agent_service import prompt_override_of
+        from app.services.capability_versioning import (
+            agent_prompt_source, apply_pending_changes, memory_index_source, SOURCE_PLATFORM,
+        )
+        # 记忆索引必须在列：它进锁定段（前缀），漏了它这个源就永远停在第一版——
+        # AI 后来写进索引的规则（说话风格这类）正文再也换不进来，只有一条 changelog 提过。
+        # 人格源同理，且要按"这一轮是本体还是某个用户的覆盖"选（与拼前缀、发通知同一处判定）
+        override = await prompt_override_of(db, agent.id, trigger_user_id)
+        sources = [SOURCE_PLATFORM,
+                   agent_prompt_source(agent.id, override, trigger_user_id),
+                   memory_index_source(agent.id)]
         # 世界源也要对齐：不然世界删掉技能后，锁定态的工具数组会一直留着旧定义
         try:
             from app.services.world.world_service import find_worlds_by_entity
@@ -1428,7 +1439,7 @@ async def _unlock_context(db, agent, *, group_id, session_id, conversation_type,
                         sources.append(f"world-{w.id}")
         except Exception as e:
             logger.warning(f"解锁时收集世界能力源失败（非致命）: {e}")
-        await apply_pending_changes(SQLAlchemyCapabilityRepository(db), agent, sources)
+        await apply_pending_changes(SQLAlchemyCapabilityRepository(db), agent, sources, state=ref)
 
     async def _apply_environment():
         # 环境：解锁点把写进前缀的那份对齐到现值。锁定态只落通知、字节不动；这里上下文

@@ -65,8 +65,9 @@ async def test_store_memory_warns_when_nothing_is_anchored(migrated_db):
         }, {"session_id": "40_90"})
 
         assert out["weight"] == 1, out
-        assert out["anchors"] == {"session": [], "semantic": []}, out
-        assert "未锚定焦段" in out["message"], out
+        # 空集物化成此刻的适用范围：读侧才只需一条规则（否则空锚点等于处处可见）
+        assert out["anchors"] == {"refs": ["40_90"], "session": [], "semantic": []}, out
+        assert "未锚定焦段" in out["message"] and "只在本会话" in out["message"], out
 
 
 async def test_batch_write_persists_type_weight_and_anchors(migrated_db):

@@ -29,6 +29,8 @@ class UpdateSelfConfig(ToolPlugin):
         "alarm_max_tool_rounds": {"type": "integer", "nullable": True, "description": "闹钟/心跳任务的最大工具调用轮次，范围 1-30"},
         "force_alarm_on_end": {"type": "boolean", "nullable": True, "description": "对话结束时是否必须设定闹钟。开启后每次回复结束前要 set_alarm"},
         "plan_injection_enabled": {"type": "boolean", "nullable": True, "description": "是否把你自己排的计划与闹钟投进上下文（会在历史尾部显示一块计划板）"},
+        "retire_handover_self": {"type": "boolean", "nullable": True, "description": "状态帧的后事是否由你自己办：开=帧位满时挂起等你处置（整理锚点与记忆，办完调 finish_frame 销掉）；关=平台代销，只给你一条告知"},
+        "frame_capacity": {"type": "integer", "nullable": True, "description": "最多保留多少个状态帧，范围 2-500（默认 31）。超出的挂起或代销，取决于 retire_handover_self"},
         "max_alarms": {"type": "integer", "nullable": True, "description": "最多可设多少个活跃闹钟，范围 1-50"},
         "delay_reply_enabled": {"type": "boolean", "nullable": True, "description": "是否启用延迟回复功能（需要管理员开启全局开关）"},
     }
@@ -45,7 +47,8 @@ class UpdateSelfConfig(ToolPlugin):
             "system_prompt", "temperature", "top_p", "presence_penalty",
             "frequency_penalty", "thinking_enabled", "config_profile",
             "hide_ai_identity", "max_tool_rounds", "alarm_max_tool_rounds",
-            "force_alarm_on_end", "plan_injection_enabled", "max_alarms", "delay_reply_enabled",
+            "force_alarm_on_end", "plan_injection_enabled", "retire_handover_self",
+            "frame_capacity", "max_alarms", "delay_reply_enabled",
             "allow_friend_requests", "auto_respond_friend_request",
         ]
 

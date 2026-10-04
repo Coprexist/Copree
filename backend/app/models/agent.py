@@ -169,6 +169,12 @@ class Agent(Base):
 
     # 状态栈摘要长度上限（默认 500，AI 配置页可改；最新帧必保完整）
     state_stack_max_chars = Column(Integer, default=500)
+    # 帧容量：存储帧数超过它，就把最久没被激活的帧挂起待交接（他交接完才删记录）。
+    # NULL/0 = 用默认值；AI 可自配
+    frame_capacity = Column(Integer, nullable=True, comment="状态帧容量（NULL=默认 31）")
+    # 帧后事由谁办：开 = 超容量的帧挂起待交接（他处置完调 finish_frame 销掉）；
+    # 关 = 平台直接代销，只留一条告知。跟着预设档位走（数字生命档开，其余关）
+    retire_handover_self = Column(Boolean, default=False, comment="帧后事自己交接（关=平台代销）")
 
     created_at = Column(DateTime, server_default=func.now())
 
@@ -248,8 +254,11 @@ class CapabilityVersion(Base):
     source = Column(String(50), nullable=False, comment="能力源：platform / world-{id}")
     version = Column(Integer, nullable=False, comment="版本号（每源内递增）")
     content_hash = Column(String(64), nullable=False, comment="源内容哈希（检测变更）")
-    changelog = Column(Text, default="", comment="本版本变更摘要（增量注入用）")
+    changelog = Column(Text, default="", comment="本版本变更摘要（增量注入用）；v1 是起点、为空串")
     definitions = Column(json_column(), nullable=True, comment="工具定义快照（platform=内置全部；world=skills 转出）")
+    # 变更作用域：这条变更该通知哪些状态。空 / '*' = 全部（平台、提示词、记忆索引这类内容每个状态
+    # 都装同一份）；也可以是某个会话键或 focus:{id}（按会话焦段隔离的内容）。
+    scope = Column(String(64), nullable=True, comment="变更作用域：空或 *=全部状态")
     created_at = Column(DateTime, server_default=func.now())
 
     __table_args__ = (

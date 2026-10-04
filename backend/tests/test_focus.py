@@ -65,6 +65,62 @@ def test_semantic_focus_is_not_a_session_anchor():
     assert "语义焦段" in join(foci, focus["id"], "group:64")[1]
 
 
+def test_describe_only_reports_membership():
+    """摘要只复述"你在哪些焦段里"：空焦段是一次性事实，走账本条目（见 test_empty_focus_notice）"""
+    from app.utils.pure.focus import SESSION, add, describe, join, leave
+
+    foci, group, _ = add([], "学生群", SESSION)
+    foci, _ = join(foci, group["id"], "group:64")
+    assert "学生群" in describe(foci, "group:64", "")
+
+    foci, _ = leave(foci, group["id"], "group:64")
+    line = describe(foci, "group:99", "")
+    assert "空焦段" not in line and "学生群" not in line, line
+
+
+def test_reach_is_or_across_elements_and_counts_hits():
+    """任一元素命中即召回；命中多的排前面（所以是计数，不是布尔）"""
+    from app.utils.pure.focus import ALL_CHATS_ID, SESSION, add, join, memory_reach
+
+    foci, group, _ = add([], "学生群", SESSION)
+    foci, _ = join(foci, group["id"], "group:64")
+
+    assert memory_reach(["group:64"], [], [], context_ref="group:64") == 1
+    assert memory_reach([], [ALL_CHATS_ID], [], context_ref="group:64") == 1, "「所有聊天」恒命中"
+    assert memory_reach(["group:64"], [ALL_CHATS_ID], [], context_ref="group:64") == 2
+    assert memory_reach(["group:64"], [group["id"]], [], context_ref="group:64", foci=foci) == 2
+
+
+def test_reach_is_zero_when_anchored_elsewhere():
+    """锚在别处就是够不着——锚点此前只写不读，等于处处可见（隐式全局）"""
+    from app.utils.pure.focus import SESSION, add, join, memory_reach, reachable
+
+    foci, group, _ = add([], "学生群", SESSION)
+    foci, _ = join(foci, group["id"], "group:64")
+
+    assert memory_reach(["group:64"], [], [], context_ref="group:99") == 0
+    assert memory_reach([], [group["id"]], [], context_ref="group:99", foci=foci) == 0
+    assert reachable(0) is False and reachable(1) is True
+
+
+def test_reach_of_empty_anchor_follows_the_current_context():
+    """空集语义：只有当前会话 + 当前语义焦段（写入侧会物化，存量行按够得着处理）"""
+    from app.utils.pure.focus import memory_reach
+
+    assert memory_reach([], [], [], context_ref="group:64") == 1
+    assert memory_reach([], [], [], context_ref="") == 1, "存量空锚点不做静默丢弃"
+
+
+def test_reach_does_not_require_both_axes():
+    """群里讲过的化学，在私信里也该想得起来（两轴不要求同时命中）"""
+    from app.utils.pure.focus import SEMANTIC, add, memory_reach
+
+    foci, topic, _ = add([], "化学教学", SEMANTIC)
+    assert memory_reach([], [], [topic["id"]], context_ref="12_106", semantic_focus=topic["id"], foci=foci) == 1
+    assert memory_reach([], [], [topic["id"]], context_ref="12_106", semantic_focus="", foci=foci) == 0, \
+        "没切到那个语义焦段就想不起来"
+
+
 def test_describe_lists_both_axes():
     from app.utils.pure.focus import SESSION, SEMANTIC, add, describe, join
 

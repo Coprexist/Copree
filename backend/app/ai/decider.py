@@ -76,6 +76,14 @@ async def decide_action(db, agent, context: ActionContext) -> ActionDecision:
     """
     agent_id = context.agent_id
 
+    # 决策调用也算「这个状态被调用过」——即使结论是不回，系统确实为它做了这次决策。
+    # 帧容量超限时按这个时刻挑「最久没被调用」的帧，所以记账必须覆盖决策路径，不能只算 LLM 调用。
+    try:
+        from app.services.agent.state_stack_service import touch_active_frame
+        await touch_active_frame(db, getattr(agent, "id", None) or agent_id)
+    except Exception as e:
+        logger.warning(f"决策调用记账失败（非致命）: {e}")
+
     # ═══ 硬性门控（所有事件类型通用） ═══
 
     # blocked → 一律不行动

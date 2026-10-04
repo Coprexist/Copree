@@ -69,9 +69,10 @@
   同一段对话不会再看到它。原文要带上（只给 id，AI 认不出撤掉的是哪条约定）。
 - **解锁（compact / clear）才真删**：`release_active_frame_notes` 丢掉该会话帧的副本，
   便签连同撤下通知一起离场——前缀本来就要在这时重建，不额外付缓存代价。
-- 已知边界：会话帧栈深上限 `MAX_STACK_DEPTH = 10`，`ensure_active_frame` 超限丢最旧帧。
-  回到那个会话时会重建帧并**重新投递**（记录还在有效期内 → 同样的字节，前缀不破）；记录也过期了
-  才真的消失。`doing / todo / tail` 没有这个自愈能力，它们随帧一起没了。真库实测栈深最深 5。
+- 已知边界：帧不再随手丢（全量存储、指针排队）。容量闸 `agents.frame_capacity`（默认 31）超限时
+  按档位处置**最久没被调用**的非当前帧：接手后事的（`retire_handover_self` 开）挂起待交接，
+  销帧要等他表态（`finish_frame`）；不接手的由平台代销（积压超硬底同理），两条路都留账本告知。
+  帧不会被静默裁掉，`doing / todo / tail` 也就不再随帧莫名消失。见[帧、锁与重建点](./frame_lifecycle.md)。
 - AI 侧入口：工具 `cross_state_note`（list/add/update/remove/clear）；
   长期要记住的东西**不进便签**，用 `update_self_config` 写进它自己的提示词。
 

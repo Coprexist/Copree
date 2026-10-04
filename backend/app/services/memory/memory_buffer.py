@@ -58,6 +58,7 @@ class PendingMemory:
     # 类型、设定权值与焦段锚点（v1.1）：weight=0 表示用该类型的默认权值
     mem_type: str = "daily"
     weight: int = 0
+    session_refs: list = field(default_factory=list)
     session_foci: list = field(default_factory=list)
     semantic_foci: list = field(default_factory=list)
     ai_type: str = "resonance"     # "resonance" | "general" | "semi_general"
@@ -97,6 +98,7 @@ async def enqueue_memory(
     low_value: bool = False,
     mem_type: str = "daily",
     weight: int = 0,
+    session_refs: list | None = None,
     session_foci: list | None = None,
     semantic_foci: list | None = None,
 ) -> None:
@@ -120,6 +122,7 @@ async def enqueue_memory(
         low_value=low_value,
         mem_type=mem_type,
         weight=weight,
+        session_refs=list(session_refs or []),
         session_foci=list(session_foci or []),
         semantic_foci=list(semantic_foci or []),
     )
@@ -245,7 +248,7 @@ async def _batch_write_memories(db, batch: list[PendingMemory]):
     # Step 1: 并发 embedding（不阻塞彼此）
     embedding_tasks = []
     for mem in batch:
-        embedding_tasks.append(_get_embedding_safe(mem.title, mem.api_base_url, mem.api_key))
+        embedding_tasks.append(get_embedding_safe(mem.title, mem.api_base_url, mem.api_key))
     embeddings = await asyncio.gather(*embedding_tasks)
 
     # Step 2: 批量构建 ORM 对象
@@ -269,6 +272,7 @@ async def _batch_write_memories(db, batch: list[PendingMemory]):
             # 自动提取的流水一律最低档；其余按 AI 给的权值，没给就用该类型的默认
             value_score=1 if mem.low_value else (mem.weight or default_weight(mem.mem_type)),
             mem_type="daily" if mem.low_value else mem.mem_type,
+            session_refs=list(mem.session_refs or []),
             session_foci=list(mem.session_foci or []),
             semantic_foci=list(mem.semantic_foci or []),
         )
@@ -297,7 +301,7 @@ async def _batch_write_memories(db, batch: list[PendingMemory]):
     logger.info(f"📝 批量写入 rough={len(roughs)}, detail={len(details)}, 耗时={elapsed:.2f}s")
 
 
-async def _get_embedding_safe(title: str, api_base_url: str, api_key: str | None) -> list[float] | None:
+async def get_embedding_safe(title: str, api_base_url: str, api_key: str | None) -> list[float] | None:
     """安全获取 embedding，失败返回 None（不阻塞批量写入）"""
     try:
         from app.utils.embedding import get_embedding

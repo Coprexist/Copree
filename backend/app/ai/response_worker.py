@@ -825,7 +825,10 @@ async def _maybe_trigger_ai_reply(
         api_base_url=api_base,
         api_key=api_key,
         trigger_user_id=trigger_user_id,
-        system_prompt_override=effective_cfg.get("system_prompt"),
+        # 只传"覆盖本身"，不传解析后的人格：解析后的值永远非空，会让拼前缀那层以为
+        # 每个 AI 都有人格覆盖，于是本体人格永远走"直接生效"、整条版本链一次都不跑
+        system_prompt_override=effective_cfg.get("system_prompt_override"),
+        prompt_owner=trigger_user_id,
     )
     logger.info(f"🔍 AI {agent.name}: 构建了 {len(messages)} 条消息")
 
@@ -862,7 +865,10 @@ async def _maybe_trigger_ai_reply(
     delay_allowed = await _is_delay_reply_allowed(db, agent)
     current_tools = get_allowed_tools(agent.state, thinking_enabled=effective_cfg["thinking_enabled"], delay_reply_allowed=delay_allowed)
     allowed_names = {t["function"]["name"] for t in current_tools}
-    effective_defs = await get_effective_definitions(SQLAlchemyCapabilityRepository(db), agent, SOURCE_PLATFORM, current_tools)
+    from app.services.history.context_sync import context_ref
+    effective_defs = await get_effective_definitions(
+        SQLAlchemyCapabilityRepository(db), agent, SOURCE_PLATFORM, current_tools,
+        state=context_ref(group_id=group_id))
     tools = keep_request_tools(effective_defs, allowed_names)
 
     # + 绑定世界的世界侧 skills（居民能力；群绑定或 agent 直接绑定；effective 版本快照，版本化懒加载）
@@ -886,8 +892,12 @@ async def _maybe_trigger_ai_reply(
             wtools = build_world_tools(w.id)
             if wtools:
                 from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
-                await ensure_world_version(SQLAlchemyCapabilityRepository(db), w.id, wtools)
-            eff = await _get_eff(db, agent, f"world-{w.id}", wtools)
+                # 这条源的通知怎么发，由世界自己声明（tool_notice：自动 / 自己写 / 不通知）
+                await ensure_world_version(
+                    SQLAlchemyCapabilityRepository(db), w.id, wtools,
+                    notice=(w.config or {}).get("tool_notice") if isinstance(w.config, dict) else None)
+            eff = await _get_eff(db, agent, f"world-{w.id}", wtools,
+                                state=context_ref(group_id=group_id) if group_id else None)
             for d in eff:
                 nm = ((d or {}).get("function") or {}).get("name")
                 if not nm:
@@ -1070,7 +1080,8 @@ async def _trigger_dm_ai_reply(
     # 构建消息
     from app.ai.llm import build_dm_messages, resolve_model
     # v0.1.3: DM 中 sender_id 即为触发用户
-    messages = await build_dm_messages(db, agent, session_id, api_base_url=api_base, api_key=api_key, trigger_user_id=sender_id, system_prompt_override=effective_cfg.get("system_prompt"))
+    # 同上：覆盖本身 + 覆盖属于谁（人格版本源要按它分）
+    messages = await build_dm_messages(db, agent, session_id, api_base_url=api_base, api_key=api_key, trigger_user_id=sender_id, system_prompt_override=effective_cfg.get("system_prompt_override"), prompt_owner=sender_id)
 
     # 获取工具（能力版本化：按 effective 版本取定义快照）
     from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
@@ -1081,7 +1092,10 @@ async def _trigger_dm_ai_reply(
     delay_allowed = await _is_delay_reply_allowed(db, agent)
     current_tools = get_allowed_tools(agent_state, thinking_enabled=effective_cfg["thinking_enabled"], delay_reply_allowed=delay_allowed)
     allowed_names = {t["function"]["name"] for t in current_tools}
-    effective_defs = await get_effective_definitions(SQLAlchemyCapabilityRepository(db), agent, SOURCE_PLATFORM, current_tools)
+    from app.services.history.context_sync import context_ref
+    effective_defs = await get_effective_definitions(
+        SQLAlchemyCapabilityRepository(db), agent, SOURCE_PLATFORM, current_tools,
+        state=context_ref(session_id=session_id))
     tools = keep_request_tools(effective_defs, allowed_names)
     model = resolve_model(agent, global_default_model=provider_info.get("global_default_chat_model"))
 

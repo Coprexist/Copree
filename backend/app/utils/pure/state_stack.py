@@ -1,24 +1,51 @@
 """
-状态栈纯函数 — 无 IO、无 DB 依赖。
+状态帧纯函数 — 无 IO、无 DB 依赖。
+
+存储与运行是两层（本模块的分界线）：
+- 存储 = 整个数组（含已结束 ended、待交接 retired 的帧，全量保留，只在他交接完后事时删）；
+- 运行集合 = running(stack)，status 处于 active/paused/suspended 的那串指针，"栈"只剩它。
 
 make_state_frame(): 构建单个状态帧（交接驱动：handoff/completed_handoff）
-format_state_stack_summary(): 栈 → AI 可读摘要（只渲染当前帧 + 交接信息）
-parse_state_summary(): 摘要 → 当时的栈顶帧身份（写与读共用一份标记，见 STATE_SUMMARY_MARK）
+normalize_order(): 排成 [历史区][运行区，当前帧在末尾]——全仓 stack[-1] 等于当前帧的依据
+current()/running()/by_id()/retired(): 运行集合与存储的各自视图
+retire_overflow()/drop_overflow()/drop_retired_overflow(): 容量闸的两条走法（挂起待交接 / 平台直接代销）与积压硬底
+format_state_stack_summary(): 存储 → AI 可读摘要（只渲染当前帧 + 交接信息 + 待交接计数）
+parse_state_summary(): 摘要 → 当时的当前帧身份（写与读共用一份标记，见 STATE_SUMMARY_MARK）
 
 情感向量纯函数见 emotion.py（独立模块）。
 """
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import logging
 import re
 import uuid
+
+logger = logging.getLogger(__name__)
 
 from app.utils.pure.emotion import (
     normalize_emotion, emotion_to_text,
 )
 
 
-MAX_STACK_DEPTH = 10
+# 帧容量：存储里帧数超过它，就把「最久没被激活」的那个帧挂起交给他自己办后事。
+# 默认 31，AI 可自配（update_self_config）；它是**存储**的上限，不是运行集合的上限。
+DEFAULT_FRAME_CAPACITY = 31
+
+# 帧状态分两段：在跑的（占运行集合=指针排队）与留在存储的（不再参与运行）。
+# 分开表达是这一层的全部要点：pop/close 只把帧从运行集合里取出来，**不删记录**；
+# 记录只在「他交接完后事」之后才删（唯一删除点）。
+RUNNING_STATUSES = ("active", "paused", "suspended")
+ENDED_STATUS = "ended"
+RETIRED_STATUS = "retired"
+# "不在运行集合"的历史写法：completed / closed 是旧口径留下的，读的时候一视同仁，
+# 新写一律用 ended——三种写法并存会让"这帧还在跑吗"这种问题每次都要想一遍。
+ENDED_STATUSES = (ENDED_STATUS, "completed", "closed")
+
+# 容量硬底：挂起待交接的帧也不能无限堆积（他若一直不交接）。超过 capacity × 这个倍数，
+# 平台代销最旧的那批——代销是平台替他删的，必留一条账本条目，有据可查，不静默。
+# （不接手后事那一档压根不挂起，超容量直接代销，见 drop_overflow。）
+RETIRE_BACKLOG_FACTOR = 2
 
 # 状态摘要的写与读共用这一份标记：写入在 format_state_stack_summary，读回在 parse_state_summary。
 # 两边各留一份字面量的话，改一处就会让日志那边悄悄读不出状态——按状态分组全靠它。
@@ -32,6 +59,12 @@ _FRAME_FIELDS = (
     "id", "type", "context_ref", "label", "why", "doing", "todo", "plan", "journal",
     "created_at", "status", "emotion", "emotion_text", "source_emotion",
     "tools", "skills", "call_count", "handoff", "completed_handoff",
+    # last_active_at：帧最后一次被**调用**的时刻（LLM 调用与决策调用都算）。容量超限时据此挑
+    # 「最久没被调用」的帧，不按创建时间——长期在用的会话帧不该因为建得早就被挂起
+    "last_active_at",
+    # pending_notices：该告诉他、但还没落进历史的事实（目前是"平台代销了哪几帧"）。
+    # 落历史由构建提示词那一步统一做（一次性条目、幂等），这里只记事实
+    "pending_notices",
     # tail：这段会话的最后几轮原文。切走时它是「原文尾巴」，切回来时一次性注入
     "tail",
     # notes：投递进这段会话的跨状态便签副本（固化在前缀里，直到 compact/clear）
@@ -77,6 +110,7 @@ def make_state_frame(type_: str, context_ref: str = "", **extras) -> dict:
         "delivered": {},
         "handoff": {},
         "completed_handoff": {},
+        "last_active_at": datetime.now(timezone.utc).isoformat(),
     }
     for key, value in extras.items():
         if key in _FRAME_FIELDS and value is not None:
@@ -119,6 +153,183 @@ def frame_tail(messages: list[dict], max_exchanges: int = 4, max_chars: int = 12
     return picked
 
 
+# ═══════════════════════════════════════════════════════════════
+# 运行集合（"栈"只剩指针排队）与存储的分界
+# ═══════════════════════════════════════════════════════════════
+
+def is_running(frame: dict) -> bool:
+    """这帧还在运行集合里吗（当前 / 被压着还要回来 / 会话切走了等它回来）。"""
+    return (frame or {}).get("status") in RUNNING_STATUSES
+
+
+def is_ended(frame: dict) -> bool:
+    """已出运行集合（ended / 旧写法的 completed、closed）。"""
+    return (frame or {}).get("status") in ENDED_STATUSES
+
+
+def running(stack: list[dict]) -> list[dict]:
+    """运行集合 —— 数组里"还在跑"的那串指针，保序（相对顺序即排队位次）。
+
+    存储 = 整个数组（含已结束/待交接的帧，永不随手丢）；运行 = 这个过滤视图。
+    所以"栈顶"不再是 stack[-1]：数组末尾可能躺着一帧已经结束的。
+    """
+    return [f for f in (stack or []) if is_running(f)]
+
+
+def current(stack: list[dict]) -> dict | None:
+    """当前帧 = 运行集合里 status 为 active 的那个。
+
+    正常情况下运行集合里恰好一个 active（切换/弹出/关闭都会把当前帧提上来）。若一个都没有
+    （历史数据，或将来某条路径漏了提升），退回运行集合末位**并告警**——兜底可以，静默不行。
+    """
+    live = running(stack)
+    if not live:
+        return None
+    act = next((f for f in reversed(live) if f.get("status") == "active"), None)
+    if act is None:
+        # 只有一帧在跑时"它不是 active"是正常的（比如日志里那帧已被挂起，但身份还要读得出来），
+        # 不当异常；两帧以上都没有 active 才是真不清楚谁是当前——那种要响。
+        if len(live) > 1:
+            logger.warning(
+                "运行集合里没有 active 帧，暂以末位为当前帧："
+                + str([(f.get("status"), f.get("context_ref") or f.get("type")) for f in live]))
+        return live[-1]
+    return act
+
+
+def normalize_order(stack: list[dict]) -> list[dict]:
+    """把数组排成「[历史区][运行区，当前帧在末尾]」——存储顺序的唯一不变量。
+
+    为什么需要它：存储改成"全量保留"之后，数组末尾可能躺着一帧已经结束的，
+    而全仓有几十处把 stack[-1] 当"当前帧"用。与其改几十处，不如让**写入/读取各收口一次**
+    （state_stack_service 的 _get_stack / _save 都过这里），于是 stack[-1] 恒等于当前帧，
+    既不用改那些调用点，也不会有"某一处忘了改"的半吊子状态。
+    """
+    frames = list(stack or [])
+    return (
+        [f for f in frames if not is_running(f)]
+        + [f for f in frames if is_running(f) and f.get("status") != "active"]
+        + [f for f in frames if f.get("status") == "active"]
+    )
+
+
+def resume_target(stack: list[dict]) -> dict | None:
+    """撤下当前帧之后回到哪一层：运行集合的末位。
+
+    与 current() 的区别是时机：此刻当前帧刚被标成 ended，运行集合里可能一个 active 都没有，
+    这不是异常，而是"正要把它提上来"。所以这里不告警，也不该走 current() 的兜底。
+    """
+    live = running(stack)
+    return live[-1] if live else None
+
+
+def by_id(stack: list[dict], frame_id: str) -> dict | None:
+    """按帧 id 找帧——在**全量存储**里找，所以被 pop/close 过的帧照样找得到。"""
+    fid = str(frame_id or "")
+    return next((f for f in (stack or []) if fid and f.get("id") == fid), None)
+
+
+def touch(frame: dict) -> None:
+    """刷新最后一次激活时刻（容量超限时按它挑最久没用的帧）。"""
+    if frame is not None:
+        frame["last_active_at"] = datetime.now(timezone.utc).isoformat()
+
+
+def retired(stack: list[dict]) -> list[dict]:
+    """待交接的帧（交给他办后事；办完才删）。"""
+    return [f for f in (stack or []) if f.get("status") == RETIRED_STATUS]
+
+
+def _overflow(stack: list[dict], capacity: int) -> list[dict]:
+    """运行集合超容量时该让谁走：**最久没被调用**的非当前帧，够数即止。
+
+    "最久"的键是 last_active_at（最后一次调用，LLM 调用与决策调用都记），不是创建时间——
+    长期在用的会话帧不该因为建得早被挑走。当前帧永远不挑；已挂起的不重复挑。
+    挂起与代销（下面两个函数）只差"走的时候留不留记录"，挑选规则必须是同一套，
+    所以收在这里一份。
+    """
+    live = [f for f in running(stack) if not f.get("retired_at")]
+    if len(live) <= capacity:
+        return []
+    cands = [f for f in live if f.get("status") != "active"]
+    cands.sort(key=lambda f: str(f.get("last_active_at") or f.get("created_at") or ""))
+    return cands[: len(live) - capacity]
+
+
+def retire_overflow(stack: list[dict], capacity: int) -> list[str]:
+    """超容量的帧**挂起待交接**（留记录，等他表态），返回其 id 列表。
+
+    这是"他自己接手后事"那一档的走法：记录留着，下段上下文收到待交接告知，
+    办完调 finish_frame 才删。挑不出（全是当前/已挂起）就不动——
+    他还没交接，硬删记录是不行的（那正是这一层要修的病）。
+    """
+    out: list[str] = []
+    for frame in _overflow(stack, capacity):
+        frame["status"] = RETIRED_STATUS
+        frame["retired_at"] = datetime.now(timezone.utc).isoformat()
+        out.append(str(frame.get("id") or ""))
+    return out
+
+
+def drop_overflow(stack: list[dict], capacity: int) -> list[dict]:
+    """超容量的帧**直接销掉**（平台代销），返回被销的帧。
+
+    用在"这档 AI 不接手帧后事"的时候（预设开关关着）：既然没人来交接，留着记录只是
+    占地方，平台代为清理并留一条告知（调用方负责落账本条目，代销必须有据可查）。
+    """
+    dropped = _overflow(stack, capacity)
+    for frame in dropped:
+        stack.remove(frame)
+    return dropped
+
+
+def context_frames(stack: list[dict], context_ref: str) -> list[dict]:
+    """某个会话名下**还在跑的**帧（会话本身消失了，它们再也跑不起来）。"""
+    ref = str(context_ref or "")
+    return [f for f in running(stack) if ref and f.get("context_ref") == ref]
+
+
+def retire_context_frames(stack: list[dict], context_ref: str) -> list[str]:
+    """把一个会话名下的帧挂起待交接（会话没了：群解散等），返回其 id 列表。
+
+    与容量闸的区别是它不问容量、不等他表态：会话已经不存在，帧留着也只是等他处置。
+    当前帧同样要摘——它指的是一个再也回不去的会话，留着会让摘要把死会话当成"正在进行"。
+    """
+    out: list[str] = []
+    for frame in context_frames(stack, context_ref):
+        frame["status"] = RETIRED_STATUS
+        frame["retired_at"] = datetime.now(timezone.utc).isoformat()
+        out.append(str(frame.get("id") or ""))
+    return out
+
+
+def drop_context_frames(stack: list[dict], context_ref: str) -> list[dict]:
+    """把一个会话名下的帧直接销掉（这档 AI 不接手帧后事），返回被销的帧。"""
+    dropped = context_frames(stack, context_ref)
+    for frame in dropped:
+        stack.remove(frame)
+    return dropped
+
+
+def drop_retired_overflow(stack: list[dict], capacity: int,
+                          factor: int = RETIRE_BACKLOG_FACTOR) -> list[dict]:
+    """挂起待交接的帧也不能无限堆积：超过 capacity × factor，平台代销最旧的那批。
+
+    返回被代销的帧（调用方据它留一条「平台代销」的账本条目——代销必须有据可查）。
+    排序键是 last_active_at（最后一次调用，LLM 调用与决策调用都算），不是创建时间。
+    只销**挂起**的帧：还在跑的、以及没挂起的已结束帧不动（后者等他主动交接）。
+    """
+    pend = retired(stack)
+    limit = max(1, int(capacity or 0)) * max(2, int(factor or 2))
+    if len(pend) <= limit:
+        return []
+    pend.sort(key=lambda f: str(f.get("last_active_at") or f.get("created_at") or ""))
+    dropped = pend[: len(pend) - limit]
+    for frame in dropped:
+        stack.remove(frame)
+    return dropped
+
+
 def format_handoff_tail(label: str, tail: list[str], reason: str = "") -> str:
     """渲染「上一段对话的原文尾巴」——临时性交接，只注入一次。
 
@@ -154,6 +365,7 @@ def format_state_stack_summary(stack: list[dict], max_chars: int = 500,
 
     只渲染「当前帧 + 交接信息」，不逐层展开历史帧：
     - 旧交接已在 LLM 对话历史里出现过（工具调用参数），不重复注入
+    - 当前帧 = 运行集合里 active 的那个（**不是数组末尾**：末尾可能躺着已结束的帧）
     - 当前帧：doing / TODO / PLAN / 🎭 情感（完整）
     - handoff：本次切换的交接（← 从[来源]来，为什么，回去继续）
     - completed_handoff：pop 回来后刚完成的交接（📝 刚完成）
@@ -163,9 +375,9 @@ def format_state_stack_summary(stack: list[dict], max_chars: int = 500,
     长度控制（max_chars 默认 500）：超限按降级阶梯（_RENDER_*），
     最新帧的 TODO/PLAN 永不丢。
     """
-    if not stack:
+    top = current(stack)
+    if top is None:
         return ""
-    top = stack[-1]
 
     def render_top() -> list[str]:
         lines = [_STATE_SUMMARY_PREFIX]
@@ -198,8 +410,12 @@ def format_state_stack_summary(stack: list[dict], max_chars: int = 500,
             src_type = (top.get("source_emotion") or {}).get("type") or ""
             prefix = f"   ← 来源状态({src_type})情感: " if src_type else "   ← 来源状态情感: "
             lines.append(prefix + emotion_to_text(src_vec))
-        if len(stack) > 1:
-            lines.append(f"   ⏸ 另有 {len(stack) - 1} 帧未完成（可 list_states 查看）")
+        live = running(stack)
+        if len(live) > 1:
+            lines.append(f"   ⏸ 另有 {len(live) - 1} 帧未完成（可 list_states 查看）")
+        # 待交接帧只报"有几帧、要用哪个工具销"，清单（要处置哪些记忆）落历史，不在这里念
+        if pend := retired(stack):
+            lines.append(f"   ⏳ 待交接 {len(pend)} 帧（状态已结束，后事办完调 finish_frame 销掉）")
         return lines
 
     def render_handoff() -> list[str]:

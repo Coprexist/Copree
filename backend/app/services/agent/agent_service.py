@@ -44,6 +44,8 @@ CONFIG_PROFILES = {
         "force_alarm_on_end": False,
         "plan_injection_enabled": False,
         "max_alarms": 3,
+        # 帧后事谁办：跟着档位走——便宜档由平台代销（只留告知），数字生命档交给他自己
+        "retire_handover_self": False,
         # 行为开关
         "delay_reply_enabled": False,
         "is_ai_editable": False,
@@ -67,6 +69,8 @@ CONFIG_PROFILES = {
         "force_alarm_on_end": False,
         "plan_injection_enabled": False,
         "max_alarms": 5,
+        # 帧后事谁办：跟着档位走——便宜档由平台代销（只留告知），数字生命档交给他自己
+        "retire_handover_self": False,
         # 行为开关
         "delay_reply_enabled": True,
         "is_ai_editable": True,
@@ -90,6 +94,8 @@ CONFIG_PROFILES = {
         "force_alarm_on_end": True,
         "plan_injection_enabled": True,
         "max_alarms": 20,
+        # 帧后事谁办：跟着档位走——便宜档由平台代销（只留告知），数字生命档交给他自己
+        "retire_handover_self": True,
         # 行为开关
         "delay_reply_enabled": True,
         "is_ai_editable": True,
@@ -140,6 +146,7 @@ async def apply_config_profile(
         "alarm_max_tool_rounds": agent.alarm_max_tool_rounds,
         "force_alarm_on_end": agent.force_alarm_on_end,
         "plan_injection_enabled": agent.plan_injection_enabled,
+        "retire_handover_self": agent.retire_handover_self,
         "max_alarms": agent.max_alarms,
         "is_ai_editable": agent.is_ai_editable,
         "memory_recent_count": agent.memory_recent_count,
@@ -220,6 +227,7 @@ async def create_agent(
     alarm_max_tool_rounds: int = 10,
     force_alarm_on_end: bool = False,
     plan_injection_enabled: bool = False,
+    retire_handover_self: bool = False,
     max_alarms: int = 10,
     is_ai_editable: bool = True,
     ai_type: str = "resonance",
@@ -315,6 +323,7 @@ async def create_agent(
         alarm_max_tool_rounds=alarm_max_tool_rounds,
         force_alarm_on_end=force_alarm_on_end,
         plan_injection_enabled=plan_injection_enabled,
+        retire_handover_self=retire_handover_self,
         max_alarms=max_alarms,
         is_ai_editable=is_ai_editable,
         ai_type=ai_type,
@@ -404,6 +413,24 @@ async def list_agents(db: AsyncSession, owner_id: int) -> list[Agent]:
     return all_agents
 
 
+async def prompt_override_of(db, agent_id: int, user_id: int | None) -> str | None:
+    """这个用户对这个 AI 的人格覆盖（没有就是 None）——人格源判定与文本取值共用这一处。
+
+    为什么单独一个入口：解锁点要判"这一轮的人格源是本体还是某个用户的覆盖"，它手里没有
+    `get_effective_config` 那份大字典；两处各判一遍，源与文本就会走散（通知发对了源、
+    解锁点去刷了另一个源）。
+    """
+    if not user_id:
+        return None
+    value = (await db.execute(
+        select(AgentUserConfig.system_prompt_override).where(
+            AgentUserConfig.agent_id == agent_id,
+            AgentUserConfig.user_id == user_id,
+        )
+    )).scalar_one_or_none()
+    return value or None
+
+
 async def get_effective_config(
     db: AsyncSession,
     agent_id: int,
@@ -429,6 +456,7 @@ async def get_effective_config(
     if ai_type == "resonance" or user_id is None:
         return {
             "system_prompt": agent.current_system_prompt,
+            "system_prompt_override": None,     # 本体人格没有覆盖：人格版本源就是本体源
             "temperature": agent.current_temperature,
             "top_p": agent.current_top_p,
             "presence_penalty": agent.current_presence_penalty,
@@ -442,7 +470,8 @@ async def get_effective_config(
             "max_tool_rounds": agent.max_tool_rounds,
             "alarm_max_tool_rounds": agent.alarm_max_tool_rounds,
             "force_alarm_on_end": agent.force_alarm_on_end,
-        "plan_injection_enabled": agent.plan_injection_enabled,
+            "plan_injection_enabled": agent.plan_injection_enabled,
+            "retire_handover_self": agent.retire_handover_self,
             "max_alarms": agent.max_alarms,
             "config_profile": agent.config_profile,
             "is_ai_editable": agent.is_ai_editable,
@@ -467,6 +496,9 @@ async def get_effective_config(
 
     return {
         "system_prompt": _get("system_prompt_override", agent.current_system_prompt),
+        # 覆盖本身（不是解析后的值）：拼前缀那层要按"有没有覆盖"选人格版本源，
+        # 给它解析后的值就等于把覆盖判定做废（线上 34 个 AI 的人格因此从没进过版本链）
+        "system_prompt_override": (user_cfg.system_prompt_override if user_cfg else None),
         "temperature": _get("temperature", agent.current_temperature),
         "top_p": _get("top_p", agent.current_top_p),
         "presence_penalty": _get("presence_penalty", agent.current_presence_penalty),
@@ -481,6 +513,7 @@ async def get_effective_config(
         "alarm_max_tool_rounds": agent.alarm_max_tool_rounds,
         "force_alarm_on_end": agent.force_alarm_on_end,
         "plan_injection_enabled": agent.plan_injection_enabled,
+        "retire_handover_self": agent.retire_handover_self,
         "max_alarms": agent.max_alarms,
         "config_profile": agent.config_profile,
         "is_ai_editable": agent.is_ai_editable,
@@ -699,6 +732,15 @@ async def update_agent_config(
     # plan_injection_enabled 计划板进上下文
     if "plan_injection_enabled" in updates:
         agent.plan_injection_enabled = updates["plan_injection_enabled"]
+
+    # retire_handover_self 帧后事由谁办（跟着预设档位，AI 可自改）
+    if "retire_handover_self" in updates:
+        agent.retire_handover_self = bool(updates["retire_handover_self"])
+
+    # frame_capacity 帧容量（空值回落到默认 31）
+    if "frame_capacity" in updates:
+        value = updates["frame_capacity"]
+        agent.frame_capacity = int(value) if value else None
 
     # max_alarms 最大闹钟数
     if "max_alarms" in updates and updates["max_alarms"] is not None:
@@ -1292,6 +1334,8 @@ def agent_to_dict(agent: Agent) -> dict:
         "alarm_max_tool_rounds": agent.alarm_max_tool_rounds,
         "force_alarm_on_end": agent.force_alarm_on_end,
         "plan_injection_enabled": agent.plan_injection_enabled,
+        "retire_handover_self": agent.retire_handover_self,
+        "frame_capacity": agent.frame_capacity,
         "max_alarms": agent.max_alarms,
         "hide_ai_identity": agent.hide_ai_identity,
         "ai_type": agent.ai_type or "resonance",

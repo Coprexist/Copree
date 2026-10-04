@@ -34,12 +34,13 @@ async def sr_set(
     value: str,
     mem_type: str | None = None,
     weight: int | None = None,
+    session_refs: list | None = None,
     session_foci: list | None = None,
     semantic_foci: list | None = None,
 ) -> dict:
     """写入一个字段（upsert：同路径重复写入自动覆盖）。
 
-    类型、权值与焦段锚点都是可选的：不传保持原值，新建则按类型默认。
+    类型与锚点都是可选的：不传保持原值，新建则按类型默认。
     """
     db = _ensure_repo(db)
     try:
@@ -59,6 +60,8 @@ async def sr_set(
                 existing.mem_type = mem_type
             if weight is not None:
                 existing.value_score = clamp_weight(weight)
+            if session_refs is not None:
+                existing.session_refs = list(session_refs)
             if session_foci is not None:
                 existing.session_foci = list(session_foci)
             if semantic_foci is not None:
@@ -76,6 +79,7 @@ async def sr_set(
                 value=value,
                 mem_type=kind,
                 value_score=clamp_weight(weight) if weight is not None else default_weight(kind),
+                session_refs=list(session_refs or []),
                 session_foci=list(session_foci or []),
                 semantic_foci=list(semantic_foci or []),
             )

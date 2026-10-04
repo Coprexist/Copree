@@ -129,13 +129,14 @@ class ManageRecords(ToolPlugin):
             from app.utils.pure import focus as pure_focus
             from app.utils.pure.memory_shape import MAX_CONTENT_CHARS, over_limit
 
-            session_foci, semantic_foci, problems = await focus_service.check_anchors(
-                db, agent_id, arguments.get("session_foci"), arguments.get("semantic_foci"))
+            session_refs, session_foci, semantic_foci, problems = await focus_service.resolve_anchors(
+                db, agent_id, group_id, context,
+                arguments.get("session_foci"), arguments.get("semantic_foci"))
             result = await sr_set(
                 db, agent_id, category, sub_key, field, value,
                 mem_type=(arguments.get("mem_type") or "").strip() or None,
                 weight=arguments.get("weight"),
-                session_foci=session_foci, semantic_foci=semantic_foci,
+                session_refs=session_refs, session_foci=session_foci, semantic_foci=semantic_foci,
             )
             if result["ok"]:
                 out = {

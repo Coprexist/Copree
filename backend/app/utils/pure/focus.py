@@ -164,13 +164,57 @@ def of_session(foci, context_ref: str) -> list[dict]:
 
 
 def describe(foci, context_ref: str, semantic_focus_id: str = "") -> str:
-    """一行复述归属，供状态摘要每轮念给 AI 听。"""
+    """一行复述归属，供状态摘要每轮念给 AI 听。
+
+    只说"你在这儿属于哪些焦段"。**空焦段不在这里念**：那是"里面的人全走了"这条一次性事实，
+    每轮重拼的尾部动态块永远吃不到缓存，它该走账本条目（empty_pending / format_empty_notice）。
+    """
     parts = []
     if names := [f["name"] for f in of_session(foci, context_ref)]:
         parts.append("会话焦段：" + "、".join(names))
     if semantic_focus_id and (focus := find(foci, semantic_focus_id)) and focus.get("axis") == SEMANTIC:
         parts.append(f"语义焦段：{focus['name']}")
     return " · ".join(parts)
+
+
+def empty_sessions(foci) -> list[dict]:
+    """一个会话都没有的会话焦段（预置的「所有聊天」不算，它本来就没人）。"""
+    return [f for f in normalize(foci)
+            if f.get("axis") == SESSION and not f.get("builtin") and not (f.get("elements") or [])]
+
+
+def empty_notice_key(focus_id: str) -> str:
+    """「这个空焦段已经告诉过他了」的投递键——存在会话帧的 delivered 里。
+
+    为什么借触发规则那份投递进度：解锁（compact/clear）会把它一起归零，
+    于是"条件还在就说一遍"自然成立，不必再为焦段另建一处会跟解锁走散的状态。
+    """
+    return f"emptyfocus:{focus_id}"
+
+
+def empty_pending(foci, delivered) -> list[dict]:
+    """空掉、且本会话还没告诉过他的会话焦段（投递的唯一依据）。
+
+    判据是**当下**的 elements，所以焦段重新有人之后这里不会再命中——
+    "空"不是一次事件，它只是一个当下成立的事实，说过了就该闭嘴，除非解锁后重新想起。
+    """
+    sent = delivered or {}
+    return [f for f in empty_sessions(foci) if empty_notice_key(f["id"]) not in sent]
+
+
+def format_empty_notice(foci: list[dict]) -> str:
+    """空焦段告知：锚在它上面的记忆在哪儿都召不回（§九），而 AI 自己看不见这件事。
+
+    只说事实与出路，不替它搬记忆：唯一能自动做的动作（改锚「所有聊天」）等于把群里的
+    事搬进所有会话，那条隐私边界不该由一次后台动作决定。
+    """
+    lines = [f"【空焦段 · {len(foci)} 个】",
+             "这些会话焦段里的会话已经全部消失了，锚在它们身上的记忆在哪儿都召不回："]
+    for f in foci:
+        lines.append(f"- {f['name']}（{f['id']}）")
+    lines.append("出路：用 merge_focus 并进一个还有人的焦段（或并入「所有聊天」），"
+                 "或把那些记忆改锚到别的焦段——别让记忆挂在一个够不着的地方。")
+    return "\n".join(lines)
 
 
 def brief(foci, context_ref: str = "", semantic_focus_id: str = "") -> list[dict]:
@@ -184,6 +228,51 @@ def brief(foci, context_ref: str = "", semantic_focus_id: str = "") -> list[dict
         "builtin": bool(f.get("builtin")),
         "current": f["id"] in active,
     } for f in normalize(foci)]
+
+
+def covers_session(foci, focus_id: str, context_ref: str) -> bool:
+    """某个会话焦段覆不覆盖这个会话（预置「所有聊天」恒命中）。
+
+    与记忆可达性、变更通知作用域共用一份判定——两处各写一份就会出现"通知按一个口径、
+    召回按另一个口径"的分裂。
+    """
+    if str(focus_id or "") == ALL_CHATS_ID:
+        return True                      # 预置焦段不落库、由纯函数兜底：任何会话场景恒命中
+    focus = find(foci, focus_id)
+    if not focus or focus.get("axis") != SESSION:
+        return False
+    return str(context_ref or "") in (focus.get("elements") or [])
+
+
+def memory_reach(session_refs, session_foci, semantic_foci, *,
+                 context_ref: str = "", semantic_focus: str = "", foci=None) -> int:
+    """这条记忆在当前上下文里够不够得着：返回命中的元素数，0 = 够不着。
+
+    - 任一元素命中即召回（或）；命中多的排在前面，所以计数而不是布尔；
+    - 不要求两轴同时命中：群里讲过的化学，在私信里也该想得起来；
+    - 三组全空 = 空集语义（第六节）：只有当前会话 + 当前语义焦段。写入侧会把这一刻的
+      会话与语义焦段物化下来（见 focus_service.default_anchors），所以空集只会出现在
+      本机制之前的存量行上——那些行按"在本上下文里够得着"处理，不做静默丢弃。
+
+    为什么要有这个函数：锚点此前只写不读，"换了地方就找不到"只是工具里的一句警告，
+    实际照样处处可见，等于隐式全局——与第六节明确相悖。
+    """
+    refs = normalize_anchor_ids(session_refs)
+    s_foci = normalize_anchor_ids(session_foci)
+    m_foci = normalize_anchor_ids(semantic_foci)
+    if not refs and not s_foci and not m_foci:
+        return 1
+    ref = str(context_ref or "")
+    hit = 1 if (ref and ref in refs) else 0
+    hit += sum(1 for fid in s_foci if covers_session(foci, fid, ref))
+    if semantic_focus:
+        hit += sum(1 for fid in m_foci if fid == semantic_focus)
+    return hit
+
+
+def reachable(reach: int) -> bool:
+    """够得着 = 至少命中一个元素（或空集语义的当前上下文）。"""
+    return reach > 0
 
 
 def normalize_anchor_ids(ids) -> list[str]:

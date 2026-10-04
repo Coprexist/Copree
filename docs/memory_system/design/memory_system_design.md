@@ -386,8 +386,9 @@ flowchart TB
 
 | 工具 | 功能 |
 |------|------|
-| `store_memory` | 存储向量记忆 |
-| `recall_memory` | 召回向量记忆 |
+| `store_memory` | 存向量记忆；带 `memory_id` 则改已有的那条（标题/正文/类型/权值/范围/锚点，只改传了的） |
+| `recall_memory` | 召回向量记忆（返回里带 `id`，改与删都用它） |
+| `forget_memory` | 删一条自己的向量记忆（不可逆，单独的入口 + 理由落日志） |
 | `manage_records` | 管理结构记忆（set/get/list/summary/categories/delete/rename/move） |
 
 ### 9.2 manage_records 接口

@@ -194,12 +194,12 @@ async def test_retire_frame_notes_marks_copies_in_every_conversation():
     async def fake_get_stack(db, agent_id):
         return stored["stack"]
 
-    async def fake_set_stack(db, agent_id, stack):
+    async def fake_save(db, agent_id, stack):
         writes.append(stack)
         stored["stack"] = stack
 
-    real = (sss._get_stack, sss._set_stack)
-    sss._get_stack, sss._set_stack = fake_get_stack, fake_set_stack
+    real = (sss._get_stack, sss._save)
+    sss._get_stack, sss._save = fake_get_stack, fake_save
     try:
         assert await sss.retire_frame_notes(object(), 1, {"n1"}) == 2
         assert stored["stack"][0]["notes"][0]["retired"] is True
@@ -209,7 +209,7 @@ async def test_retire_frame_notes_marks_copies_in_every_conversation():
         assert await sss.retire_frame_notes(object(), 1, set()) == 0
         assert len(writes) == 1
     finally:
-        sss._get_stack, sss._set_stack = real
+        sss._get_stack, sss._save = real
 
 
 async def test_mark_frame_notes_notified_stamps_only_once():
@@ -223,12 +223,12 @@ async def test_mark_frame_notes_notified_stamps_only_once():
     async def fake_get_stack(db, agent_id):
         return stored["stack"]
 
-    async def fake_set_stack(db, agent_id, stack):
+    async def fake_save(db, agent_id, stack):
         writes.append(stack)
         stored["stack"] = stack
 
-    real = (sss._get_stack, sss._set_stack)
-    sss._get_stack, sss._set_stack = fake_get_stack, fake_set_stack
+    real = (sss._get_stack, sss._save)
+    sss._get_stack, sss._save = fake_get_stack, fake_save
     try:
         assert await sss.mark_frame_notes_notified(object(), 1, {"n1"}) == 1
         assert stored["stack"][0]["notes"][0]["notified"] is True
@@ -237,7 +237,7 @@ async def test_mark_frame_notes_notified_stamps_only_once():
         assert await sss.mark_frame_notes_notified(object(), 1, set()) == 0
         assert len(writes) == 1
     finally:
-        sss._get_stack, sss._set_stack = real
+        sss._get_stack, sss._save = real
 
 
 async def test_release_active_frame_notes_drops_copies_only_on_unlock():
@@ -253,12 +253,12 @@ async def test_release_active_frame_notes_drops_copies_only_on_unlock():
     async def fake_get_stack(db, agent_id):
         return stored["stack"]
 
-    async def fake_set_stack(db, agent_id, stack):
+    async def fake_save(db, agent_id, stack):
         writes.append(stack)
         stored["stack"] = stack
 
-    real = (sss._get_stack, sss._set_stack)
-    sss._get_stack, sss._set_stack = fake_get_stack, fake_set_stack
+    real = (sss._get_stack, sss._save)
+    sss._get_stack, sss._save = fake_get_stack, fake_save
     try:
         assert await sss.release_active_frame_notes(object(), 1) == 2
         assert stored["stack"][0]["notes"] == []
@@ -270,7 +270,7 @@ async def test_release_active_frame_notes_drops_copies_only_on_unlock():
         assert await sss.release_active_frame_notes(object(), 1) == 0, "手动状态帧不是会话，别误清"
         assert stored["stack"][0]["notes"] == [{"id": "n3"}] and len(writes) == 1
     finally:
-        sss._get_stack, sss._set_stack = real
+        sss._get_stack, sss._save = real
 
 
 async def test_remove_note_also_marks_delivered_copies_withdrawn():

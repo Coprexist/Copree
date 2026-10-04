@@ -289,12 +289,16 @@ async def _record_usage(world_repo, world_id: int, turn_id: str, round_no, model
         await world_repo.flush()
         # 个人 API 用量：记账人 = 世界 AI 表单的世界主人（user_id 直记，查询时虚拟聚合「群视界 agent」）
         if messages:
+            from app.repositories.content_repo import SQLAlchemyContentRepository
             from app.services.content.conversation_log_service import save_conversation_log
             from app.models.world import World
             world = await world_repo.get(World, world_id)
             if world is not None:
+                # 对话日志/用量账都在内容域，content 服务要的是 ContentRepository；
+                # 世界仓库只提供世界域接口（execute 不带 params），顶不了这个位置——
+                # 借同一个 session 包装桥接（与同文件其它跨域调用一致），不新开事务
                 await save_conversation_log(
-                    world_repo, None, messages, conversation_type="world",
+                    SQLAlchemyContentRepository(world_repo.session), None, messages, conversation_type="world",
                     token_usage=usage, model=model, thinking_enabled=False,
                     user_id=world.owner_id,
                 )
@@ -1285,6 +1289,7 @@ async def _prepare_world_chat(
     from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
     from app.services.capability_versioning import (
         apply_pending_changes, ensure_text_source_version, get_effective_text, mark_known_latest,
+        SCOPE_ALL,
     )
     _cap_repo = SQLAlchemyCapabilityRepository(world_repo.session)
     # ── 会话起点解锁（2026-09-19）───────────────────────────────────────────────
@@ -1304,9 +1309,10 @@ async def _prepare_world_chat(
     user_prompt = cfg.get("system_prompt") or CREATOR_DEFAULT_CONFIG["system_prompt"]
     forced_prompt = build_forced_prompt()
     creator_name = cfg.get("name") or "群视界机器人"
-    await ensure_text_source_version(_cap_repo, f"world-prompt-{world_id}", user_prompt, "世界AI提示词")
-    await ensure_text_source_version(_cap_repo, "forced-prompt", forced_prompt, "强注入段")
-    await ensure_text_source_version(_cap_repo, f"world-name-{world_id}", creator_name, "世界AI昵称")
+    # 三源都是"这个世界的前缀里装同一份"的全局内容 → 作用域全部
+    await ensure_text_source_version(_cap_repo, f"world-prompt-{world_id}", user_prompt, "世界AI提示词", scope=SCOPE_ALL)
+    await ensure_text_source_version(_cap_repo, "forced-prompt", forced_prompt, "强注入段", scope=SCOPE_ALL)
+    await ensure_text_source_version(_cap_repo, f"world-name-{world_id}", creator_name, "世界AI昵称", scope=SCOPE_ALL)
     eff_user_prompt = await get_effective_text(_cap_repo, world.config, f"world-prompt-{world_id}", user_prompt)
     eff_forced_prompt = await get_effective_text(_cap_repo, world.config, "forced-prompt", forced_prompt)
     eff_name = await get_effective_text(_cap_repo, world.config, f"world-name-{world_id}", creator_name)
@@ -1465,10 +1471,12 @@ async def _prepare_world_chat(
     from app.tools.world import WORLD_TOOLS
     from app.services.world.world_skill_runtime import build_ai_tools
     from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
-    from app.services.capability_versioning import ensure_source_version, get_effective_definitions
+    from app.services.capability_versioning import (
+        ensure_source_version, get_effective_definitions, SCOPE_ALL,
+    )
     skill_tools = build_ai_tools()
     if skill_tools:
-        await ensure_source_version(SQLAlchemyCapabilityRepository(world_repo.session), "ai-skills", skill_tools, "设计侧能力")
+        await ensure_source_version(SQLAlchemyCapabilityRepository(world_repo.session), "ai-skills", skill_tools, "设计侧能力", scope=SCOPE_ALL)
     effective_skill_tools = await get_effective_definitions(SQLAlchemyCapabilityRepository(world_repo.session), world.config, "ai-skills", skill_tools)
     tools_for_world = [*WORLD_TOOLS, *effective_skill_tools]
 

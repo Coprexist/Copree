@@ -1,7 +1,8 @@
 # 能力懒加载：skills/tools 版本化 + 增量变更注入
 
-> 设计口径：给每个 AI 记「已告知版本」与「生效版本」——请求时对比已知与最新，只注入差异段（变更通知），
-> 注入即更新已知版本，所以每次注入的都是新变化、且只有新变化；compact 之后上下文重建，工具与技能直接用最新定义。
+> 设计口径：给每个 **状态**记「已告知版本」与「生效版本」——请求时对比已知与最新，只注入差异段（变更通知），
+> 注入即更新已知版本，所以每次注入的都是新变化、且只有新变化；compact 之后该状态上下文重建，工具与技能直接用最新定义。
+> 状态的粒度与作用域语义见「作用域（scope）」一节。
 
 ## 背景问题
 
@@ -12,18 +13,44 @@
 
 ## 机制（产品方案）
 
-### 版本号（每个 AI 存两份）
-- **known_version**（告知进度）：AI 已收到变更通知的版本——控制**增量注入**
-- **effective_version**（生效进度）：AI 当前请求实际使用的工具定义版本——控制 **tools 数组**（compact 前保持旧定义，前缀缓存稳定）
+### 进度（每个 AI 存两份，均按**状态**各记一份）
+
+进度键为 `{状态}|{源}`；状态即会话键（群 `group:{id}`、私信 `{a}_{b}`）。
+
+- **known_version**（告知进度）：该状态已收到变更通知的版本——控制**增量注入**
+- **effective_version**（生效进度）：该状态的前缀实际使用的定义版本——控制 **tools 数组**与文本段（compact 前保持旧定义，前缀缓存稳定）
+
+按状态记账为强制要求：进度若挂在 AI 级，先构建提示词的状态会把版本推平，其余状态再也收不到那条变更。
+
+### 作用域（scope）
+
+版本行携带作用域，决定这条变更应通知哪些状态。取值仅两种：
+
+| 取值 | 含义 |
+|------|------|
+| `*`（`SCOPE_ALL`） | 全部状态。适用于"每个状态的前缀里装同一份"的内容：平台工具、提示词、记忆索引 |
+| 会话键 / `focus:{id}` | 仅该会话；或该会话焦段下的会话（预置焦段「所有聊天」恒命中） |
+
+人格段（提示词）有**两个源**：本体 `agent-prompt-{id}`，以及某个用户的人格覆盖
+`agent-prompt-{id}-u{uid}`——两份文本不能共用一个源（哈希每轮都不一样，会一轮写一个新版本）。
+两个源都用 `*`：覆盖只影响那个用户的会话，"某个用户的全部会话"这种粒度表达不出来，
+按本文一贯口径"宁可多通知，也不能静默"处理。
+
+**写入时 `scope` 为必填项。** 写 `*` 是全部；不写 `*` 即当前会话（由调用方传入该会话键）。全局必须显式表态：漏写的失败形态是静默不投递，属最难排查的一类缺陷；反之最多只是多通知，可观测。
+
+存量行的 `scope` 为空，读取时按 `*` 处理。本机制落地前进度挂在 AI 级，语义上即为全部；按全部处理可避免历史变更被静默丢弃。
 
 ### 变更流程
-1. 能力源（平台工具 / 世界 skill）变更 → 生成新版本 + 变更摘要（changelog）
-2. AI 响应时对比：`known < latest` → 注入**差异部分**（v_known+1 → v_latest 的 changelog 摘要，追加 system 消息）
-   ——每次注入的都是新变化、只有新变化；之前注入过的不会重复
-3. **注入成功（消息进入上下文）→ known_version 更新为 latest**
-4. **compact 之后**：上下文重建（缓存本来就断）→ effective_version = latest，工具定义直接用最新，无需再走增量
+
+1. 能力源（平台工具 / 世界 skill / 提示词 / 记忆索引）变更 → 生成新版本 + 变更摘要（changelog）+ 作用域
+2. 某状态构建提示词时，与**本状态**的进度对比 `known < latest`：
+   - 作用域覆盖本状态的版本 → 注入其 changelog（v_known+1 → v_latest，只含新变化，已注入过的不重复）
+   - 作用域不覆盖本状态的版本 → 不注入内容，但**同样将 known 推进到 latest**（与该版本结清，否则每轮重扫）
+3. **注入与 known 推进同事务**（不出现"通知发出、版本未记"的重复注入）
+4. **compact / clear 之后**：该状态上下文重建（缓存本来就断）→ **该状态**的 effective 对齐 latest；其他状态不受影响
 
 ### 不变式
+- **锁与状态同构**：effective 表达"这个状态的前缀锁在哪一版"，只能由该状态自己的 compact / clear 推进；任何状态的解锁不得改动其他状态的 effective（否则那些状态的前缀从第 0 字节起 miss）
 - 请求 payload 的 tools 数组 = **effective 快照 ∩ 当前允许集**（同名工具的更新在锁定态不动字节 → 前缀缓存稳定）
 - 变更告知 = 紧跟历史的账本条目（在尾部动态块之前；不进静态前缀，机制见 [帧、锁与重建点](./frame_lifecycle.md)）
 - **改定义不改字节，增删工具会改**——两个源的保护程度不同：
@@ -42,28 +69,35 @@
 ### 与状态帧、触发组合规则的关系
 
 "锁"和触发规则里的"帧"都以 compact / clear 为参照点，但不是同一个容器：锁住的是**前缀字节**
-（`agents.cap_effective_versions` / `worlds.config`），帧是**会话状态容器**（`agents.state_stack` 栈顶帧：
-便签副本 + `tool_uses` / `delivered`）。解锁时锁**换新**（effective 对齐 latest）、帧对象**不重建**但身上的
+（`agents.cap_effective_versions` / `worlds.config`，键内含状态），帧是**会话状态容器**（`agents.state_stack` 栈顶帧：
+便签副本 + `tool_uses` / `delivered`）。解锁时锁**换新**（该状态的 effective 对齐 latest）、帧对象**不重建**但身上的
 触发规则状态**复位**（`reset_trigger_state`）；谁动谁不动只在 [帧、锁与重建点](./frame_lifecycle.md) 表里维护。
+
+进度为何不放进状态帧：帧记录是**可删的**——他交接完后事就删（`finish_frame`），积压超限或这档不接手后事时平台还会代销；
+进度若挂在一个会被删的容器上，会话换回来时会被当作"新源"对齐 latest，反而使该会话前缀突变换字节。
+何况世界 AI 的 holder 是 `worlds.config`，根本没有帧对象。因此进度留在 holder 的两个 map 内，以状态为键。
 
 ### 并发与一致性
 
-- **known 的推进与通知落库同事务**：`build_change_notice` 就地改 `cap_known_versions`，通知经 `append_events`
+- **known 的推进与通知落库同事务**：`build_change_notice` 就地改 `cap_known_versions`（本状态的键），通知经 `append_events`
   写进账本，同一个 session 提交——不会出现"通知发出去了、版本没记住"的重复注入。
 - **盖章位置**：便签投递的章就是账本条目本身（`delivered_note_ids` 反查）；"便签撤下通知"的章在会话帧的
   `notified` 上（`mark_frame_notes_notified`），与通知同一次构建落库——掉电或异常最多多发一次，不会漏发。
 - **并发假设：单实例**。当前部署是一个 uvicorn 进程（无 `--workers`），同一个 AI 的上下文构建不并发。
   `cap_known_versions` / `cap_effective_versions` 是 JSONB 整块覆盖，全仓没有 `FOR UPDATE`：
   真要多实例，得先给这两个 map 加乐观锁（行锁或版本号），否则两个进程同时构建会互相覆盖。
+  按状态记账使键数随会话数增长（每会话每源一键），键值覆盖的粒度不变。
 
 ## 数据模型
 
-- `capability_versions`：**统一能力源版本表**（source, version, changelog, definitions JSONB nullable, created_at）
+- `capability_versions`：**统一能力源版本表**（source, version, changelog, definitions JSONB nullable, scope, created_at）
   - 能力源 = **平台**（platform：内置工具定义）+ **每个世界**（world-{id}：世界 skills 生成的工具定义）
   - 世界 skills/tools **同样版本化**：世界 skill 目录哈希变化 → 新版本 + changelog（新增/修改/删除的 skill 摘要）
   - 平台源存 definitions（内置工具定义快照）；世界源同样存 definitions（该世界 skills 转出的工具定义）——旧版本保留，compact 前照旧用
-- `agents.cap_known_versions` JSONB：{source: version} 告知进度
-- `agents.cap_effective_versions` JSONB：{source: version} 生效进度
+- `capability_versions.scope`：变更作用域（`*` 或会话键 / `focus:{id}`，写入必填；存量行为空，读取按 `*` 处理）
+- `agents.cap_known_versions` JSONB：`{"{状态}|{源}": version}` 告知进度
+- `agents.cap_effective_versions` JSONB：`{"{状态}|{源}": version}` 生效进度
+- 世界 AI 用 `worlds.config` 同名字段。世界 = 一世界一对话，状态键退化为空，键即 `{源}`，行为与改造前一致
 
 ## 落地范围
 
@@ -162,9 +196,59 @@ flowchart TD
 4. ✅ `guard_apply_change`：锁定态应用变更 → 拒绝 + logger.error（防御性报错）
 5. ✅ world_chat_service：前缀组装改为 effective 快照 + 变更检测写新版本 + 尾部 changelog（世界 AI 三个源：world-prompt-{id} / forced-prompt / world-name-{id}）
 6. ✅ compact_context / clear_context：调用 apply_pending_changes 解锁（三源 + ai-skills 一起对齐）
-7. ✅ 主站 agent 同样接入（build_messages / build_dm_messages 的 personality 段走 agent-prompt-{id} 源；executor compact 解锁）——2026-08-12 已实现
+7. ✅ 主站 agent 同样接入（build_messages / build_dm_messages 的 personality 段走 `agent-prompt-{id}` 源；per-user 覆盖走 `agent-prompt-{id}-u{uid}`；executor compact 解锁，两处都按"这一轮有没有覆盖"取同一个源）
 
-> 2026-08-12 已实现并通过真实 DB 端到端验证：锁定态改提示词 effective 不变 → 尾部 changelog 告知 → compact 解锁生效。
+> 2026-08-12 记的是"构建函数通过了真实 DB 端到端验证"——**这个结论当时是错的**：
+> 验证调的是 `build_messages(...)`（不带覆盖参数），而线上两个调用点每次都把**解析好的本体人格**
+> 当 per-user 覆盖传进来，版本链在线上一次都没跑过。教训见下。
+
+### 通知里给多少：改变量，不给全文
+
+一条变更通知要能撑起"以本通知为准"这句话——AI 看它的时候，**工具数组与前缀字节都还是旧的**
+（它们各自等解锁才换）。所以通知得把"新的是什么"讲到能照着办事的程度，而"是什么"就是**改变量**：
+
+| 源 | 改变量怎么算 | 预算 |
+|------|-------------|------|
+| 文本源（提示词 / 昵称 / 强注入段 / 记忆索引） | 行级 diff（`_line_diff`）——提示词是人分点写的，行是它最小的语义单位；短文本（两边 ≤60 字）直接给「旧 → 新」 | 800 字 |
+| 工具源（平台工具 / 世界 skills / 设计侧 skills） | 逐个能力给字段级差异：说明（长走行级 diff、短给「旧 → 新」）、**参数增删改**（名字、类型、说明）、必填项；**新能力给全**（名字/说明/参数/必填）；下线能力给一句"不要再调用它" | 单能力 600 字 |
+
+为什么工具源要细到参数：模型是按参数名与说明调工具的。只报"更新能力 X"，它下一轮照旧按老习惯
+传参，白烧一轮才知道参数没了（世界 AI 原话：「不只费 token，我会去找不存在的工具、白烧轮次」）。
+超预算就截断并写明"已截断"/"还有 N 行没列出"——宁可说清截断，也不静默给半截。
+
+**这条源的开发者可以改口径**（`ensure_source_version` 的 `changelog` / `notice`，以及
+`notice_policy` 读世界配置的 `tool_notice`）：自动改变量（缺省）/ 自己写一句文案 / 不通知。三条里
+"不通知"与"起点版本"共用**同一条存储口径**——**摘要留空 = 不告知**（`build_change_notice` 见到空摘要
+就跳过内容、但仍然把 known 推到最新与它结清）。版本行照写、锁定与解锁照旧，也就是"悄悄换"；
+声明写错一律按 auto 并告警（宁可多通知，不能因一个拼错的字段静默沉默）。开发者面向的说明见
+[世界工具插件 §5.6](../plugin-dev/world_tools_plugin.md)。
+
+### 已修：人格段的版本链在线上从没跑过（2026-10-04）
+
+**症状**：改 AI 的人格提示词 → 立刻对所有会话生效、**没有任何变更通知**，而且它所有会话的整段前缀
+一起作废（人格段在锁定段最前面，字节一变后面全 miss）。人格是唯一还在无保护改写前缀的东西。
+
+**实证**：`capability_versions` 里 `agent-prompt-*` 只有 3 个 AI 有行（5、13、24，其中两个还是"快照与现值
+不一致"的半进链残留），其余 34 个从没进过版本表；同期 `memory-index-*` 有 11 个源在持续产新版本。
+
+**根因（两层各理解了一半）**：`_versioned_agent_prompt` 首行是
+`if system_prompt_override: return system_prompt_override`，本意是"per-user 覆盖不是本体、保持直接生效"；
+但 `response_worker` 两处调用传的是 `effective_cfg.get("system_prompt")`，而 `get_effective_config`
+返回的 `system_prompt` **永远是解析后的值**（没人覆盖时就是本体）。于是那条早退分支吃掉了所有情况。
+
+**修法**：配置层把"覆盖本身"和"解析后的值"分开（`get_effective_config` 增 `system_prompt_override` 键），
+调用点只传覆盖本身 + 覆盖属于谁；人格段与本体的版本源由
+`capability_versioning.agent_prompt_source(agent_id, owner)` 一处判定，拼前缀、发通知、解锁三处同一个源。
+守门用例 `tests/test_personality_versioning.py`：本体与覆盖各进各的源，且**源码级**断言调用点不许再传解析后的值
+（这个 bug 活了几个月没人发现，就是因为没有任何一处会失败）。
+
+**顺带两处**：
+
+- 通知一律给**改变量**（下一节）；多行 changelog 在通知里不再套外层方括号（它自带 `[标签 vN]` 头）。
+- **第一版是起点，不写 changelog**（`ensure_source_version`）。以前 v1 也写一条"从无到有"+全文，
+  于是每个状态首见这条源时都会收到它：新 AI 的第一句话前先收一屏自己的人格，人格段接进版本链那天
+  全站会同时冒出 37 条这种通知。"从无到有"不是变更——内容是它眼前前缀里本来就有的东西。
+  首见照旧与最新**结清**（known 推到最新），所以不会每轮重扫。
 
 ## 与现有机制的合并
 
@@ -216,24 +300,50 @@ flowchart TD
 
 1. **快照比较的基准是"上次已告知 AI 的值"，不是"上次锁进前缀的值"**。两者会不同：值变过去 → 通知 →
    又变回来，此时现值等于锁定值、但不等于已告知值。按"对 AI 来说没变过"的口径，该比的是前者。
-2. **三种都要带作用域**（具体状态帧 / 会话焦段 / 空 = 当前会话）。空集语义与记忆共用同一份口径
-   （见[焦段与记忆适用范围](../memory_system/design/focus_and_memory_reach.md) §六）：空 = 只有当前会话，
-   全局必须显式锚「所有聊天」。
+2. **三种都要带作用域**，且全站共用一套取值：`*` = 全部；其余 = 具体作用域（会话键 / `focus:{id}`）。
+   版本行的 `scope` 为必填项——不写 `*` 即当前会话，全局必须显式表态。
+   记忆锚点侧的"空 = 当前会话"见[焦段与记忆适用范围](../memory_system/design/focus_and_memory_reach.md) §六；
+   两处口径一致：**空只在"锚"上出现（= 当前会话），版本行上不存在空值**。
 
 这条链路同样受本文的核心不变式约束：**锁定态只落通知条目，前缀字节不动；解锁点才换字节**。
 
 ---
 
-# 待修：effective 的粒度与解锁点不一致
+# 已修：粒度与解锁点不一致
 
-`UNLOCK_STEPS`（`app/ai/executor.py`）五步里，`rewrite_history`（按 `context_ref`）、`clear_note_copies`
-（按活跃帧）、`reset_trigger_state`（按帧）都以**当前会话**为参照点；只有 `apply_pending_changes` 写的是
-**agent 级**的 `cap_effective_versions`。
+本节记录一次已落地的修正，供后续改动对照。
 
-后果：一个会话 compact 会推进整个 AI 的 effective，其他**没有 compact 的会话**下一轮拼请求时，人格段 /
-记忆索引 / 工具数组一起换新 → 那些会话的前缀从第 0 字节起 miss。这与核心不变式
-「锁定态前缀永不因变更而变；compact / clear 是唯一解锁点」冲突——"别的会话 compact"不是"这个会话的解锁点"。
+## 一、病症
 
-修法：effective 的键从 `{source: version}` 改为 `{context_ref|source: version}`，读取先查帧键、
-查不到回落旧键（不需要数据迁移）。`known` 保持 agent 级：告知是"人的认知"，生效才是"这个会话的上下文"。
-同样的口径问题还有 `apply_pending_config`（也是 agent 级），一起定。
+有三个缺陷同源——**进度与作用域都挂在 AI 级**：
+
+1. **通知只发一次**。`known` 是 `{source: version}` 的扁平 map，挂在 agent 行上。任一状态构建提示词即把版本推平，
+   其余状态 `known >= latest`，永远收不到那条变更。
+2. **一个会话 compact，全体换字节**。`UNLOCK_STEPS` 中 `rewrite_history` / `clear_note_copies` /
+   `reset_trigger_state` 均以当前会话为参照点，唯独 `apply_pending_changes` 写 AI 级的 `cap_effective_versions`。
+   未 compact 的会话下一轮拼请求时人格段 / 记忆索引 / 工具数组一起换新，前缀从第 0 字节起 miss，
+   与不变式「compact / clear 是唯一解锁点」冲突——"别的会话 compact"不是"这个会话的解锁点"。
+3. **记忆索引正文永不更新**。`apply_pending_changes` 的源列表缺 `memory-index-{id}`，而 `get_effective_text`
+   仅在 effective 无记录时初始化。于是该源一旦写下第一版就再不对齐：索引正文长期停在首版，
+   后续变更只以 changelog 通知过一次（且受缺陷 1 影响只发给一个状态）。
+
+  实测（生产）：某 AI 的记忆索引 `effective = v1`（创建于首版，正文为"（空）"）、`latest = v15`；
+  其请求载荷里 `## 记忆索引` 段确为空，而库中已有十余条结构化记录（含该 AI 自行写入的说话风格规则）。
+  即：该 AI 为自己写下的规则，从未进入任何提示词。
+
+## 二、修正内容
+
+| 项 | 修正 |
+|----|------|
+| 进度键 | `{源}` → `{状态}\|{源}`（`cap_known_versions` / `cap_effective_versions` 同口径） |
+| 作用域 | `capability_versions.scope` 新列，写入必填；`*` = 全部，其余为会话键 / `focus:{id}` |
+| 通知 | 按本状态的 known 计算；作用域不覆盖者不注入内容但推进 known |
+| 解锁 | `apply_pending_changes` 只写触发解锁的那一个状态 |
+| 解锁源 | 补入 `memory-index-{id}` |
+| 存量数据 | 无需迁移：旧扁平键作为各状态的起点继承一次，避免向每个状态重放历史全量 changelog |
+
+## 三、`apply_pending_config`
+
+`apply_pending_config`（AI 自改提示词暂存 → 切换 `current_system_prompt`）保持 AI 级，不逐状态。
+理由：提示词本身经版本链下发，写入新版本后各状态仍读各自的 effective 快照，
+**不会**改变其他状态的前缀字节；`pending_system_prompt` 只有一个槽位，逐状态拆分属于另一项改动，当前不需要。

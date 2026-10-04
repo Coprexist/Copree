@@ -415,6 +415,8 @@ async def _process_alarm_event(db, event: dict):
     system_prompt = CORE_IDENTITY + "\n\n" + custom_prompt + "\n\n" + protocol
 
     try:
+        # 闹钟没有会话上下文：够得着的只有"空集/「所有聊天」"这类记忆，
+        # 锚死在某个会话上的记忆不属于这个场景（§九 任一元素命中即召回）
         memories = await recall_relevant_memories(
             db, agent.id,
             query=task,

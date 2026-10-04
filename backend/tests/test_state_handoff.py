@@ -131,11 +131,11 @@ async def test_frame_turn_context_stores_then_consumes_once():
     async def fake_get_stack(db, agent_id):
         return stored["stack"]
 
-    async def fake_set_stack(db, agent_id, stack):
+    async def fake_save(db, agent_id, stack):
         stored["stack"] = stack
 
-    real_get, real_set = sss._get_stack, sss._set_stack
-    sss._get_stack, sss._set_stack = fake_get_stack, fake_set_stack
+    real_get, real_set = sss._get_stack, sss._save
+    sss._get_stack, sss._save = fake_get_stack, fake_save
     try:
         stored["stack"] = [{
             "id": "f1", "type": "dm", "context_ref": "s1", "label": "私信「书爱」",
@@ -153,7 +153,7 @@ async def test_frame_turn_context_stores_then_consumes_once():
         second = await sss.frame_turn_context(object(), 1, "s1", ["书爱: 暗号是 7788"])
         assert second == "", "尾巴是临时交接，只注入一轮，不能每轮重复喂"
     finally:
-        sss._get_stack, sss._set_stack = real_get, real_set
+        sss._get_stack, sss._save = real_get, real_set
 
 
 async def test_frame_turn_context_does_not_write_to_other_conversation_frame():
@@ -166,14 +166,14 @@ async def test_frame_turn_context_does_not_write_to_other_conversation_frame():
     async def fake_get_stack(db, agent_id):
         return stored["stack"]
 
-    async def fake_set_stack(db, agent_id, stack):
+    async def fake_save(db, agent_id, stack):
         writes.append(stack)
 
-    real_get, real_set = sss._get_stack, sss._set_stack
-    sss._get_stack, sss._set_stack = fake_get_stack, fake_set_stack
+    real_get, real_set = sss._get_stack, sss._save
+    sss._get_stack, sss._save = fake_get_stack, fake_save
     try:
         assert await sss.frame_turn_context(object(), 1, "s1", ["私信的原文"]) == ""
         assert stored["stack"][0]["tail"] == ["群的旧尾巴"]
         assert writes == [], "没变化就不该写库"
     finally:
-        sss._get_stack, sss._set_stack = real_get, real_set
+        sss._get_stack, sss._save = real_get, real_set

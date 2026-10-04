@@ -62,6 +62,10 @@ async def environment(self, *, origin: str | int) -> dict[str, str | int | bool]
 | `origin_name` | 「{origin_name}」 |
 | `member_num` | {member_num} 人 |
 | `full_mode` | 全量模式 / 仅 @ 唤醒 |
+| `origin_memo` | 简介：{origin_memo} |
+
+`origin_memo`（来源方简介）由平台按 `ENV_MEMO_MAX` 截断后再渲染；它的取值变化与其它公共键一样
+参与比较、会构成一次环境变更。`ENV_PUBLIC_KEYS` 是这一组键的唯一来源，新增键必须同步该常量与测试。
 
 渲染优先级：`text`（非空）→ 公共键骨架 → 通用兜底。
 

@@ -13,6 +13,7 @@ _STRONG_NUMERIC_PARAMS = [
 ]
 _STRONG_BOOL_PARAMS = [
     "thinking_enabled", "force_alarm_on_end", "plan_injection_enabled", "is_ai_editable",
+    "retire_handover_self",
 ]
 # 字符串枚举参数：切换预设时直接覆盖（不合并）
 _STRONG_STRING_PARAMS = [

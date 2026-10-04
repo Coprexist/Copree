@@ -21,8 +21,8 @@
 | 事实 | 数据 | 含义 |
 |------|------|------|
 | 状态栈是 `agents.state_stack` 一列 JSON，同时装两类帧 | 全站 39 帧**全是情景帧**（dm/group_chat），任务帧 0 个；`paused`/`completed`/`closed` 一个都没有 | `push_state`/`close_state` 这套从上线到现在没被真正用过 |
-| **帧 id 会变** | 摘要结尾写着「完成后调用 pop_state」；实测某个 AI 每轮 `end_turn` 前都 `pop_state` → 栈清空 → 下次触发 `ensure_active_frame` 重建新帧（新 uuid） | 绑 `frame_id` 必须配离栈规则，不能假设它是长期标识 |
-| 栈深上限 10 | `MAX_STACK_DEPTH`；`ensure_active_frame` 超了从**栈底裁**，`push_state` 满了**拒绝** | 本机最深 5 层，裁剪从未触发；触发条件是「同一 AI 被 11 个以上不同会话触发过」 |
+| **帧 id 长期有效**（现状） | 帧全量保留：`pop_state` / `close_state` 只改 status，只有 `finish_frame`（他交接完）与平台代销会删记录 | 闹钟绑 `frame_id` 因此稳定；重建只发生在"这个 id 从来没存在过"时 |
+| 帧容量 31 | `agents.frame_capacity`（默认 31，AI 可配）；超限按档位处置**最久没被调用**的非当前帧——接手后事的（`retire_handover_self` 开）挂起待交接，不接手的平台代销；`push_state` 不再拒绝 | 本机最深 5 层；触发条件是「同一 AI 在 32 个以上会话里还有帧」 |
 | `agent_alarms` 是**可变行** | `update_alarm` 就地改 wake_at/task，cancel/fire 改 status | 没有版本列、没有事件表：所以「变没变」只能投递时比渲染文本现算（§3.2），而不是查版本号 |
 | 前缀缓存的命中边界 | 修前：命中恒等于「工具定义 + system 段」约 17k token，某 AI 从 190 条涨到 235 条 `cached_tokens` 死钉在 17,280。修后（同一 AI 同一群）：233 / 235 / 239 条消息时 `cached_tokens` 27,264 / 27,520 / 27,648，占 prompt 94%~97%；相邻两次请求首个不同下标 225/227（总长 233/239），`messages[0]` 4894 字符逐字节相同 | 整段历史现在都进缓存。规矩：**开头每个字节只许随「配置/能力版本」变**，随对话/时间变的一律去尾部读数或账本条目 |
 | 状态摘要本身是字节稳定的 | 同一帧 8 连轮 243 字节完全一致，且位置在历史**之后** | 它不需要改；计划和它同区即可 |
@@ -68,8 +68,8 @@
 - 归属只记两个事实，都在闹钟行上（单一来源）：`origin_context_ref`（谁拉起的，口径就是账本会话键：群 `group:{id}`、
   私信 `session_id`）、`frame_id`（该唤醒谁）。
   **「该通知谁」不落列**——它是这两者推出来的两类读者（本会话的、排给别处的），存一份就是第二份真相。
-- 帧离栈（`pop_state` / `close_state` / 栈底裁剪）时**不静默删计划**：记一条「状态 X 已关闭，名下还有 N 条没到点」，
-  让 AI 下次醒着时自己改派或取消。静默删等于丢东西。
+- 帧退出运行集合（`pop_state` / `close_state`）时**不静默删计划**：记一条「状态 X 已关闭，名下还有 N 条没到点」，
+  让 AI 下次醒着时自己改派或取消。静默删等于丢东西。（帧本身还在存储里，等他交接完再 `finish_frame` 删。）
 
 ### 3.5 开关
 
@@ -132,8 +132,9 @@
 | `backend/app/ai/alarm.py` | `set_alarm` / `update_alarm` / `cancel_alarm` / `fire_alarm` / `list_alarms` / `get_due_alarms` / `alarm_scheduler` / `_process_alarm_event` |
 | `backend/app/ai/decider.py` | `_decide_alarm_action`（优先级 85） |
 | `backend/app/services/agent/state_stack_service.py` | `get_frames` / `restore_frame`（闹钟唤醒时按帧恢复状态）/ `ensure_active_frame` / `push_state` / `pop_state` / `close_state` / `get_state_stack_summary` / `frame_turn_context` |
-| `backend/app/utils/pure/state_stack.py` | `make_state_frame`(48) / `format_state_stack_summary`(147) / `MAX_STACK_DEPTH`(21) |
-| `backend/app/models/agent.py` | `state_stack`(152) / `cross_state_notes`(162) / `foci`(166) / `state_stack_max_chars`(169) |
+| `backend/app/utils/pure/state_stack.py` | `make_state_frame` / `format_state_stack_summary` / `running` / `current` / `normalize_order` / `context_frames` / `retire_overflow` / `drop_overflow` / `drop_retired_overflow`（容量默认 `DEFAULT_FRAME_CAPACITY`=31） |
+| `backend/app/utils/pure/handover.py` | 后事告知文案、代销来由与幂等键（`handover:{帧 id}` / `drop:{时刻}`） |
+| `backend/app/models/agent.py` | `state_stack` / `cross_state_notes` / `foci` / `state_stack_max_chars` / `frame_capacity` / `retire_handover_self` |
 | `backend/app/ai/llm.py` | 群聊路径：锁定段 + 尾部读数(`tail_blocks`) + 账本段（记忆投递在 `sync_group_history` 之前）；私信路径同形。`message 0` 之后**直接进历史**，开头没有注入插槽 |
 | `backend/app/services/history/context_sync.py` | `sync_group_history`(131) / `sync_dm_history` / `append_events`(40) / `rewrite_context`(52) |
 | `backend/app/utils/pure/history.py` | `KINDS` / `NEVER_COMPRESSIBLE` / `make_entry` / `entries_to_messages` / `latest_message_ref` |

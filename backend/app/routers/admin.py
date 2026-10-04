@@ -647,13 +647,14 @@ async def disband_group(
     admin: dict = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """强制解散群聊"""
+    """强制解散群聊（与群主自助解散同一个入口：退场收尾只写一份）"""
     result = await db.execute(select(Group).where(Group.id == group_id))
     group = result.scalar_one_or_none()
     if group is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="群聊不存在")
 
-    await db.delete(group)
+    from app.chat.gm import disband_group as _disband
+    await _disband(db, group_id, operator_id=None)   # 管理员路径不做群主校验
     await _log_admin_action(db, admin["user_id"], "disband_group", "group", group_id)
     await db.flush()
 

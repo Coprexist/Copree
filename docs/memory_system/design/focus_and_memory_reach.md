@@ -1,8 +1,8 @@
 # 焦段与记忆适用范围
 
-> **版本**：v1.1（草案）
-> **日期**：2026-09-26
-> **状态**：待评审，尚未落地
+> **版本**：v1.2
+> **状态**：除第八节「按可见性分家」外均已落地——表结构、焦段与工具、归属复述、写入锚点（含空集物化）、
+> 锚点参与召回；逐项见第十四节「落地状态」与第十五节。
 > **文档规范**：设计类文档统一结构，语言规范，命名规范
 
 ---
@@ -78,6 +78,16 @@
 
 这套空集语义是**全平台统一口径**：记忆、技能作用域、环境与变更通知都用它——空 = 只有当前会话，
 全局必须显式锚「所有聊天」。措辞也共用一份，不各写各的。
+
+两处口径必须一致，落点不同：
+
+| 承载物 | "空"的形态 | 全局怎么写 |
+|--------|-----------|-----------|
+| 记忆 / 技能的**锚点**（可空多值列） | 空 = 只有当前会话 | 显式锚「所有聊天」 |
+| 变更通知的**版本行作用域**（必填单值） | 不存在空值——不写 `*` 即当前会话 | 显式写 `*` |
+
+即：**"空 = 当前会话"是锚的语义；版本行把同一语义落成必填值，写入方必须表态。**
+实现口径见[能力懒加载](../dev/capability_lazy_loading.md)「作用域（scope）」。
 
 ## 七、记忆的类型与权值
 
@@ -233,7 +243,10 @@ T        = max(Δ天, Δ调用 × 30 / 200)      # 200 次调用 ≈ 主观上�
 | 焦段（两条轴、元素、预置「所有聊天」） | 已落地 | `utils/pure/focus.py`、`services/agent/focus_service.py` |
 | 焦段三工具（选/建/改名、清单、合并） | 已落地 | `tools/self_management/switch_focus.py`、`list_focus.py`、`merge_focus.py` |
 | 归属随状态摘要每轮复述 | 已落地 | `services/agent/state_stack_service.py` |
-| 写入带锚点 + 空集警告 | 已落地 | `tools/memory/store_memory.py`、`tools/memory/manage_records.py` |
+| 空焦段告知（落账本、按会话帧幂等） | 已落地 | `ai/llm.py`（`_deliver_focus_notices`）、`utils/pure/focus.py`（`empty_pending` / `format_empty_notice`） |
+| 写入带锚点 + 空集警告 + **空集物化** | 已落地 | `services/agent/focus_service.py`（`resolve_anchors`）、`tools/memory/store_memory.py`、`tools/memory/manage_records.py` |
+| **整理已有记忆**（改锚点/权值/正文、删一条） | 已落地 | `services/memory/memory_service.py`（`update_memory` / `forget_memory`）、`tools/memory/store_memory.py`（带 `memory_id`）、`tools/memory/forget_memory.py` |
+| **锚点参与召回**（任一元素命中即召回、命中多的排前） | 已落地 | `utils/pure/focus.py`（`memory_reach` / `covers_session`）、`services/memory/memory_service.py`（`_apply_reach`） |
 | 标题 30 字 / 内容 200 字的超限提醒（只提醒、不裁剪） | 已落地 | `utils/pure/memory_shape.py` |
 | 记忆落在账本当轮新消息之前（内容指纹去重，改过只补最新版） | 已落地 | `utils/pure/memory_entry.py`、`services/memory/memory_delivery.py`、`ai/llm.py` |
 | 每日整理（低权值退场即删 + 待归档去重） | 已落地 | `services/memory/tidy_service.py`、`bootstrap.py` |
@@ -243,5 +256,40 @@ T        = max(Δ天, Δ调用 × 30 / 200)      # 200 次调用 ≈ 主观上�
 `test_focus_tools.py`、`test_memory_anchors.py`、`test_memory_tidy.py`、
 `test_schema_contract.py`（迁移编号与时间戳列）。端到端观测：`scripts/memory_probe.py`。
 
-**尚未落地：锚点参与召回。** 现在锚点只写不读——「按可见性分家」（依赖当前会话/焦段的
-记忆进尾部读数，不依赖的进锁定层）做完之后，锚点才会真正决定一条记忆在哪儿能被想起。
+## 十五、锚点参与召回（已落地）
+
+### 读侧
+
+召回合并之后过一道 `_apply_reach`：一次读回候选行的三组锚点，按第九节判定够不够得着——
+够不着的丢弃，命中元素多的排前（同命中数保持原来的相关性顺序，稳定排序）。两轴不要求同时命中。
+
+判定本身是纯函数 `focus.memory_reach`，与变更通知的作用域判定共用 `focus.covers_session`——
+两处各写一份就会分裂成"通知按一个口径、召回按另一个口径"。报警唤醒（闹钟）没有会话上下文，
+因此只够得着空集与「所有聊天」这类记忆；锚死在某个会话上的记忆不属于那个场景。
+
+### 空集物化（写侧）
+
+第六节的空集语义是"只在本会话与当前语义焦段下能被想起"。**空集原样落库是不成立的**：
+读侧无从知道"本会话"指哪一个，那条记忆就成了处处可见，即第六节明令禁止的隐式全局。
+所以在写入这一刻由 `focus_service.resolve_anchors` 把它物化下来——
+`session_refs = [当前会话键]`，有当前语义焦段则一并写入；工具结果如实回显落成的锚点。
+
+存量空锚点行按"够得着"处理，不做静默丢弃：修这条 bug 不该让历史记忆集体消失。
+
+### 空焦段怎么告诉他（位置）
+
+焦段里的会话全走光之后，锚在它身上的记忆在哪儿都召不回，而 AI 自己看不见这件事。
+这条告知**落账本条目**，与状态帧后事/便签/能力变更通知同一个出口
+（`ai/llm.py` 的 `_deliver_focus_notices`）；投递进度记在会话帧的 `delivered` 里
+（`emptyfocus:{焦段 id}`），解锁随之归零，下段上下文条件还在就重新提醒。
+以前它挂在每轮复述归属的那行摘要里——那是尾部动态块，每轮重拼、永远吃不到缓存，
+一条一次性事实不该按每轮全价付；`focus.describe` 现在只复述归属。
+出路只有合并（`merge_focus`）或改锚：平台不替他搬记忆——唯一能自动做的动作
+（改锚「所有聊天」）等于把群里的事搬进所有会话，那条隐私边界不该由一次后台动作决定。
+
+### 仍未落地：按可见性分家（第八节）
+
+第八节要求把记忆分两处注入——可见性不依赖当前会话/焦段的进锁定段（版本链冻结），
+依赖的进账本条目。当前**全部**走账本条目（位置正确、缓存稳定），分家只影响注入位置与
+前缀缓存，不影响"一条记忆在哪儿能被想起"，故列为独立一步；它涉及前缀装配，
+须在前缀缓存不变式下单独验收，见[会话历史与前缀缓存](../../dev/conversation_history.md)。

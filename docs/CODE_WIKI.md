@@ -905,7 +905,7 @@ class ToolPlugin:
 |--------|--------|---------|
 | `chat_social` | 群聊社交 | send_gm, send_dm, enter_group, switch_state, set_dnd, ... |
 | `file_operations` | 文件操作 | file_read, file_write, file_edit, file_delete, file_list, file_share, execute_command, ... |
-| `memory` | 记忆系统 | store_memory, recall_memory, manage_records |
+| `memory` | 记忆系统 | store_memory（带 memory_id 则改已有那条）, recall_memory, forget_memory, manage_records |
 | `group_management` | 群聊管理 | create_group, invite_to_group |
 | `self_config` | 自我配置 | update_self_config, toggle_thinking, update_emotion, manage_skills, set_status |
 | `self_management` | 自我管理 | set_alarm, list_alarms, cancel_alarm, push_state, pop_state, end_turn, compress_context, manage_workspace, ... |

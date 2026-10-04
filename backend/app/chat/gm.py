@@ -849,22 +849,99 @@ async def change_member_role(db: AsyncSession, group_id: int, operator_id: int,
     return target
 
 
-async def disband_group(db: AsyncSession, group_id: int, operator_id: int) -> Group:
-    """解散群聊"""
+async def disband_group(db: AsyncSession, group_id: int, operator_id: int | None = None) -> Group:
+    """解散群聊 —— 退场收尾的唯一入口（operator_id 为空 = 管理员强制解散，不做群主校验）。
+
+    收尾为什么必须做齐：
+    - `rough_memories.group_id` 外键是 NO ACTION：不清它根本删不掉群（管理员那条路曾直接
+      `db.delete(group)`，只要该群有群共享记忆就撞外键）；
+    - 群共享记忆改成"该 AI 私有"并原样保留：群没了，事还在它自己心里。留成
+      `scope='group' AND group_id IS NULL` 是错的——召回的群记忆条件按 group_id 匹配，
+      那种行谁也召不回，等于**数据在、再也想不起来**；
+    - 锚在这个会话上的锚点改锚「所有聊天」：会话一消失，可达性判定会让它处处够不着；
+    - 悬空指针一起清：闹钟的 `origin_context_ref`、世界绑定、焦段元素。
+    """
     group = await db.get(Group, group_id)
     if group is None:
         raise ValueError("群聊不存在")
-    member = await _get_member(db, group_id, "human", operator_id)
-    if member is None or member.role != "owner":
-        raise ValueError("仅群主可解散群聊")
-    from app.models.memory import RoughMemory
-    await db.execute(update(RoughMemory).where(RoughMemory.group_id == group_id).values(group_id=None))
+    if operator_id is not None:
+        member = await _get_member(db, group_id, "human", operator_id)
+        if member is None or member.role != "owner":
+            raise ValueError("仅群主可解散群聊")
+
+    from app.services.history.context_sync import context_ref as _context_ref
+    ref = _context_ref(group_id=group_id)
+
+    moved = await release_group_memories(db, group_id, ref)
+    cleared = await clear_dangling_group_refs(db, group_id, ref)
+
     from app.models.conversation_log import ConversationLog
     await db.execute(delete(ConversationLog).where(ConversationLog.group_id == group_id))
     await db.delete(group)
     await db.flush()
-    logger.info(f"群聊 '{group.name}' (id={group_id}) 已被群主 {operator_id} 解散")
+    logger.info(
+        f"群聊 '{group.name}' (id={group_id}) 已解散 "
+        f"（操作者 {operator_id or 'admin'}；{moved} 条记忆改为私有、{cleared} 处悬空引用已清）")
     return group
+
+
+async def release_group_memories(db: AsyncSession, group_id: int, ref: str) -> int:
+    """群共享记忆 → 该 AI 私有；锚在这个会话上的锚点改锚「所有聊天」。返回改锚条数。
+
+    改锚是必需的：解散后这个会话键不复存在，留着它的锚点会让那条记忆在任何上下文都
+    够不着（见 docs/memory_system/design/focus_and_memory_reach.md §九）。
+    数量可控（单个 AI 的记忆规模），所以在 Python 里筛，不跟各后端的 JSON 语法较劲。
+    """
+    from app.models.memory import RoughMemory
+    from app.models.structured_record import StructuredRecord
+    from app.utils.pure.focus import ALL_CHATS_ID
+
+    await db.execute(update(RoughMemory)
+                     .where(RoughMemory.group_id == group_id)
+                     .values(group_id=None, scope="private"))
+
+    hit = 0
+    for model, filters in ((RoughMemory, (RoughMemory.owner_type == "ai",)),
+                           (StructuredRecord, ())):
+        rows = (await db.execute(select(model).where(*filters))).scalars().all()
+        for row in rows:
+            refs = list(row.session_refs or [])
+            if ref in refs:
+                row.session_refs = [ALL_CHATS_ID if r == ref else r for r in refs]
+                hit += 1
+    return hit
+
+
+async def clear_dangling_group_refs(db: AsyncSession, group_id: int, ref: str) -> int:
+    """清掉指向这个群的悬空引用：闹钟来源、世界绑定、焦段元素、会话帧。返回处理处数。"""
+    from app.models.agent import Agent
+    from app.models.alarm import AgentAlarm
+    from app.models.world import WorldBinding
+    from app.services.agent import focus_service
+    from app.services.agent.state_stack_service import dispose_context_frames
+
+    hit = 0
+    # 闹钟：计划原本"在那个状态里执行"，群没了就没有那个状态；任务本身留着，等它自己再排
+    result = await db.execute(
+        update(AgentAlarm).where(AgentAlarm.origin_context_ref == ref)
+        .values(origin_context_ref=None))
+    hit += result.rowcount or 0
+    # 世界绑定：群是世界的入口，入口没了，绑定一起走
+    result = await db.execute(delete(WorldBinding).where(
+        WorldBinding.entity_type == "group", WorldBinding.entity_id == group_id))
+    hit += result.rowcount or 0
+    # 焦段元素：会话焦段里不该留着已经消失的会话
+    for agent_id, foci in (await db.execute(select(Agent.id, Agent.foci))).all():
+        gone = sum(1 for f in (foci or [])
+                   if f.get("axis") == "session" and ref in (f.get("elements") or []))
+        if gone:
+            await focus_service.forget_session(db, agent_id, ref)
+            hit += gone
+    # 会话帧：会话没了，帧就再也跑不起来。按各 AI 的档位取向处置，两条路都留告知
+    # （接手后事的挂起待交接、办完调 finish_frame；不接手的平台代销 + 一条「会话已不存在」）
+    disposed = await dispose_context_frames(db, ref)
+    hit += disposed["retired"] + disposed["dropped"]
+    return hit
 
 
 # ============================================================
