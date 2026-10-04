@@ -467,12 +467,14 @@ async def test_channel_group_name_asks_the_live_channel_once(migrated_db):
             self.key = key
             self.name = "测试通道"
             self.asked: list[int] = []
+            self.forces: list[bool] = []
 
         def facts_for_group(self, group_id: int) -> dict | None:
             return None                     # 还没收到过消息：缓存里什么都没有
 
-        async def refresh_group_facts(self, group_id: int) -> dict | None:
+        async def refresh_group_facts(self, group_id: int, *, force: bool = True) -> dict | None:
             self.asked.append(group_id)
+            self.forces.append(force)
             return {"name": "合欢宗藏经阁", "member_num": 115}
 
     with _FakePluginDir():
@@ -491,6 +493,72 @@ async def test_channel_group_name_asks_the_live_channel_once(migrated_db):
             try:
                 assert await channel.channel_group_name(db, 7) == "合欢宗藏经阁"
                 assert live.asked == [7], "手上没有就该现问一次"
+                assert live.forces == [True], "用户按开关时不受'今天问过'的缓存约束"
+            finally:
+                PluginRegistry.unregister(key)
+
+            for plugin_id in list(skill_bridge._loaded):
+                await skill_bridge._unload_plugin(plugin_id)
+
+
+async def test_manual_channel_sync_pulls_group_info(migrated_db):
+    """群主/管理员可以手动拉一次通道那边的群信息，打开的群顺手把群名对齐
+
+    按钮的语义是"现在就同步一次"——不然按完看不出发生了什么。别人（非群主/管理员）拉不动。
+    """
+    from app.chat import gm
+    from app.database import async_session
+    from app.models.agent import Agent
+    from app.services.infrastructure.plugin_registry import PluginRegistry, registry_key
+    from app.services.plugin import channel, config as plugin_config, skill_bridge
+
+    class _LiveChannel:
+        def __init__(self, key: str) -> None:
+            self.key = key
+            self.name = "测试通道"
+            self.forces: list[bool] = []
+
+        def facts_for_group(self, group_id: int) -> dict | None:
+            return None                     # 缓存里还没有：必须靠手动同步现拉
+
+        async def refresh_group_facts(self, group_id: int, *, force: bool = True) -> dict | None:
+            self.forces.append(force)
+            return {"name": "合欢宗藏经阁", "member_num": 115, "memo": "只聊养猫"}
+
+    with _FakePluginDir():
+        async with async_session() as db:
+            owner_id, other_id, agent_id = await _seed(db)
+            agent = await db.get(Agent, agent_id)
+            group = await gm.create_group(
+                db, "小明 的群", "human", owner_id,
+                initial_members=[{"type": "ai", "id": agent.user_id}],
+            )
+            group.name_from_channel = True
+            await db.commit()
+
+            skill_bridge.ensure_declared("qq-channel")
+            instance = channel.instance_of(agent_id)
+            await plugin_config.set_config(
+                "qq-channel",
+                {"app_id": "1", "client_secret": "2", "copree_group_id": str(group.id)},
+                instance, db=db,
+            )
+            key = registry_key("qq-channel", instance)
+            live = _LiveChannel(key)
+            PluginRegistry.register(live)
+            try:
+                result = await gm.refresh_group_channel_info(db, group.id, owner_id)
+                assert result["channels"][0]["name"] == "合欢宗藏经阁", result
+                assert live.forces == [True], "手动同步要绕过'今天问过'的缓存"
+                # 打开的群顺手对齐：按钮按完要看得见效果
+                assert result["name"] == "合欢宗藏经阁", result
+                assert str(group.name) == "合欢宗藏经阁"
+
+                try:
+                    await gm.refresh_group_channel_info(db, group.id, other_id)
+                    raise AssertionError("非群主/管理员不该能同步通道信息")
+                except ValueError:
+                    pass
             finally:
                 PluginRegistry.unregister(key)
 

@@ -184,19 +184,25 @@ async def served_instances(db: AsyncSession, group_id: int) -> list[tuple[str, s
     return out
 
 
-async def channel_bound_group_ids(db: AsyncSession) -> set[int]:
-    """所有被外部通道接着的 Copree 群：群列表/群设置据此决定显不显示通道相关的开关
+async def bound_group_labels(db: AsyncSession) -> dict[int, list[str]]:
+    """被外部通道接着的 Copree 群 → 那些通道的名字（如 ['QQ']）
 
     只算还声明着的通道（插件可能已被卸载）：按钮点了没反应的开关比没有开关更糟。
     """
-    ids: set[int] = set()
+    out: dict[int, list[str]] = {}
     for (plugin_id, _instance), slot in (await _channel_landings(db)).items():
-        if not catalog.channel_plugin(plugin_id):
+        found = catalog.channel_plugin(plugin_id)
+        if not found:
             continue
+        group_ids: set[int] = set()
         if slot["default"]:
-            ids.add(int(slot["default"]))
-        ids.update(int(v) for v in slot["map"].values() if int(v or 0))
-    return ids
+            group_ids.add(int(slot["default"]))
+        group_ids.update(int(v) for v in slot["map"].values() if int(v or 0))
+        for group_id in group_ids:
+            labels = out.setdefault(group_id, [])
+            if found["label"] not in labels:
+                labels.append(found["label"])
+    return out
 
 
 async def channel_group_name(db: AsyncSession, group_id: int) -> str:
@@ -208,17 +214,20 @@ async def channel_group_name(db: AsyncSession, group_id: int) -> str:
     for plugin_id, instance, _found in await served_instances(db, group_id):
         facts = _live_group_facts(plugin_id, instance, group_id)
         if not facts:
-            facts = await _refresh_live_group_facts(plugin_id, instance, group_id)
+            facts = await _refresh_live_group_facts(plugin_id, instance, group_id, force=True)
         name = str((facts or {}).get("name") or "").strip()
         if name:
             return name
     return ""
 
 
-async def _refresh_live_group_facts(plugin_id: str, instance: str, group_id: int) -> dict[str, Any] | None:
-    """让活着的实例现拉一次通道侧群名（用户正等着看结果）；失败当作"还没有名字"
+async def _refresh_live_group_facts(
+    plugin_id: str, instance: str, group_id: int, *, force: bool
+) -> dict[str, Any] | None:
+    """让活着的实例现拉一次通道侧群信息（用户正看着界面）；失败当作"还没有"
 
-    这是唯一一处"不是收到消息也去问通道"的地方，触发点是用户按开关，代价一次接口调用。
+    触发点都是用户动作（按开关、打开资料卡），所以机会不多；force=False 仍受插件那边的
+    "今天问过就用手里的"约束——资料卡会被反复打开，不能每次都去问通道。
     """
     from app.services.infrastructure.plugin_registry import PluginRegistry, registry_key
 
@@ -227,10 +236,28 @@ async def _refresh_live_group_facts(plugin_id: str, instance: str, group_id: int
     if not callable(probe):
         return None
     try:
-        return await probe(group_id)
+        return await probe(group_id, force=force)
     except Exception as e:
-        logger.warning(f"现拉通道群名失败（非致命）: {type(e).__name__}: {e}")
+        logger.warning(f"现拉通道群信息失败（非致命）: {type(e).__name__}: {e}")
         return None
+
+
+async def describe_group(db: AsyncSession, group_id: int, *, refresh: bool = False) -> list[dict[str, Any]]:
+    """这个群在通道那边是什么样（群名/人数/简介/分类/标签）：资料卡显示"它在 QQ 里叫什么"
+
+    手上有就用，没有就问一次（同一天只问一次）——资料卡是用户主动打开的，等不到下一条消息。
+    refresh=True 给"手动同步"按钮：现在就问，不再看今天问过没有。
+    拿不到就返回空列表，资料卡不显示通道那一段。
+    """
+    out: list[dict[str, Any]] = []
+    for plugin_id, instance, found in await served_instances(db, group_id):
+        facts = _live_group_facts(plugin_id, instance, group_id)
+        if not facts or refresh:
+            facts = await _refresh_live_group_facts(plugin_id, instance, group_id, force=refresh)
+        if not facts or not str(facts.get("name") or "").strip():
+            continue
+        out.append({**facts, "kind": found["kind"], "label": found["label"]})
+    return out
 
 
 async def group_brief(db: AsyncSession, group_id: int) -> str:

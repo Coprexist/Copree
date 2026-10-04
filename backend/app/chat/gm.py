@@ -100,10 +100,10 @@ async def list_user_groups(db: AsyncSession, user_id: int) -> list[dict]:
         return []
     group_ids = [g.id for _, g in pairs]
 
-    # 哪些群接进了外部通道：群设置面板据此决定显不显示"群名跟随通道"那个开关
+    # 哪些群接进了外部通道（以及通道叫什么）：群设置面板据此决定显不显示"群名跟随通道"与同步按钮
     from app.services.plugin import channel as channel_service
 
-    channel_bound = await channel_service.channel_bound_group_ids(db)
+    channel_labels = await channel_service.bound_group_labels(db)
 
     user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     username = user.username if user else ""
@@ -300,7 +300,8 @@ async def list_user_groups(db: AsyncSession, user_id: int) -> list[dict]:
             "auto_approve_join": bool(group.auto_approve_join),
             "approve_invites": bool(group.approve_invites),
             "name_from_channel": bool(group.name_from_channel),
-            "channel_bound": group.id in channel_bound,
+            "channel_bound": group.id in channel_labels,
+            "channel_labels": channel_labels.get(group.id, []),
             "is_pinned": False,
             "created_at": str(group.created_at) if group.created_at else None,
         })
@@ -782,6 +783,33 @@ async def update_group_settings(db: AsyncSession, group_id: int, operator_id: in
         await enqueue_profile_update(db, "group", group_id, "display_name", renamed)
     logger.info(f"群聊 {group_id} 设置已更新: {list(updates.keys())}")
     return group
+
+
+async def refresh_group_channel_info(db: AsyncSession, group_id: int, operator_id: int) -> dict:
+    """手动拉一次通道那边这个群的信息（群主/管理员）：群设置里那个"同步"按钮
+
+    打开的群顺手把群名对齐——按钮的语义就是"现在就同步一次"，不然用户按完看不出发生了什么。
+    通道那边还没消息进来、或通道没实现群信息接口时返回空列表（按钮照旧不报错，界面说"没拉到"）。
+    """
+    group = await db.get(Group, group_id)
+    if group is None:
+        raise ValueError("群聊不存在")
+    member = await _get_member(db, group_id, "human", operator_id)
+    if member is None or member.role not in ("owner", "admin"):
+        raise ValueError("仅群主或管理员可同步通道信息")
+
+    from app.services.plugin import channel as channel_service
+
+    channels = await channel_service.describe_group(db, group_id, refresh=True)
+    name = next((str(c.get("name") or "").strip() for c in channels if str(c.get("name") or "").strip()), "")
+    if name and bool(getattr(group, "name_from_channel", False)) and name[:100] != group.name:
+        group.name = name[:100]
+        await db.flush()
+        from app.services.federation.federation_service import enqueue_profile_update
+
+        await enqueue_profile_update(db, "group", group_id, "display_name", group.name)
+        logger.info(f"群聊 {group_id} 群名对齐通道群名（手动同步）")
+    return {"id": group.id, "name": group.name, "channels": channels}
 
 
 async def change_member_role(db: AsyncSession, group_id: int, operator_id: int,

@@ -817,17 +817,18 @@ class QqChannelPlugin(ServicePlugin):
             self._group_facts.pop(oldest, None)
         return facts
 
-    async def refresh_group_facts(self, group_id: int) -> dict[str, Any] | None:
-        """现去通道问一次这个群的群信息（用户刚打开"跟随通道群名"时用）
+    async def refresh_group_facts(self, group_id: int, *, force: bool = True) -> dict[str, Any] | None:
+        """现去通道问一次这个群的群信息（用户在看界面时用：打开资料卡、刚打开"跟随通道群名"）
 
         只在知道通道侧群标识时才问得了：映射表里有它，或它以前来过消息（默认落点群要知道是哪个群）。
         都没见过就返回 None——那说明这个群还没收到过通道消息，等下一条来自然就有了。
+        force=False 时仍按"今天问过就用手里的"：资料卡会被反复打开，不能每次都去问通道。
         """
         origins = [o for o in self._group_map if self._landing_group(o) == int(group_id)]
         if not origins:
             origins = [o for o in self._seen_groups if self._landing_group(o) == int(group_id)]
         for origin in origins:
-            facts = await self._group_facts_of(origin, force=True)
+            facts = await self._group_facts_of(origin, force=force)
             if facts:
                 return facts
         return None

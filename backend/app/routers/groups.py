@@ -185,10 +185,13 @@ async def get_group_detail(
     member_count = len(members)
     online_count = sum(1 for m in members if get_user_online_status(m.member_id))
 
-    # 这个群接没接外部通道：群设置据此决定显不显示"群名跟随通道"
+    # 这个群接没接外部通道（群设置据此决定显不显示"群名跟随通道"），以及通道那边它是什么样（资料卡）
     from app.services.plugin import channel as channel_service
 
-    channel_bound = len(await channel_service.served_instances(db, group_id)) > 0
+    served = await channel_service.served_instances(db, group_id)
+    channel_labels = list(dict.fromkeys(str(f["label"]) for _p, _i, f in served))
+    # 通道那边这个群是什么样（群名/人数/简介）：拿不到就是空，资料卡不显示那一段
+    channels = await channel_service.describe_group(db, group_id)
 
     return {
         "id": group.id,
@@ -204,7 +207,9 @@ async def get_group_detail(
         "auto_approve_join": bool(group.auto_approve_join),
         "approve_invites": bool(group.approve_invites),
         "name_from_channel": bool(group.name_from_channel),
-        "channel_bound": channel_bound,
+        "channel_bound": bool(served),
+        "channel_labels": channel_labels,
+        "channels": channels,
         "created_at": str(group.created_at) if group.created_at else None,
         "member_count": member_count,
         "online_count": online_count,
@@ -440,6 +445,21 @@ async def update_group(
             "name_from_channel": bool(group.name_from_channel),
             "created_at": str(group.created_at) if group.created_at else None,
         }
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post("/groups/{group_id}/channel/refresh", status_code=status.HTTP_200_OK)
+async def refresh_group_channel(
+    group_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """手动拉一次通道那边这个群的信息（群主/管理员）。"""
+    from app.chat.gm import refresh_group_channel_info
+
+    try:
+        return await refresh_group_channel_info(db, group_id, current_user["user_id"])
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 

@@ -72,6 +72,10 @@ class GroupResponse(BaseModel):
     # 群名是否跟随外部通道，以及这个群接没接通道（没接就不显示那个开关）
     name_from_channel: bool = False
     channel_bound: bool = False
+    # 接着这个群的通道叫什么（如 ['QQ']）：群设置的按钮文案用它，不写死 QQ
+    channel_labels: list[str] = []
+    # 通道那边的样子（群名/人数/简介/分类/标签）：资料卡显示「它在 QQ 里叫什么」，拿不到就是空
+    channels: list[dict] = []
 
 
 class GroupMemberResponse(BaseModel):
