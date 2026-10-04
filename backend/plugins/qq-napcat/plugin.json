@@ -17,6 +17,7 @@
     "desc_ja": "自前のプロトコル端末で実 QQ 番号を接続：グループ/DM の全メッセージとリッチテキストに対応（BAN リスクは自己責任）",
     "pairing": true,
     "supports_group": true,
+    "supports_files": false,
     "limits": [
       {"text":"用真 QQ 号（协议端）：没有官方那套「只能被动回复 / 每天 2 条」的限制，群里被 @ 才唤醒，也能按需主动发", "text_en":"Uses a real QQ account (protocol endpoint): no official reply-only or 2-per-day limits; the AI wakes on @mentions and can also post proactively", "text_ja":"実 QQ 番号（プロトコル端末）を使用：公式のような受動返信のみ／1 日 2 通の制限はなく、@ で起動し主動送信も可能"},
       {"text":"违反 QQ 用户协议，有封号风险：只挂备用号，别用主号", "text_en":"It violates the QQ ToS and risks a ban: use a spare account, never your main one", "text_ja":"QQ 利用規約に違反し BAN のリスクがあります。予備アカウントのみ使用してください"},

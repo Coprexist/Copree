@@ -17,6 +17,7 @@
     "desc_ja": "公式 QQ ボット：グループでの @ や DM は Copree に入り、返信は QQ に戻ります",
     "pairing": true,
     "supports_group": true,
+    "supports_files": false,
     "limits": [
       {
         "text": "群里只能被动回复：别人 @ 或回复机器人时才发得出去（腾讯自 2025-04-21 起下线了主动推送），所以不能让 AI「待会儿在群里说一声」",

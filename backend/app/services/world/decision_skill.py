@@ -10,9 +10,12 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
+from app.config import settings
 from app.repositories.world_repo import SQLAlchemyWorldRepository
 from app.utils.display_name import display_names
+from app.utils.pure.timeutil import local_time_fields
 from sqlalchemy.ext.asyncio import AsyncSession
 logger = logging.getLogger(__name__)
 
@@ -43,7 +46,7 @@ _DO_ACTIONS = ("reply_template", "call_tool", "run_script", "silent")
 
 # 预置情景：写错的 event 等于永远不触发，故当场拒绝并列出可选值（情景表见 docs/dev/decision_layer.md）
 SCENARIOS: dict[str, str] = {
-    "group_message": "群消息（content/sender_id/sender_name/sender_type/group_id/is_mention/is_at_all/group_type）",
+    "group_message": "群消息（content/content_clean/content_len/sender_id/sender_name/sender_type/group_id/is_mention/is_at_all/group_type）",
     "member_join": "有人入群（member_id/member_name/operator_id/operator_name）",
     "member_leave": "有人退群（member_id/member_name/operator_id/operator_name）",
     "scheduled": "定时到点（trigger/task）",
@@ -58,16 +61,23 @@ def rule_schema_desc() -> str:
     return (
         "配置你自己的决策技能：声明「遇到什么情景我干什么、是否必须唤醒我本体」。"
         f"结构：{{name, when:{{event, conditions}}, do:{{action,...}}, notify}}。event 支持：{events}。"
-        "conditions 是递归条件树：{\"and\":[...]}/{\"or\":[...]}/{\"not\":{...}} 自由组装；"
-        "叶子 {\"字段\":值}=等于，{\"字段_contains\":\"子串\"}、{\"字段_starts_with\":\"前缀\"}、"
-        "{\"字段_matches\":\"正则\"}、{\"字段_gt/gte/lt/lte\":数值}。"
-        "do 四选一：reply_template（{action, reply} 固定回复，零成本）/ call_tool（{action, name, arguments} 调平台工具）/ "
-        "run_script（{action, code} 沙箱脚本：在你自己的文件空间里跑，不能联网；把要说的话 print 成 JSON {\"reply\":\"...\"}）/ "
+        "所有情景都能读到的公共字段：now（HH:MM）/ today / weekday / hour。"
+        "conditions 是递归条件树：{\"and\":[...]}/{\"or\":[...]}/{\"not\":{...}} 自由嵌套（可多选、可非与或）；"
+        "叶子 {\"字段\":值} = 全等（整条消息就等于它；建议判 content_clean，@ 令牌已去掉）、"
+        "{\"字段_contains\":\"子串\"}、{\"字段_starts_with\":\"前缀\"}、{\"字段_matches\":\"正则\"}、"
+        "{\"字段_gt/gte/lt/lte\":数值}（长度限制：{\"content_len_lte\":20}）、"
+        "{\"field\":\"content_clean\",\"op\":\"similar\",\"value\":\"签到\"} = 相似命中"
+        "（默认阈值 0.8，也可写 {\"text\":\"签到\",\"ratio\":0.75}；错别字、多几个字都认）。"
+        "do 四选一：reply_template（{action, reply} 固定回复，零成本；可用占位 "
+        "{sender_name} {sender_id} {group_id} {content} {now}）/ call_tool（{action, name, arguments} 调平台工具）/ "
+        "run_script（{action, code} 沙箱脚本：在你自己的文件空间里跑，不能联网。本次事件的全部字段由"
+        "环境变量 DECISION_CTX 给到（JSON）：json.loads(os.environ[\"DECISION_CTX\"]) 里就有 sender_id / "
+        "sender_name / group_id / content_clean / now 等，按人分开记账靠的就是它；要说的话 print 成 JSON {\"reply\":\"...\"}）/ "
         "silent（{action} 静默：这条消息不回、也不唤醒你本体，用来声明「这种消息不值得理」）。"
         "notify=true = 命中后仍唤醒本体（执行结果会作为一条系统提示给你）；false = 程序处理完即止。"
-        "同名覆盖更新，上限 20 条。示例：签到自动回复 = "
-        "{\"name\":\"签到\",\"when\":{\"event\":\"group_message\",\"conditions\":{\"and\":[{\"content_contains\":\"签到\"},{\"not\":{\"is_mention\":true}}]}},"
-        "\"do\":{\"action\":\"reply_template\",\"reply\":\"已记录签到\"},\"notify\":false}"
+        "同名覆盖更新，上限 20 条。示例：签到自动回复（零唤醒、按人回名字）= "
+        "{\"name\":\"签到\",\"when\":{\"event\":\"group_message\",\"conditions\":{\"and\":[{\"content_clean_contains\":\"签到\"},{\"not\":{\"is_mention\":true}}]}},"
+        "\"do\":{\"action\":\"reply_template\",\"reply\":\"{sender_name} 已记录签到\"},\"notify\":false}"
     )
 
 
@@ -226,12 +236,16 @@ async def run_decision_engine(
 
     rules：调用方批量预取的规则（全量消息下每条消息要给一群 AI 过一遍，逐个查库不划算）。
     三态返回、notify 语义与分派表见 docs/dev/decision_layer.md。
+
+    ctx 在这里补上公共的时间字段（now/today/weekday/hour）：六个情景各写一遍迟早漏一个，
+    调用方自己给了同名字段就以调用方为准。条件与脚本读的是同一份 ctx。
     """
     try:
         if rules is None:
             rules = await get_decision_rules(db, kind, entity_id)
         if not rules:
             return {"hit": False}
+        ctx = {**local_time_fields(settings.display_timezone), **(ctx or {})}
         rule = find_hit(rules, event_type, ctx)
         if rule is None:
             return {"hit": False}
@@ -394,15 +408,32 @@ def build_friend_request_ctx(requester_id: int, requester_name: str,
     }
 
 
+def clean_message_text(content: str) -> str:
+    """消息正文的"干净"版本：去掉 @ 令牌与开头的 @名字，空白收成单空格。
+
+    为什么条件里要按它判：QQ 那边用户 @ 你是常态，正文物化后是「<@!1> 签到」——
+    拿原串做全等匹配永远对不上，AI 只能退而求其次用 contains。content 仍是原样。
+    """
+    from app.utils.text import MENTION_TOKEN_RE
+
+    text = MENTION_TOKEN_RE.sub(" ", str(content or ""))
+    text = re.sub(r"^\s*@[^\s@]{1,32}\s*", "", text)      # 开头的旧写法 @名字
+    return " ".join(text.split())
+
+
 def build_group_message_ctx(
     content: str, sender_id: int | None, sender_name: str,
     sender_type: str, group_id: int | None, is_mention: bool = False,
     is_at_all: bool = False, group_type: dict | None = None,
 ) -> dict:
     """group_message 情景的事件上下文（条件 DSL 字段来源）。"""
+    clean = clean_message_text(content)
     return {
         "event": "group_message",
         "content": content or "",
+        # content_clean / content_len：全等、相似、长度限制都判它们（见 clean_message_text）
+        "content_clean": clean,
+        "content_len": len(clean),
         "sender_id": sender_id,
         "sender_name": sender_name or "",
         "sender_type": sender_type or "human",
@@ -430,6 +461,25 @@ def find_hit(rules: list[dict], event_type: str, ctx: dict) -> dict | None:
 # do 执行
 # ═══════════════════════════════════════════════════════════
 
+# reply_template 能用的占位；认不出的 {…} 原样留着（正文里的花括号可能是字面意思）
+_TEMPLATE_FIELDS = ("sender_name", "sender_id", "group_id", "content", "now", "today", "weekday")
+_TEMPLATE_RE = re.compile(r"\{([a-z_]+)\}")
+
+
+def render_reply_template(text, ctx: dict) -> str:
+    """把 {字段} 换成这次事件的值 —— 零唤醒的固定回复也能叫出对方名字。
+
+    认不出的占位一字不动：花括号在正文里可能是字面意思（JSON 例子、代码片段），
+    宁可留着让人看见，也别替掉或者当场拒掉一条合法的回复。
+    """
+    def one(match: re.Match) -> str:
+        key = match.group(1)
+        value = (ctx or {}).get(key)
+        return str(value) if key in _TEMPLATE_FIELDS and value is not None else match.group(0)
+
+    return _TEMPLATE_RE.sub(one, str(text or ""))
+
+
 async def execute_do(db, world, do: dict, ctx: dict, *, kind: str = "", entity_id: int = 0) -> dict:
     """执行决策技能的动作，返回 {success, reply?, result?, error?}。
 
@@ -442,7 +492,8 @@ async def execute_do(db, world, do: dict, ctx: dict, *, kind: str = "", entity_i
             # 空 reply 即不代发；handled=True 让调用方连唤醒一起跳过
             return {"success": True, "reply": ""}
         if action == "reply_template":
-            return {"success": True, "reply": str(do.get("reply") or "").strip()}
+            # 占位换成这次事件的值（见 render_reply_template）
+            return {"success": True, "reply": render_reply_template(do.get("reply"), ctx).strip()}
         if action == "call_tool":
             name = str(do.get("name") or "")
             arguments = do.get("arguments") or {}

@@ -206,6 +206,56 @@ _MD_HEADING_RE = re.compile(r'^\s{0,3}#{1,6}\s*', re.M)
 _MD_QUOTE_RE = re.compile(r'^\s{0,3}>\s?', re.M)
 _MD_HR_RE = re.compile(r'^\s{0,3}([-*_])\1{2,}\s*$', re.M)
 
+# 站内彩色文字的唯一文法：标签名 + 中文色名。前端渲染器（MarkdownContent.tsx 的 COLOR_VARS）、
+# 工具描述、出站脱标签三处都从这一份走——少对齐一处就会出现"站内好看、QQ 里露出 [blue]"。
+COLOR_TAGS: tuple[tuple[str, str], ...] = (
+    ("gold", "金色"), ("red", "红色"), ("blue", "蓝色"), ("green", "绿色"),
+    ("purple", "紫色"), ("orange", "橙色"), ("pink", "粉色"), ("gray", "灰色"),
+)
+_COLOR_NAMES = "|".join(name for name, _ in COLOR_TAGS)
+# 两种写法都要认：标签语法 [gold]…[/gold]（闭标签必须同名）、HTML 语法 <span class="text-gold">…</span>
+_COLOR_TAG_RE = re.compile(rf"\[({_COLOR_NAMES})\](.*?)\[/\1\]", re.S)
+_COLOR_SPAN_RE = re.compile(rf"<span\s+class=['\"]text-({_COLOR_NAMES})['\"][^>]*>(.*?)</span>", re.S | re.I)
+
+# 工具描述用的那一句（色表就上面一份）：send_gm / send_dm / send_file 共用
+COLOR_SYNTAX_HINT = (
+    "彩色文字：" + " ".join(f"[{name}]{zh}[/{name}]" for name, zh in COLOR_TAGS)
+    + '；HTML 语法 <span class="text-red">红色</span> 兼容（两种任选）'
+)
+
+
+def strip_color_markup(content: str) -> str:
+    """彩色标签 → 纯文字：只脱掉标签，内容一字不动。
+
+    为什么出站必须过这一道：彩色是**站内**的自定义语法（前端 colorize 渲染），QQ / NapCat
+    都不认——不脱就是群里冒出一串 [blue] 字面量。两种写法都脱（标签、span），
+    认不出的名字原样留着（那是正文，不是我们的语法）。
+    """
+    if not content or ("[" not in content and "<" not in content):
+        return content
+    text = _COLOR_SPAN_RE.sub(lambda m: m.group(2), content)
+    return _COLOR_TAG_RE.sub(lambda m: m.group(2), text)
+
+
+def render_color_markup(content: str, *, markdown: bool = True) -> str:
+    """彩色标签按「目标通道能不能渲染彩色」落地。
+
+    - markdown=True：降级成 **加粗**（QQ 的 Markdown 没有颜色，但认得加粗——比整段褪成
+      黑字更能看出这里是强调）
+    - markdown=False：只脱标签留文字（纯文本里 ** 会原样露出两个星号）
+
+    支持彩色的通道别调它：原样发就是彩色——"支持就不用"由调用方决定，这里不猜。
+    """
+    if not content or ("[" not in content and "<" not in content):
+        return content
+
+    def emphasized(text: str) -> str:
+        # 空内容不加粗：** ** 只会留下一对空星号
+        return f"**{text}**" if markdown and text.strip() else text
+
+    text = _COLOR_SPAN_RE.sub(lambda m: emphasized(m.group(2)), content)
+    return _COLOR_TAG_RE.sub(lambda m: emphasized(m.group(2)), text)
+
 
 def plainify_markdown(content: str, *, keep_url: bool = True) -> str:
     """Markdown → 纯文本（保留换行与列表，只去掉排版符号）。
@@ -216,10 +266,13 @@ def plainify_markdown(content: str, *, keep_url: bool = True) -> str:
     AI 写的 **加粗**、# 标题、`行内代码` 不能原样露在群里。
     站内聊天界面不动（Copree 自己渲染 markdown）；站内的**浮窗预览**用它——那条只有两行，
     链接里的长 URL 会把正文挤没，所以那里传 keep_url=False（只留可读文字）。
+
+    站内彩色标签（[gold]…、<span class="text-red">…）外部通道不认，这里只脱标签留文字；
+    按 Markdown 发的那条走 render_color_markup（降级成加粗），不经过本函数。
     """
     if not content:
         return content
-    text = _MD_FENCE_RE.sub("", content)
+    text = _MD_FENCE_RE.sub("", strip_color_markup(content))
     # 图片只留说明文字；没有说明文字就退回占位——纯图片消息否则会变成一条空白正文
     text = _MD_IMAGE_RE.sub(lambda m: m.group(1) or "[图片]", text)
     if keep_url:

@@ -50,7 +50,8 @@ Copree 管三件事：**这个外部的人是谁**、**放不放行**、**消息
     "label_en": "QQ",
     "label_ja": "QQ",
     "pairing": true,
-    "supports_group": true
+    "supports_group": true,
+    "supports_files": false
   }
 }
 ```
@@ -63,6 +64,7 @@ Copree 管三件事：**这个外部的人是谁**、**放不放行**、**消息
 | `desc` / `desc_en` / `desc_ja` | 否 | 子项下面那行说明；缺省回落顶层 `description` |
 | `pairing` | 否 | 是否用配对制（陌生私聊先领码）。通道卡片据此决定出不出配对区 |
 | `supports_group` | 否 | 是否有群聊。卡片据此决定出不出「消息落到哪个群」 |
+| `supports_files` | 否 | **出站能不能带附件**（缺省 `true` = 没声明就当能带）。声明 `false` 的通道：给 AI 的通道规矩里多一句「发不了文件」，`send_file` 的结果里也直说「那边收不到」（附件仍落站内，别让 AI 以为发出去了）。这是**插件实现**的能力，不是平台的限制——将来实现了上传就翻成 true |
 | `guide` | 否 | 开通指引：`[{text, text_en?, text_ja?, url?}]`，只在"还没配过"时显示。申请页面链接属于插件自己的知识，平台不替它记 |
 | `limits` | 否 | 能力与限制：`[{text, text_en?, text_ja?}]`，卡片上常驻显示（腾讯的主动推送下线、私聊额度、封号风险…）。同样是插件自己的知识，平台不替它总结 |
 | `icon`（顶层） | 否 | lucide 图标名，通道卡片与插件列表都用它 |

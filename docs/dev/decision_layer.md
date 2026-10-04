@@ -18,7 +18,7 @@ AI 不该被每条消息唤醒。事件先过一层决策：**AI 自己写的规
 
 | 情景 | 字段 | 触发点 |
 |------|------|--------|
-| `group_message` | content / sender_id / sender_name / sender_type / group_id / is_mention / is_at_all / group_type | 群消息触发链路（`response_worker._maybe_trigger_ai_reply`） |
+| `group_message` | content / content_clean / content_len / sender_id / sender_name / sender_type / group_id / is_mention / is_at_all / group_type | 群消息触发链路（`response_worker._maybe_trigger_ai_reply`） |
 | `member_join` | member_id / member_name / operator_id / operator_name | `chat/gm.add_member`（人类成员） |
 | `member_leave` | member_id / member_name / operator_id / operator_name | `chat/gm.remove_member` / `leave_group`（人类成员） |
 | `scheduled` | trigger / task / alarm_id | 闹钟唤醒前（`ai/alarm._process_alarm_event`） |
@@ -26,7 +26,18 @@ AI 不该被每条消息唤醒。事件先过一层决策：**AI 自己写的规
 | `world_event` | name / title / world_id / group_id / payload_* | 世界发来的事件（`services/world/world_ai_events.py`，契约见 `docs/group_world/design/world_ai_events.md`） |
 
 规则结构：`{name, when:{event, conditions}, do:{action,...}, notify}`；
-条件 DSL 为递归逻辑树（and/or/not + 字段等于/contains/starts_with/matches/gt·gte·lt·lte）。
+条件 DSL 为递归逻辑树（and/or/not + 字段等于/contains/starts_with/matches/gt·gte·lt·lte/similar）。
+**所有情景**都能读到判定时刻的公共字段 `now`（HH:MM）/ `today` / `weekday` / `hour`——
+由 `run_decision_engine` 在入口补一次（六个情景各写一遍迟早漏一个），调用方给了同名字段以调用方为准。
+
+关键词的三种口径也都在这一棵树上（可多选、可自由组合 and/or/not）：
+
+| 口径 | 写法 | 说明 |
+|------|------|------|
+| 全等 | `{"content_clean": "签到"}` | 整条消息**就是**它。判 `content_clean` 而不是 `content`：后者带着 `<@!id>` 令牌，永远对不上（见 `clean_message_text`） |
+| 包含 / 相似 | `{"content_clean_contains": "签到"}` / `{"field":"content_clean","op":"similar","value":"签到"}` | 相似用标准库 difflib 比"与关键词等长的窗口"，默认阈值 0.8，可写 `{"text":"签到","ratio":0.75}`；错别字、多几个字都认 |
+| 长度 | `{"content_len_lte": 20}` | `content_len` 是 `content_clean` 的字数，配合 gt/gte/lt/lte 组条件 |
+
 每个实体最多 20 条，同名覆盖。
 
 ## 3. 校验
@@ -35,6 +46,8 @@ AI 不该被每条消息唤醒。事件先过一层决策：**AI 自己写的规
 - `do.action` 四选一，各自必填项校验（`reply` / `name` / `code`；`silent` 无必填项），文本与脚本上限 4000 字符。
 - `silent` 是「不回应」的正式表达：命中即静默（不代发、不唤醒本体）。此前只能给 `reply_template`
   塞一句空话，或让 `run_script` 打印空 JSON 绕过去。
+- 关键词运算与阈值写入时校验（`utils/pure/conditions.py`）：`similar` 的关键词/阈值、
+  正则的形状、条件树规模（8 层 / 64 节点）都当场说清——安静地不命中比报错难查得多。
 - 工具描述与 schema 说明只有**一处**（`decision_skill.rule_schema_desc()`），
   平台工具与世界链路共用同一份文案，避免加情景时漏改一处。
 
@@ -64,7 +77,14 @@ AI 不该被每条消息唤醒。事件先过一层决策：**AI 自己写的规
 | `silent` | 到此为止：`reply` 为空，调用方不代发、不唤醒本体（与 `notify=true` 互斥，校验时拒绝） | 同左 |
 
 脚本的返回值即"要说什么"：`stdout` 最后一行是 JSON 时取 `{"reply": "..."}`，由宿主代发。
+脚本的**事件上下文**走 `DECISION_CTX`（JSON 环境变量）：`json.loads(os.environ["DECISION_CTX"])`
+就是本次情景的全部字段（含 `sender_id` 与公共时间字段）——"按人分开记账"这类玩法靠的就是它
+（工具描述里写着这条，否则 AI 只会在脚本里把 sender_id 写死）。
 脚本没有联网与平台句柄，能力边界停在"算"。
+
+`reply_template` 支持占位 `{sender_name}` `{sender_id}` `{group_id}` `{content}` `{now}`
+（`render_reply_template`；认不出的 `{…}` 原样留着——正文里的花括号可能是字面意思），
+所以零唤醒的固定回复也能叫出对方名字。
 
 代发一律经 `decision_skill.send_group_reply`：标 `source="world"`（不回灌世界程序钩子），
 且 AI 唤醒队列只收人类消息，因此不存在"自己说一句又把自己叫醒"的环。
@@ -111,4 +131,5 @@ docker exec ai_group_backend bash -c 'export TEST_DATABASE_URL="${DATABASE_URL%/
 
 覆盖：不绑世界也命中、`call_tool` 走平台身份、`run_script` 由 stdout 决定回复、`silent` 静默不代发不唤醒、
 `silent`+`notify` 被拒、`notify=true` 带 note 继续唤醒、未知事件被拒、批量预取与逐个读同源、
-入群情景端到端代发、定时情景匹配。
+入群情景端到端代发、定时情景匹配、关键词三态（全等/相似/长度）与 `content_clean` 收令牌、
+相似阈值写错被拒、公共时间字段、`reply_template` 占位。

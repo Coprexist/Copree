@@ -813,6 +813,10 @@ class QqNapcatPlugin(ServicePlugin):
 
     async def _send_reply(self, route: dict, text: str, kind: str, *, link_mentions: bool = False) -> None:
         """link_mentions：群回复才翻真 @（要查一次库认人）；私聊没有 @ 这回事"""
+        from app.utils.text import strip_color_markup
+
+        # 彩色标签是站内语法，QQ 客户端不认：出站先脱标签留文字
+        text = strip_color_markup(text)
         client = self._client
         target = str(route.get("qq") or "")
         if client is None or not target:

@@ -176,7 +176,11 @@ class QqClient:
         force_type 非空 = 用户明确指定了消息类型（有的 QQ 客户端只显示特定类型）：
         这时不做降级、发一次，把响应或错误原样带回去。
         """
-        from app.utils.text import plainify_markdown
+        from app.utils.text import plainify_markdown, render_color_markup
+
+        # 彩色是站内语法，QQ 不认：按 Markdown 发的那条降级成 **加粗**（比褪成黑字强），
+        # 纯文本那条由 plainify_markdown 脱掉标签——两条各自在下面取用
+        rich = render_color_markup(content, markdown=True)
 
         extra: dict[str, Any] = {"msg_id": msg_id, "msg_seq": msg_seq} if msg_id else {}
         if wakeup:
@@ -189,12 +193,12 @@ class QqClient:
             body: dict[str, Any] = {"msg_type": int(force_type), **extra}
             # 长度由 _deliver 统一决定（只有它知道学到的单条上限），这里再截一次会静悄悄吃掉一截正文
             if int(force_type) == 2:
-                body["markdown"] = {"content": content}
+                body["markdown"] = {"content": rich}
             else:
                 body["content"] = plainify_markdown(content)
             return await self._post(path, body)
         try:
-            return await self._post(path, {"msg_type": 2, "markdown": {"content": content}, **extra})
+            return await self._post(path, {"msg_type": 2, "markdown": {"content": rich}, **extra})
         except RuntimeError as e:
             # 只对"没权限"这类降级；其它错误（频控、参数错）照旧抛出去，别吞
             if not any(word in str(e) for word in ("无权限", "权限", "markdown", "msg_type")):

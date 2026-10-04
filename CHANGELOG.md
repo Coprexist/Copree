@@ -9,6 +9,25 @@
 ## [Unreleased]
 
 ### ✨ 新增
+- **站内彩色语法出站要变**：彩色是站内渲染的语法（`[blue]…[/blue]` / `<span class="text-red">…</span>`），
+  QQ 不认——不处理就是群里冒出一串标签。现在出站按通道能力降级：能发 Markdown 的那条降成 `**加粗**`
+  （QQ 的 Markdown 没有颜色），只能发纯文本的那条只脱标签留文字；支持彩色的通道不调它、原样发
+  （「支持就不用」由通道自己决定）。文法只有一处（`utils.text.COLOR_TAGS`），前端渲染、三个发送工具的
+  描述、出站降级都从它取。
+- **AI 知道 QQ 收不到文件**：官方 QQ 机器人没有发送文件的出口，`send_file` 的附件只会留在站内，
+  而 AI 收到的是「发送了 N 个文件」。通道声明多一个 `supports_files`（qq-channel / qq-napcat 均 false，
+  NapCat 侧同样没实现上传），`channel.files_supported` 是唯一判定：给 AI 的通道规矩里多一句「发不了文件」，
+  `send_file` 的结果里也直说「那边收不到，要传内容就把正文写成文字或给链接」。
+- **AI 知道自己在 Copree 上**：新增 `prompts/platform_origin.txt`（一句话 + 开源地址
+  github.com/Coprexist/copree），拼在核心身份段**管理员覆盖之后**——覆盖是「我的 AI 守什么规矩」的自由，
+  而「你从哪来」是平台事实，盖不掉。它落在锁定前缀里，一次性成本、之后吃缓存。
+- **决策技能：关键词三态 + id 接口 + 时间接口 + 回复占位**：`run_script` 一直能用 `DECISION_CTX`
+  （JSON 环境变量）读到本次事件的 `sender_id` / `sender_name` / `group_id`，但工具描述从没提过——
+  AI 只能在脚本里把 sender_id 写死。现在描述里写清这条接口，并补齐关键词口径：全等
+  （`content_clean`，@ 令牌先收掉）/ 相似（新内置运算 `similar`，标准库 difflib，默认阈值 0.8）/
+  长度（`content_len` + gt/gte/lt/lte），仍统一在一棵 and/or/not 条件树上（决策技能与触发规则共用
+  `utils/pure/conditions.py` 一份求值）；所有情景另补公共时间字段 `now`/`today`/`weekday`/`hour`；
+  `reply_template` 支持 `{sender_name}` 等占位，零唤醒的固定回复也能叫出对方名字。
 - **通知文案由这条源的主人定**：能力变更通知默认给"改变量"，但开发者可以三选一——自动改变量 /
   自己写一句文案 / 不通知（`ensure_source_version` 的 `changelog` 与 `notice` 参数；世界工具源
   写在世界配置 `tool_notice` 里，见插件文档 §5.6）。"不通知"与"起点版本"共用同一条口径——摘要留空 =

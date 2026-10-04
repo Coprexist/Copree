@@ -5,6 +5,7 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.tools.base import ToolPlugin, ToolRegistry
+from app.utils.text import COLOR_SYNTAX_HINT
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ class SendFile(ToolPlugin):
         "file_paths": {"type": "array", "items": {"type": "string"}, "nullable": True, "description": "多文件路径数组（如图片列表 [img1.png, img2.jpg]）。与 file_path 二选一。"},
         "group_id": {"type": "integer", "nullable": True, "description": "目标群聊 ID（群聊时填写）"},
         "target_user_id": {"type": "integer", "nullable": True, "description": "目标用户 ID（私信时填写）"},
-        "content": {"type": "string", "nullable": True, "description": "附带的文字说明（可选，支持 Markdown 和彩色文字 [gold]金色[/gold] 等）"},
+        "content": {"type": "string", "nullable": True, "description": f"附带的文字说明（可选，支持 Markdown 和彩色文字）。{COLOR_SYNTAX_HINT}"},
     }
     required = ["file_path"]
     states = ["active"]
@@ -116,6 +117,20 @@ class SendFile(ToolPlugin):
 
         manager = context.get("manager")
 
+        # 出站能力：这个群接的通道带不了附件时（QQ 官方机器人接口没有这个出口），
+        # 文件只留在站内、群里的人收不到——必须如实回给 AI，否则它以为发出去了
+        channel_note = ""
+        if target_user is None:
+            try:
+                from app.services.plugin.channel import files_supported
+                if not await files_supported(db, target_group):
+                    channel_note = (
+                        "；但本群接的外部通道带不了附件：文件只在站内可见，QQ 那边收不到"
+                        "（要传内容请把正文写成文字，或给出能打开的链接）"
+                    )
+            except Exception as e:  # noqa: BLE001 —— 能力查询失败不该拦住发文件
+                logger.warning(f"send_file 通道能力查询失败（按能带附件处理）: {e}")
+
         if target_user is not None:
             # ── DM 私信（sender_id 用 users 表 ID） ──
             session = await get_or_create_dm_session(db, current_user_id=agent_user_id, target_user_id=target_user)
@@ -187,7 +202,7 @@ class SendFile(ToolPlugin):
 
             return {
                 "success": True,
-                "message": f"发送了 {len(attachments)} 个文件到群聊",
+                "message": f"发送了 {len(attachments)} 个文件到群聊{channel_note}",
                 "attachments": attachments,
             }
 

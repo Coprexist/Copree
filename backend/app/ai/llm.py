@@ -77,8 +77,8 @@ class KeyFatalError(Exception):
 
 # 提示词从 prompts/*.txt 文件加载，直接编辑 .txt 即可修改
 from app.utils.pure.prompt_loader import (
-    CORE_IDENTITY, PROTOCOL_CHAT, PROTOCOL_IMMERSIVE, PROTOCOL_DIGITAL_LIFE, DM_PROTOCOL,
-    MULTI_SESSION, PRIVACY_RULES, CHAT_CHAIN_RULES,
+    CORE_IDENTITY, PLATFORM_ORIGIN, PROTOCOL_CHAT, PROTOCOL_IMMERSIVE, PROTOCOL_DIGITAL_LIFE,
+    DM_PROTOCOL, MULTI_SESSION, PRIVACY_RULES, CHAT_CHAIN_RULES,
 )
 
 # 按 config_profile 选择行为协议
@@ -987,6 +987,17 @@ async def _versioned_personality(
     return source, await get_effective_text(cap, agent, source, text, state=state)
 
 
+def _core_identity(overrides: dict) -> str:
+    """核心身份段 + 平台出处（群与私信两条链路共用一份）。
+
+    平台出处拼在**管理员覆盖之后**：面板上的覆盖是"我的 AI 该守什么规矩"的自由，
+    而"你从哪来（Copree，开源）"是平台事实，不该被整段覆盖顺手抹掉。
+    它落在 message 0 的锁定前缀里，一次性成本、之后都吃缓存。
+    """
+    base = overrides.get("core_identity") or CORE_IDENTITY
+    return f"{base.rstrip()}\n\n{PLATFORM_ORIGIN}"
+
+
 async def build_messages(
     db: AsyncSession,
     agent,
@@ -1083,7 +1094,7 @@ async def build_messages(
 
     segments = {}
     if "core_identity" in enabled_segments:
-        segments["core_identity"] = overrides.get("core_identity") or CORE_IDENTITY
+        segments["core_identity"] = _core_identity(overrides)
     
     if "personality" in enabled_segments:
         segments["personality"] = build_personality_segment(agent, language, eff_personality)
@@ -1521,7 +1532,7 @@ async def build_dm_messages(
     personality_source, eff_personality = await _versioned_personality(
         db, agent, system_prompt_override, prompt_owner, dm_ref)
     segments = {
-        "core_identity": overrides.get("core_identity") or CORE_IDENTITY,
+        "core_identity": _core_identity(overrides),
         "personality": build_personality_segment(agent, language, eff_personality),
         "protocol": dm_protocol,
         "tools": await _build_tools_segment(db, agent, is_dm=True),

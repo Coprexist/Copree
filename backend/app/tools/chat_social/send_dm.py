@@ -5,6 +5,7 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.tools.base import ToolPlugin, ToolRegistry
+from app.utils.text import COLOR_SYNTAX_HINT
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,7 @@ class SendDM(ToolPlugin):
             "type": "integer",
             "description": "对方的 users.id（统一 ID，人类和 AI 都在 users 表中）。可从群聊消息格式「名字(ID:数字)」中获取，或通过搜索找到。",
         },
-        "content": {"type": "string", "description": "消息内容（支持 Markdown + 彩色文字）。彩色文字：标签语法 [gold]金色[/gold] [red]红色[/red] [blue]蓝色[/blue] [green]绿色[/green] [purple]紫色[/purple] [orange]橙色[/orange] [pink]粉色[/pink] [gray]灰色[/gray]；HTML 语法 <span class=\"text-red\">红色</span> 兼容（两种任选）"},
+        "content": {"type": "string", "description": f"消息内容（支持 Markdown + 彩色文字）。{COLOR_SYNTAX_HINT}"},
         "reply_to": {"type": "integer", "description": "（可选）要引用回复的那条消息的 msg_id。注意：消息末尾的 [msg_id=…] 是给你读的标记，回复某条消息请用这个参数，不要把它抄进正文。"},
     }
     required = ["target_user_id", "content"]

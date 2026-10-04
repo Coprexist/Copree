@@ -207,6 +207,9 @@ def channels() -> list[dict[str, Any]]:
             "limits": [x for x in (block.get("limits") if isinstance(block.get("limits"), list) else []) if isinstance(x, dict) and x.get("text")],
             "pairing": bool(block.get("pairing", False)),
             "supports_group": bool(block.get("supports_group", False)),
+            # 出站能不能带附件：这是**通道实现**的能力（不是腾讯的限制），由插件自己声明
+            # （缺省 true = 没声明就当能带；站内群没有通道，用不到这一项）
+            "supports_files": bool(block.get("supports_files", True)),
             "default_enabled": bool(manifest.get("default_enabled", True)),
         })
     return result

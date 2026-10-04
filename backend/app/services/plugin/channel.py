@@ -260,6 +260,17 @@ async def describe_group(db: AsyncSession, group_id: int, *, refresh: bool = Fal
     return out
 
 
+async def files_supported(db: AsyncSession, group_id: int, *, served: list | None = None) -> bool:
+    """这个群出站带不带得了附件 —— send_file 与「给 AI 讲通道规矩」共用的一份判定
+
+    没有通道 = 站内群，附件随便发。有通道时看插件自己声明的 supports_files：任一还在接着
+    这个群的通道报 false，就按"发出去对面也收不到"算——多通道并存时取最保守的那个，
+    理由同 group_brief：说错了 AI 会拿它当事实用。
+    """
+    found = served if served is not None else await served_instances(db, group_id)
+    return all(bool(declared.get("supports_files", True)) for _, _, declared in found)
+
+
 async def group_brief(db: AsyncSession, group_id: int, *, served: list | None = None) -> str:
     """这个群经不经过外部通道、那条通道有什么规矩 —— 给 AI 的一段话（没有通道就返回空串）
 
@@ -306,6 +317,11 @@ async def group_brief(db: AsyncSession, group_id: int, *, served: list | None = 
         lines.append(
             "- NapCat 通道用的是真 QQ 号（协议端）：没有上面那些接口窗口限制，但同样别刷屏，"
             "并且富文本能不能渲染取决于 QQ 客户端。"
+        )
+    if not await files_supported(db, group_id, served=served):
+        lines.append(
+            f"- **发不了文件**（{labels} 侧）：这条通道没有接收附件的出口，send_file 只会留在站内，"
+            "那边的人收不到。要传内容就把正文写成文字，或给出一个能打开的链接。"
         )
     return "\n".join(lines)
 
@@ -440,6 +456,7 @@ async def _view_one(
         "limits": declared_channel["limits"],
         "pairing": declared_channel["pairing"],
         "supports_group": declared_channel["supports_group"],
+        "supports_files": declared_channel["supports_files"],
         "instance": instance,
         "enabled": await _plugin_enabled(db, plugin_id),
         "schema": schema or {},

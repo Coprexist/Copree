@@ -34,6 +34,9 @@ PROTOCOL_IMMERSIVE = load_prompt("protocol_immersive")
 PROTOCOL_DIGITAL_LIFE = load_prompt("protocol_digital_life")
 DM_PROTOCOL = load_prompt("dm_protocol")
 
+# 平台出处：不是"规矩"而是事实，所以拼在管理员覆盖之后（见 llm._core_identity）
+PLATFORM_ORIGIN = load_prompt("platform_origin")
+
 # ── 可选的动态注入段 ──
 MULTI_SESSION = load_prompt("multi_session")
 PRIVACY_RULES = load_prompt("privacy_rules")

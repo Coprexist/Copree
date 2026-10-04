@@ -207,3 +207,66 @@ async def test_silent_conflicts_with_notify(migrated_db):
             "do": {"action": "silent"}, "notify": True,
         })
         assert not ok and "notify" in err, err
+
+
+def test_keyword_primitives_share_one_condition_engine():
+    """全等 / 包含 / 相似 / 长度 / 非与或：同一棵条件树（决策技能与触发规则共用一份求值）"""
+    from app.services.world.decision_skill import build_group_message_ctx
+    from app.utils.pure.conditions import match_conditions
+
+    ctx = build_group_message_ctx("<@!1> 签到了签到啦", 1, "小明", "human", 7)
+    # @ 令牌先收掉：QQ 里用户 @ 你是常态，拿原串做全等永远对不上
+    assert ctx["content_clean"] == "签到了签到啦" and ctx["content_len"] == 6
+    assert match_conditions({"content_clean": "签到"}, ctx) is False        # 全等 = 整条消息
+    assert match_conditions({"content_clean": "签到了签到啦"}, ctx) is True
+    assert match_conditions({"content_clean_contains": "签到"}, ctx) is True
+    assert match_conditions({"field": "content_clean", "op": "similar", "value": "签到"}, ctx) is True
+    assert match_conditions({"content_len_lte": 6}, ctx) is True
+    assert match_conditions({"content_len_lte": 5}, ctx) is False
+    assert match_conditions(
+        {"and": [{"content_clean_contains": "签到"}, {"not": {"is_mention": True}}]}, ctx) is True
+
+
+def test_similar_rejects_a_broken_threshold():
+    """阈值写错当场拒绝：安静地不命中比报错难查得多"""
+    from app.utils.pure.conditions import validate_conditions
+
+    ok, err = validate_conditions(
+        {"field": "content", "op": "similar", "value": {"text": "签到", "ratio": 2}})
+    assert not ok and "0~1" in err, err
+    ok, err = validate_conditions({"field": "content", "op": "similar", "value": ""})
+    assert not ok and "关键词" in err, err
+
+
+async def test_every_scenario_gets_the_clock(migrated_db):
+    """时间接口：由引擎统一补上（六个情景各写一遍迟早漏一个）"""
+    from app.database import async_session
+    from app.services.world.decision_skill import run_decision_engine
+
+    async with async_session() as db:
+        await _seed(db)
+        ok, err = await _save(db, {
+            "name": "几点都行", "when": {"event": "group_message", "conditions": {"hour_gte": 0}},
+            "do": {"action": "reply_template", "reply": "好"}, "notify": False,
+        })
+        assert ok, err
+        dec = await run_decision_engine(db, "agent", 24, None, "group_message", _incoming())
+        assert dec["hit"] and dec["reply"] == "好", dec
+
+
+async def test_reply_template_names_the_sender(migrated_db):
+    """零唤醒的固定回复也能叫出对方名字；认不出的 {…} 原样留着（花括号可能是字面意思）"""
+    from app.database import async_session
+    from app.services.world.decision_skill import run_decision_engine
+
+    async with async_session() as db:
+        await _seed(db)
+        ok, err = await _save(db, {
+            "name": "签到",
+            "when": {"event": "group_message", "conditions": {"content_clean_contains": "签到"}},
+            "do": {"action": "reply_template", "reply": "{sender_name} 已记录，{unknown} 原样"},
+            "notify": False,
+        })
+        assert ok, err
+        dec = await run_decision_engine(db, "agent", 24, None, "group_message", _incoming())
+        assert dec["reply"] == "小明 已记录，{unknown} 原样", dec

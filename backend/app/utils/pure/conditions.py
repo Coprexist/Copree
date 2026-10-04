@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import re
+from difflib import SequenceMatcher
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,7 @@ MAX_DEPTH = 8
 MAX_NODES = 64
 MAX_PATTERN = 200          # _matches 的模式长度上限
 MAX_SUBJECT = 1000         # _matches 的被匹配文本上限（先截断再匹配）
+DEFAULT_SIMILAR_RATIO = 0.8  # similar 的默认阈值（写规则时可覆盖）
 
 # 灾难性回溯的已知形状：嵌套量词 (a+)+ / (a*)* / (a+){2,}，以及反向引用。长度闸压不住它们，
 # 静态挡形状是这里能做到的最好——Python 的 re 没有超时，re2/regex 要引依赖（本机还装不了）。
@@ -156,6 +158,62 @@ def _match(value, expect) -> bool:
     return re.search(pattern, str(value)[:MAX_SUBJECT]) is not None
 
 
+def similar_ratio(content, keyword) -> float:
+    """内容与关键词的相似度（0~1）：只跟"和关键词等长的窗口"比，取最高。
+
+    整串比在中文里太苛刻（"签到了" 对 "签到" 只有 0.5，却显然该算命中），contains 又完全
+    不容错（"签道" 不命中）——相似度就是这两者之间的中间态。标准库 difflib，不引依赖。
+    """
+    text = str(content or "")[:MAX_SUBJECT]
+    key = str(keyword or "")
+    if not text or not key:
+        return 0.0
+    if key in text:
+        return 1.0                      # 子串一定是最相似的那个窗口，先短路
+    if len(text) <= len(key):
+        return SequenceMatcher(None, text, key).ratio()
+    size = len(key)
+    best = 0.0
+    for start in range(len(text) - size + 1):
+        ratio = SequenceMatcher(None, text[start:start + size], key).ratio()
+        if ratio > best:
+            best = ratio
+    return best
+
+
+def _similar(value, expect) -> bool:
+    """相似度命中：expect 是关键词，或 {"text": 关键词, "ratio": 0.75}"""
+    keyword, ratio = expect, DEFAULT_SIMILAR_RATIO
+    if isinstance(expect, dict):
+        keyword, ratio = expect.get("text"), expect.get("ratio", DEFAULT_SIMILAR_RATIO)
+    try:
+        want = float(ratio)
+    except (TypeError, ValueError):
+        want = DEFAULT_SIMILAR_RATIO
+    return similar_ratio(value, str(keyword or "")) >= want
+
+
+# 相似度也是内置运算：实现放这儿是因为它要 difflib 与 MAX_SUBJECT，但注册仍进同一张表——
+# "有哪些内置运算"只有 BUILTIN_OPS 一处出处，校验与 op_names 都读它
+BUILTIN_OPS["similar"] = _similar
+
+
+def _validate_similar(value) -> tuple[bool, str]:
+    """相似度写法校验：当场说清阈值范围与关键词缺在哪，不留给运行期安静地不命中"""
+    keyword, ratio = value, DEFAULT_SIMILAR_RATIO
+    if isinstance(value, dict):
+        keyword, ratio = value.get("text"), value.get("ratio", DEFAULT_SIMILAR_RATIO)
+    if not str(keyword or "").strip():
+        return False, 'similar 需要关键词：直接写关键词，或 {"text": "关键词", "ratio": 0.75}'
+    try:
+        ratio = float(ratio)
+    except (TypeError, ValueError):
+        return False, f"similar 的 ratio 必须是 0~1 的数字，收到 {ratio!r}"
+    if not 0 < ratio <= 1:
+        return False, f"similar 的 ratio 必须在 0~1 之间，收到 {ratio}"
+    return True, ""
+
+
 def apply_op(value, op: str | None, expect) -> bool:
     """求值一个运算。任何异常都只算不命中——一条规则不该炸掉整个工具调用。"""
     try:
@@ -236,6 +294,8 @@ def validate_conditions(conditions, *, check_refs: bool = True,
             return False, f"运算 {op} 未注册（可用：{list(op_names())}）"
         if op == "matches":
             return _validate_pattern(conditions.get("value"))
+        if op == "similar":
+            return _validate_similar(conditions.get("value"))
         return True, ""
     for key, value in conditions.items():
         if key in ("and", "or"):

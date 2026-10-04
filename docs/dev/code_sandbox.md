@@ -80,6 +80,7 @@ AI 脚本禁网络是刻意的：要联网有 `web_search`/`web_fetch` 等平台
 - `run_agent_code(agent_id, code|entry, ctx, deny_net, deny_fork)` —— AI 脚本
 - 工具 `run_script(code, path?)` —— AI 面向入口：`path` 给定则先落盘到文件空间再执行（攒自己的脚本库）
 - 决策技能 `do.run_script` —— 经 `run_agent_code` 执行，事件上下文走 `DECISION_CTX`
+  （JSON：本次情景的全部字段 + 引擎补的 now/today/weekday/hour，见 `docs/dev/decision_layer.md` §2）
 - 例外：`world/skill_sandbox.py` 走 stdin/stdout JSON 行协议（世界 skill 的 ctx 能力转发），
   自己起进程但复用同一套隔离库与 rlimit
 
