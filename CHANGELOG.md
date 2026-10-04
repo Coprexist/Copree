@@ -68,6 +68,12 @@
   从缓存里打掉。现在技能跟任务、状态栈摘要、当前时间一样沉尾部，开头只留走版本链冻结的锁定段。
 
 ### 🐛 修复
+- **世界用量不再丢账，命中率不再被记成个位数**：世界 AI 每轮把 LLM 返回的原始 usage 直接交给内容域的
+  用量账，而世界仓库的 `execute` 不带 `params`（`takes 2 positional arguments but 3 were given`，
+  按天聚合整体失败、调用一次丢一次，日志里几千条）；改为借同一个 session 包装成 ContentRepository 记账。
+  同时把"各家接口把明细放在哪"收成一个纯函数 `utils/pure/llm_usage.normalize_usage`——原先四处手抄，
+  工具轮那处漏了，只读顶层键，实测 942k 命中被记成 12k（命中率看着像 1%）、思考量同样归零；
+  世界侧每轮另记 `api_calls`，群视界那栏的调用数才有数。
 - **提示的"语气"不再从文案里猜**：`msg.includes('失败')` 这类判断在英文/日文下必然失灵（"failed"、
   「失敗」都匹配不上中文关键词，红色提示会变绿）。改由产生提示的那一刻决定：新增 `hooks/useNotice`
   （`ok/fail/clear` + `NOTICE_TEXT_CLASS`/`NOTICE_BOX_CLASS`，配色只在那里定），设置页（保存条、兑换码）、

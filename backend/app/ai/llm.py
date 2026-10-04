@@ -16,6 +16,7 @@ from app.models.context_config import ContextConfig
 from app.chat import chat_api
 from app.services.memory.memory_service import recall_relevant_memories
 from app.utils.display_name import display_name
+from app.utils.pure.llm_usage import normalize_usage
 from app.utils.pure.prompting import (
     resolve_model, build_personality_segment, format_time_shanghai,
     format_message, format_context_for_ai, assemble_system_prompt,
@@ -277,12 +278,8 @@ async def _chat_completion_non_streaming(
         choice = data["choices"][0]
         message = choice["message"]
 
-        usage = dict(data.get("usage", {}))
-        # 提取 reasoning_tokens（DeepSeek thinking 模式）— 始终写入，缺失时 = 0
-        completion_details = usage.pop("completion_tokens_details", None) or {}
-        prompt_details = usage.pop("prompt_tokens_details", None) or {}
-        usage["reasoning_tokens"] = completion_details.get("reasoning_tokens", 0)
-        usage["cached_tokens"] = prompt_details.get("cached_tokens", 0)
+        # 归一到顶层键（reasoning_tokens / cached_tokens）——口径见 llm_usage
+        usage = normalize_usage(data.get("usage"))
 
         result = {
             "content": message.get("content"),
@@ -368,11 +365,7 @@ async def _chat_completion_streaming(
                 if "usage" in chunk:
                     chunk_usage = chunk["usage"]
                     if chunk_usage:
-                        usage = dict(chunk_usage)
-                        completion_details = usage.pop("completion_tokens_details", None) or {}
-                        prompt_details = usage.pop("prompt_tokens_details", None) or {}
-                        usage["reasoning_tokens"] = completion_details.get("reasoning_tokens", 0)
-                        usage["cached_tokens"] = prompt_details.get("cached_tokens", 0)
+                        usage = normalize_usage(chunk_usage)
 
                 choices = chunk.get("choices", [])
                 if not choices:

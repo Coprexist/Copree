@@ -20,6 +20,7 @@ from app.utils.multimodal import (
     build_content, image_placeholder, image_note, injected_image_count,
 )
 from app.utils.pure.llm_endpoint import chat_completions_url
+from app.utils.pure.llm_usage import normalize_usage
 from app.utils.pure.tool_chain import heal_tool_chain
 
 logger = logging.getLogger(__name__)
@@ -274,6 +275,8 @@ async def _record_usage(world_repo, world_id: int, turn_id: str, round_no, model
     """
     if not usage:
         return
+    # api_calls：世界侧只有这一个记账口，每次调用记 1 次（内容域的用量账要拿它算调用数）
+    usage = {**normalize_usage(usage), "api_calls": 1}
     try:
         from app.models.world import WorldLLMUsage
         world_repo.add(WorldLLMUsage(
@@ -284,7 +287,7 @@ async def _record_usage(world_repo, world_id: int, turn_id: str, round_no, model
             prompt_tokens=int(usage.get("prompt_tokens") or 0),
             completion_tokens=int(usage.get("completion_tokens") or 0),
             reasoning_tokens=int(usage.get("reasoning_tokens") or 0),
-            cached_tokens=_extract_cached_tokens(usage),
+            cached_tokens=int(usage.get("cached_tokens") or 0),
         ))
         await world_repo.flush()
         # 个人 API 用量：记账人 = 世界 AI 表单的世界主人（user_id 直记，查询时虚拟聚合「群视界 agent」）
@@ -304,20 +307,6 @@ async def _record_usage(world_repo, world_id: int, turn_id: str, round_no, model
                 )
     except Exception as e:
         logger.warning(f"🌐 世界 #{world_id} 用量记录失败: {e}")
-
-
-def _extract_cached_tokens(usage: dict | None) -> int:
-    """提取缓存命中 token：DeepSeek 各接口返回位置不一——
-    顶层 cached_tokens（首轮）｜prompt_tokens_details.cached_tokens（工具轮）｜
-    prompt_cache_hit_tokens（兼容）；2026-08-13 修复（之前只读顶层 → 工具轮全记 0）。"""
-    if not usage:
-        return 0
-    v = usage.get("cached_tokens")
-    if v is None:
-        v = (usage.get("prompt_tokens_details") or {}).get("cached_tokens")
-    if v is None:
-        v = usage.get("prompt_cache_hit_tokens")
-    return int(v or 0)
 
 
 def world_context_block(world) -> str:
@@ -929,7 +918,7 @@ async def _stream_llm_once(
                             # ⚠️ 2026-08-13 修复：usage 收集独立于 choices——DeepSeek 的 usage 块
                             # 可能带空 choices（[]）也可能带非空 choices，只要消息有 usage 就收
                             if j.get("usage"):
-                                result["usage"] = j["usage"]
+                                result["usage"] = normalize_usage(j["usage"])
                             choices = j.get("choices") or []
                             if not choices:
                                 continue
@@ -1613,12 +1602,7 @@ async def _stream_first_round(
                             j = json.loads(p)
                             # ⚠️ 2026-08-13 修复：usage 收集独立于 choices（同上）
                             if j.get("usage"):
-                                u = dict(j["usage"])
-                                pd = u.pop("prompt_tokens_details", None) or {}
-                                cd = u.pop("completion_tokens_details", None) or {}
-                                u["cached_tokens"] = pd.get("cached_tokens", 0)
-                                u["reasoning_tokens"] = cd.get("reasoning_tokens", 0)
-                                first_usage = u
+                                first_usage = normalize_usage(j["usage"])
                             choices = j.get("choices") or []
                             if not choices:
                                 continue
