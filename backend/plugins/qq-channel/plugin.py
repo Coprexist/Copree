@@ -69,6 +69,8 @@ MIRROR_MIN_CHARS = 2               # 太短的正文（"嗯"、"?"）撞车概�
 # 单条正文先整条发：官方只给了 40054007「消息长度超限」这个错误码、没给数字，
 # 所以不猜上限——被平台拒了就在"认过的长度"和"刚被拒的长度"之间二分（见 _deliver）。
 LENGTH_ERROR_HINTS = ("40054007", "长度超限")
+# 同一个 (msg_id, msg_seq) 发第二次会被判"消息被去重"：说明这条没发出去，换号重发是安全的
+DEDUP_ERROR_HINTS = ("40054005", "消息被去重")
 TEXT_CHUNK_MIN = 64                # 二分的兜底下限：只保证不再原地打转，不代表平台认这么短
 GROUP_PER_MINUTE = 20              # 单群频控 20/qpm（主动消息）
 BOT_PER_MINUTE = 60                # Bot 维度 60/qpm
@@ -303,6 +305,12 @@ def _is_length_error(exc: Exception) -> bool:
     return any(hint in text for hint in LENGTH_ERROR_HINTS)
 
 
+def _is_dedup_error(exc: Exception) -> bool:
+    """平台的"这个序号用过了"：按错误码/文案认（40054005）"""
+    text = str(exc)
+    return any(hint in text for hint in DEDUP_ERROR_HINTS)
+
+
 def split_message(text: str, limit: int) -> list[str]:
     """长文拆成几条发（官方单条有长度上限，超了整条被拒，不是截断）。
 
@@ -451,6 +459,10 @@ class QqChannelPlugin(ServicePlugin):
         self._dm_route: OrderedDict[str, dict[str, Any]] = OrderedDict()
         # 后台回复任务：保引用 + 停止前 drain（见 services/plugin/tasks.py）
         self._replies = PluginTasks()
+        # 会话 → 发送锁：msg_seq 是"按那条来消息"发的，同一个会话的两条回复必须排队算号
+        self._send_locks: dict[str, asyncio.Lock] = {}
+        # 会话 → 该会话最后一条回复任务：同一会话的回复串成一条链，前一条发完才发下一条
+        self._send_tail: dict[str, asyncio.Task] = {}
         self._seen: deque[str] = deque(maxlen=DEDUP_SIZE)
         # 已落库的消息：msg_id → (站内消息 id, 落库时的正文)。
         # 同一条消息的另一种事件（@模式 ↔ 全量模式）更全时，用它把正文补上
@@ -1582,10 +1594,15 @@ class QqChannelPlugin(ServicePlugin):
             if not text:
                 return
         # 正文里剩下的 <@!平台id> 翻成 QQ 的真 @（会 @ 到人、会提醒）
-        self._replies.spawn(self._send_reply(
-            route, text, kind="group", link_mentions=True, message_id=getattr(message, "id", None),
-            reply_to=getattr(message, "reply_to", None),
-        ), f"{self.key} 群回复")
+        self._enqueue_reply(
+            str(route.get("qq") or ""),
+            lambda: self._prepare_reply(
+                route, text, kind="group", link_mentions=True,
+                message_id=getattr(message, "id", None),
+                reply_to=getattr(message, "reply_to", None),
+            ),
+            f"{self.key} 群回复",
+        )
 
     async def _dm_outbound_sink(self, db: Any, session_id: str, msg: dict) -> None:
         """私信出口：这条私信是我们经手的会话、且是 AI 发的，就发回 QQ"""
@@ -1599,13 +1616,15 @@ class QqChannelPlugin(ServicePlugin):
         text = str(msg.get("content") or "").strip()
         if not text:
             return
-        self._replies.spawn(
-            self._send_reply(route, text, kind="dm", message_id=msg.get("id")), f"{self.key} 私信回复",
+        self._enqueue_reply(
+            str(route.get("qq") or ""),
+            lambda: self._prepare_reply(route, text, kind="dm", message_id=msg.get("id")),
+            f"{self.key} 私信回复",
         )
 
-    async def _send_reply(self, route: dict, text: str, kind: str, *, link_mentions: bool = False,
-                          message_id: int | None = None, reply_to: int | None = None) -> None:
-        """后台发一条回复：这是 fire-and-forget 的尾巴，失败了没人接得住，只能记进状态
+    async def _prepare_reply(self, route: dict, text: str, kind: str, *, link_mentions: bool = False,
+                             message_id: int | None = None, reply_to: int | None = None):
+        """发送前的准备（并发跑）→ 返回"真正发出去"的那个协程。
 
         link_mentions：群回复才翻真 @（要查一次库认人）；私聊没有 @ 这回事，也就不查。
         message_id：站内那条消息的 id——发成功后要把通道侧的 id 记回去，撤回才找得到它。
@@ -1619,6 +1638,21 @@ class QqChannelPlugin(ServicePlugin):
                 logger.warning(f"QQ 群 @ 映射失败，按原文发送：{type(e).__name__}: {e}")
         text = await self._emoji_to_chars(text)
         reference_id = await self._reply_reference(reply_to, kind)
+        return lambda: self._post_reply(route, kind, text, reference_id, message_id)
+
+    async def _send_reply(self, route: dict, text: str, kind: str, *, link_mentions: bool = False,
+                          message_id: int | None = None, reply_to: int | None = None) -> None:
+        """立刻发一条、不排队：正常回复都走 _enqueue_reply（按会话排队），这条给"就现在发"的调用方。
+
+        比如自测与单测：它们要看的是"这条发出去会怎样"，不是它与别人的先后。
+        """
+        send = await self._prepare_reply(route, text, kind, link_mentions=link_mentions,
+                                         message_id=message_id, reply_to=reply_to)
+        await send()
+
+    async def _post_reply(self, route: dict, kind: str, text: str, reference_id: str,
+                          message_id: int | None) -> None:
+        """真正发出去（按会话排队，前一条发完才轮到这条）：失败没人接得住，只能记进状态。"""
         try:
             # 正文格式由 _deliver 统一施加（群与私聊一致；留空 = 先 Markdown、没权限降级纯文本）
             result = await self._deliver(route, kind, text, reference_id=reference_id)
@@ -1843,6 +1877,39 @@ class QqChannelPlugin(ServicePlugin):
             return max(TEXT_CHUNK_MIN, min(length, self._too_long - 1))
         return length
 
+    def _enqueue_reply(self, target: str, prepare, label: str) -> None:
+        """回复入队：**准备并发、发送排队**。
+
+        准备（翻真 @、转表情、解析引用）各自跑，谁也不等谁；发送按入队顺序一条条来，
+        因为 QQ 按到达时间显示。第一个准备好了就发出去，再看第二个准备好没有。
+        """
+        ready = self._replies.spawn(prepare(), label)
+        prev_send = self._send_tail.get(target)
+        self._send_tail[target] = self._replies.spawn(
+            self._send_in_turn(prev_send, ready), f"{label} 发送",
+        )
+
+    async def _send_in_turn(self, prev_send: "asyncio.Task | None", ready: asyncio.Task) -> None:
+        """等自己准备好、再等前一条发完，然后发。前一条失败不连坐这一条。"""
+        try:
+            send = await ready
+        except Exception:
+            return                      # 准备阶段自己已经记过状态，后面几条照发
+        if prev_send is not None:
+            await asyncio.gather(prev_send, return_exceptions=True)
+        if send is not None:
+            await send()
+
+    def _send_lock(self, target: str) -> asyncio.Lock:
+        """同一个会话的发送串行化：两条回复同时算 msg_seq 会撞车（腾讯按 (msg_id, msg_seq) 去重，
+        后来那条被判 40054005 丢掉）。锁按会话存，最多留 512 个，满了丢最早建的那个。"""
+        lock = self._send_locks.get(target)
+        if lock is None:
+            if len(self._send_locks) >= 512:
+                self._send_locks.pop(next(iter(self._send_locks)))
+            lock = self._send_locks[target] = asyncio.Lock()
+        return lock
+
     async def _deliver(self, route: dict, kind: str, text: str, *, passive_only: bool = False,
                        reference_id: str = "") -> dict:
         """把一条消息发到 route 指向的会话（频控与被动回复窗口都在这里）
@@ -1858,12 +1925,21 @@ class QqChannelPlugin(ServicePlugin):
         窗口过期后的出路两边不同：私聊走互动召回（is_wakeup，配额按周期落库），
         群聊直接失败——腾讯早就没有群主动推送，也没有群召回字段，硬发只会换一个错误码。
         """
+        target = str(route.get("qq") or "")
+        if not target:
+            raise RuntimeError("这条路由里没有目标会话")
+        async with self._send_lock(target):
+            return await self._send_on_route(
+                route, kind, text, passive_only=passive_only, reference_id=reference_id,
+            )
+
+    async def _send_on_route(self, route: dict, kind: str, text: str, *,
+                             passive_only: bool = False, reference_id: str = "") -> dict:
+        """_deliver 的实体：拿到会话锁之后才进来，msg_seq 这本账从这里开始算。"""
         client = self._client
         if client is None or not self._task or self._task.done():
             raise RuntimeError("通道没在运行")
         target = str(route.get("qq") or "")
-        if not target:
-            raise RuntimeError("这条路由里没有目标会话")
         if not await self._wait_for_slot(target):
             raise RuntimeError("触发频控（单会话 20/分钟、Bot 60/分钟），过一分钟再试")
         window, limit = (GROUP_WINDOW, GROUP_MAX) if kind == "group" else (DM_WINDOW, DM_MAX)
@@ -1928,18 +2004,26 @@ class QqChannelPlugin(ServicePlugin):
                     # 腾讯明确拒了才把周期还回去；响应丢失时留着（见 _claim_recall）
                     await self._release_recall(target, claimed)
                     claimed = None
-                if not too_long:
+                if not too_long and not _is_dedup_error(e):
                     raise
-                # 二分：在"平台认过的长度"和"刚被拒的长度"之间取中点，没有认过的长度就砍半。
-                good = self._max_chars
-                self._too_long = min(self._too_long or len(piece), len(piece))
-                smaller = (good + len(piece)) // 2 if good and good < len(piece) else len(piece) // 2
-                smaller = max(TEXT_CHUNK_MIN, min(smaller, len(piece) - 1))   # 必须比上一次小，否则原地打转
-                logger.info(
-                    f"QQ 通道[{self.instance}] 单条 {len(piece)} 字被平台拒（长度超限）："
-                    f"改按 {smaller} 字二分重发（认过的 {good or '—'}）"
-                )
-                queue = split_message(piece, smaller) + queue
+                if too_long:
+                    # 二分：在"平台认过的长度"和"刚被拒的长度"之间取中点，没有认过的长度就砍半。
+                    good = self._max_chars
+                    self._too_long = min(self._too_long or len(piece), len(piece))
+                    smaller = (good + len(piece)) // 2 if good and good < len(piece) else len(piece) // 2
+                    smaller = max(TEXT_CHUNK_MIN, min(smaller, len(piece) - 1))   # 必须比上一次小，否则原地打转
+                    logger.info(
+                        f"QQ 通道[{self.instance}] 单条 {len(piece)} 字被平台拒（长度超限）："
+                        f"改按 {smaller} 字二分重发（认过的 {good or '—'}）"
+                    )
+                    queue = split_message(piece, smaller) + queue
+                else:
+                    # 序号撞车 = 平台没收到这条（按 (msg_id, msg_seq) 去重）：换个号重发，
+                    # 别让用户那边凭空少一句；额度不够时上面的检查会如实记下没发出去的字数
+                    queue.insert(0, piece)
+                    logger.warning(
+                        f"QQ 通道[{self.instance}] msg_seq {seq + attempts + 1} 被判「消息被去重」，换号重发"
+                    )
                 attempts += 1        # 被拒的这次也占了序号：同一个 msg_id+seq 重发会被判"消息被去重"
                 continue
             attempts += 1
@@ -1948,8 +2032,9 @@ class QqChannelPlugin(ServicePlugin):
                 # 平台认了这一段：它就是"认过的长度"，下次二分时当下界用
                 self._max_chars = len(piece)
         if msg_id:
-            # 每一次尝试都占一次回复额度（含被拒的那次）；少记了会让下一个 seq 撞车
-            route["seq"] = seq + max(1, attempts)
+            # 每一次尝试都占一次回复额度（含被拒的那次）；少记了会让下一个 seq 撞车。
+            # 只许往前：另一条回复可能已经把这本账推到更前了，拿旧基数回写会把它拽回来
+            route["seq"] = max(int(route.get("seq") or 0), seq + max(1, attempts))
         if wakeup:
             self.recalls += 1
         if kind == "group":

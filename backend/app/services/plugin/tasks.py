@@ -22,10 +22,11 @@ class PluginTasks:
         # task → 它为什么被起：异常时日志要说得清是哪一条回复没发出去
         self._tasks: dict[asyncio.Task, str] = {}
 
-    def spawn(self, coro: Coroutine[Any, Any, Any], label: str = "") -> None:
+    def spawn(self, coro: Coroutine[Any, Any, Any], label: str = "") -> asyncio.Task:
         task = asyncio.create_task(coro)
         self._tasks[task] = label
         task.add_done_callback(self._done)
+        return task
 
     def _done(self, task: asyncio.Task) -> None:
         label = self._tasks.pop(task, "")

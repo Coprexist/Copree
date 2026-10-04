@@ -248,6 +248,156 @@ async def test_group_round_trip(migrated_db):
         _cleanup(plugin)
 
 
+class _DedupClient(FakeClient):
+    """真平台的口径：同一个 (msg_id, msg_seq) 发第二次 → 40054005「消息被去重」"""
+
+    def __init__(self):
+        super().__init__()
+        self.seen: set = set()
+        self.deduped: list = []
+
+    async def send_group(self, group_openid, content, msg_id=None, msg_seq=1, message_reference="",
+                         force_type=None):
+        if msg_id and (msg_id, msg_seq) in self.seen:
+            self.deduped.append((msg_id, msg_seq, content[:20]))
+            raise RuntimeError(
+                "发 QQ 消息失败（HTTP 400）：{'message': '消息被去重，请检查请求msgseq', 'code': 40054005}"
+            )
+        if msg_id:
+            self.seen.add((msg_id, msg_seq))
+        await asyncio.sleep(0)          # 让并发真的交错，别靠"顺序恰好"
+        return await super().send_group(group_openid, content, msg_id, msg_seq, message_reference, force_type)
+
+
+async def _wait_sent_n(plugin, n: int, timeout=2.0):
+    for _ in range(int(timeout / 0.01)):
+        if len(plugin._client.sent) + len(getattr(plugin._client, "deduped", [])) >= n:
+            return
+        await asyncio.sleep(0.01)
+
+
+async def test_many_replies_in_one_turn_each_get_their_own_seq(migrated_db):
+    """一轮里连着回好几条（回复任务是并发的）：每条必须各占一个 seq。
+
+    腾讯按 (msg_id, msg_seq) 去重，撞车的那条直接 40054005 丢掉——真机上就是这么丢的：
+    一轮 5 条、其中第 3 条被判"消息被去重"，用户那边少一句。
+    这里还要求序号连续（1..5），因为被动回复额度是按次数算的。
+    """
+    from app.chat.gm import send_gm_message
+    from app.database import async_session
+
+    await _seed()
+    plugin = await _make_plugin()
+    plugin._client = _DedupClient()
+    try:
+        await plugin._on_group_at(dict(GROUP_EVENT))
+        async with async_session() as db:
+            for i in range(5):
+                await send_gm_message(db, group_id=GROUP_ID, sender_type="ai",
+                                      sender_id=AGENT_USER, content=f"第{i + 1}条")
+            await db.commit()
+        await _wait_sent_n(plugin, 5)
+        client = plugin._client
+        assert not client.deduped, f"seq 撞车，被平台去重丢掉：{client.deduped}"
+        assert sorted(s["seq"] for s in client.sent) == [1, 2, 3, 4, 5], client.sent
+        assert all(s["msg_id"] == "MSG-1" for s in client.sent), client.sent
+    finally:
+        _cleanup(plugin)
+
+
+class _DedupOnceClient(FakeClient):
+    """模拟"这次算的号已经被用过了"：某个 seq 第一次被拒，换号之后接受"""
+
+    def __init__(self, reject_seq=1):
+        super().__init__()
+        self.reject_seq = reject_seq
+        self.rejected: list = []
+
+    async def send_group(self, group_openid, content, msg_id=None, msg_seq=1, message_reference="",
+                         force_type=None):
+        if self.reject_seq is not None and msg_seq == self.reject_seq:
+            self.rejected.append((msg_seq, content[:20]))
+            self.reject_seq = None
+            raise RuntimeError(
+                "发 QQ 消息失败（HTTP 400）：{'message': '消息被去重，请检查请求msgseq', 'code': 40054005}"
+            )
+        return await super().send_group(group_openid, content, msg_id, msg_seq, message_reference, force_type)
+
+
+async def test_dedup_rejection_is_retried_with_a_new_seq(migrated_db):
+    """平台判「消息被去重」= 这条没收到：换一个 seq 重发，别让用户少一句话。"""
+    from app.chat.gm import send_gm_message
+    from app.database import async_session
+
+    await _seed()
+    plugin = await _make_plugin()
+    plugin._client = _DedupOnceClient(reject_seq=1)
+    try:
+        await plugin._on_group_at(dict(GROUP_EVENT))
+        async with async_session() as db:
+            await send_gm_message(db, group_id=GROUP_ID, sender_type="ai",
+                                  sender_id=AGENT_USER, content="只有这一条")
+            await db.commit()
+        await _wait_sent(plugin)
+        client = plugin._client
+        assert client.rejected, "第一次应当被平台判去重"
+        assert [s["seq"] for s in client.sent] == [2], client.sent
+        assert plugin.last_error == "", plugin.last_error
+        # 被拒的那次也占了号：下一个 seq 不能是 2
+        assert plugin._routes["QQGROUP-AAA"]["seq"] == 2
+    finally:
+        _cleanup(plugin)
+
+
+async def test_prep_runs_concurrently_and_send_waits_its_turn(migrated_db):
+    """准备并发、发送排队——用事件卡住第一条，验证两条性质：
+
+    1. 第一条还卡在准备阶段时，后面两条的准备**已经各自跑完了**（准备不互相等）；
+    2. 此时**一条都没发出去**（后面的准备完了也不许越过前面那条），放行后按主站顺序依次到达。
+
+    用事件而不是 sleep 的时长：时间数字会让用例时红时绿，事件让"卡住"这件事确定发生。
+    """
+    from app.chat.gm import send_gm_message
+    from app.database import async_session
+
+    await _seed()
+    plugin = await _make_plugin()
+    release_first = asyncio.Event()
+    others_prepared = asyncio.Event()
+    prepared: list[str] = []
+    original = plugin._translate_mentions
+
+    async def gated(text, *, plain=False):
+        if "第一条" in text:
+            prepared.append("first-start")
+            await release_first.wait()          # 第一条一直停在准备阶段
+            prepared.append("first-done")
+        else:
+            prepared.append(text[:3])
+            if len([p for p in prepared if p != "first-start"]) >= 2:
+                others_prepared.set()
+        return await original(text, plain=plain)
+
+    plugin._translate_mentions = gated
+    try:
+        await plugin._on_group_at(dict(GROUP_EVENT))
+        texts = ["第一条", "第二条", "第三条"]
+        async with async_session() as db:
+            for t in texts:
+                await send_gm_message(db, group_id=GROUP_ID, sender_type="ai",
+                                      sender_id=AGENT_USER, content=t)
+            await db.commit()
+        await asyncio.wait_for(others_prepared.wait(), timeout=2)
+        assert plugin._client.sent == [], "前面那条还没准备好，后面的先发出去了"
+        release_first.set()
+        await _wait_sent_n(plugin, 3)
+        assert [s["content"] for s in plugin._client.sent] == texts, plugin._client.sent
+        assert prepared[0] == "first-start" and "first-done" in prepared, prepared
+    finally:
+        release_first.set()                     # 断言失败时别把准备任务吊死
+        _cleanup(plugin)
+
+
 async def test_private_chat_round_trip(migrated_db):
     """私聊：QQ 用户 → 与该 AI 的私信会话 → AI 回复回到这个 QQ 用户"""
     from app.chat.dm import get_or_create_dm_session, send_dm_message
@@ -1040,11 +1190,11 @@ async def test_reply_task_drained_before_client_close(migrated_db):
     client = plugin._client
     finished = []
 
-    async def _slow_reply(route, text, kind, **kwargs):
+    async def _slow_post(route, kind, text, reference_id, message_id):
         await asyncio.sleep(0.05)
         finished.append(text)
 
-    plugin._send_reply = _slow_reply
+    plugin._post_reply = _slow_post
     try:
         await plugin._on_group_at(dict(GROUP_EVENT))          # 先建好回哪个群的路由
         async with async_session() as db:
@@ -1052,7 +1202,7 @@ async def test_reply_task_drained_before_client_close(migrated_db):
                                   sender_id=AGENT_USER, content="慢回复")
             await db.commit()
         await asyncio.sleep(0.01)
-        assert len(plugin._replies) == 1, "回复任务没有被持有（随时可能被 GC 回收）"
+        assert len(plugin._replies) >= 1, "回复任务没有被持有（随时可能被 GC 回收）"
         assert finished == [] and client.closed is False
 
         await plugin.stop()
