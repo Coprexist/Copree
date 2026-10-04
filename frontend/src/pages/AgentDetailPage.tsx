@@ -4,7 +4,8 @@ import { api } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import { STATE_BADGE_COLORS } from '../constants'
 import Toggle from '../components/Toggle'
-import { useT } from '../i18n/I18nContext'
+import { useT, useLang } from '../i18n/I18nContext'
+import { fmtDate, fmtDateTime } from '../utils/time'
 import { getStatusTextStyle, STATUS_COLORS } from '../utils/statusColor.tsx'
 import {
   ArrowLeft, Trash2, Download, Upload, Key, Edit3,
@@ -124,6 +125,7 @@ interface WorkspaceFiles {
 // ── 向量记忆卡片（可折叠内容 + scope 彩色标签） ──
 
 function VectorMemoryCard({ mem, t: _t }: { mem: MemoryItem; t: any }) {
+  const lang = useLang()
   const [showFull, setShowFull] = useState(false)
   const scopeColor: Record<string, string> = {
     private: 'bg-primary-500/10 text-primary-400 border-primary-500/20',
@@ -149,7 +151,7 @@ function VectorMemoryCard({ mem, t: _t }: { mem: MemoryItem; t: any }) {
         </p>
       )}
       <p className="text-3xs text-textMuted mt-1">
-        {mem.created_at ? new Date(mem.created_at).toLocaleString('zh-CN') : ''}
+        {mem.created_at ? fmtDateTime(mem.created_at, lang) : ''}
       </p>
     </div>
   )
@@ -173,6 +175,7 @@ interface StructuredSub {
 
 function StructuredMemoryView({ agentId }: { agentId: number }) {
   const t = useT()
+  const lang = useLang()
   const [data, setData] = useState<StructuredCategory[] | null>(null)
   const [loading, setLoading] = useState(true)
   const [expandedCat, setExpandedCat] = useState<string | null>(null)
@@ -231,7 +234,7 @@ function StructuredMemoryView({ agentId }: { agentId: number }) {
                         <span className="text-xs text-textPrimary font-medium">{sub.sub_key}</span>
                         <span className="text-3xs text-textMuted ml-auto">{sub.field_count} 项</span>
                         {sub.last_update && (
-                          <span className="text-3xs text-textMuted/60">{new Date(sub.last_update).toLocaleDateString('zh-CN')}</span>
+                          <span className="text-3xs text-textMuted/60">{fmtDate(sub.last_update, lang)}</span>
                         )}
                       </button>
                       {isSubOpen && (
@@ -261,6 +264,7 @@ type Tab = (typeof TABS)[number]
 
 export default function AgentDetailPage() {
   const t = useT()
+  const lang = useLang()
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { user, refreshUser } = useAuth()
@@ -690,7 +694,7 @@ export default function AgentDetailPage() {
                   </span>
                 )}
                 <span className="text-xs text-textMuted">
-                  {t('agentDetail:createdOn')} {new Date(agent.created_at).toLocaleDateString('zh-CN')}
+                  {t('agentDetail:createdOn')} {fmtDate(agent.created_at, lang)}
                 </span>
               </div>
             </div>

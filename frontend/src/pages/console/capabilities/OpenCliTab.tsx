@@ -4,7 +4,8 @@ import { useState, useEffect } from 'react'
 import { ListPanel } from '../../../components/ui'
 import { api } from '../../../api/client'
 import Toggle from '../../../components/Toggle'
-import { useT } from '../../../i18n/I18nContext'
+import { useT, useLang } from '../../../i18n/I18nContext'
+import { fmtDateTime } from '../../../utils/time'
 
 export default function OpenCLITab() {
   const t = useT()
@@ -408,6 +409,7 @@ function OpenCLICommandsSection() {
 
 function OpenCLILogsSection() {
   const t = useT()
+  const lang = useLang()
   const [data, setData] = useState<any>(null)
   const [page, setPage] = useState(1)
 
@@ -436,7 +438,7 @@ function OpenCLILogsSection() {
             {data.items.map((log: any) => (
               <tr key={log.id} className="border-b border-border/50">
                 <td className="py-2 px-3 text-xs text-textSecondary">
-                  {log.executed_at ? new Date(log.executed_at).toLocaleString('zh-CN') : '-'}
+                  {log.executed_at ? fmtDateTime(log.executed_at, lang) : '-'}
                 </td>
                 <td className="py-2 px-3 text-xs text-textPrimary">AI #{log.agent_id}</td>
                 <td className="py-2 px-3 font-mono text-xs text-textPrimary">

@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useId, memo } from 'react
 import { Loader2, AlertTriangle, Maximize2, Minimize2, ZoomIn, ZoomOut, Download } from 'lucide-react'
 import CodeRenderer from './shared/CodeRenderer'
 import { useIsDark } from '../hooks/useIsDark'
+import { useT } from '../i18n/I18nContext'
 
 interface MermaidBlockProps {
   code: string
@@ -95,6 +96,7 @@ function getMermaidSetting(key: string, fallback: boolean): boolean {
 // ---------------------------------------------------------------------------
 
 function MermaidBlock({ code, compact = false }: MermaidBlockProps) {
+  const t = useT()
   const containerRef = useRef<HTMLDivElement>(null)
   const [svg, setSvg] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -199,12 +201,9 @@ function MermaidBlock({ code, compact = false }: MermaidBlockProps) {
   svgRef.current = svg
 
   // 构建错误报告消息
-  const buildReportMsg = (err: string) => {
-    const lang = document.documentElement.lang?.startsWith('zh') ? 'zh-CN' : 'en'
-    const msgZh = `Mermaid 图表渲染失败：${err}\n\n原始代码：\n\`\`\`mermaid\n${code}\n\`\`\``
-    const msgEn = `Mermaid diagram failed to render: ${err}\n\nOriginal code:\n\`\`\`mermaid\n${code}\n\`\`\``
-    return lang === 'zh-CN' ? msgZh : msgEn
-  }
+  // 以前按 document.documentElement.lang 猜语言（那个属性没人设，永远落英文分支），
+  // 而且只有中英两版；现在走 i18n，三语一份模板
+  const buildReportMsg = (err: string) => t('tool:mermaid.renderFailed', { error: err, code })
   const dispatchErrorReport = (err: string) => {
     document.dispatchEvent(new CustomEvent('mermaid-error-report', { detail: { message: buildReportMsg(err) } }))
   }

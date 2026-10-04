@@ -5,7 +5,7 @@ import { api } from '../api/client'
 import { getStateDotColor } from '../constants'
 import { useT, useLang } from '../i18n/I18nContext'
 import { getStatusTextStyle, BG_ELEVATED_LIGHT, BG_ELEVATED_DARK } from '../utils/statusColor.tsx'
-import { formatMessageTime } from '../utils/time'
+import { fmtDate, formatMessageTime } from '../utils/time'
 import { useTheme } from '../context/ThemeContext'
 import { Dialog } from './ui'
 
@@ -257,7 +257,7 @@ export default function ProfileCard({ entityType, entityId, entityName, state, a
           )}
           <div className="flex flex-wrap gap-x-2">
             {createdAt && (
-              <span>{t('profileCard:registeredOn')}: {new Date(createdAt).toLocaleDateString('zh-CN')}</span>
+              <span>{t('profileCard:registeredOn')}: {fmtDate(createdAt, lang)}</span>
             )}
             {isActive ? (
               <span className="text-mint-500">{t('dm:online')}</span>
@@ -342,7 +342,7 @@ export default function ProfileCard({ entityType, entityId, entityName, state, a
           {/* 群聊信息 */}
           {isGroup && (
             <div className="text-2xs text-textMuted text-center pt-2">
-              {createdAt && <span>{t('profileCard:createdOn')} {new Date(createdAt).toLocaleDateString('zh-CN')}</span>}
+              {createdAt && <span>{t('profileCard:createdOn')} {fmtDate(createdAt, lang)}</span>}
             </div>
           )}
           </div>

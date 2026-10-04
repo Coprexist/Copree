@@ -5,7 +5,8 @@ import { Bot, Plus, Edit3, History, Power, Download, Upload, X, RotateCcw, Eye, 
 import { useAuth } from '../context/AuthContext'
 import Toggle from '../components/Toggle'
 import { Button, Dialog, IconButton, PageHeader } from '../components/ui'
-import { useT } from '../i18n/I18nContext'
+import { useT, useLang } from '../i18n/I18nContext'
+import { fmtDate, fmtDateTime } from '../utils/time'
 import CreateAgentModal from '../components/CreateAgentModal'
 import { STATE_BADGE_COLORS, AI_TYPE_LABEL, CHAT_REFRESH_EVENT } from '../constants'
 
@@ -78,6 +79,7 @@ export default function AgentsPage() {
   const [stateAgent, setStateAgent] = useState<Agent | null>(null)
   const { refreshUser } = useAuth()
   const t = useT()
+  const lang = useLang()
 
   const loadAgents = async () => {
     try {
@@ -164,7 +166,7 @@ export default function AgentsPage() {
                       <div>
                         <h3 className="font-medium text-textPrimary">{agent.name}</h3>
                         <p className="text-xs text-textMuted">
-                          {new Date(agent.created_at).toLocaleDateString('zh-CN')}
+                          {fmtDate(agent.created_at, lang)}
                         </p>
                       </div>
                     </div>
@@ -778,6 +780,7 @@ function HistoryModal({ agent, onClose, onRollback }: {
   agent: Agent; onClose: () => void; onRollback: () => void
 }) {
   const t = useT()
+  const lang = useLang()
   const [history, setHistory] = useState<ConfigHistory[]>([])
   const [loading, setLoading] = useState(true)
   const [rollingBack, setRollingBack] = useState<number | null>(null)
@@ -839,7 +842,7 @@ function HistoryModal({ agent, onClose, onRollback }: {
                 >
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-xs text-textMuted">
-                      {h.created_at ? new Date(h.created_at).toLocaleString('zh-CN') : t('agents:unknownTime')}
+                      {h.created_at ? fmtDateTime(h.created_at, lang) : t('agents:unknownTime')}
                       {isLatest && <span className="ml-1 text-primary-400 font-medium">{t('agents:currentLabel')}</span>}
                     </span>
                     {!isLatest && (

@@ -2,7 +2,8 @@ import { useState, useEffect, useMemo, type ReactNode } from 'react'
 import { useNavigate, useOutletContext, useSearchParams } from 'react-router-dom'
 import { api } from '../api/client'
 import { useAuth } from '../context/AuthContext'
-import { useT } from '../i18n/I18nContext'
+import { useT, useLang } from '../i18n/I18nContext'
+import { uiLocale } from '../utils/time'
 import { Users, MessageSquare, UserPlus, Check, X, Search, ArrowUpDown, ArrowLeft, Bot, User, Menu, Star } from 'lucide-react'
 import {
   notifyRequestsChanged, fetchPendingRequests, REQUESTS_CHANGED, REQUESTS_POLL_MS,
@@ -153,7 +154,7 @@ function typeWeight(t: string): number {
   return t === 'human' ? 0 : 1
 }
 
-function sortFriends(friends: Friend[], mode: SortMode): Friend[] {
+function sortFriends(friends: Friend[], mode: SortMode, locale: string): Friend[] {
   const list = [...friends]
   switch (mode) {
     case 'smart':
@@ -163,12 +164,12 @@ function sortFriends(friends: Friend[], mode: SortMode): Friend[] {
         if (s !== 0) return s
         const t = typeWeight(a.friend_type) - typeWeight(b.friend_type)
         if (t !== 0) return t
-        return a.friend_name.localeCompare(b.friend_name, 'zh-CN')
+        return a.friend_name.localeCompare(b.friend_name, locale)
       })
       break
     case 'alpha':
       // 纯字典序
-      list.sort((a, b) => a.friend_name.localeCompare(b.friend_name, 'zh-CN'))
+      list.sort((a, b) => a.friend_name.localeCompare(b.friend_name, locale))
       break
     case 'recent_chat':
       // 最近聊天时间越近越顶（无时间的排末尾）
@@ -192,6 +193,7 @@ function sortFriends(friends: Friend[], mode: SortMode): Friend[] {
 
 export default function ListPage() {
   const t = useT()
+  const lang = useLang()
   const [searchParams] = useSearchParams()
   const [friends, setFriends] = useState<Friend[]>([])
   const [requests, setRequests] = useState<FriendRequest[]>([])
@@ -327,7 +329,7 @@ export default function ListPage() {
 
   // 排序 + 搜索过滤
   const sortedFriends = useMemo(() => {
-    const sorted = sortFriends(friends, sortMode)
+    const sorted = sortFriends(friends, sortMode, uiLocale(lang))
     if (!searchQuery.trim()) return sorted
     const q = searchQuery.trim().toLowerCase()
     return sorted.filter(f => f.friend_name.toLowerCase().includes(q))

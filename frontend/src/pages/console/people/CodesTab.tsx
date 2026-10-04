@@ -2,10 +2,12 @@
 
 import { useState, useEffect } from 'react'
 import { api } from '../../../api/client'
-import { useT } from '../../../i18n/I18nContext'
+import { useT, useLang } from '../../../i18n/I18nContext'
+import { fmtDate } from '../../../utils/time'
 
 export default function CodesTab() {
   const t = useT()
+  const lang = useLang()
   const [codes, setCodes] = useState<any[]>([])
   const [quota, setQuota] = useState(3)
   const [days, setDays] = useState(30)
@@ -145,7 +147,7 @@ export default function CodesTab() {
                   <td className="py-2 px-3 text-xs text-textSecondary">{CODE_TYPES[c.code_type] || c.code_type || t('admin:codeTypeDefault')}</td>
                   <td className="py-2 px-3 text-textPrimary">{c.quota_amount}{(c.code_type === 'file_size' || c.code_type === 'file_quota') ? ' MB' : ''}</td>
                   <td className="py-2 px-3 text-xs text-textMuted max-w-[120px] truncate" title={c.note || ''}>{c.note || '-'}</td>
-                  <td className="py-2 px-3 text-xs text-textSecondary">{c.expires_at ? new Date(c.expires_at).toLocaleDateString('zh-CN') : '-'}</td>
+                  <td className="py-2 px-3 text-xs text-textSecondary">{c.expires_at ? fmtDate(c.expires_at, lang) : '-'}</td>
                   <td className="py-2 px-3">
                     {c.used_by ? (
                       <span className="text-xs text-textMuted">{t('admin:usedBy')} (uid:{c.used_by})</span>

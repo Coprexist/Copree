@@ -10,7 +10,9 @@ import { useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Loader2 } from 'lucide-react'
 import { api } from '../../api/client'
 import { saveElementAsHtml } from '../../utils/exportHtml'
-import { useT } from '../../i18n/I18nContext'
+import { useT, useLang } from '../../i18n/I18nContext'
+import type { Lang } from '../../i18n/languages'
+import { fmtDateTime } from '../../utils/time'
 import RequestBodyViewer from './RequestBodyViewer'
 import { RunStatusChip } from './RunStatus'
 import {
@@ -34,8 +36,8 @@ interface Props {
   limit?: number
 }
 
-const timeOf = (value: string | null | undefined) =>
-  value ? new Date(value).toLocaleString('zh-CN') : ''
+const timeOf = (value: string | null | undefined, lang: Lang) =>
+  value ? fmtDateTime(value, lang) : ''
 
 /** 改变量里的一截：多出来的 / 没了的，各自连着那几条消息 */
 function Hunk({ label, removed, messages, names }: {
@@ -54,6 +56,7 @@ function Hunk({ label, removed, messages, names }: {
 
 export default function LogBrowser({ agentId, basePath = '/conversation-log', exportLog, limit = 30 }: Props) {
   const t = useT()
+  const lang = useLang()
   const [searchParams, setSearchParams] = useSearchParams()
   const [logs, setLogs] = useState<LogSummary[]>([])
   const [loading, setLoading] = useState(true)
@@ -178,7 +181,7 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
                 <span className="text-xl font-semibold text-textPrimary">{group.items.length}</span>
                 <span className="text-3xs text-textMuted">{t('logs:stateRequests')}</span>
               </div>
-              <div className="text-3xs text-textMuted mt-1">{timeOf(newest.created_at)}</div>
+              <div className="text-3xs text-textMuted mt-1">{timeOf(newest.created_at, lang)}</div>
             </button>
           )
         })}
@@ -243,7 +246,7 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
                 <span className="text-3xs font-mono text-textMuted">#{log.id}</span>
                 <RunStatusChip status={log.status} />
               </div>
-              <div className="text-3xs text-textMuted">{log.message_count} · {timeOf(log.created_at)}</div>
+              <div className="text-3xs text-textMuted">{log.message_count} · {timeOf(log.created_at, lang)}</div>
             </button>
           ))}
         </aside>

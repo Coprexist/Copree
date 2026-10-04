@@ -168,3 +168,27 @@ export function formatMessageTime(
   const d = date.getDate()
   return `${y}/${mo}/${d} ${timeStr}`
 }
+
+// ── 按界面语言的日期/时间格式化 ──
+
+export type DateInput = string | number | Date
+
+/** 界面语言对应的 BCP-47 locale：日期格式与列表排序共用这一处 */
+export function uiLocale(lang: Lang): string {
+  return getLangMeta(lang).locale
+}
+
+/**
+ * 日期 / 日期时间：页面别再写 `toLocaleDateString('zh-CN')`——en/ja 用户会看到中文格式，
+ * 也别按 `document.documentElement.lang` 猜（那个属性没人维护）。
+ *
+ * 时间点仍按调用点原来的 `new Date(value)` 解释：相对时间那套 parseServerDate 是另一回事，
+ * 在这里换语义会让"日期差一天"这种事神不知鬼不觉地发生。
+ */
+export function fmtDate(value: DateInput, lang: Lang = 'zh'): string {
+  return new Date(value).toLocaleDateString(uiLocale(lang))
+}
+
+export function fmtDateTime(value: DateInput, lang: Lang = 'zh', opts?: Intl.DateTimeFormatOptions): string {
+  return new Date(value).toLocaleString(uiLocale(lang), opts)
+}

@@ -2,7 +2,8 @@ import { useState, useEffect, useRef } from 'react'
 import { api } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
-import { useT } from '../i18n/I18nContext'
+import { useT, useLang } from '../i18n/I18nContext'
+import { fmtDateTime } from '../utils/time'
 import Toggle from '../components/Toggle'
 import ComboBox from '../components/ui/ComboBox'
 import { IN_APP_NOTIFICATION_KEY } from '../hooks/useNotificationSocket'
@@ -74,6 +75,7 @@ const NAV_SECTIONS: NavSection[] = [
 
 export default function SettingsPage() {
   const t = useT()
+  const lang = useLang()
   const { user, refreshUser } = useAuth()
   const { theme, toggleTheme } = useTheme()
 
@@ -847,7 +849,7 @@ export default function SettingsPage() {
           ))}
         </select>
         <p className="text-xs text-textMuted mt-2">
-          {t('settings:currentTimestamp')} {new Date().toLocaleString('zh-CN', { timeZone: timezone })}
+          {t('settings:currentTimestamp')} {fmtDateTime(new Date(), lang, { timeZone: timezone })}
         </p>
       </div>
 

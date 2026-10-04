@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '../../../api/client'
-import { useT } from '../../../i18n/I18nContext'
+import { useT, useLang } from '../../../i18n/I18nContext'
+import { fmtDateTime } from '../../../utils/time'
 
 const GEOIP_CACHE_KEY = '_geoip_cache'
 
@@ -18,6 +19,7 @@ const FILTER_TYPES = ['all', 'login', 'login_failed', 'register']
 
 export default function LogsTab() {
   const t = useT()
+  const lang = useLang()
   const [data, setData] = useState<any>(null)
   // 运维总览的数字点进来时带着 log_type：URL 是下钻落点的唯一入口，刷新/收藏也还在
   const [searchParams] = useSearchParams()
@@ -91,7 +93,7 @@ export default function LogsTab() {
               return (
                 <tr key={log.id} className="border-b border-border/50">
                   <td className="py-2 px-3 text-xs">
-                    {log.created_at ? new Date(log.created_at).toLocaleString('zh-CN') : '-'}
+                    {log.created_at ? fmtDateTime(log.created_at, lang) : '-'}
                   </td>
                   <td className="py-2 px-3">
                     <span className={`text-xs px-2 py-0.5 rounded bg-elevated ${failed ? 'text-red-400' : 'text-textPrimary'}`}>
