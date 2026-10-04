@@ -17,8 +17,8 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { launchChrome, Session, sleep } from './cdp.mjs'
 import { AI_AVATARS, DEFAULT_AVATAR_NAME } from './demo-data.mjs'
-import { rewriteApi, shouldPassThrough } from './rewrite.mjs'
 import { SHOTS, UI_SHOTS, VIEWPORT } from './shots.mjs'
+// rewrite.mjs 在模块初始化时按 SHOT_LANG 建翻译表，所以解析完参数后再动态导入
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
 const DEFAULT_URL = 'http://127.0.0.1:5227'
@@ -42,12 +42,15 @@ function avatarBody(fileName) {
 }
 
 function parseArgs(argv) {
-  const opts = { url: process.env.AISCHAT_URL || DEFAULT_URL, out: DEFAULT_OUT, only: null }
+  const opts = { url: process.env.AISCHAT_URL || DEFAULT_URL, out: DEFAULT_OUT, only: null, lang: process.env.SHOT_LANG || 'zh' }
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--url') opts.url = argv[++i]
     else if (argv[i] === '--out') opts.out = path.resolve(argv[++i])
     else if (argv[i] === '--only') opts.only = argv[++i]
+    else if (argv[i] === '--lang') opts.lang = argv[++i]
   }
+  if (!['zh', 'en', 'ja'].includes(opts.lang)) throw new Error('--lang 只认 zh / en / ja：' + opts.lang)
+  process.env.SHOT_LANG = opts.lang
   return opts
 }
 
@@ -72,6 +75,7 @@ function mintToken(secret) {
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2))
+  const { rewriteApi, shouldPassThrough } = await import('./rewrite.mjs')
   // --only 可以给多个（逗号分隔），在 README 那 8 张与组件规范配图里一起找；
   // 不给 --only 时只拍 README 那 8 张，组件配图得点名（它们另有输出目录）
   const all = [...SHOTS, ...UI_SHOTS]
@@ -90,7 +94,7 @@ async function main() {
   const session = await Session.connect(wsUrl)
   mkdirSync(opts.out, { recursive: true })
 
-  console.log('目标：' + opts.url + ' ｜ 输出：' + opts.out + ' ｜ 浏览器：' + bin)
+  console.log('目标：' + opts.url + ' ｜ 输出：' + opts.out + ' ｜ 界面语言：' + opts.lang + ' ｜ 浏览器：' + bin)
 
   await session.send('Page.enable')
   await session.send('Runtime.enable')
@@ -153,12 +157,15 @@ async function main() {
   await session.send('Page.navigate', { url: opts.url + '/login' })
   await sleep(2000)
   await session.eval('localStorage.setItem("access_token", ' + JSON.stringify(token) + ')')
+  // App 取语言的顺序是：设置向导覆盖 → 用户设置 → 缓存。截图统一用第一档顶掉，跟演示数据的语言一致
+  await session.eval('localStorage.setItem("i18n_override_lang", ' + JSON.stringify(opts.lang) + ')')
 
   for (const shot of shots) {
     activeShot = shot
     await session.send('Page.navigate', { url: opts.url + shot.path })
     await sleep(shot.settle || 4000)
-    for (const js of [].concat(shot.prepare || [])) await session.eval(js).catch(() => {})
+    const prepare = typeof shot.prepare === 'function' ? shot.prepare() : shot.prepare
+    for (const js of [].concat(prepare || [])) await session.eval(js).catch(() => {})
     await sleep(600)
     // 页面崩了（ErrorBoundary / Vite 报错浮层）照样能截图，但图是废的 —— 必须报出来
     const broken = await session.eval('document.querySelectorAll("vite-error-overlay, [data-error-boundary], .error-boundary").length').catch(() => 0)

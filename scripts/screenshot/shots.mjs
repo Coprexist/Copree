@@ -10,6 +10,17 @@
 
 export const VIEWPORT = { width: 1440, height: 900 }
 
+/**
+ * 截图脚本点的是真实 UI，按钮文案随界面语言变。SHOT_LANG 要等 run.mjs 解析完参数
+ * 才确定，所以这里延迟到真正取用时再读；shot.prepare 允许写成函数。
+ */
+const UI_TEXT = {
+  zh: { openStandard: '在此标准界面打开' },
+  en: { openStandard: 'Open in this standard UI' },
+  ja: { openStandard: 'この標準UIで開く' },
+}
+const uiText = (key) => UI_TEXT[process.env.SHOT_LANG || 'zh'][key]
+
 /** 点击文件树/列表里文本完全匹配的叶子节点 */
 const clickText = (text) => '(() => {' +
   'const hits = [...document.querySelectorAll("button, li, a, span, div")]' +
@@ -43,7 +54,7 @@ const hideWorldDebug = '(() => {' +
   'return true })()'
 
 export const SHOTS = [
-  { name: 'chat', path: '/chat/gm/1', settle: 4500, prepare: [clickText('在此标准界面打开'), scrollBottom] },
+  { name: 'chat', path: '/chat/gm/1', settle: 4500, prepare: () => [clickText(uiText('openStandard')), scrollBottom] },
   { name: 'worlds', path: '/worlds', settle: 4500 },
   { name: 'design', path: '/worlds/34/design', settle: 6000, prepare: [clickText('main.py'), scrollBottom] },
   { name: 'world', path: '/world-view/34', settle: 6500, prepare: hideWorldDebug, format: 'jpeg', quality: 86 },

@@ -7,11 +7,15 @@
  *   2. 幂等 —— 已经是演示数据的值不会被再次改写（KNOWN 集合），所以
  *      「先按端点覆盖、再统一兜底清洗」两遍顺序无所谓。
  */
+import { translateTree } from './demo-i18n.mjs'
 import {
   DEFAULT_AVATAR_URL, DEMO_AGENTS, DEMO_DM_SESSIONS, DEMO_FRIENDS, DEMO_GITHUB_BIND, DEMO_GITHUB_ITEMS,
   DEMO_GROUP_MESSAGES, DEMO_GROUPS, DEMO_ME, DEMO_MEMBERS, DEMO_MARKET_ITEMS, DEMO_SUGGESTIONS,
   DEMO_USER_STATS, DEMO_USER_STORAGE, DEMO_USAGE_OVERVIEW, DEMO_WORLDS, DEMO_WORLD_CHAT,
 } from './demo-data.mjs'
+
+/** 演示截图的界面语言：SHOT_LANG/--lang 只认 zh（默认）/ en / ja */
+const DEMO_LANG = process.env.SHOT_LANG || 'zh'
 
 /** 虚构人名池：任何未知的人名/昵称都会稳定地映射到这里的一个 */
 const NAME_POOL = ['林晚', '柏舟', '青禾', '沈知', '朝雾', '拾光', '阿兰德', '白露', '洛']
@@ -146,5 +150,6 @@ export function rewriteApi(pathname, data) {
     const m = path.match(pattern)
     if (m) current = apply(current, m)
   }
-  return current
+  // 最后一趟才翻：路由覆盖出来的演示数据不经过 scrub，早翻会漏
+  return DEMO_LANG === 'zh' ? current : translateTree(current, DEMO_LANG)
 }
