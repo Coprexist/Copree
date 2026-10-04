@@ -87,7 +87,7 @@ app/chat/group_delivery.py 与 dm_delivery.py，和网页端完全同路。
 | POST | /me/agents/{id}/channels/{plugin_id}/pairings/{approve,block,forget} | 批准 / 拉黑 / 解除配对 |
 
 `{plugin_id}` 不是平台常量：哪个插件算通道由它 manifest 的 `channel` 块决定（见
-[写一个通道插件](./dev/channel-plugins.md)），未知 plugin_id 一律 404。
+[写一个通道插件](./plugin-dev/channel-plugins.md)），未知 plugin_id 一律 404。
 
 ## 6. 通道自测与出站可选项（v0.4.10）
 

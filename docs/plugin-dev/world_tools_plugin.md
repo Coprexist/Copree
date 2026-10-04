@@ -91,6 +91,17 @@ WORLD_TOOLS_DIR=/opt/copree-tools docker compose up -d backend
 启动时会扫描该目录并注册；文件导入失败只记日志。
 注意：该目录里的代码与主仓库同权限运行，**只放可信代码**。
 
+## 5.5 改了工具，AI 什么时候知道（版本式）
+
+你的工具定义属于**世界源**（`world-{id}`）：定义变了 → 写一个新版本 + 自动 changelog，然后在 AI 下一轮
+**落一条变更通知条目**（紧跟在历史后面）；前缀里的旧定义要等它 compact / 清空上下文才整体换新。
+
+所以改定义**不会立刻换掉 AI 手里的工具描述**，但通知当轮就到，AI 会知道「有这个变化、以新描述为准」。
+删掉一个工具时，锁定态的请求里仍带着旧定义（模型可能凭记忆调用），调用会回 `UNKNOWN_TOOL`——这是刻意的：
+宁可回一个明确错误，也不在对话中途改工具数组、把整段前缀缓存打掉。
+
+判断与通知的三种方法（三选一）见[能力懒加载](../dev/capability_lazy_loading.md)；通道类插件见
+[写一个通道插件](./channel-plugins.md) §4.5。
 ## 6. 自测
 
 ```bash
@@ -155,6 +166,18 @@ WORLD_TOOLS_DIR=/opt/copree-tools docker compose up -d backend
 
 Plugins run with the same privileges as the backend — only load code you trust.
 
+### Tool changes — when does the AI learn?
+
+Your tool definitions belong to a **world source** (`world-{id}`): any change writes a new version with an
+auto-generated changelog, and the AI gets one change-notice entry in its ledger on the next turn. The tool
+definitions inside its frozen prefix are swapped only when that conversation compacts or clears.
+
+So a definition change is announced immediately but applied lazily. A removed tool stays in the frozen request
+on purpose — calling it returns a clear `UNKNOWN_TOOL`, which is cheaper than invalidating the whole prefix
+mid-conversation.
+
+The three ways to decide and deliver a notice are in [capability lazy-loading](../dev/capability_lazy_loading.md);
+for channel plugins see [writing a channel plugin](./channel-plugins.md) §4.5.
 ### Guard test
 
 `backend/tests/test_world_tool_summaries.py` asserts that the set of tools exposed to the LLM

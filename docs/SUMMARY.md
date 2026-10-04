@@ -71,9 +71,16 @@
 | 文档 | 适用人群 | 说明 |
 |------|---------|------|
 | [plugin_system_design.md](./plugin_system/design/plugin_system_design.md) | 开发者 / 管理员 | 目录即插件协议、两级开关（管理员全局 + 用户个人）、皮肤插件、技能插件桥接 |
-| [plugin-protocol-v2.md](./plugin-protocol-v2.md) | 开发者 / 管理员 | 阶段二设计：语言中立的行为插件协议 |
-| [plugin-protocol-v3.md](./plugin-protocol-v3.md) | 开发者 / 管理员 | 阶段三（已实现）：服务类插件（category: service）、插件级加密配置、生命周期收敛 |
-| [plugin-market.md](./plugin-market.md) | 开发者 / 管理员 | 总商城与插件商城：三层信任、安装包安全边界、社区索引仓与 CI 通过规则 |
+| [plugin-protocol-v2.md](./plugin-dev/plugin-protocol-v2.md) | 开发者 / 管理员 | 阶段二设计：语言中立的行为插件协议 |
+| [plugin-protocol-v3.md](./plugin-dev/plugin-protocol-v3.md) | 开发者 / 管理员 | 阶段三（已实现）：服务类插件（category: service）、插件级加密配置、生命周期收敛 |
+| [plugin-market.md](./plugin-dev/plugin-market.md) | 开发者 / 管理员 | 总商城与插件商城：三层信任、安装包安全边界、社区索引仓与 CI 通过规则 |
+
+#### 3.7 插件开发者文档（docs/plugin-dev）
+
+| 文档 | 适用人群 | 说明 |
+|------|---------|------|
+| [插件开发者文档入口](./plugin-dev/README.md) | 插件开发者 | 索引与阅读顺序；公共契约与平台内部设计的分界 |
+| [环境上报接口](./plugin-dev/environment-api.md) | 插件开发者 | 环境上报公共契约：一个方法、扁平返回、一条判定、`text` 覆盖渲染、五种迁移 |
 | [agent-channels.md](./agent-channels.md) | 用户 / 管理员 | 给自己的 AI 接 QQ：三种身份、配对制、归属与实例约定、接口与已知限制 |
 
 ### 四、子系统专题
@@ -94,7 +101,7 @@
 | [接口文档服务](./group_world/design/api_docs_service.md) | 开发者 / 管理员 | /kb 接口 + docx 导出 + pandoc 安装、路径规则、422 local_kw 坑 |
 | [群视界 API 文档](./group_world/api/world_api_docs.md) | 开发者 / 世界 AI | 10 大分区接口手册（变量/文件/积木/群聊/同步限流/受控 API…） |
 | [世界 Skill 机制](./group_world/design/world_skill_design.md) | 开发者 | 文件式 skill/tool 机制（world skill runtime） |
-| [世界工具插件开发](./group_world/development/world_tools_plugin.md) | 开发者 / 社区 | 一个工具一个文件：契约、注册、展示文案、外部插件目录、性能 |
+| [世界工具插件开发](./plugin-dev/world_tools_plugin.md) | 开发者 / 社区 | 一个工具一个文件：契约、注册、展示文案、外部插件目录、性能 |
 | [世界决策技能](./group_world/design/world_decision_skill.md) | 开发者 | Decision Skill 与触发模式（现行实现见 [决策层](./dev/decision_layer.md)） |
 | [世界事件 → AI](./group_world/design/world_ai_events.md) | 开发者 | 世界事件契约、收件人（可按类型选）、投递语义（未命中一律唤醒）、限额与防循环、世界侧发送入口 |
 | [世界能力注入](./group_world/design/world_agent_capabilities.md) | 开发者 | 群 AI / 世界 AI 的能力边界与路径 |
@@ -135,7 +142,7 @@
 | [技术规格书](./dev/cpec.md) | 开发者 | AI 群聊社交网络系统技术规格 |
 | [自习室插件开发文档](./dev/STUDY_ROOM_DEVLOG.md) | 开发者 | study-room 插件开发记录 |
 | [开发待办](./dev/TODO.md) | 开发者 | 待办清单 |
-| [写一个通道插件](./dev/channel-plugins.md) | 插件开发者 | 外部身份怎么接：manifest 的 channel 块、出站三条（group/dm/revoke）、@ 翻译、通道自测、全量事件、信任边界 |
+| [写一个通道插件](./plugin-dev/channel-plugins.md) | 插件开发者 | 外部身份怎么接：manifest 的 channel 块、出站三条（group/dm/revoke）、@ 翻译、通道自测、全量事件、信任边界 |
 | [@ 提及统一用 id](./dev/mention_ids.md) | 开发者 | 令牌写法（`<@!id>`）、入口归一、识别兼容、通道出站翻译、群推送模式观测与通知、展示层与测试 |
 | [消息撤回](./dev/message_revoke.md) | 开发者/运维 | 撤回语义、唯一入口、数据模型、接口与前端、通道侧规则与限制 |
 | [免打扰（DND）语义地图](./dev/dnd.md) | 开发者 | **单一来源**：dnd 的四个含义、人在哪拦（浮窗/桌面通知/侧栏）、@ 穿透与 @all 不穿透、改语义时的四项清单——改 DND 前先读 |

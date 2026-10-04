@@ -356,7 +356,7 @@
 ### 第四批 d：解锁清单即契约（已完成 2026-09-25）
 
 - `executor.UNLOCK_STEPS`（数据，不是散在函数体里的调用）：`rewrite_history` / `clear_note_copies` /
-  `apply_pending_config` / `apply_pending_changes`；`_unlock_context` 按清单顺序执行并返回实际执行的步骤名。
+  `apply_pending_config` / `apply_pending_changes`；`_unlock_context` 按清单顺序执行并返回实际执行的步骤名。**各步参照点目前不统一**：`rewrite_history` / `clear_note_copies` / `reset_trigger_state` 按当前会话，`apply_pending_changes` 写的是 agent 级 `cap_effective_versions`——一个会话 compact 会让别的会话也换前缀字节（待修，见[能力懒加载](./capability_lazy_loading.md)「待修：effective 的粒度与解锁点不一致」）。
 - 任何一步抛异常都记 `logger.exception`（哪步挂的 + 前面做完了什么）再往上抛——静默半解锁正是便签那次的病根。
 - 测试 `tests/test_unlock_steps.py`：① 清单 == 约定集合（改清单必须改测试）；
   ② 真跑 `_unlock_context`（真库草稿会话）断言执行步骤 == 清单且账本真被重写成摘要在前。
