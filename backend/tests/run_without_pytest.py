@@ -115,7 +115,12 @@ class _FixtureResolver:
                 traceback.print_exc()
 
 
-async def _run(selector: str) -> int:
+def _picked(selectors: list[str], text: str) -> bool:
+    """任一选择器命中即选中（可一次给多个文件/用例，省去反复起进程）"""
+    return any(s in text for s in selectors)
+
+
+async def _run(selectors: list[str]) -> int:
     conftest = _load("conftest", TESTS_DIR / "conftest.py")
     resolver = _FixtureResolver(conftest)
 
@@ -123,7 +128,7 @@ async def _run(selector: str) -> int:
     timings: list[tuple[float, str]] = []
     for path in sorted(TESTS_DIR.glob("test_*.py")):
         # 选择器不含 :: 时按文件名过滤，避免白导入无关模块
-        if selector and "::" not in selector and selector not in path.stem:
+        if selectors and not any("::" in s for s in selectors) and not _picked(selectors, path.stem):
             continue
         module = _load(path.stem, path)
         for name in sorted(n for n in dir(module) if n.startswith("test_")):
@@ -131,7 +136,7 @@ async def _run(selector: str) -> int:
             if not callable(fn):
                 continue
             node = f"{path.stem}::{name}"
-            if selector and selector not in node:
+            if selectors and not _picked(selectors, node):
                 continue
             matched += 1
             t0 = time.monotonic()
@@ -155,7 +160,7 @@ async def _run(selector: str) -> int:
     await resolver.teardown()
 
     if matched == 0:
-        print(f"没有匹配的用例：选择器 = {selector!r}")
+        print(f"没有匹配的用例：选择器 = {selectors!r}")
         return 1
 
     print()
@@ -171,7 +176,7 @@ async def _run(selector: str) -> int:
 
 
 if __name__ == "__main__":
-    selector = sys.argv[1] if len(sys.argv) > 1 else ""
+    selectors = sys.argv[1:]
     _guard_test_db()
     _install_pytest_stub()
-    sys.exit(asyncio.run(_run(selector)))
+    sys.exit(asyncio.run(_run(selectors)))
