@@ -8,7 +8,7 @@
  *      「先按端点覆盖、再统一兜底清洗」两遍顺序无所谓。
  */
 import {
-  AVATAR_URL, avatarOf, DEMO_AGENTS, DEMO_DM_SESSIONS, DEMO_FRIENDS, DEMO_GITHUB_BIND, DEMO_GITHUB_ITEMS,
+  DEFAULT_AVATAR_URL, DEMO_AGENTS, DEMO_DM_SESSIONS, DEMO_FRIENDS, DEMO_GITHUB_BIND, DEMO_GITHUB_ITEMS,
   DEMO_GROUP_MESSAGES, DEMO_GROUPS, DEMO_ME, DEMO_MEMBERS, DEMO_MARKET_ITEMS, DEMO_SUGGESTIONS,
   DEMO_USER_STATS, DEMO_USER_STORAGE, DEMO_USAGE_OVERVIEW, DEMO_WORLDS, DEMO_WORLD_CHAT,
 } from './demo-data.mjs'
@@ -59,7 +59,7 @@ function scrub(node, key = '') {
   if (typeof node !== 'string') return node
   if (DEMO_TEXT.has(node)) return node
   if (EMAIL_RE.test(node)) return DEMO_ME.email
-  if (node.includes('/download-avatar/')) return AVATAR_URL
+  if (node.includes('/download-avatar/')) return DEFAULT_AVATAR_URL
   if (key === 'email') return DEMO_ME.email
   if (NAME_KEY.test(key)) return NAME_POOL[hashOf(node) % NAME_POOL.length]
   if (PREVIEW_KEY.test(key)) return PREVIEW_POOL[hashOf(node) % PREVIEW_POOL.length]
@@ -71,18 +71,26 @@ function scrub(node, key = '') {
 const at = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString()
 const route = (pattern, apply) => ({ pattern, apply })
 
+/** 前端会读、但演示数据不挑的群字段：给个中性默认值，具体头像三档写在 DEMO_GROUPS 里 */
+const GROUP_DEFAULTS = {
+  owner_type: 'user', owner_id: 1, announcement: null, dnd_until: null,
+  speak_limit_per_minute: 0, speak_limit_window_seconds: 0, my_role: 'owner',
+  avatar_mode: 'default', avatar_url: null, member_avatars: [], include_ai_in_avatar: true,
+}
+
 /** 端点级覆盖：这些响应整体换成演示数据，兜底清洗再统一跑一遍 */
 const ROUTES = [
   route(/^\/auth\/me$/, (data) => ({ ...data, ...DEMO_ME })),
 
   route(/^\/groups$/, () => DEMO_GROUPS.map((g, i) => ({
-    owner_type: 'user', owner_id: 1, announcement: null, dnd_until: null,
-    speak_limit_per_minute: 0, speak_limit_window_seconds: 0, my_role: 'owner',
-    created_at: at(60 * 24 * (30 + i)), member_avatars: [avatarOf('拾光'), avatarOf('林晚'), avatarOf('柏舟')],
-    avatar_mode: 'auto', avatar_url: null, include_ai_in_avatar: true,
-    ...g,
+    ...GROUP_DEFAULTS, created_at: at(60 * 24 * (30 + i)), ...g,
   }))),
-  route(/^\/groups\/\d+$/, (data) => ({ ...data, name: DEMO_GROUPS[0].name })),
+  route(/^\/groups\/(\d+)$/, (data, m) => ({
+    ...data,
+    ...GROUP_DEFAULTS,
+    ...(DEMO_GROUPS.find((g) => g.id === Number(m[1])) || DEMO_GROUPS[0]),
+    id: Number(m[1]),
+  })),
   route(/^\/groups\/\d+\/members$/, () => DEMO_MEMBERS),
   route(/^\/gm\/\d+\/messages/, () => DEMO_GROUP_MESSAGES),
 

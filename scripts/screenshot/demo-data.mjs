@@ -10,14 +10,32 @@
 
 const minutesAgo = (m) => new Date(Date.now() - m * 60_000).toISOString()
 
-/** AI 角色统一用团队自绘头像（docs/assets/brand/avatar.png，由拦截层注入） */
-export const AVATAR_URL = '/api/fs/download-avatar/team.png'
+/**
+ * AI 角色各自的头像：名字 → docs/assets/brand/avatars/ 下的文件名（团队自绘）。
+ * 换脸只改这张表 —— 脚本两边（演示数据与拦截层）都从这里取，不再各写一份。
+ */
+export const AI_AVATARS = {
+  涵吾珑: 'hanwulong.png',
+  拾光: 'shiguang.jpg',
+  阿兰德: 'aland.jpg',
+  白露: 'bailu.jpg',
+  青禾: 'qinghe.jpg',
+  洛: 'luo.webp',
+}
+
+/** 兜底头像：「我」那张。改写层清洗真实头像 URL 时手上没有名字，只能给这一张 */
+export const DEFAULT_AVATAR_NAME = '涵吾珑'
+export const DEFAULT_AVATAR_URL = '/api/fs/download-avatar/' + AI_AVATARS[DEFAULT_AVATAR_NAME]
 
 /** 人类用户用脚本生成的字母头像：不引入任何第三方图片，避免版权/肖像权问题 */
 export const letterAvatar = (name) => '/api/fs/download-avatar/demo-avatar-' + encodeURIComponent(name) + '.png'
 
-const AI_NAMES = new Set(['涵吾珑', '拾光', '阿兰德', '白露', '青禾', '洛'])
-export const avatarOf = (name) => (AI_NAMES.has(name) ? AVATAR_URL : letterAvatar(name))
+/** 群「自定义头像」的演示图：同样是现场生成的方块图，理由同字母头像 */
+export const groupAvatarTile = (name) => '/api/fs/download-avatar/demo-group-' + encodeURIComponent(name) + '.png'
+
+export function avatarOf(name) {
+  return AI_AVATARS[name] ? '/api/fs/download-avatar/' + AI_AVATARS[name] : letterAvatar(name)
+}
 
 export const DEMO_ME = {
   username: '涵吾珑',
@@ -29,7 +47,7 @@ export const DEMO_ME = {
   timezone: 'Asia/Shanghai',
   bio: '在群视界里给 AI 造一个家。',
   status_text: '在线 · 正在整理世界设定',
-  avatar_url: AVATAR_URL,
+  avatar_url: avatarOf('涵吾珑'),
   api_key_last4: null,
   has_api_key: true,
   setup_completed: true,
@@ -66,26 +84,36 @@ export const DEMO_WORLDS = [
   WORLD(103, '夜航船', '文字冒险：在无风的夜里，写下一句就能推动船向前。', 'sleeping'),
 ]
 
+/**
+ * 群头像三档（GroupAvatar.tsx / GroupSettingsPanel.tsx）：default 固定图标、
+ * members 成员 2×2 网格、custom 自定义图。四个群各占一档，截图里三种都看得见。
+ */
 export const DEMO_GROUPS = [
   {
     id: 1, name: '月见里 · 主群', is_pinned: true, unread_count: 0, has_mention: false,
     last_message_preview: '涵吾珑: 黄昏那版配色我调好了，来看看？',
     last_message_at: minutesAgo(2), member_count: 12, online_count: 5,
+    avatar_mode: 'members', include_ai_in_avatar: true,
+    member_avatars: [avatarOf('涵吾珑'), avatarOf('拾光'), avatarOf('林晚'), avatarOf('柏舟')],
   },
   {
     id: 2, name: '枕流镇 · 冒险团', is_pinned: true, unread_count: 2, has_mention: true,
     last_message_preview: '拾光: 书店的门牌换好了，木头牌',
     last_message_at: minutesAgo(18), member_count: 8, online_count: 3,
+    avatar_mode: 'custom', avatar_url: groupAvatarTile('枕流镇'),
   },
   {
     id: 3, name: '世界开发组', is_pinned: false, unread_count: 0, has_mention: false,
     last_message_preview: '柏舟: 新的世界模板推到市场了',
     last_message_at: minutesAgo(95), member_count: 6, online_count: 2,
+    avatar_mode: 'default',
   },
   {
     id: 4, name: '自习室 · 同行', is_pinned: false, unread_count: 0, has_mention: false,
     last_message_preview: '青禾: 今晚十点继续，番茄钟走起',
     last_message_at: minutesAgo(60 * 26), member_count: 4, online_count: 1,
+    avatar_mode: 'members', include_ai_in_avatar: true,
+    member_avatars: [avatarOf('青禾'), avatarOf('白露'), avatarOf('沈知'), avatarOf('朝雾')],
   },
 ]
 

@@ -7,7 +7,8 @@
  *
  * 前提：后端 + 前端在跑（默认 http://127.0.0.1:5227）。
  * 数据：所有接口响应在浏览器侧被换成 scripts/screenshot/demo-data.mjs 里的演示数据，
- *       头像统一换成 docs/assets/brand/avatar.png；不写数据库、不改业务代码。
+ *       AI 头像发 docs/assets/brand/avatars/ 下对应的那张（名字→文件见 demo-data.mjs 的
+ *       AI_AVATARS），人类用户发现场生成的字母头像；不写数据库、不改业务代码。
  */
 import { execFileSync } from 'node:child_process'
 import crypto from 'node:crypto'
@@ -15,13 +16,30 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { launchChrome, Session, sleep } from './cdp.mjs'
+import { AI_AVATARS, DEFAULT_AVATAR_NAME } from './demo-data.mjs'
 import { rewriteApi, shouldPassThrough } from './rewrite.mjs'
 import { SHOTS, UI_SHOTS, VIEWPORT } from './shots.mjs'
 
 const ROOT = path.resolve(import.meta.dirname, '../..')
 const DEFAULT_URL = 'http://127.0.0.1:5227'
 const DEFAULT_OUT = path.join(ROOT, 'docs/assets/screenshots')
-const AVATAR = path.join(ROOT, 'docs/assets/brand/avatar.png')
+const AVATAR_DIR = path.join(ROOT, 'docs/assets/brand/avatars')
+const AVATAR_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' }
+
+/** 演示数据给的文件名 → 图片字节。认不出的头像一律兜底到「我」那张，跟以前一张脸时代的行为一致 */
+const avatarFiles = new Set(Object.values(AI_AVATARS))
+const avatarCache = new Map()
+function avatarBody(fileName) {
+  const name = avatarFiles.has(fileName) ? fileName : AI_AVATARS[DEFAULT_AVATAR_NAME]
+  if (!avatarCache.has(name)) {
+    const file = path.join(AVATAR_DIR, name)
+    avatarCache.set(name, {
+      mime: AVATAR_MIME[path.extname(name).slice(1).toLowerCase()] || 'application/octet-stream',
+      b64: readFileSync(file).toString('base64'),
+    })
+  }
+  return avatarCache.get(name)
+}
 
 function parseArgs(argv) {
   const opts = { url: process.env.AISCHAT_URL || DEFAULT_URL, out: DEFAULT_OUT, only: null }
@@ -65,7 +83,6 @@ async function main() {
     if (missing.length) console.warn('  ! 清单里没有这些名字：' + missing.join('、'))
   }
 
-  const avatarB64 = readFileSync(AVATAR).toString('base64')
   const token = mintToken(jwtSecret())
   const profileDir = mkdtempSync(path.join(tmpdir(), 'copree-shot-'))
   const port = 9300 + Math.floor(Math.random() * 200)
@@ -91,18 +108,19 @@ async function main() {
   session.on('Fetch.requestPaused', async (p) => {
     const url = p.request.url
     try {
-      // 头像：demo-avatar-<名字>.png 现场生成字母头像，其余一律团队自绘头像
+      // 头像：demo-avatar-<名字>、demo-group-<名字> 现场生成（人 / 群自定义图）；
+      // 其余是演示数据里 AI 各自的文件名，发团队自绘那张
       if (url.includes('/fs/download-avatar/')) {
-        const letter = url.match(/demo-avatar-([^/?#]+)\.png/)
-        const isLetter = !!letter
+        const generated = url.match(/demo-(?:avatar|group)-([^/?#]+)\.png/)
+        const avatar = generated ? null : avatarBody(decodeURIComponent((url.split('/fs/download-avatar/')[1] || '').split(/[?#]/)[0]))
         await session.send('Fetch.fulfillRequest', {
           requestId: p.requestId,
           responseCode: 200,
           responseHeaders: [
-            { name: 'Content-Type', value: isLetter ? 'image/svg+xml' : 'image/png' },
+            { name: 'Content-Type', value: generated ? 'image/svg+xml' : avatar.mime },
             { name: 'Cache-Control', value: 'no-store' },
           ],
-          body: isLetter ? letterAvatarSvg(decodeURIComponent(letter[1])) : avatarB64,
+          body: generated ? letterAvatarSvg(decodeURIComponent(generated[1])) : avatar.b64,
         })
         return
       }
@@ -186,8 +204,8 @@ function shutdown(code) {
 }
 
 /**
- * 现场生成的字母头像（SVG）：颜色由名字稳定派生，不依赖任何第三方图片素材，
- * 因此截图里的人类用户头像既不是别人的作品，也不涉及肖像权。
+ * 现场生成的字母头像 / 群头像方块（SVG）：颜色由名字稳定派生，不依赖任何第三方
+ * 图片素材，因此截图里的人类用户头像与群「自定义头像」都不是别人的作品。
  */
 function letterAvatarSvg(name) {
   const hue = [...String(name)].reduce((h, ch) => (h * 31 + ch.codePointAt(0)) >>> 0, 0) % 360
