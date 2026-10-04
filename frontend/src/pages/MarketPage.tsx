@@ -498,7 +498,7 @@ export default function MarketPage() {
                 placeholder="标签，如 2d冒险"
                 className="w-32 sm:w-36 bg-elevated text-sm px-3 py-1.5 rounded-control border border-border outline-none focus:border-primary-500/50 text-textPrimary shrink-0"
               />
-              <button onClick={loadLocal} className="text-xs px-3 py-1.5 rounded-control bg-elevated hover:bg-border text-textSecondary transition-colors shrink-0">
+              <button onClick={loadLocal} className="btn btn-sm btn-outline shrink-0">
                 搜索
               </button>
             </>
@@ -510,13 +510,13 @@ export default function MarketPage() {
               <button
                 onClick={doRefreshGithub}
                 disabled={refreshing}
-                className="inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded-control bg-elevated hover:bg-border text-textSecondary transition-colors shrink-0 disabled:opacity-40"
+                className="btn btn-sm btn-outline shrink-0"
               >
                 <RefreshCw size={11} className={refreshing ? 'animate-spin' : ''} /> {refreshing ? '刷新中…' : '刷新'}
               </button>
               <button
                 onClick={openGithubSettings}
-                className="inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded-control bg-elevated hover:bg-border text-textSecondary transition-colors shrink-0"
+                className="btn btn-sm btn-outline shrink-0"
                 title="实例 GitHub 配置（管理员）"
               >
                 <Settings size={11} /> 实例配置
@@ -537,7 +537,7 @@ export default function MarketPage() {
             <div className="text-center text-textMuted text-sm py-16 space-y-2">
               <Package size={32} className="mx-auto opacity-40" />
               <div>本地商城还没有世界。把做好的世界发布出来吧。</div>
-              <button onClick={openPublish} className="text-xs px-3 py-1.5 rounded-control bg-elevated hover:bg-border text-primary-400 transition-colors">
+              <button onClick={openPublish} className="btn btn-sm btn-primary">
                 + 发布第一个世界
               </button>
             </div>

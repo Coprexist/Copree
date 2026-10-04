@@ -6,7 +6,7 @@ import { useT } from '../i18n/I18nContext'
 import { getStateDotColor } from '../constants'
 import { X, Bell, Pause, BellOff, LogOut, UserX, Shield, ShieldOff, UserPlus, Volume2, VolumeX, Download, Clock, Globe, Loader2, ArrowLeft, Crown, Pin, PinOff, Image, Camera, Users, CheckCircle2, MessageSquare, RefreshCw } from 'lucide-react'
 import Toggle from './Toggle'
-import { UnderlineTabs } from './ui'
+import { Slider, UnderlineTabs } from './ui'
 import AvatarPickerModal from './AvatarPickerModal'
 
 // ── 联邦共享状态（v0.2.0: 群主/AI制作者按群控制联邦共享） ──
@@ -663,10 +663,8 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                   {/* default 模式 */}
                   <button
                     onClick={() => { setAvatarMode('default'); saveSettings({ avatar_mode: 'default' }) }}
-                    className={`relative p-3 rounded-card border text-center transition-colors ${
-                      avatarMode === 'default'
-                        ? 'border-primary-400 dark:border-primary-600 bg-primary-500/10 dark:bg-primary-900/40'
-                        : 'border-border bg-elevated hover:bg-canvas'
+                    className={`card card-interactive relative p-3 text-center ${
+                      avatarMode === 'default' ? 'is-active' : ''
                     }`}
                   >
                     <div className="w-10 h-10 mx-auto rounded-control bg-primary-500/10 dark:bg-primary-900/30 flex items-center justify-center mb-1.5">
@@ -682,10 +680,8 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                   {/* members 模式 */}
                   <button
                     onClick={() => { setAvatarMode('members'); saveSettings({ avatar_mode: 'members', include_ai_in_avatar: includeAiAvatar }) }}
-                    className={`relative p-3 rounded-card border text-center transition-colors ${
-                      avatarMode === 'members'
-                        ? 'border-primary-400 dark:border-primary-600 bg-primary-500/10 dark:bg-primary-900/40'
-                        : 'border-border bg-elevated hover:bg-canvas'
+                    className={`card card-interactive relative p-3 text-center ${
+                      avatarMode === 'members' ? 'is-active' : ''
                     }`}
                   >
                     <div className="w-10 h-10 mx-auto rounded-control bg-elevated flex items-center justify-center mb-1.5">
@@ -701,10 +697,8 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                   {/* custom 模式 */}
                   <button
                     onClick={() => setAvatarMode('custom')}
-                    className={`relative p-3 rounded-card border text-center transition-colors ${
-                      avatarMode === 'custom'
-                        ? 'border-primary-400 dark:border-primary-600 bg-primary-500/10 dark:bg-primary-900/40'
-                        : 'border-border bg-elevated hover:bg-canvas'
+                    className={`card card-interactive relative p-3 text-center ${
+                      avatarMode === 'custom' ? 'is-active' : ''
                     }`}
                   >
                     <div className="w-10 h-10 mx-auto rounded-control overflow-hidden bg-elevated flex items-center justify-center mb-1.5">
@@ -1166,14 +1160,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                         {speakLimit === 0 ? t('groupSettings:unlimited') : `${speakLimit} ${t('groupSettings:perMinute')}`}
                       </span>
                     </div>
-                    <input
-                      type="range"
-                      min={0}
-                      max={60}
-                      value={speakLimit}
-                      onChange={e => setSpeakLimit(Number(e.target.value))}
-                      className="w-full accent-primary-500"
-                    />
+                    <Slider min={0} max={60} value={speakLimit} onChange={setSpeakLimit} />
                     <div className="flex justify-between text-3xs text-textMuted">
                       <span>{t('groupSettings:unlimitedLabel')}</span>
                       <span>60</span>
@@ -1187,15 +1174,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                       </label>
                       <span className="text-xs text-primary-400 font-medium">{speakWindow}s</span>
                     </div>
-                    <input
-                      type="range"
-                      min={30}
-                      max={600}
-                      step={30}
-                      value={speakWindow}
-                      onChange={e => setSpeakWindow(Number(e.target.value))}
-                      className="w-full accent-primary-500"
-                    />
+                    <Slider min={30} max={600} step={30} value={speakWindow} onChange={setSpeakWindow} />
                     <div className="flex justify-between text-3xs text-textMuted">
                       <span>30s</span>
                       <span>600s</span>
@@ -1222,7 +1201,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                       <label className="text-xs font-medium text-textSecondary">AI 并发数</label>
                       <span className="text-xs text-primary-400 font-medium">{concurrentAiLimit}</span>
                     </div>
-                    <input type="range" min={1} max={10} value={concurrentAiLimit} onChange={e => setConcurrentAiLimit(Number(e.target.value))} className="w-full accent-primary-500" />
+                    <Slider min={1} max={10} value={concurrentAiLimit} onChange={setConcurrentAiLimit} />
                     <div className="flex justify-between text-3xs text-textMuted"><span>1</span><span>10</span></div>
                   </div>
 

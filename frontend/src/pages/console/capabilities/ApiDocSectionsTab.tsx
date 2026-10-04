@@ -121,7 +121,7 @@ export default function ApiDocSectionsTab() {
         <button
           onClick={syncFromDocs}
           disabled={syncing}
-          className="inline-flex items-center gap-1.5 text-xs px-3 py-2 rounded-control bg-elevated hover:bg-border text-textSecondary transition-colors disabled:opacity-50"
+          className="btn btn-sm btn-outline"
         >
           <RefreshCw size={13} /> {syncing ? '同步中…' : '从文档中更新'}
         </button>

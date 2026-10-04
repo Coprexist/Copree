@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import Toggle from './Toggle'
+import { Slider } from './ui'
 import { api } from '../api/client'
 import {
   WandSparkles, RotateCcw, AlertTriangle,
@@ -147,11 +148,9 @@ export default function MagicVisionFilter({ value, onChange }: Props) {
                   </div>
                   {st.enabled && (
                     <div className="flex items-center gap-3 pl-6">
-                      <input type="range" min={def.min} max={def.max} step={def.step} value={st.value}
-                        onChange={e => slide(def.id, parseFloat(e.target.value))}
-                        className="flex-1 h-1.5 rounded-full appearance-none cursor-pointer bg-border accent-accent-500
-                          [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5
-                          [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-accent-500 [&::-webkit-slider-thumb]:shadow-sm [&::-webkit-slider-thumb]:cursor-pointer" />
+                      <Slider tone="accent" className="flex-1"
+                        min={def.min} max={def.max} step={def.step} value={st.value}
+                        onChange={v => slide(def.id, v)} />
                       <span className="text-xs font-mono text-textSecondary tabular-nums w-16 text-right shrink-0">
                         {def.unit === '%' ? `${st.value}%` : def.unit === 'deg' ? `${st.value}°` : def.unit === 'px' ? `${st.value}px` : st.value}
                       </span>

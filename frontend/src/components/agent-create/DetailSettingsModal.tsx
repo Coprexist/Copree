@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { ArrowLeft, Loader2, RotateCw, Ticket, X } from 'lucide-react'
+import { SliderField } from '../../components/ui'
 import { api } from '../../api/client'
 import { useT } from '../../i18n/I18nContext'
 import {
-  AiTypeSelector, ApiKeyGetLink, NumberField, Section, SliderField, ToggleField,
+  AiTypeSelector, ApiKeyGetLink, NumberField, Section, ToggleField,
   TristateSelect, renderModelOptions,
 } from './fields'
 import type { AgentFormApi, ModelOption, ProviderInfo } from './types'

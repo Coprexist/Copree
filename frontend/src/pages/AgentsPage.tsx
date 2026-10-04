@@ -4,7 +4,7 @@ import { api, ApiError } from '../api/client'
 import { Bot, Plus, Edit3, History, Power, Download, Upload, X, RotateCcw, Eye, EyeOff, ArrowLeft, Menu } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import Toggle from '../components/Toggle'
-import { Button, Dialog, IconButton, PageHeader } from '../components/ui'
+import { Button, Dialog, IconButton, PageHeader, Slider } from '../components/ui'
 import { useT, useLang } from '../i18n/I18nContext'
 import { fmtDate, fmtDateTime } from '../utils/time'
 import CreateAgentModal from '../components/CreateAgentModal'
@@ -564,14 +564,13 @@ function EditAgentModal({ agent, onClose, onUpdated }: {
                 ].map(([label, value, setter, min, max, step]) => (
                   <div key={label as string}>
                     <label className="text-textMuted">{label as string}: {String(value)}</label>
-                    <input
-                      type="range"
+                    <Slider
                       min={min as number}
                       max={max as number}
                       step={step as number}
                       value={value as number}
-                      onChange={(e) => (setter as any)(parseFloat(e.target.value))}
-                      className="w-full h-1 accent-primary-500"
+                      onChange={(v) => (setter as any)(v)}
+                      className="mt-1"
                     />
                   </div>
                 ))}

@@ -271,11 +271,7 @@ export default function DMSettingsPanel({ sessionId, partner, myDndUntil, onClos
                     <button
                       key={f.key}
                       onClick={() => setExportFormat(f.key)}
-                      className={`flex-1 py-2 rounded-control border text-center text-xs font-medium transition-colors ${
-                        exportFormat === f.key
-                          ? 'border-primary-400 bg-primary-500/10 text-primary-600 dark:text-primary-300'
-                          : 'border-border bg-elevated text-textSecondary hover:bg-canvas'
-                      }`}
+                      className={`btn btn-sm btn-outline flex-1 ${exportFormat === f.key ? 'is-active' : ''}`}
                     >
                       {f.labelKey}
                     </button>

@@ -798,7 +798,7 @@ function InviteMemberModal({
               <button
                 onClick={handleManualInvite}
                 disabled={!manualId.trim() || loading}
-                className="px-3 py-1.5 text-xs bg-elevated text-textSecondary rounded-control hover:bg-border disabled:opacity-30"
+                className="btn btn-sm btn-outline"
               >
                 {t('chat:invite')}
               </button>

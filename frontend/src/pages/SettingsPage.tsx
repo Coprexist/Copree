@@ -5,6 +5,7 @@ import { useTheme } from '../context/ThemeContext'
 import { useT, useLang } from '../i18n/I18nContext'
 import { fmtDateTime } from '../utils/time'
 import Toggle from '../components/Toggle'
+import { Slider } from '../components/ui'
 import ComboBox from '../components/ui/ComboBox'
 import { IN_APP_NOTIFICATION_KEY } from '../hooks/useNotificationSocket'
 import MagicVisionFilter from '../components/MagicVisionFilter.tsx'
@@ -937,15 +938,7 @@ export default function SettingsPage() {
             <label className="block text-xs font-medium mb-1.5 text-textSecondary">
               {t('settings:autoApproveTimeout')} {autoTimeout}
             </label>
-            <input
-              type="range"
-              min="10"
-              max="300"
-              step="10"
-              value={autoTimeout}
-              onChange={(e) => setAutoTimeout(parseInt(e.target.value))}
-              className="w-full accent-primary-500"
-            />
+            <Slider min={10} max={300} step={10} value={autoTimeout} onChange={setAutoTimeout} />
           </div>
           <div className="flex items-center gap-3">
             <Toggle checked={autoDefault} onChange={setAutoDefault} />

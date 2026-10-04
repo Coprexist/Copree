@@ -1070,7 +1070,7 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
           </button>
           <button
             onClick={closeWorldModal}
-            className="w-full inline-flex items-center justify-center gap-1.5 py-3 bg-elevated hover:bg-border text-textPrimary rounded-card font-medium transition-colors"
+            className="btn btn-md btn-outline w-full"
           >
             <Settings size={12} /> {t('chat:worldGateStandard')}
           </button>

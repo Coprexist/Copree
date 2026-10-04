@@ -412,39 +412,62 @@
   .preset-card-frame { position: relative; }
   .preset-card-inner { position: relative; }
 
-  /* ── 滑块 range input ── */
+  /* ── 滑块 range input ──
+     轨道 / 滑钮 / 左侧填充只有这一份：填充比例由 Slider 组件写成 --slider-pct，
+     颜色由 --slider-c 给（默认主色，金色/绿色档由组件的 tone 换）。
+     几何全部由 --slider-track / --slider-thumb 推出来，别在别处再写一套像素。 */
   input[type="range"] {
+    --slider-track: 0.375rem;
+    --slider-thumb: 1rem;
+    --slider-c: var(--tw-primary-500);
     -webkit-appearance: none;
     appearance: none;
-    height: 6px;
-    border-radius: 3px;
-    background: rgb(var(--tw-border) / 1);
+    width: 100%;
+    height: 1.5rem;          /* 命中区：不止那条细线，手好抓 */
+    background: transparent;
     outline: none;
     cursor: pointer;
+    /* 竖向留给页面滚动：手指上下滑时浏览器直接吃掉，不会顺手把值改了 */
+    touch-action: pan-y;
+  }
+  input[type="range"]:disabled { opacity: .55; cursor: not-allowed; }
+  input[type="range"]::-webkit-slider-runnable-track {
+    height: var(--slider-track);
+    border-radius: 9999px;
+    background: linear-gradient(to right,
+      rgb(var(--slider-c)) 0 var(--slider-pct, 0%),
+      rgb(var(--slider-bg, var(--tw-border))) var(--slider-pct, 0%) 100%);
   }
   input[type="range"]::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
-    width: 16px;
-    height: 16px;
+    width: var(--slider-thumb);
+    height: var(--slider-thumb);
     border-radius: 50%;
-    background: #8B5CF6;
+    background: rgb(var(--slider-c));
     border: 2px solid #fff;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
     cursor: pointer;
+    /* 滑钮垂直居中：由轨道粗与滑钮直径推出来 */
+    margin-top: calc((var(--slider-track) - var(--slider-thumb)) / 2);
   }
+  input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgb(var(--slider-c) / .3); }
   input[type="range"]::-moz-range-track {
-    height: 6px;
-    border-radius: 3px;
-    background: rgb(var(--tw-border) / 1);
+    height: var(--slider-track);
+    border-radius: 9999px;
+    background: rgb(var(--slider-bg, var(--tw-border)));
+  }
+  input[type="range"]::-moz-range-progress {
+    height: var(--slider-track);
+    border-radius: 9999px;
+    background: rgb(var(--slider-c));
   }
   input[type="range"]::-moz-range-thumb {
-    width: 16px;
-    height: 16px;
+    width: var(--slider-thumb);
+    height: var(--slider-thumb);
     border-radius: 50%;
-    background: #8B5CF6;
+    background: rgb(var(--slider-c));
     border: 2px solid #fff;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
   }
 }
 
@@ -662,6 +685,9 @@
 /* 描边危险按钮 —— 删除这类不可逆操作：描边而非实心，免得在操作区抢焦点 */
 .btn-outline-danger { background: transparent; border: 1px solid rgb(var(--tw-rose-500) / .2); color: rgb(var(--tw-rose-400)); }
 .btn-outline-danger:hover { background: rgb(var(--tw-rose-500) / .1); border-color: rgb(var(--tw-rose-500) / .4); color: rgb(var(--tw-rose-400)); }
+/* 描边按钮的选中态 —— 开关/分段控件里同一颗按钮切状态，不再各写一套 active/inactive 配色 */
+.btn-outline.is-active { background: rgb(var(--tw-primary-500) / .12); border-color: rgb(var(--tw-primary-500) / .45); color: rgb(var(--tw-primary-400)); }
+.btn-outline.is-active:hover { background: rgb(var(--tw-primary-500) / .2); border-color: rgb(var(--tw-primary-500) / .6); }
 
 /* 补档 xs=24px —— 工具条/列表行里的小按钮（此前的 px-2 py-0.5 一族） */
 .btn-xs { height: 1.5rem; padding: 0 0.5rem; font-size: 0.6875rem; gap: 0.25rem; }
@@ -747,6 +773,10 @@ textarea.field { height: auto; padding: 0.5rem 0.75rem; resize: vertical; }
 }
 .card-pad { padding: 1rem; }
 .card-pad-lg { padding: 1.25rem; }
+/* 可选卡片（tile）：底色/描边/圆角仍走 .card，这里只补「可点」的反馈与选中态 */
+.card-interactive { transition: background-color .15s ease, border-color .15s ease, box-shadow .15s ease; }
+.card-interactive:hover { background: rgb(var(--tw-elevated)); }
+.card-interactive.is-active { background: rgb(var(--tw-primary-500) / .1); border-color: rgb(var(--tw-primary-400)); }
 
 .chip {
   display: inline-flex;

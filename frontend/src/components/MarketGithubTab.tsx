@@ -88,7 +88,7 @@ export default function MarketGithubTab() {
         <button
           onClick={doTest}
           disabled={testing}
-          className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-control bg-elevated hover:bg-border text-textSecondary transition-colors disabled:opacity-40 shrink-0"
+          className="btn btn-sm btn-outline shrink-0"
         >
           <RefreshCw size={12} className={testing ? 'animate-spin' : ''} /> {testing ? '测试中…' : '测试连接'}
         </button>

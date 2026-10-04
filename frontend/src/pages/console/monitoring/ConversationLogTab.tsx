@@ -4,7 +4,7 @@ import { useT, useLang } from '../../../i18n/I18nContext'
 import { fmtDateTime } from '../../../utils/time'
 import { Settings, Bot, Eye, Loader2, Save, Sliders } from 'lucide-react'
 import Toggle from '../../../components/Toggle'
-import { UnderlineTabs } from '../../../components/ui'
+import { Slider, UnderlineTabs } from '../../../components/ui'
 import LogBrowser from '../../../components/shared/LogBrowser'
 
 interface GlobalConfig {
@@ -181,11 +181,10 @@ export default function ConversationLogTab() {
               <label className="block text-xs font-medium text-textSecondary mb-1">
                 {t('admin:convlogCompressThreshold')} ({config.compression_threshold || 60}%)
               </label>
-              <input
-                type="range" min={5} max={100} step={5}
+              <Slider
+                min={5} max={100} step={5}
                 value={config.compression_threshold || 60}
-                onChange={e => setConfig({ ...config, compression_threshold: parseInt(e.target.value) })}
-                className="w-full accent-primary-500"
+                onChange={v => setConfig({ ...config, compression_threshold: v })}
               />
               <p className="text-3xs text-textMuted mt-0.5">{t('admin:convlogCompressThresholdDesc')}</p>
             </div>
@@ -193,11 +192,10 @@ export default function ConversationLogTab() {
               <label className="block text-xs font-medium text-textSecondary mb-1">
                 {t('admin:convlogIdleThreshold')} ({config.idle_threshold_percent ?? 37}%)
               </label>
-              <input
-                type="range" min={1} max={99} step={1}
+              <Slider
+                min={1} max={99}
                 value={config.idle_threshold_percent ?? 37}
-                onChange={e => setConfig({ ...config, idle_threshold_percent: parseInt(e.target.value) })}
-                className="w-full accent-primary-500"
+                onChange={v => setConfig({ ...config, idle_threshold_percent: v })}
               />
               <p className="text-3xs text-textMuted mt-0.5">{t('admin:convlogIdleThresholdDesc')}</p>
             </div>
@@ -205,11 +203,10 @@ export default function ConversationLogTab() {
               <label className="block text-xs font-medium text-textSecondary mb-1">
                 {t('admin:convlogTargetPercent')} ({config.compress_target_percent ?? 20}%)
               </label>
-              <input
-                type="range" min={1} max={99} step={1}
+              <Slider
+                min={1} max={99}
                 value={config.compress_target_percent ?? 20}
-                onChange={e => setConfig({ ...config, compress_target_percent: parseInt(e.target.value) })}
-                className="w-full accent-primary-500"
+                onChange={v => setConfig({ ...config, compress_target_percent: v })}
               />
               <p className="text-3xs text-textMuted mt-0.5">{t('admin:convlogTargetPercentDesc')}</p>
             </div>

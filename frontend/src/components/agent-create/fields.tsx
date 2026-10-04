@@ -114,30 +114,7 @@ export function Section({ title, desc, children }: { title: string; desc: string
   )
 }
 
-// ── 滑块 ──
-
-export function SliderField({
-  label, value, setValue, min, max, step, desc,
-}: {
-  label: string; value: number; setValue: (v: number) => void
-  min: number; max: number; step: number; desc?: string
-}) {
-  return (
-    <div>
-      <div className="flex justify-between mb-1">
-        <label className="text-xs text-textSecondary">{label}</label>
-        <span className="text-xs font-mono text-textPrimary">{value}</span>
-      </div>
-      <input
-        type="range" min={min} max={max} step={step}
-        value={value}
-        onChange={(e) => setValue(parseFloat(e.target.value))}
-        className="w-full"
-      />
-      {desc && <p className="text-3xs text-textMuted mt-0.5">{desc}</p>}
-    </div>
-  )
-}
+// ── 滑块 ──（实现在 components/ui/Slider：与 AI 设置弹窗共用一份，别再抄）
 
 // ── 数字输入 ──
 

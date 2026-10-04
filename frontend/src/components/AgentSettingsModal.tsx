@@ -6,6 +6,7 @@ import { STATUS_COLORS } from '../utils/statusColor.tsx'
 import SkillBackpack from './SkillBackpack'
 import ChannelModal from './channels/ChannelModal'
 import Toggle from './Toggle'
+import { SliderField } from './ui'
 // 档位预设与创建弹窗共用一份，避免两处各维护一套数字
 import { PRESETS } from './agent-create/presets'
 
@@ -847,24 +848,7 @@ function Section({ title, desc, children, defaultCollapsed }: { title: string; d
   )
 }
 
-// ── 滑块 ──
-function SliderField({ label, value, setValue, min, max, step, desc }: {
-  label: string; value: number; setValue: (v: number) => void
-  min: number; max: number; step: number; desc?: string
-}) {
-  return (
-    <div>
-      <div className="flex justify-between mb-1">
-        <label className="text-xs text-textSecondary">{label}</label>
-        <span className="text-xs font-mono text-textPrimary">{value}</span>
-      </div>
-      <input type="range" min={min} max={max} step={step} value={value}
-        onChange={(e) => setValue(parseFloat(e.target.value))}
-        className="w-full" />
-      {desc && <p className="text-3xs text-textMuted mt-0.5">{desc}</p>}
-    </div>
-  )
-}
+// ── 滑块 ──（用 components/ui/Slider 里共享的 SliderField）
 
 // ── 数字输入 ──
 function NumberField({ label, value, setValue, min, max, desc }: {

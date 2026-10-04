@@ -108,7 +108,7 @@ export default function MarketPublishPage() {
 
             <button
               onClick={() => setSyncGithub(!syncGithub)}
-              className={`w-full flex items-center gap-2 px-3 py-2.5 rounded-control border text-sm transition-colors ${syncGithub ? 'bg-primary-500/10 border-primary-500/50 text-primary-300' : 'bg-elevated border-border text-textSecondary'}`}
+              className={`btn btn-md btn-outline w-full ${syncGithub ? 'is-active' : ''}`}
             >
               <Github size={15} />
               <span className="flex-1 text-left">发布后同步到 GitHub（Copree-Community）</span>

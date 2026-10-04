@@ -383,7 +383,7 @@ export default function WorldCreatorConfig({ wid, creator, usageStats, aiMode, o
               <button
                 onClick={saveSettings}
                 disabled={settingsSaving}
-                className="w-full py-1.5 text-xs bg-elevated hover:bg-border text-textSecondary rounded-control transition-colors disabled:opacity-40"
+                className="btn btn-sm btn-outline w-full"
               >
                 {settingsSaving ? t('tool:world.creatorConfig.saving') : t('tool:world.creatorConfig.lifecycle.save')}
               </button>

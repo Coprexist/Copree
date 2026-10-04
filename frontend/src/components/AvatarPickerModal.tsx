@@ -188,7 +188,7 @@ export default function AvatarPickerModal({
               {/* 选项1：从个人空间选择 */}
               <button
                 onClick={() => setStep('select-file')}
-                className="flex flex-col items-center justify-center gap-2 p-4 rounded-card border border-border bg-elevated hover:bg-canvas transition-colors"
+                className="card card-interactive flex flex-col items-center justify-center gap-2 p-4"
               >
                 <div className="w-12 h-12 rounded-card bg-primary-500/10 dark:bg-primary-900/30 flex items-center justify-center">
                   <Image size={22} className="text-primary-400" />
@@ -204,7 +204,7 @@ export default function AvatarPickerModal({
               {/* 选项2：上传新图片 */}
               <button
                 onClick={() => fileInputRef.current?.click()}
-                className="flex flex-col items-center justify-center gap-2 p-4 rounded-card border border-border bg-elevated hover:bg-canvas transition-colors"
+                className="card card-interactive flex flex-col items-center justify-center gap-2 p-4"
               >
                 <div className="w-12 h-12 rounded-card bg-mint-400/10 dark:bg-mint-900/30 flex items-center justify-center">
                   <Upload size={22} className="text-mint-400" />

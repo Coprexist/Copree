@@ -873,7 +873,7 @@ export default function WorldDesignPage() {
           {chatFocus && (
             <button
               onClick={() => setPreviewOpen(true)}
-              className="shrink-0 inline-flex items-center gap-1 h-7 px-2 rounded-control text-xs bg-elevated hover:bg-border text-textSecondary transition-colors"
+              className="btn btn-sm btn-outline shrink-0"
               title={t('tool:world.preview.open')}
             >
               <Eye size={12} /> {t('tool:world.pane.preview')}
@@ -881,7 +881,7 @@ export default function WorldDesignPage() {
           )}
           <button
             onClick={() => setShowCreatorForm((v) => !v)}
-            className={`shrink-0 inline-flex items-center gap-1 h-7 px-2 rounded-control text-xs transition-colors ${showCreatorForm ? 'bg-primary-500/15 text-primary-400' : 'bg-elevated hover:bg-border text-textSecondary'}`}
+            className={`btn btn-sm btn-outline shrink-0 ${showCreatorForm ? 'is-active' : ''}`}
             title={t('tool:world.top.configTitle')}
           >
             <Settings size={12} /> {t('tool:world.top.config')}

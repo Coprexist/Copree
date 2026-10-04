@@ -56,11 +56,9 @@ export default function SubOptionModal({
             <button
               key={sub.id}
               onClick={() => onSelect(sub.id)}
-              className={`w-full text-left p-4 rounded-card border transition-all duration-150
-                ${selectedSub === sub.id
-                  ? 'border-primary-400/60 bg-primary-500/10 shadow-md shadow-primary-500/5'
-                  : 'border-border/50 bg-elevated hover:border-primary-500/30 hover:bg-canvas'
-                }`}
+              className={`card card-interactive w-full text-left p-4 ${
+                selectedSub === sub.id ? 'is-active' : ''
+              }`}
             >
               <div className="flex items-start gap-3">
                 <span className="text-2xl flex-shrink-0"><SubIcon name={sub.icon} /></span>
