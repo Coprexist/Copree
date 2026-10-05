@@ -558,11 +558,61 @@ class QqChannelPlugin(ServicePlugin):
         self.started_at = 0.0
 
     # ── 生命周期 ───────────────────────────────────────────────
+    async def _recent_groups(self) -> list[dict[str, Any]]:
+        """最近收到过消息的 QQ 群：**以消息行为准**（重启不丢），内存里的观测补更新的一次。
+
+        为什么不能只用内存那份：它进程重启就清空；而卡片要靠它列群、并给「可能是同一个群」提供入口，
+        丢了就等于重启后这个功能消失，要等群里再说话才回来。"群里说过话"这件事，消息行上的
+        channel_origin 已经记着，不必再存第二份账本。
+        """
+        from sqlalchemy import func, select
+
+        from app.database import async_session
+        from app.models.message import Message
+
+        rows: dict[str, dict[str, Any]] = {}
+        try:
+            async with async_session() as db:
+                found = (await db.execute(
+                    select(Message.channel_origin, func.count(Message.id), func.max(Message.created_at))
+                    .where(Message.channel_origin.like(f"{self.channel_kind}:{self.instance}:%"))
+                    .group_by(Message.channel_origin)
+                )).all()
+        except Exception as e:
+            logger.debug(f"按消息行取最近群失败（非致命）: {type(e).__name__}: {e}")
+            found = []
+        for raw, count, last_at in found:
+            parsed = parse_channel_origin(self.channel_kind, raw)
+            origin = parsed[1] if parsed else ""
+            if not origin:
+                continue
+            rows[origin] = {
+                "origin": origin, "count": int(count or 0),
+                "last_at": float(last_at.timestamp()) if last_at else 0.0,
+                "allowed": bool((not self._allow) or origin in self._allow),
+            }
+        for origin, seen in self._seen_groups.items():   # 内存观测：更近的时刻、更新的条数
+            row = rows.setdefault(origin, {
+                "origin": origin, "count": 0, "last_at": 0.0,
+                "allowed": bool(seen.get("allowed", True)),
+            })
+            row["count"] = max(int(row["count"]), int(seen.get("count") or 0))
+            row["last_at"] = max(float(row["last_at"]), float(seen.get("last_at") or 0))
+        # 已经指过落点的群也算"我的群"：落点在配置里（落库的），重启后照样列得出来——
+        # 落点就是这台机器人确实接过它的凭证，比"见过一条消息"更硬（count=0 表示还没收到过）
+        for origin in self._group_map:
+            rows.setdefault(origin, {
+                "origin": origin, "count": 0, "last_at": 0.0,
+                "allowed": bool((not self._allow) or origin in self._allow),
+            })
+        return sorted(rows.values(), key=lambda r: float(r.get("last_at") or 0), reverse=True)[:20]
+
     async def get_status(self) -> dict:
         running = self._task is not None and not self._task.done()
         # 现读一次落点：卡片上刚改的落点、刚合并过去的，立刻看得见（不用重启实例）
         await self._reload_group_map()
-        suggestions = await self._landing_suggestions()
+        recent_rows = await self._recent_groups()
+        suggestions = await self._landing_suggestions([str(r["origin"]) for r in recent_rows])
         return {
             "installed": True,
             "running": running,
@@ -588,9 +638,7 @@ class QqChannelPlugin(ServicePlugin):
                     # channel.landing_suggestion）；卡片拿它画子列 + 一键合并
                     "possible_group": suggestions.get(str(row.get("origin") or "")),
                 }
-                for row in sorted(
-                    self._seen_groups.values(), key=lambda r: float(r.get("last_at") or 0), reverse=True
-                )
+                for row in recent_rows
             ],
             # 群 → Copree 群 的映射（卡片据此让每个群选落点）与"还没指定的群"
             "group_map": dict(self._group_map),
@@ -1679,7 +1727,7 @@ class QqChannelPlugin(ServicePlugin):
             group_map=self._group_map, default_group_id=self._copree_group_id, origin=qq_group
         )
 
-    async def _landing_suggestions(self) -> dict[str, dict[str, Any]]:
+    async def _landing_suggestions(self, origins: list[str]) -> dict[str, dict[str, Any]]:
         """没落点的 QQ 群 → "可能是同一个群"的候选（卡片显示 + 一键合并用）。
 
         只对**没指定过落点**的群算：指定过的以人的选择为准，算了也没用。判定本身在平台侧
@@ -1695,13 +1743,14 @@ class QqChannelPlugin(ServicePlugin):
         agent_id = agent_id_of(self.instance)
         if agent_id is None:
             return out
-        # 只看卡片真会画出来的那几个（recent 前 6 行）：认领候选要查库、可能还要问一次通道，
+        # 只看卡片真会画出来的那几个（前 6 行）：认领候选要查库、可能还要问一次通道，
         # 不是当前这屏要看的群就别算了
-        recent = sorted(
-            self._seen_groups.items(), key=lambda kv: float(kv[1].get("last_at") or 0), reverse=True
-        )[:6]
-        for origin, _row in recent:
-            name = str((self._group_facts.get(origin) or {}).get("name") or "")
+        for origin in origins[:6]:
+            facts = self._group_facts.get(origin)
+            if not str((facts or {}).get("name") or ""):
+                # 重启后内存里的群信息是空的：现问一次（按天缓存，和收消息那条路共用同一份）
+                facts = await self._group_facts_of(origin, force=True)
+            name = str((facts or {}).get("name") or "")
             if not name:
                 continue
             current = int(self._group_map.get(origin) or self._copree_group_id or 0)

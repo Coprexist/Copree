@@ -661,7 +661,9 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
                     {g.name || g.origin}
                   </div>
                   <div className="text-3xs text-textMuted truncate">
-                    {t('tool:channel.recentGroupMeta', { count: String(g.count), time: new Date(g.last_at * 1000).toLocaleString() })}
+                    {g.count > 0
+                      ? t('tool:channel.recentGroupMeta', { count: String(g.count), time: new Date(g.last_at * 1000).toLocaleString() })
+                      : t('tool:channel.recentGroupNoMessages')}
                     {g.name ? ' · ' + g.origin : ''}
                     {g.member_num ? ' · ' + t('tool:channel.recentGroupMembers', { n: String(g.member_num) }) : ''}
                   </div>
