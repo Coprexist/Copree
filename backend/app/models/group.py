@@ -39,6 +39,11 @@ class Group(Base):
     # 群名由外部通道维护：打开后通道拉到群名就对齐（一个 AI 接多个 QQ 群时靠它分辨"哪个是哪个"）
     name_from_channel = Column(Boolean, nullable=False, default=False, server_default=text("false"),
                                comment="群名跟随外部通道的群名")
+    # 哪个通道把它当落点建出来的（NULL = 不是通道建的，是用户自己建的群）。
+    # 合并时只收走"通道自己建的"落点群，用户建的群一律不动。
+    origin_channel = Column(String(20), nullable=True, comment="由哪条通道建出来当落点的（如 qq）")
+    # 归档：合并走之后没人再指着它，列表里不再显示，数据一条不删（可查、可恢复）
+    archived_at = Column(DateTime, nullable=True, comment="归档时刻（合并走的源群）")
     created_at = Column(DateTime, server_default=func.now())
 
     __table_args__ = (

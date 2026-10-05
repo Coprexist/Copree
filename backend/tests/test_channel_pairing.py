@@ -326,7 +326,11 @@ async def test_partial_save_keeps_secret(migrated_db):
 
 
 async def test_group_binding_must_be_owned_and_joined(migrated_db):
-    """接群的两个条件：群是你管的 + 这个 AI 已经在里面（否则 QQ 消息会落进别人的群）"""
+    """接群的两个条件：群必须是**你管的**；AI 还没进去也没关系——平台会把它加进去。
+
+    为什么允许"AI 不在里面"：合并/换落点本来就要把 AI 搬过去（自己建的落点群、从别处并过来的群），
+    再要求"先手动拉进群才出现在候选里"等于多一道手续。
+    """
     from app.database import async_session
     from app.models.group import Group, GroupMember
     from app.services.plugin import channel, skill_bridge
@@ -352,21 +356,17 @@ async def test_group_binding_must_be_owned_and_joined(migrated_db):
             except ValueError:
                 pass
 
-            # 我管但 AI 不在里面的群：不能接
+            # 我管但 AI 不在里面的群：可以接，接的时候顺手把这个 AI 加进去
             mine = Group(name="我的空群", owner_type="human", owner_id=owner_id, avatar_mode="default", include_ai_in_avatar=True)
             db.add(mine)
             await db.commit()
-            try:
-                await channel.save(db, plugin_id="qq-channel", agent_id=agent_id, user_id=owner_id,
-                                   values={"app_id": "1", "client_secret": "2", "copree_group_id": str(mine.id)},
-                                   actor="owner-a", target_agent_name="小明")
-                raise AssertionError("AI 不在里面的群不该能接")
-            except ValueError:
-                pass
+            await channel.save(db, plugin_id="qq-channel", agent_id=agent_id, user_id=owner_id,
+                               values={"app_id": "1", "client_secret": "2", "copree_group_id": str(mine.id)},
+                               actor="owner-a", target_agent_name="小明")
+            assert await db.get(GroupMember, (mine.id, "ai", agent.user_id)) is not None, \
+                "接了落点群就该把这个 AI 加进去"
 
-            # 我管且 AI 在里面：可以接，而且下拉里只会出现这一个
-            db.add(GroupMember(group_id=mine.id, member_type="ai", member_id=agent.user_id, role="member"))
-            await db.commit()
+            # 严格候选（你管的 + 它已在的）：现在就是这一个
             options = await channel.group_options(db, agent_id, owner_id)
             assert [g["id"] for g in options] == [mine.id], options
 
@@ -379,7 +379,8 @@ async def test_group_binding_must_be_owned_and_joined(migrated_db):
             cfg = await plugin_config.get_config("qq-channel", channel.instance_of(agent_id), db=db)
             assert cfg["copree_group_id"] == str(mine.id)
             view = (await channel.views(db, agent_id, owner_id))[0]
-            assert [g["id"] for g in view["group_options"]] == [mine.id]
+            # 卡片里的落点候选放宽成"你管理的所有群"（合并/换落点要选得到），不再要求 AI 已在里面
+            assert mine.id in [g["id"] for g in view["group_options"]]
 
             for plugin_id in list(skill_bridge._loaded):
                 await skill_bridge._unload_plugin(plugin_id)

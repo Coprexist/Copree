@@ -37,6 +37,7 @@ import httpx
 
 from app.services.plugin.api import ServicePlugin, service
 from app.services.plugin.tasks import PluginTasks
+from app.utils.pure.channel_landing import flag_on
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,7 @@ UNION_TTL_SECONDS = 86400          # 补拉到的 union 缓存一天（没有也
 UNION_CACHE_MAX = 2000             # 缓存条目上限：按群成员数增长，满了丢最早的
 MIRROR_WINDOW_SECONDS = 3          # 同一句 QQ 消息被两台机器人分别送进来的认亲窗口
 MIRROR_MIN_CHARS = 2               # 太短的正文（"嗯"、"?"）撞车概率太高，不认
+MIRROR_SCAN = 20                   # 认亲时在时间窗内回看多少条：渲染后的令牌各台不同，SQL 比不了，只能捞出来比
 # 单条正文先整条发：官方只给了 40054007「消息长度超限」这个错误码、没给数字，
 # 所以不猜上限——被平台拒了就在"认过的长度"和"刚被拒的长度"之间二分（见 _deliver）。
 LENGTH_ERROR_HINTS = ("40054007", "长度超限")
@@ -312,6 +314,24 @@ def parse_channel_origin(kind: str, raw: Any) -> tuple[str, str] | None:
         return None
     return parts[1], parts[2]
 
+_MENTION_TOKEN_RE = re.compile(r"<@!?\d+>")
+
+
+def _same_channel_text(left: Any, right: Any) -> bool:
+    """两台机器人渲染出来的字节不一样，但"人说的那句话"是一样的——认亲比的是后者。
+
+    差在哪：被 @ 的那台会在正文前补自己的唤醒令牌（<@!自己的id>），没被 @ 的那台不补；
+    正文里被 @ 的成员也各自解析成自己那条通道下的令牌。所以先把令牌摘掉、空白归一，再逐字比。
+    太短的正文（"嗯"、"?"）不认：摘完令牌就没什么好比的了，撞车概率还高（见 MIRROR_MIN_CHARS）。
+    取舍：同一个人 3 秒内发的两条只差 @ 对象的话，会被认成同一句——比"带 @ 的消息条条落两遍"
+    划算（摘掉令牌后 AI 看到的话本来就一样），所以这么定。
+    """
+    def stripped(text: Any) -> str:
+        return " ".join(_MENTION_TOKEN_RE.sub(" ", str(text or "")).split())
+
+    cleaned = stripped(left)
+    return len(cleaned) >= MIRROR_MIN_CHARS and cleaned == stripped(right)
+
 
 def _is_length_error(exc: Exception) -> bool:
     """平台的"这条太长"就认这一种错：按错误码/文案认，不靠 HTTP 状态猜"""
@@ -386,7 +406,9 @@ def recall_period(elapsed_days: float) -> int | None:
         "copree_group_id": {
             "type": "string", "title": "接入的 Copree 群 ID",
             "title_en": "Landing Copree group ID", "title_ja": "接続先 Copree グループID",
-            "description": "群消息落到哪个群；留空 = 只做私聊，不接群",
+            "description": "**没单独指定落点的**群消息落到哪个群。留空也可以接群：下面开着"
+                           "「QQ 群首次说话自动接上」时，每个 QQ 群会自己认领或建一个落点群；"
+                           "留空 + 关掉那个开关 = 只做私聊，不接群。",
         },
         "qq_group_allowlist": {
             "type": "string", "title": "允许接入的 QQ 群",
@@ -401,6 +423,26 @@ def recall_period(elapsed_days: float) -> int | None:
             "description": "每个 QQ 群落到哪个 Copree 群，写成 JSON：{\"群 openid\": 群 ID}。"
                            "卡片上「最近见到过的群」可以直接给每个群选落点，不必手写这段；"
                            "没在这里的群落到上面的「接入的 Copree 群 ID」。",
+        },
+        "auto_create_group": {
+            "type": "boolean", "title": "QQ 群首次说话自动接上", "default": True,
+            "title_en": "Auto-attach a Copree group per QQ group",
+            "title_ja": "QQグループごとに Copree グループを自動接続",
+            "description": "开启后（默认开）：在 QQ 里把这个机器人拉进群就完事——它第一次说话时，Copree 自动"
+                           "给它安排落点：同一主人的别的机器人已经接过**同名**的 QQ 群 → 接到同一个 Copree 群"
+                           "（并把这个 AI 加进群）；没有对应的群 → 新建一个专属群（群名跟随 QQ 群名）。"
+                           "已经手工选过落点的群不动。落点群留空也照样接；要只做私聊，把这个开关关掉。",
+            "description_en": "On by default: just add the bot to a QQ group — on its first message Copree"
+                              " attaches a landing by itself. If another bot of the same owner already serves"
+                              " a QQ group with the same name, the same Copree group is reused (and this AI is"
+                              " added to it); otherwise a dedicated Copree group is created. Groups you mapped"
+                              " by hand are left alone. Works even with no landing group above; turn this off"
+                              " for DM-only.",
+            "description_ja": "既定でオン：QQ でボットをグループに入れるだけで、初回発言時に Copree が落点を"
+                              "用意します。同じオーナーの別のボットが**同名**の QQ グループを既に接続していれば"
+                              "同じ Copree グループを再利用し（この AI も参加させます）、無ければ専用グループを"
+                              "新規作成します。手動で落点を指定したグループは変更しません。上の落点グループが"
+                              "空でも接続します。DM 専用にしたいときはオフにしてください。",
         },
         "body_format": {
             "type": "string", "title": "正文格式",
@@ -469,6 +511,11 @@ class QqChannelPlugin(ServicePlugin):
         self._routes: dict[str, dict[str, Any]] = {}
         # QQ 群 → Copree 群 的映射（配置键 group_map）；没映射的群落到默认落点群
         self._group_map: dict[str, int] = {}
+        # 首次说话的 QQ 群自动建落点群（配置键 auto_create_group，默认开）：
+        # 开了以后没映射的群各自建一个群，而不是全挤进默认落点群
+        self._auto_create = True
+        # 每个 QQ 群建群只建一次：同群的两条消息可能同时走到这一步（建完就写进 group_map）
+        self._landing_locks: dict[str, asyncio.Lock] = {}
         # OrderedDict：满了丢最早建立的那条（见 _remember_dm_route）
         self._dm_route: OrderedDict[str, dict[str, Any]] = OrderedDict()
         # 后台回复任务：保引用 + 停止前 drain（见 services/plugin/tasks.py）
@@ -513,6 +560,9 @@ class QqChannelPlugin(ServicePlugin):
     # ── 生命周期 ───────────────────────────────────────────────
     async def get_status(self) -> dict:
         running = self._task is not None and not self._task.done()
+        # 现读一次落点：卡片上刚改的落点、刚合并过去的，立刻看得见（不用重启实例）
+        await self._reload_group_map()
+        suggestions = await self._landing_suggestions()
         return {
             "installed": True,
             "running": running,
@@ -534,6 +584,9 @@ class QqChannelPlugin(ServicePlugin):
                     "member_num": int(
                         (self._group_facts.get(str(row.get("origin") or "")) or {}).get("member_num") or 0
                     ),
+                    # "可能是同一个群"：同一个主人的别的机器人把同名的群接在哪儿（只读候选，见
+                    # channel.landing_suggestion）；卡片拿它画子列 + 一键合并
+                    "possible_group": suggestions.get(str(row.get("origin") or "")),
                 }
                 for row in sorted(
                     self._seen_groups.values(), key=lambda r: float(r.get("last_at") or 0), reverse=True
@@ -587,9 +640,10 @@ class QqChannelPlugin(ServicePlugin):
 
         self._allow = _split_list(cfg.get("qq_group_allowlist"))
         self._group_map = _parse_group_map(cfg.get("group_map"))
+        self._auto_create = flag_on(cfg.get("auto_create_group"), default=True)
         self._dm_policy = (str(cfg.get("dm_policy") or "pairing").strip().lower() or "pairing")
         self._msg_type = _msg_type_of(cfg.get("body_format"))
-        self._quote_replies = str(cfg.get("quote_replies", "true")).strip().lower() not in ("false", "0", "off")
+        self._quote_replies = flag_on(cfg.get("quote_replies"), default=True)
         self._client = QqClient(app_id, secret)
         self.last_error = ""
         self.connected = False
@@ -761,6 +815,10 @@ class QqChannelPlugin(ServicePlugin):
             return
         if event == "GROUP_AT_MESSAGE_CREATE":
             await self._on_group_at(data)
+            return
+        if event == "GROUP_ADD_ROBOT":
+            # 机器人被拉进一个 QQ 群：这一刻只认领同名的已有落点群（有就立刻接上），不新建
+            await self._on_group_added(data)
             return
         if event == "C2C_MESSAGE_CREATE":
             await self._on_c2c(data)
@@ -961,13 +1019,17 @@ class QqChannelPlugin(ServicePlugin):
         await self._handle_group_message(d, addressed=self._addressed_to_bot(d), full=True)
 
     def _addressed_to_bot(self, d: dict) -> bool:
-        """这条消息点没点到机器人。
+        """这条消息点没点到**我**。
 
-        全量事件里官方给 mentions（带 bot 标记），优先用它；拿不到就退回按名字判
+        全量事件里官方给 mentions，每条带 bot / is_you 两个标记，**只有 is_you 是"这条是我"**：
+        bot 只说明"被点的是个机器人"，群里有两个机器人时，@ 另一个机器人同样带 bot: true
+        （2026-10-05 真机载荷：书爱 @ 绵绵那条是
+        `{"bot": true, "is_you": false, "username": "绵绵"}`——旧判据把它当成"我被 @ 了"，
+        于是给这条消息补上唤醒令牌，涵吾珑替绵绵答了话）。拿不到 mentions 再退回按名字判
         （@机器人 的前缀在两种事件里都被官方去掉了，所以名字判定是唯一兜底）。
         """
         for user in d.get("mentions") or []:
-            if isinstance(user, dict) and user.get("bot"):
+            if isinstance(user, dict) and user.get("is_you"):
                 return True
         from app.utils.text import check_mention
 
@@ -1109,12 +1171,16 @@ class QqChannelPlugin(ServicePlugin):
         # 先记账再判白名单：白名单该怎么填，前提是界面能看见"机器人在哪些群里出现过"。
         # 被白名单挡下的群同样记下来（allowed=False），否则用户永远发现不了它。
         self._note_group(qq_group, allowed=(not self._allow) or qq_group in self._allow)
-        landing = self._landing_group(qq_group)
-        if not landing:
-            logger.debug("这个 QQ 群没有落点群（实例没绑 Copree 群、映射里也没有），忽略")
-            return
+        # 白名单先挡：被挡下的群不该走到"自动建群"那一步（建了群却收不到消息，比没建更糟）
         if self._allow and qq_group not in self._allow:
             logger.debug(f"QQ 群 {qq_group} 不在白名单，忽略")
+            return
+        # 群信息（群名/人数…）先拿：认领已有落点群要靠群名对号（见 channel._claim_landing），
+        # 下面落库时还要用它对齐落点群名。今天问过就用手里的，不额外发请求。
+        facts = await self._group_facts_of(qq_group)
+        landing = await self._resolve_landing(qq_group, name=str((facts or {}).get("name") or ""))
+        if not landing:
+            logger.debug("这个 QQ 群没有落点群（实例没绑 Copree 群、映射里也没有），忽略")
             return
 
         content = self._readable_content(d)
@@ -1152,8 +1218,6 @@ class QqChannelPlugin(ServicePlugin):
 
         # 事件里的 union_openid 常常是空的（官方也写了"可能为空"），跨机器人认人只能按需补拉一次
         await self._fill_union(qq_group, author)
-        # 群信息（群名/人数…）：今天第一条群消息时才真去问一次（见 _group_facts_of）
-        facts = await self._group_facts_of(qq_group)
         try:
             delivered = await self._deliver_to_group(
                 landing, qq_group, author, content, msg_id, str(ext.get("msg_idx") or ""), quoted_ref,
@@ -1395,11 +1459,13 @@ class QqChannelPlugin(ServicePlugin):
                             content: str) -> Any | None:
         """同一条 QQ 消息被两台机器人分别送进来时，认出先落库的那条。
 
-        判据：同群、QQ 进来的人话、正文一字不差、几秒之内、来源不是本实例，且两边认到的
-        union 不冲突（都认得出又不同名 = 根本不是同一个人）。
-        两台各建一条的后果：合并后的 Copree 群里同一句话出现两遍，说话人还是两个账号。
+        判据：同群、QQ 进来的人话、**摘掉 @ 令牌后**正文一字不差、几秒之内、来源不是本实例，
+        且两边认到的 union 不冲突（都认得出又不同名 = 根本不是同一个人）。
+        为什么不能拿渲染后的字节直接比：两台是**不同的 AI**——被 @ 的那台补的是它自己的令牌，
+        正文里的成员也各自解析成各自通道下的 id，逐字比会认不出亲，合并后的群里同一句话就出现
+        两遍、说话人还是两个账号。
         """
-        if len(content.strip()) < MIRROR_MIN_CHARS:
+        if len(_MENTION_TOKEN_RE.sub("", str(content or "")).strip()) < MIRROR_MIN_CHARS:
             return None
         from datetime import timedelta
 
@@ -1410,16 +1476,18 @@ class QqChannelPlugin(ServicePlugin):
         from app.utils.pure.timeutil import utc_now
 
         mine = format_channel_origin(self.channel_kind, self.instance, qq_group)
-        twin = (await db.execute(
+        # 时间窗内的候选捞出来逐条比（令牌不同，SQL 的 content 等值比不了）；
+        # 同群 + 别的来源 + 人话，本来就没几条
+        rows = (await db.execute(
             select(Message).where(
                 Message.group_id == int(group_id),
                 Message.sender_type == "human",
                 Message.channel_origin.isnot(None),
                 Message.channel_origin != mine,
-                Message.content == content,
                 Message.created_at >= utc_now() - timedelta(seconds=MIRROR_WINDOW_SECONDS),
-            ).order_by(Message.id.desc()).limit(1)
-        )).scalars().first()
+            ).order_by(Message.id.desc()).limit(MIRROR_SCAN)
+        )).scalars().all()
+        twin = next((m for m in rows if _same_channel_text(m.content, content)), None)
         if twin is None:
             return None
         theirs = parse_channel_origin(self.channel_kind, twin.channel_origin)
@@ -1610,6 +1678,138 @@ class QqChannelPlugin(ServicePlugin):
         return landing_group(
             group_map=self._group_map, default_group_id=self._copree_group_id, origin=qq_group
         )
+
+    async def _landing_suggestions(self) -> dict[str, dict[str, Any]]:
+        """没落点的 QQ 群 → "可能是同一个群"的候选（卡片显示 + 一键合并用）。
+
+        只对**没指定过落点**的群算：指定过的以人的选择为准，算了也没用。判定本身在平台侧
+        （channel.landing_suggestion：同一个主人的别的机器人把同名的通道群接在哪个 Copree 群）；
+        插件只把结果塞进状态，算不出来就空着——状态上报不该被它拖住。
+        """
+        out: dict[str, dict[str, Any]] = {}
+        if not self._auto_create:
+            return out
+        from app.database import async_session
+        from app.services.plugin.channel import agent_id_of, landing_suggestion
+
+        agent_id = agent_id_of(self.instance)
+        if agent_id is None:
+            return out
+        # 只看卡片真会画出来的那几个（recent 前 6 行）：认领候选要查库、可能还要问一次通道，
+        # 不是当前这屏要看的群就别算了
+        recent = sorted(
+            self._seen_groups.items(), key=lambda kv: float(kv[1].get("last_at") or 0), reverse=True
+        )[:6]
+        for origin, _row in recent:
+            name = str((self._group_facts.get(origin) or {}).get("name") or "")
+            if not name:
+                continue
+            current = int(self._group_map.get(origin) or self._copree_group_id or 0)
+            try:
+                async with async_session() as db:
+                    found = await landing_suggestion(
+                        db, agent_id=agent_id, name=name, exclude_group_id=current,
+                    )
+            except Exception as e:
+                logger.debug(f"认领候选算不出来（非致命）: {type(e).__name__}: {e}")
+                continue
+            if found:
+                out[origin] = found
+        return out
+
+    async def _reload_group_map(self) -> dict[str, int]:
+        """现读一份配置里的 group_map。
+
+        为什么必须现读：卡片上改落点、在别处把两个群合并，都是写配置——实例是启动时读进内存的，
+        不重读就要等重启才生效（表现是"刚合并过去，消息又落回老群/又建了个新群"）。
+        """
+        from app.database import async_session
+        from app.services.plugin.config import get_config
+
+        try:
+            async with async_session() as db:
+                cfg = await get_config(self.id, self.instance, db=db)
+        except Exception as e:
+            logger.debug(f"重读通道配置失败（继续用内存里的）: {type(e).__name__}: {e}")
+            return self._group_map
+        self._group_map = _parse_group_map(cfg.get("group_map"))
+        return self._group_map
+
+    async def _resolve_landing(self, qq_group: str, *, name: str = "") -> int:
+        """落点：映射表 → 认领/新建（勾选开时）→ 默认落点群。
+
+        自动接住（配置键 auto_create_group，默认开）只对"本来没有落点的群"生效：人显式指定过
+        落点的群不受影响。**落点留空也算接**——"在 QQ 里把它拉进群，Copree 侧自己接上"就是这个
+        开关的承诺；要只做私聊就把它关掉（那时退回默认落点群，没有默认落点就整群忽略）。
+        接住失败不丢消息：退回默认落点群。
+        """
+        from app.utils.pure.channel_landing import auto_create_wanted
+
+        if auto_create_wanted(enabled=self._auto_create, group_map=self._group_map, origin=qq_group):
+            landed = await self._ensure_landing_group(qq_group, name=name)
+            if landed:
+                return landed
+        return self._landing_group(qq_group)
+
+    async def _on_group_added(self, d: dict) -> None:
+        """被拉进群：先认领同名的已有落点群（有就立刻接上），没有就等第一条消息再建。
+
+        为什么不在这一刻就建群：群可能只是被拉进去、一句还没人说，那一刻建出来是空群。
+        "接上"真正需要的信号是"这个群里有对话"，那是第一条消息。认领不一样——它是把两台机器人
+        眼里的**同一个** QQ 群并到一个 Copree 群上（群标识是各 app 的 openid，只能按群名对号）。
+        """
+        qq_group = str(d.get("group_openid") or "")
+        if not qq_group:
+            return
+        self._note_group(qq_group, allowed=(not self._allow) or qq_group in self._allow)
+        if self._allow and qq_group not in self._allow:
+            logger.debug(f"QQ 群 {qq_group} 不在白名单，忽略")
+            return
+        from app.utils.pure.channel_landing import auto_create_wanted
+
+        if not auto_create_wanted(enabled=self._auto_create, group_map=self._group_map, origin=qq_group):
+            return
+        facts = await self._group_facts_of(qq_group)
+        name = str((facts or {}).get("name") or "")
+        landed = await self._ensure_landing_group(qq_group, name=name, create=False)
+        if landed:
+            logger.info(f"QQ 群 …{qq_group[-6:]}（{name or '未知名'}）已加入，落点群 #{landed}")
+        else:
+            logger.info(f"QQ 群 …{qq_group[-6:]}（{name or '未知名'}）已加入，暂无对应落点群，等第一条消息")
+
+    async def _ensure_landing_group(self, qq_group: str, *, name: str = "", create: bool = True) -> int:
+        """给这个 QQ 群安排落点（认领同名的已有群；create 时还可以新建一个并把这个 AI 加进去）。
+
+        加锁的理由是"认领/建群真的会落库"：同一条消息的两种事件、同群连发的两条消息都可能
+        同时走到这儿，重复跑就是两个空群。做完立刻写进内存映射，后续直接命中。
+        """
+        lock = self._landing_locks.setdefault(qq_group, asyncio.Lock())
+        async with lock:
+            # 先现读一份配置：卡片上刚指过的落点（或刚合并过去的）要立刻生效，别等重启实例
+            known = await self._reload_group_map()
+            if qq_group in known:
+                return int(known[qq_group])
+            from app.database import async_session
+            from app.services.plugin.channel import agent_id_of, resolve_landing
+
+            agent_id = agent_id_of(self.instance)
+            if agent_id is None:
+                return 0
+            try:
+                async with async_session() as db:
+                    group_id = await resolve_landing(
+                        db, plugin_id=self.id, agent_id=agent_id, origin=qq_group,
+                        name=name, create=create,
+                    )
+            except Exception as e:
+                self.last_error = f"自动接住通道群失败：{type(e).__name__}: {e}"
+                logger.warning(
+                    f"QQ 群 …{qq_group[-6:]} 自动接住失败，退回默认落点群：{e}", exc_info=True
+                )
+                return 0
+            self._group_map[qq_group] = int(group_id)
+            logger.info(f"QQ 群 …{qq_group[-6:]} 首次说话 → 落点群 #{group_id}")
+            return int(group_id)
 
     async def _message_origin(self, db: Any, message: Any) -> tuple[str, str] | None:
         """这条消息来自哪个通道会话 → (实例, 会话)。

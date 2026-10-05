@@ -93,6 +93,8 @@ async def list_user_groups(db: AsyncSession, user_id: int) -> list[dict]:
             select(GroupMember, Group)
             .join(Group, Group.id == GroupMember.group_id)
             .where(GroupMember.member_type == "human", GroupMember.member_id == user_id)
+            # 归档的群不进列表：合并走的源落点群（数据还在，只是不再出现）
+            .where(Group.archived_at.is_(None))
             .order_by(GroupMember.group_id)
         )).all()
     ]

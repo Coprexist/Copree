@@ -68,3 +68,31 @@ def serves_group(*, group_map: dict[str, int], default_group_id: int, group_id: 
     if default_group_id and int(group_id) == int(default_group_id):
         return True
     return any(int(v or 0) == int(group_id) for v in group_map.values())
+
+
+def flag_on(raw: Any, *, default: bool = True) -> bool:
+    """配置里的开关：空 = 用默认值；false / 0 / off / no = 关（大小写与空白都不算）。
+
+    通道插件里所有布尔项都走这一处，免得每处各写一套"什么算关"。
+    """
+    text = str(raw if raw is not None else "").strip().lower()
+    if not text:
+        return default
+    return text not in ("false", "0", "off", "no")
+
+
+def auto_create_wanted(*, enabled: Any, group_map: dict[str, int], origin: str) -> bool:
+    """这个通道侧群**首次说话**时，要不要自动给它安排落点（认领已有的同名群，或新建一个）。
+
+    两个前提：
+    - 开关开着（配置键 auto_create_group，默认开）。**落点群留空也算接**：这个开关承诺的就是
+      「在外部软件里把它拉进群，Copree 侧自动接上」；要只做私聊就把开关关掉——那时未映射的群
+      落默认落点群，没有默认落点就整群忽略（旧行为）；
+    - 这个群还没有落点（不在映射表里）。人显式指定过的群，人的选择优先。
+
+    判定是纯函数；真正认领/建群要落库、要写配置，那部分是 channel.resolve_landing。
+    """
+    target = str(origin or "").strip()
+    if not target or not flag_on(enabled, default=True):
+        return False
+    return target not in (group_map or {})

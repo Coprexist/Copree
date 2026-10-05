@@ -235,13 +235,14 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
     return api.put(base, { values })
   }, t('tool:channel.saved'))
 
-  /** 给某个 QQ 群指定落点：写 group_map（后端允许部分保存，不动其它配置） */
+  /** 给某个 QQ 群指定落点 = 合并到这个群：走后端一处收尾（AI 入群 + 源落点群归档）。
+   *  只有"选回默认落点"才是纯配置动作（把这个群从映射表里删掉，不涉及成员）。 */
   const saveLanding = (origin: string, value: string) => {
-    const next: Record<string, string> = { ...((view?.detail?.group_map as Record<string, string>) || {}) }
-    if (value) next[origin] = value
-    else delete next[origin]
     setMapDraft(prev => ({ ...prev, [activeId]: { ...(prev[activeId] || {}), [origin]: value } }))
     setNewFor(prev => ({ ...prev, [origin]: '' }))
+    if (value) return mergeInto(origin, Number(value))
+    const next: Record<string, string> = { ...((view?.detail?.group_map as Record<string, string>) || {}) }
+    delete next[origin]
     return act('map:' + origin, () => api.put(base, { values: { group_map: JSON.stringify(next) } }), t('tool:channel.landingSaved'))
   }
 
@@ -250,13 +251,11 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
     const created = await api.post<{ id: number; name: string }>(
       base + '/landing-group', { name: (newFor[origin] || '').trim() },
     )
-    const id = String(created.id)
-    const next: Record<string, string> = {
-      ...((view?.detail?.group_map as Record<string, string>) || {}), [origin]: id,
-    }
-    setMapDraft(prev => ({ ...prev, [activeId]: { ...(prev[activeId] || {}), [origin]: id } }))
+    setMapDraft(prev => ({ ...prev, [activeId]: { ...(prev[activeId] || {}), [origin]: String(created.id) } }))
     setNewFor(prev => ({ ...prev, [origin]: '' }))
-    await api.put(base, { values: { group_map: JSON.stringify(next) } })
+    // 新建出来的群已经是成员（create_landing_group 加的），再走一次合并只是把落点固定下来——
+    // 与"选已有群"同一条后端路径，少一套写法
+    await mergeInto(origin, created.id)
   }, t('tool:channel.landingSaved'))
 
   /** 凭据单独存：换 AppID/Secret 等于"换一个机器人重新连"，与落点/策略不是一件事。
@@ -278,6 +277,8 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
     copree_group_id?: number | null; mapped?: boolean;
     // 插件今天从通道那边拉到的群名/人数（没拉到就是空）：有就显示真名，比 openid 好认
     name?: string; member_num?: number;
+    // 「可能是同一个群」：同一个主人的别的机器人把同名的通道群接在哪儿（只读候选）
+    possible_group?: { id: number; name: string } | null;
   }[] = (view?.detail?.recent_groups as any[]) || []
   /** 每个 QQ 群选了哪个落点（未提交前的本地值）：键是群 openid */
   const [mapDraft, setMapDraft] = useState<Record<string, Record<string, string>>>({})
@@ -301,6 +302,10 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
   }, res => t('tool:channel.selfTestSent', {
     mode: t(res.mode === 'active' ? 'tool:channel.selfTestModeActive' : 'tool:channel.selfTestModePassive'),
   }))
+
+  /** 合并到「可能是同一个群」那个 Copree 群：落点指过去、这个 AI 也搬进去（收尾在后端一处） */
+  const mergeInto = (origin: string, groupId: number) =>
+    act('merge:' + origin, () => api.post(base + '/merge', { origin, group_id: groupId }), t('tool:channel.merged'))
 
   const start = () => act('start', () => api.post(base + '/start'), t('tool:channel.started'))
   const stop = () => act('stop', () => api.post(base + '/stop'), t('tool:channel.stopped'))
@@ -648,7 +653,7 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
             {recent.length === 0 ? (
               <div className="text-3xs text-textMuted">{t('tool:channel.recentGroupsEmpty')}</div>
             ) : recent.slice(0, 6).map(g => (
-              <div key={g.origin} className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-2 bg-canvas border border-border rounded-control px-3 py-2">
+              <div key={g.origin} className="grid grid-cols-[auto_1fr_auto_auto_auto] items-center gap-2 bg-canvas border border-border rounded-control px-3 py-2">
                 <span className={'w-1.5 h-1.5 rounded-full shrink-0 ' + (g.allowed ? 'bg-mint-400' : 'bg-amber-400')} />
                 <div className="min-w-0">
                   {/* 通道那边报过群名就显示真名（下一行留 openid 当身份）；没有就只显示 openid */}
@@ -677,6 +682,22 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
                   className="w-44"
                   disabled={!view.enabled}
                 />
+                {/* 「可能是同一个群」子列：认到就地合并过去（同主人的别的机器人已经把同名的群接在哪儿） */}
+                <div className="flex items-center gap-2 justify-end">
+                  {g.possible_group ? (
+                    <>
+                      <span className="text-3xs text-textSecondary truncate max-w-[9rem]" title={g.possible_group.name}>
+                        {t('tool:channel.possibleSame')}：{g.possible_group.name}
+                      </span>
+                      <Button size="xs" variant="secondary" loading={busy === 'merge:' + g.origin}
+                        onClick={() => mergeInto(g.origin, g.possible_group?.id ?? 0)}>
+                        {t('tool:channel.mergeInto')}
+                      </Button>
+                    </>
+                  ) : (
+                    <span className="text-3xs text-textMuted">—</span>
+                  )}
+                </div>
                 {g.allowed
                   ? <span className="text-3xs text-mint-400 shrink-0">{t('tool:channel.allowListed')}</span>
                   : <Button size="xs" variant="secondary" loading={busy === 'allow:' + g.origin} onClick={() => addToList(g.origin)}>{t('tool:channel.allowAdd')}</Button>}

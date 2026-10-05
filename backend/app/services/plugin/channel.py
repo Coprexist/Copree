@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -78,11 +79,17 @@ async def owned_agent(db: AsyncSession, agent_id: int, user_id: int):
     return agent
 
 
-async def group_options(db: AsyncSession, agent_id: int, user_id: int) -> list[dict[str, Any]]:
-    """可以把这个 AI 接进去的 Copree 群：**你管的** 且 **它已经在里面的**。
+async def group_options(
+    db: AsyncSession, agent_id: int, user_id: int, *,
+    include_unjoined: bool = False, query: str = "",
+) -> list[dict[str, Any]]:
+    """可以把这个 AI 接进去的 Copree 群：**你管的**（群主/管理员）。
 
-    两个条件缺一不可：只列你管理的群，别人不会因为你的机器人被塞进他们的群；
+    默认再要求**它已经在里面**：只列你管理的群，别人不会因为你的机器人被塞进他们的群；
     只列它已经是成员的群，否则 QQ 消息落进去、它却不在群里，等于往别人群里灌消息。
+    include_unjoined=True 给"合并/指落点"用：你管的群都能选，定下落点时平台顺手把这个 AI
+    加进去（见 attach_landing）——比"先手动把它拉进群，才出现在候选里"少一步。
+    query 按群名搜（群多了要翻得动）。
     （约定：AI 成员在 group_members 里用 agent.user_id 当 member_id。）
     """
     from sqlalchemy import or_, select
@@ -104,14 +111,20 @@ async def group_options(db: AsyncSession, agent_id: int, user_id: int) -> list[d
     )
     stmt = (
         select(Group.id, Group.name)
-        .where(Group.id.in_(groups_with_this_ai))
+        .where(Group.archived_at.is_(None))
         .where(or_(Group.id.in_(groups_i_manage), Group.id.in_(groups_i_own)))
         .order_by(Group.id.desc())
     )
+    if not include_unjoined:
+        stmt = stmt.where(Group.id.in_(groups_with_this_ai))
+    if str(query or "").strip():
+        stmt = stmt.where(Group.name.ilike(f"%{str(query).strip()}%"))
     return [{"id": int(r[0]), "name": r[1]} for r in (await db.execute(stmt)).all()]
 
 
-async def create_landing_group(db: AsyncSession, *, agent_id: int, user_id: int, name: str) -> dict:
+async def create_landing_group(
+    db: AsyncSession, *, agent_id: int, user_id: int, name: str, origin_channel: str | None = None,
+) -> dict:
     """在 Copree 单独建一个群当外部消息的落点：你是群主，这个 AI 是成员。
 
     为什么走 create_group：建群还要带群主成员行、并发上限等一串约定，
@@ -130,9 +143,211 @@ async def create_landing_group(db: AsyncSession, *, agent_id: int, user_id: int,
     )
     # 没起名＝接受兜底名：这种群的名字交给通道维护，通道侧群名有了就对齐（群设置里可关）
     group.name_from_channel = not typed
+    # 记下"这条通道建的"：合并时只有这类群会被收走（用户自己建的群一律不动）
+    group.origin_channel = (origin_channel or None)
     await db.commit()
     logger.info("为 AI #%s 建了落点群 #%s（%s）", agent_id, group.id, clean)
     return {"id": int(group.id), "name": group.name}
+
+
+async def ensure_ai_in_group(db: AsyncSession, *, group_id: int, agent_id: int) -> bool:
+    """保证这个 AI 是那个 Copree 群的成员：落点群就是它的舞台，指到哪儿就把它加进去。
+
+    已经是成员就什么都不做（返回 False）。复用 gm.add_member（AI 成员统一用 user_id 当 member_id）。
+    """
+    from sqlalchemy import select
+
+    from app.chat.gm import add_member
+    from app.models.agent import Agent
+    from app.models.group import GroupMember
+
+    agent = await db.get(Agent, agent_id)
+    if agent is None or not agent.user_id:
+        return False
+    member_id = int(agent.user_id)
+    exists = (await db.execute(select(GroupMember).where(
+        GroupMember.group_id == int(group_id),
+        GroupMember.member_type == "ai",
+        GroupMember.member_id == member_id,
+    ))).scalar_one_or_none()
+    if exists is not None:
+        return False
+    await add_member(db, int(group_id), "ai", member_id)
+    logger.info("AI #%s 已加入落点群 #%s", agent_id, group_id)
+    return True
+
+
+async def _claim_landing(db: AsyncSession, *, agent_id: int, name: str) -> int:
+    """认领已有落点：同一个主人的别的机器人已经把**同名**的通道群接到了某个 Copree 群 → 就是它。
+
+    为什么只能按群名对号：同一个 QQ 群，每台机器人看到的群体标识是**各自 app 的 openid**，
+    官方也不给群号（成员侧同理——见 models/external.py 那句"同一个人在每个机器人眼里各是一个
+    openid"），所以跨机器人唯一对得上的就是群名（外加人数这类同样只能当线索的东西）。
+    限定"同一个主人的机器人之间"：认错了也只会落在自己的群里，不会把 AI 塞进别人的群。
+    """
+    wanted = str(name or "").strip()
+    if not wanted:
+        return 0
+    from app.models.agent import Agent
+
+    mine_agent = await db.get(Agent, agent_id)
+    if mine_agent is None:
+        return 0
+    mine = instance_of(agent_id)
+    for (plugin_id, instance), slot in (await _channel_landings(db)).items():
+        if instance == mine:
+            continue
+        other_id = agent_id_of(str(instance))
+        if other_id is None:
+            continue
+        other = await db.get(Agent, other_id)
+        if other is None or int(other.owner_id) != int(mine_agent.owner_id):
+            continue
+        candidates = {int(slot["default"] or 0)} | {int(v or 0) for v in slot["map"].values()}
+        for group_id in sorted(g for g in candidates if g):
+            got = await channel_group_name(db, group_id)
+            if got and got.strip() == wanted:
+                logger.info(
+                    "通道群「%s」认到已有落点群 #%s（来自实例 %s/%s）", wanted, group_id, plugin_id, instance
+                )
+                return group_id
+    return 0
+
+
+async def _read_landings(db: AsyncSession, *, plugin_id: str, agent_id: int) -> tuple[dict[str, int], int]:
+    """这个实例当前生效的落点（group_map + 默认落点群）：一律现读库，别信内存副本"""
+    from app.utils.pure.channel_landing import parse_group_map
+
+    current = await plugin_config.get_config(plugin_id, instance_of(agent_id), db=db)
+    mapping = parse_group_map(current.get("group_map"))[0]
+    try:
+        default_id = int(str(current.get("copree_group_id") or 0) or 0)
+    except ValueError:
+        default_id = 0
+    return mapping, default_id
+
+
+async def _write_landing(db: AsyncSession, *, plugin_id: str, agent_id: int, origin: str, group_id: int) -> None:
+    """把这个通道群的落点写进该实例的 group_map（部分保存，不碰别的键）"""
+    mapping, _default = await _read_landings(db, plugin_id=plugin_id, agent_id=agent_id)
+    mapping[str(origin)] = int(group_id)
+    await plugin_config.set_config(
+        plugin_id, {"group_map": json.dumps(mapping, ensure_ascii=False)}, instance_of(agent_id),
+        actor="auto", db=db,
+    )
+
+
+async def _retire_source_group(
+    db: AsyncSession, *, plugin_id: str, agent_id: int, kind: str, previous: int, target: int,
+    mapping: dict[str, int], default_id: int,
+) -> int:
+    """合并之后收走源落点群：只收"本通道自己建的"，而且收之前确认再没有别的通道群指着它。
+
+    为什么要有这两道闸：用户自己建的群不能因为一次落点调整就消失；通道建的群只要还有别的
+    QQ 群（或本实例的默认落点）指着，它就还在用。收走＝归档（archived_at），数据一条不删。
+    """
+    if not previous or int(previous) == int(target):
+        return 0
+    from app.models.group import Group
+    from app.utils.pure.timeutil import utc_now
+
+    group = await db.get(Group, int(previous))
+    if group is None or str(getattr(group, "origin_channel", "") or "") != str(kind):
+        return 0
+    landings = await _channel_landings(db)
+    landings[(plugin_id, instance_of(agent_id))] = {"default": int(default_id or 0), "map": dict(mapping)}
+    for slot in landings.values():
+        if int(slot.get("default") or 0) == int(previous):
+            return 0
+        if any(int(v or 0) == int(previous) for v in (slot.get("map") or {}).values()):
+            return 0
+    group.archived_at = utc_now()
+    logger.info("落点群 #%s 已并入 #%s，归档（不再有任何通道群指着它）", previous, target)
+    return int(previous)
+
+
+async def attach_landing(
+    db: AsyncSession, *, plugin_id: str, agent_id: int, origin: str, group_id: int,
+) -> int:
+    """把一个通道群的落点指到某个 Copree 群 —— 手工选择、合并、自动认领都走这一条。
+
+    只做三件事：这个 AI 进那个群 → 落点写进该实例的 group_map → 原来的落点群该收走就收走
+    （见 _retire_source_group）。所以"合并"不是一个新机制，而是"把落点指过去"；
+    "自动接住"也只是先自己找了个目标再走这里。
+    """
+    kind = str(declared(plugin_id)["kind"])
+    mapping, default_id = await _read_landings(db, plugin_id=plugin_id, agent_id=agent_id)
+    previous = int(mapping.get(str(origin)) or default_id or 0)
+    await ensure_ai_in_group(db, group_id=int(group_id), agent_id=agent_id)
+    mapping[str(origin)] = int(group_id)
+    await plugin_config.set_config(
+        plugin_id, {"group_map": json.dumps(mapping, ensure_ascii=False)}, instance_of(agent_id),
+        actor="auto", db=db,
+    )
+    await _retire_source_group(
+        db, plugin_id=plugin_id, agent_id=agent_id, kind=kind, previous=previous,
+        target=int(group_id), mapping=mapping, default_id=default_id,
+    )
+    return int(group_id)
+
+
+async def landing_suggestion(
+    db: AsyncSession, *, agent_id: int, name: str, exclude_group_id: int = 0,
+) -> dict[str, Any] | None:
+    """这个通道群"可能是同一个群"的那个 Copree 群：卡片显示 + 一键合并用（只读，不落任何东西）。
+
+    已经指着它（exclude）就没什么可合并的，返回 None——"有没有落点"不影响这条提示：
+    用户常常是先建了个落点群，才发现另一个机器人早把同一个 QQ 群接在别处了。
+    """
+    from app.models.group import Group
+
+    group_id = await _claim_landing(db, agent_id=agent_id, name=str(name or ""))
+    if not group_id or int(group_id) == int(exclude_group_id or 0):
+        return None
+    row = await db.get(Group, int(group_id))
+    return {"id": int(group_id), "name": str(getattr(row, "name", "") or f"群{group_id}")}
+
+
+async def claim_landing(db: AsyncSession, *, plugin_id: str, agent_id: int, origin: str, name: str) -> int:
+    """认领同名已有群（认到就等于接上，不建任何东西）；认不到返回 0。
+
+    "被拉进群"那一刻只做这一步：有对应的群立刻接上，没对应的等第一条消息再建——
+    群可能只是被拉进去、没人说话，那一刻建出来的是空群。
+    """
+    group_id = await _claim_landing(db, agent_id=agent_id, name=name)
+    if not group_id:
+        return 0
+    return await attach_landing(db, plugin_id=plugin_id, agent_id=agent_id, origin=origin, group_id=group_id)
+
+
+async def resolve_landing(
+    db: AsyncSession, *, plugin_id: str, agent_id: int, origin: str, name: str = "", create: bool = True,
+) -> int:
+    """通道侧的群该落到哪个 Copree 群 —— 自动接住的唯一入口：认领同名已有群 → 新建一个。
+
+    两条路都保证「这个 AI 是那个群的成员」，也都写进 group_map：与手工指定的落点是同一份配置、
+    同一条查表路径（不是两套机制）。建群走 create_landing_group（群主成员行那串约定在 gm.py 一处）。
+    create=False = 只认领，不新建（见 claim_landing）。
+    """
+    target = str(origin or "").strip()
+    if not target:
+        raise ValueError("通道侧群标识为空，不排落点")
+    from app.models.agent import Agent
+
+    claimed = await claim_landing(db, plugin_id=plugin_id, agent_id=agent_id, origin=target, name=name)
+    if claimed or not create:
+        return claimed
+    agent = await db.get(Agent, agent_id)
+    if agent is None:
+        raise ValueError(f"AI 不存在（{agent_id}）")
+    # 起名留空＝接受兜底名（<AI 名> 的群），名字交给通道侧对齐：QQ 群改名它跟着改
+    created = await create_landing_group(
+        db, agent_id=agent_id, user_id=int(agent.owner_id), name="",
+        origin_channel=str(declared(plugin_id)["kind"]),
+    )
+    group_id = int(created["id"])
+    logger.info("通道群 %s 首次说话 → 新建落点群 #%s（AI #%s）", target[-8:], group_id, agent_id)
+    return await attach_landing(db, plugin_id=plugin_id, agent_id=agent_id, origin=target, group_id=group_id)
 
 
 async def _channel_landings(db: AsyncSession) -> dict[tuple[str, str], dict[str, Any]]:
@@ -407,7 +622,8 @@ async def _plugin_enabled(db: AsyncSession, plugin_id: str) -> bool:
 
 async def views(db: AsyncSession, agent_id: int, user_id: int) -> list[dict[str, Any]]:
     """这个 AI 的全部通道视图（配置、运行态、配对名单）——有几条通道由插件说了算"""
-    options = await group_options(db, agent_id, user_id)
+    # 卡片里的落点候选 = 你管理的所有群（合并/指落点都要选得到；选中后平台会把这个 AI 加进去）
+    options = await group_options(db, agent_id, user_id, include_unjoined=True)
     return [
         await _view_one(db, declared_channel=ch, agent_id=agent_id, user_id=user_id, group_options=options)
         for ch in all_declared()
@@ -529,12 +745,14 @@ async def save(
     payload = dict(values)
     payload["target_agent"] = target_agent_name
 
-    # 接了群就必须是"你管的、且这个 AI 已经在里面的"群：否则外部消息会落进别人的群
+    # 接了群就必须是"你管的"群：否则外部消息会落进别人的群。选中之后平台把这个 AI 加进去
+    # （含"它还没进那个群"的情况——合并/换落点本来就是要把它搬过去）
     raw_group = str(payload.get("copree_group_id") or "").strip()
     if raw_group:
-        allowed = {int(g["id"]) for g in await group_options(db, agent_id, user_id)}
+        allowed = {int(g["id"]) for g in await group_options(db, agent_id, user_id, include_unjoined=True)}
         if not raw_group.isdigit() or int(raw_group) not in allowed:
-            raise ValueError("这个群不能接：只能选你管理、并且这个 AI 已经在里面的 Copree 群")
+            raise ValueError("这个群不能接：只能选你管理（群主/管理员）的 Copree 群")
+        await ensure_ai_in_group(db, group_id=int(raw_group), agent_id=agent_id)
 
     instance = instance_of(agent_id)
     await plugin_config.set_config(plugin_id, payload, instance=instance, actor=actor, db=db)

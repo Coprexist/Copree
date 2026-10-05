@@ -47,6 +47,12 @@ class LandingGroupRequest(BaseModel):
     name: str = ""
 
 
+class MergeLandingRequest(BaseModel):
+    """把某个通道侧的群合并到哪个已有的 Copree 群（落点指过去，AI 也搬过去）"""
+    origin: str
+    group_id: int
+
+
 async def _owned(db: AsyncSession, agent_id: int, user: dict):
     """归属检查：不是自己的 AI 一律 403（NotOwned 是 PermissionError，不转成 HTTP 会变成 500）"""
     try:
@@ -107,14 +113,44 @@ async def create_landing_group(
     db: AsyncSession = Depends(get_db),
 ):
     """在 Copree 新建一个群当外部消息的落点（用户是群主，这个 AI 是成员）"""
-    _declared(plugin_id)
+    declared = _declared(plugin_id)
     await _owned(db, agent_id, user)
     try:
         return await channel.create_landing_group(
-            db, agent_id=agent_id, user_id=int(user["user_id"]), name=req.name
+            db, agent_id=agent_id, user_id=int(user["user_id"]), name=req.name,
+            origin_channel=str(declared["kind"]),
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+@router.post("/{agent_id}/channels/{plugin_id}/merge")
+async def merge_landing(
+    agent_id: int,
+    plugin_id: str,
+    req: MergeLandingRequest,
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """把一个通道侧的群合并到已有的 Copree 群：落点指过去，这个 AI 也搬进去。
+
+    目标只认**你管理的**群（群主/管理员）——合并等于把你的 AI 和它的消息出口交到那个群。
+    源落点群如果是本通道建出来的、而且再没有别的通道群指着它，会被归档（数据不删）。"""
+    declared = _declared(plugin_id)
+    await _owned(db, agent_id, user)
+    allowed = {
+        int(g["id"])
+        for g in await channel.group_options(db, agent_id, int(user["user_id"]), include_unjoined=True)
+    }
+    if int(req.group_id) not in allowed:
+        raise HTTPException(400, "只能合并到你管理的 Copree 群")
+    try:
+        group_id = await channel.attach_landing(
+            db, plugin_id=plugin_id, agent_id=agent_id, origin=req.origin, group_id=int(req.group_id)
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"message": "已合并", "channel": declared["label"], "origin": req.origin, "group_id": group_id}
 
 
 @router.post("/{agent_id}/channels/{plugin_id}/start")

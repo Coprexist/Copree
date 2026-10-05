@@ -968,10 +968,18 @@ async def test_full_mode_mirrors_everything_but_only_wakes_when_addressed(migrat
         rows = await _messages(GROUP_ID)
         assert len(rows) == 1 and rows[0][2] == "今天天气不错", rows    # 入库，但没有唤醒令牌
 
+        # @ 的是**别的机器人**（is_you=false）：这不是点名我，不加唤醒令牌
+        # （2026-10-05 真机：书爱 @ 绵绵，涵吾珑被这条叫醒了）
         await plugin._on_group_message({**GROUP_EVENT, "id": "FULL-2", "content": "你看这个",
-                                        "mentions": [{"id": "BOT-OPENID", "bot": True}]})
+                                        "mentions": [{"id": "OTHER-BOT", "bot": True, "is_you": False,
+                                                      "username": "绵绵"}]})
         rows = await _messages(GROUP_ID)
-        assert len(rows) == 2 and rows[1][2].startswith("<@!2>"), rows  # 点名 → 带唤醒令牌
+        assert len(rows) == 2 and not rows[1][2].startswith("<@!"), rows
+
+        await plugin._on_group_message({**GROUP_EVENT, "id": "FULL-3", "content": "你看这个",
+                                        "mentions": [{"id": "BOT-OPENID", "bot": True, "is_you": True}]})
+        rows = await _messages(GROUP_ID)
+        assert len(rows) == 3 and rows[2][2].startswith("<@!2>"), rows  # 点名我 → 带唤醒令牌
     finally:
         _cleanup(plugin)
 
@@ -1750,6 +1758,38 @@ async def test_same_qq_message_from_two_bots_lands_once(migrated_db):
         assert rows[0][2] == "qq:bot-a:QQGROUP-A", rows
         assert {u[0] for u in users} == {"bot-a", "bot-b"}, users
         assert len({u[2] for u in users}) == 1, f"两侧应该是同一个账号：{users}"
+    finally:
+        _cleanup(bot_a)
+        _cleanup(bot_b)
+
+async def test_same_qq_message_with_mention_lands_once_across_two_bots(migrated_db):
+    """带 @ 的同一句也要认出亲：两台是**不同的 AI**，各补各的唤醒令牌、各自解析被 @ 的成员。
+
+    逐字比会比不出来（旧做法就是把渲染后的字节拿去 SQL 等值比），于是合并后的群里同一句话
+    落两遍。认亲要比的是"人说的那句话"，所以先摘令牌再比（见 _same_channel_text）。
+    fixture 里两台同名同 id 恰好掩盖了这个洞，这条特意让它们不同。
+    """
+    from app.database import async_session
+
+    await _seed()
+    bot_a = await _make_plugin("bot-a")
+    bot_b = await _make_plugin("bot-b")
+    bot_b._target_agent = "绵绵"
+    bot_b._target_user_id = AGENT_USER + 1
+    try:
+        event = dict(
+            GROUP_EVENT,
+            content="你看这个 <@OPENID-NEW> 对吧",
+            mentions=[{"id": "OPENID-NEW", "username": "小红"}],
+        )
+        await bot_a._on_group_at(dict(event, id="MEN-A", group_openid="QQGROUP-A"))
+        await bot_b._on_group_at(dict(event, id="MEN-B", group_openid="QQGROUP-B"))
+
+        async with async_session() as db:
+            rows = (await db.execute(text(
+                "SELECT id, content FROM messages WHERE group_id = :g"
+            ), {"g": GROUP_ID})).all()
+        assert len(rows) == 1, f"带 @ 的同一句也只该落一条：{rows}"
     finally:
         _cleanup(bot_a)
         _cleanup(bot_b)
