@@ -548,6 +548,7 @@ async def resolve_speaker_names(db, messages) -> dict[tuple[str, int], str]:
     必须有人名：空名字会被 format_message 原样渲染成字面 "None"，模型真的会把 None
     当成一个可 @ 的人（用户 2026-09-25 在 QQ 群里看到 AI 回 "@None"）。
     联邦消息自带 sender_name，优先用它；AI 的 sender_id 也是它的用户行 id，所以一张表查得到。
+    外部通道来的人带通道标记（如「书爱[QQ]」）：这条是**给 AI 看**的名字，它得知道对方不在这侧。
     """
     from app.utils.display_name import display_names
 
@@ -556,7 +557,7 @@ async def resolve_speaker_names(db, messages) -> dict[tuple[str, int], str]:
         m.sender_id for m in messages
         if not (getattr(m, "sender_name", None) or "").strip()
     }
-    resolved = await display_names(db, need) if need else {}
+    resolved = await display_names(db, need, with_channel=True) if need else {}
 
     names: dict[tuple[str, int], str] = {}
     for m in messages:

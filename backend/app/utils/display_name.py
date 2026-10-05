@@ -16,27 +16,39 @@ def _fallback(user_id: int) -> str:
     return f"用户{user_id}"
 
 
-async def display_names(db, user_ids) -> dict[int, str]:
+async def display_names(db, user_ids, *, with_channel: bool = False) -> dict[int, str]:
     """批量：id → 显示名。
 
     db 可以是 Session，也可以是暴露了 execute 的仓库（导出、邀请等路径就是这么传的）。
     一次 join 查完，避免列表逐条查名字。
+
+    with_channel=True 给**给 AI 看**的那条路（会话账本、记忆检索）：外部通道来的人在名字后带上
+    通道标记（如「书爱[QQ]」）——AI 才知道他不在这侧。站内界面不要这个标记：那边本来就有"来自 QQ"
+    的展示位（前端自己画），名字里再塞一次就重了。
     """
     ids = {int(uid) for uid in user_ids if uid is not None}
     if not ids:
         return {}
 
     rows = (await db.execute(
-        select(User.id, User.username, User.type, Agent.name)
+        select(User.id, User.username, User.type, User.origin_channel, Agent.name)
         .outerjoin(Agent, Agent.user_id == User.id)
         .where(User.id.in_(ids))
     )).all()
 
+    marks: dict[str, str] = {}        # 通道标识 → 展示名：一批里按 kind 只查一次 manifest
     names: dict[int, str] = {}
-    for uid, username, user_type, agent_name in rows:
+    for uid, username, user_type, origin_channel, agent_name in rows:
         # agent.name 只对 AI 有意义；人类用户没有 agent 行，取 username
         name = (agent_name or "").strip() if user_type == "ai" else ""
-        names[int(uid)] = name or (username or "").strip() or _fallback(int(uid))
+        name = name or (username or "").strip() or _fallback(int(uid))
+        if with_channel and origin_channel:
+            if origin_channel not in marks:
+                from app.services.plugin.catalog import channel_label
+
+                marks[origin_channel] = channel_label(str(origin_channel))
+            name = f"{name}[{marks[origin_channel]}]"
+        names[int(uid)] = name
 
     for uid in ids - names.keys():
         names[uid] = _fallback(uid)

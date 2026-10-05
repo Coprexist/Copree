@@ -215,6 +215,18 @@ def channels() -> list[dict[str, Any]]:
     return result
 
 
+def channel_label(kind: str) -> str:
+    """通道侧标识（如 qq）→ 展示名（如 QQ）：展示名只在 manifest 里声明一处，别处不许再抄。
+
+    插件没声明（或已被卸载）时退回大写的标识——标记本身比好看重要：AI 得知道说话的人不在这侧。
+    """
+    wanted = str(kind or "").strip()
+    for ch in channels():
+        if str(ch.get("kind") or "") == wanted:
+            return str(ch.get("label") or wanted.upper())
+    return wanted.upper()
+
+
 def channel_plugin(plugin_id: str) -> dict[str, Any] | None:
     """按 id 取一条已声明的通道；没声明返回 None（路由拿它挡掉乱传的 plugin_id）"""
     return next((c for c in channels() if c["plugin_id"] == plugin_id), None)
