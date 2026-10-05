@@ -61,6 +61,9 @@ class EnterGroup(ToolPlugin):
         frame = make_state_frame(
             type_="group_chat",
             context_ref=f"group:{target_group}",
+            # label 是给人和日志看的那张脸（与 enter_world 的 世界「名」同口径）；
+            # 不给的话摘要回退打印 context_ref，界面上就显示成 group:69
+            label=f"群「{group_name}」",
             why=reason,
             doing=f"进入群「{group_name}」查看 {unread_count} 条未读消息",
         )

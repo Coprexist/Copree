@@ -381,7 +381,9 @@ async def get_agent_logs(
         user_limit = await get_user_log_limit(content_repo, user_id)
         logs = cap_per_state(logs, lambda log: log.state_key or "", int(user_limit["effective"]))
 
-    return [_log_to_summary(log) for log in logs]
+    items = [_log_to_summary(log) for log in logs]
+    await _fill_group_labels(content_repo, items)
+    return items
 
 
 async def get_log_detail(
@@ -402,7 +404,9 @@ async def get_log_detail(
         if not await _user_can_view_agent_logs(content_repo, log.agent_id, user_id):
             raise ValueError("无权查看此对话日志")
 
-    return _log_to_detail(log)
+    detail = _log_to_detail(log)
+    await _fill_group_labels(content_repo, [detail])
+    return detail
 
 
 async def get_log_delta(
@@ -884,6 +888,47 @@ def _diff_messages(prev: list[dict], current: list[dict]) -> dict:
     return {"ops": ops, "added_count": added, "removed_count": removed, "shared_count": shared}
 
 
+# 帧身份的读法只有一处：以写入时算好的列为准，列为空（迁移前的老行）退回现算一次。
+# 列表与详情共用它，否则同一份数据两个口径（详情曾经不读列，同一行两页显示不一样）。
+def _state_frame_of_log(log: ConversationLog) -> dict:
+    return frame_of_state_key(log.state_key) or state_frame_of(log.messages or [])
+
+
+def _bare_group_id(label: str) -> int | None:
+    """裸的会话键 group:{id}（帧没写 label 时摘要回退打印的就是它）"""
+    head, _, tail = label.partition(":")
+    return int(tail) if head == "group" and tail.isdigit() else None
+
+
+async def _fill_group_labels(content_repo: ContentRepository, items: list[dict]) -> None:
+    """帧 label 是裸的 group:{id} → 补成群名，界面上不再显示编号。
+
+    label 是建帧时写的，历史帧有几条路没写（enter_group 早期、persist_last_task_as_state 自动压帧），
+    只有 context_ref。这里按会话名批量补一次：写入路径与存量一起覆盖，也不必让每条建帧路径各记一次名字。
+    无状态的行（没有帧）不动——那不是"缺少名字"，是那轮本来没有状态身份。
+    """
+    from app.models.group import Group
+
+    want: set[int] = set()
+    for item in items:
+        frame = item.get("state_frame") or {}
+        if not frame.get("type"):
+            continue
+        gid = _bare_group_id(str(frame.get("label") or ""))
+        if gid is not None:
+            want.add(gid)
+    if not want:
+        return
+
+    rows = await content_repo.execute(select(Group.id, Group.name).where(Group.id.in_(want)))
+    names = {int(i): n for i, n in rows.all()}
+    for item in items:
+        frame = item.get("state_frame") or {}
+        gid = _bare_group_id(str(frame.get("label") or "")) if frame.get("type") else None
+        if gid is not None and names.get(gid):
+            frame["label"] = f"群「{names[gid]}」"
+
+
 def _log_to_summary(log: ConversationLog) -> dict:
     """转为摘要（不含完整 messages，前端列表用）"""
     # 取前两条和后一条消息作为预览
@@ -909,8 +954,7 @@ def _log_to_summary(log: ConversationLog) -> dict:
         "status": _run_status(msgs, bool(log.has_output)),
         # 这轮是在哪段状态下发出的（帧身份 = type + label）：不同状态的请求体前缀本就不同，
         # 列表按它归堆才看得出「这段状态的上下文长什么样」
-        # 以列（写入时算的）为准；列为空 = 迁移前没回填上的老行，退回现算一次
-        "state_frame": frame_of_state_key(log.state_key) or state_frame_of(msgs),
+        "state_frame": _state_frame_of_log(log),
         "model": log.model,
         "thinking_enabled": log.thinking_enabled,
         "preview": preview,
@@ -931,7 +975,7 @@ def _log_to_detail(log: ConversationLog) -> dict:
         "token_usage": log.token_usage,
         "has_output": log.has_output,
         "status": _run_status(log.messages or [], bool(log.has_output)),
-        "state_frame": state_frame_of(log.messages or []),
+        "state_frame": _state_frame_of_log(log),
         "model": log.model,
         "thinking_enabled": log.thinking_enabled,
         "created_at": str(log.created_at) if log.created_at else None,

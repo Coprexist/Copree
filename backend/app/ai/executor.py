@@ -22,7 +22,7 @@ from app.chat import chat_api
 from app.utils.pure.history import tool_ledger_note
 from app.utils.pure.tool_chain import heal_tool_chain
 
-# ── 中断消息注入：AI 忙碌时，新消息不另起 executor，注入当前循环 ──
+# ── 中断消息注入：AI 忙碌时，新消息不另起 executor，注入当前循环（链路见 docs/dev/conversation_history.md §4.2）──
 # {agent_id: [{type: "user_message", content, sender_id, sender_name, session_id}]}
 # 只发消息的工具：一轮里除了它们什么都没干时，思考痕迹没有留的价值
 _MESSAGE_ONLY_TOOLS = ("send_gm", "send_dm")
@@ -936,7 +936,7 @@ async def _tool_call_loop(
                             except Exception:
                                 pass
 
-                # ── 注入用户忙时消息（中断缓冲）──
+                # ── 注入用户忙时消息（中断缓冲）：每步 LLM 调用前都来取一次（见 docs/dev/conversation_history.md §4.2）──
                 # 只取本会话的中断：同一个 AI 的缓冲跨会话共用（见 conversation_of）
                 pending_msgs = await drain_pending_interrupts(
                     agent.id,

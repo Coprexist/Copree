@@ -115,6 +115,14 @@
   从缓存里打掉。现在技能跟任务、状态栈摘要、当前时间一样沉尾部，开头只留走版本链冻结的锁定段。
 
 ### 🐛 修复
+- **一段会话收工之后再收到消息就压不出状态帧**：`ensure_active_frame` 判「栈顶已是本会话」只比了
+  `context_ref`、没看 `status`——一段会话 pop 掉之后（帧 `ended`，记录留在数组末尾），它每次再来消息
+  都在第一句 return：运行集合一直空着，那几轮既没有状态身份（对话日志全落「无状态」）也没有交接摘要。
+  现在两处提前返回都要求「这个帧还在运行中」，回归用例在 `tests/test_frame_lifecycle.py`。
+- **对话日志里的群不再显示成 `group:69`**：帧没写 label 时摘要回退打印 `context_ref`，界面就显示编号
+  （进群建帧那条路确实没写）。列表与详情统一走 `_state_frame_of_log`（以写入时算好的 `state_key` 列为准，
+  详情原本不读列、同一行两页显示不一样），再按会话名批量补成 `群「名字」`——存量与所有建帧路径一起覆盖；
+  进群建帧也补上了 label。**无状态的行不动**：那轮本来就没有状态身份，塞个群名会把这件事抹掉。
 - **决策四件套归位，schema 只剩一处**：`list/write/delete/test_decision_skill` 的 `segment` 一直是空的，于是它们进不了 AI 系统提示的「技能背包」，管理员侧按段分组也漏掉——AI 只从 function schema 知道有这几个函数，提示词里从来没提过。现在四个插件都归 `self_management` 段（`active`），并补齐 `admin_description` / `trigger_condition`（管理员卡片不再空白）；`tool_help` 顺手修掉「没归段却显示『— 段』」的标题。群助手那份手抄的 `DECISION_TOOLS` 字面量换成从注册表现取的 `decision_tools()`：描述本就复用函数，**参数 schema 是逐字抄的**，改一处漏一处；现在名字列表一处、定义一处（`app/tools/decision.py` 是唯一出处）。顺带把 `file_read` / `file_write` 的描述收敛成同一句口径（文件空间即 `run_script` 工作目录，两边同一份文件）。
 - **管理页的上传限制不再是「重启就没」**：`upload_max_size_mb` / `avatar_max_size_mb` 原先是进程内
   运行时覆盖（代码注释、界面文案都写着「重启后恢复 env 默认值」）——管理页改完，重启就回去了。
@@ -360,6 +368,11 @@
   **已部署实例要 `docker compose up -d backend` 重建容器**——只 `restart` 不会重读环境变量。
 
 ### ⚡ 优化
+- **「改变量」逐条对齐**：一截之内删的第 i 条与增的第 i 条同一行（左右各一条消息、每行等高），不再左右
+  各堆一大坨——缩放改变折行后也不会错位；`消失/新增 N 条` 收成两列表头。顺带修掉这条支路缺滚动/横向
+  裁剪容器、长值直接画到面板外的问题（完整视图的滚动与裁剪在 `RequestBodyViewer` 内部，改变量没有那层）。
+- **忙时消息的链路写进文档**：抢 claim / 投进当前轮 / 轮末重排的四种时刻收进
+  `docs/dev/conversation_history.md` §4.2，`executor`、`response_worker` 的相关位置挂上链接。
 - **灰底控件收进语义类，不再一处一个样**：有描边的次级按钮默认就是白底（`.btn-secondary` /
   `.btn-outline`）、hover 才落一档灰；开关与分段控件的选中态新增 `.btn-outline.is-active`，
   可选卡片新增 `.card-interactive`（白底 → hover 落灰 → 选中紫）。全站 11 个手写灰底按钮、

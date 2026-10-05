@@ -297,3 +297,29 @@ async def test_merge_keeps_temporary_facts(migrated_db):
         assert live[0]["handoff"]["tail"] == ["t1", "t2"]
         assert live[0]["handoff"]["from_doing"] == "旧交接", "交接包里的空位补齐"
 
+
+async def test_a_finished_frame_does_not_block_the_next_one_in_the_same_group(migrated_db):
+    """同一个群上一次已经收工（帧 ended 还躺在数组末尾）时，再来消息必须重新压帧。
+
+    回归：栈顶判定原来只比 context_ref、不看 status，于是这个会话再也压不出帧——
+    运行集合一直空着，那几轮对话既没有状态身份（日志全落「无状态」），也没有交接摘要。
+    """
+    from app.database import async_session
+    from app.services.agent.state_stack_service import (
+        ensure_active_frame, get_frames, get_state_stack_summary, pop_state, running,
+    )
+
+    async with async_session() as db:
+        await _seed(db)
+        await _open(db, 69)
+        await pop_state(db, 1)                      # 收工：帧 ended，记录留在数组末尾
+        await db.commit()
+        assert [f for f in await get_frames(db, 1) if f.get("status") == "ended"], "前提：末尾躺着已结束的帧"
+
+        await ensure_active_frame(db, 1, "group_chat", "group:69", "群69", "某人")
+        await db.commit()
+
+        live = running(await get_frames(db, 1))
+        assert len(live) == 1 and live[0].get("context_ref") == "group:69", live
+        assert live[0].get("status") == "active", live
+        assert (await get_state_stack_summary(db, 1)).strip(), "重新压帧后摘要不能为空"

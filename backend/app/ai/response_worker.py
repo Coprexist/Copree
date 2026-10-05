@@ -94,6 +94,7 @@ async def _inject_busy_group_message(agent_id: int, *, group_id: int, content: s
     """AI 正忙时：把这条消息投进它**当前那一轮**（下一轮 LLM 调用前注入，见 executor）。
 
     注入不用等这一轮结束——executor 每轮请求前都会把缓冲拼成一条 user 消息。
+    整条链（抢 claim → 当前轮注入 → 轮末重排）见 docs/dev/conversation_history.md §4.2。
     """
     await add_pending_interrupt(agent_id, {
         "type": "user_message",
@@ -111,6 +112,7 @@ async def _requeue_leftover_interrupts(agent_id: int, ai_user_id: int, group_id:
 
     注入点是每轮 LLM 调用**之前**，所以落在最后一次注入之后的消息只会在缓冲里等下一次有人来叫
     ——那时通常谁也不会来。这里把它捞出来重新投回队列，带 only_ai_ids 限定只叫这一个 AI。
+    这条兜底在链路里的位置见 docs/dev/conversation_history.md §4.2。
     """
     leftovers = await drain_pending_interrupts(agent_id, group_id=group_id)
     requeued = 0
@@ -479,7 +481,7 @@ async def _process_group_event(db, event: dict):
             # 这个 AI 正在这个群里跑着一轮：把消息**投给它当前那一轮**（下一轮 LLM 调用前注入），
             # 而不是丢掉。原先这里直接 continue，注释写着"LLM 跑完自然看到"——而跑着的那一轮
             # 开局就把上下文构建好了、中途不重读群历史：既没唤醒它、它也没看见
-            # （2026-10-04 群 69 实测：同一句话连发三条只回一条）。
+            # （2026-10-04 群 69 实测：同一句话连发三条只回一条）。口径见 docs/dev/conversation_history.md §4.2。
             _agent_id = agent_id_by_user.get(int(ai_id))
             if _agent_id is not None:
                 await _inject_busy_group_message(

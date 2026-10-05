@@ -715,11 +715,14 @@ async def ensure_active_frame(
 
     conv_label = "私信" if conv_type == "dm" else "群"
 
-    # 栈顶已是当前会话
-    if stack and stack[-1].get("context_ref") == context_ref:
+    # 栈顶已是当前会话：不动——但只认**还在运行**的帧。弹掉的帧（ended）留在数组里当记录，
+    # 拿它当"还在这个会话"会让这个会话从此再也压不出帧：运行集合一直空着，
+    # 之后的每轮既没有状态身份（日志全落「无状态」）也没有交接摘要。
+    top = stack[-1] if stack else None
+    if top is not None and is_running(top) and top.get("context_ref") == context_ref:
         return
-    # 栈顶是 AI 手动帧：不干预
-    if stack and stack[-1].get("type") not in ("dm", "group_chat"):
+    # 栈顶是 AI 手动帧：不干预（同样只认运行中的）
+    if top is not None and is_running(top) and top.get("type") not in ("dm", "group_chat"):
         return
 
     label = f"{conv_label}「{title}」"

@@ -41,14 +41,16 @@ const timeOf = (value: string | null | undefined, lang: Lang) =>
 
 /** 改变量里的一截：多出来的 / 没了的，各自连着那几条消息 */
 function Hunk({ label, removed, messages, names }: {
-  label: string; removed?: boolean; messages: any[]; names?: Record<string, string>
+  label?: string; removed?: boolean; messages: any[]; names?: Record<string, string>
 }) {
   return (
-    <div className="space-y-1.5">
-      <div className={`text-3xs ${removed ? 'text-rose-400' : 'text-mint-400'}`}>{label}</div>
+    // min-w-0 + overflow-hidden：改变量挂在 flex 列里，不给收缩下限的话，里面一条长值就把整块卡片
+    // 顶宽、挤出面板（完整视图那边有外层限着，所以看不出）。这一层就是那个"限制"
+    <div className="space-y-1.5 min-w-0 overflow-hidden">
+      {label && <div className={`text-3xs ${removed ? 'text-rose-400' : 'text-mint-400'}`}>{label}</div>}
       <RequestBodyViewer
         messages={messages} legend={false} mentionNames={names} lazy={false}
-        tone={removed ? 'removed' : 'normal'}
+        className="min-w-0" tone={removed ? 'removed' : 'normal'}
       />
     </div>
   )
@@ -309,37 +311,53 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
           )}
           {/* 限高与滚动挪进 RequestBodyViewer：滚动条要落在图例下面，不能从图例右侧穿上去；
               这里只负责占满剩余高度 */}
-          <div className="min-h-0 flex flex-col">
+          <div className="min-h-0 min-w-0 flex flex-col">
           {bodyLoading ? (
             <div className="flex items-center gap-2 text-xs text-textMuted py-6 justify-center">
               <Loader2 size={13} className="animate-spin will-change-transform" /> {t('common:loading')}
             </div>
           ) : showDelta && comparable ? (
-            // 改变量：按原顺序摆——相同的那几段折叠成一行，多出来/没了的各自成截
-            <div className="space-y-2">
-              {delta.ops.map((op: any, index: number) => op.tag === 'equal' ? (
-                <div key={index} className="text-3xs text-textMuted text-center py-0.5">
-                  {t('logs:hunkSame').replace('{n}', String(op.count))}
-                </div>
-              ) : (
-                <div key={index} className="space-y-2">
-                  {op.tag !== 'insert' && (
-                    <Hunk
-                      removed
-                      label={t('logs:hunkRemoved').replace('{n}', String((op.removed || op.messages || []).length))}
-                      messages={op.tag === 'replace' ? op.removed : op.messages}
-                      names={detail?.mention_names}
-                    />
-                  )}
-                  {op.tag !== 'delete' && (
-                    <Hunk
-                      label={t('logs:hunkAdded').replace('{n}', String((op.added || op.messages || []).length))}
-                      messages={op.tag === 'replace' ? op.added : op.messages}
-                      names={detail?.mention_names}
-                    />
-                  )}
-                </div>
-              ))}
+            // 改变量：按原顺序摆——相同的那几段折叠成一行；一截之内**删的排左、增的排右**，
+            // 每截自己两格、顶端对齐，左右对着看（只删的占左格、只增的占右格）。
+            // 这层滚动容器是必须的：完整视图的滚动与横向裁剪在 RequestBodyViewer 内部，
+            // 改变量这条支路没有它，长值就直接画到面板外面去了
+            <div className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden pr-1 space-y-2">
+              {delta.ops.map((op: any, index: number) => {
+                if (op.tag === 'equal') {
+                  return (
+                    <div key={index} className="text-3xs text-textMuted text-center py-0.5">
+                      {t('logs:hunkSame').replace('{n}', String(op.count))}
+                    </div>
+                  )
+                }
+                // 一截之内**逐条对齐**：删的第 i 条与增的第 i 条同一行，左右各一条消息。
+                // 一坨一坨地上下堆（旧写法）只有两端齐，缩放让折行变化后中间就对不上；
+                // 逐条摆之后每一行自己等高，怎么缩放都是"这句对着那句"
+                const gone = op.tag === 'insert' ? [] : (op.tag === 'replace' ? (op.removed || []) : (op.messages || []))
+                const fresh = op.tag === 'delete' ? [] : (op.tag === 'replace' ? (op.added || []) : (op.messages || []))
+                return (
+                  <div key={index} className="space-y-2 min-w-0">
+                    <div className="grid grid-cols-2 gap-2 min-w-0">
+                      <div className="text-3xs text-rose-400 min-w-0">
+                        {gone.length > 0 && t('logs:hunkRemoved').replace('{n}', String(gone.length))}
+                      </div>
+                      <div className="text-3xs text-mint-400 min-w-0">
+                        {fresh.length > 0 && t('logs:hunkAdded').replace('{n}', String(fresh.length))}
+                      </div>
+                    </div>
+                    {Array.from({ length: Math.max(gone.length, fresh.length) }).map((_, i) => (
+                      <div key={i} className="grid grid-cols-2 gap-2 items-stretch min-w-0">
+                        <div className="min-w-0 overflow-hidden">
+                          {gone[i] && <Hunk removed messages={[gone[i]]} names={detail?.mention_names} />}
+                        </div>
+                        <div className="min-w-0 overflow-hidden">
+                          {fresh[i] && <Hunk messages={[fresh[i]]} names={detail?.mention_names} />}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )
+              })}
             </div>
           ) : (
             <RequestBodyViewer
