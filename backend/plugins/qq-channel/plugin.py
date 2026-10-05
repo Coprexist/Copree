@@ -1150,8 +1150,11 @@ class QqChannelPlugin(ServicePlugin):
         只有全量模式（官方给 mentions）才做得了；@模式载荷里没有这个字段。
 
         QQ 写在正文里的原始提及是 `<@openid>`（**没有那个 `!`**，那是它自己的 id）：谁都不认，
-        一律按 mentions 里的 origin 精确摘掉。机器人自己那条只摘不补——点名由唤醒令牌负责，
+        一律按 mentions 里的 origin 精确摘掉。**只有"我自己"那一条只摘不补**——点名由唤醒令牌负责，
         不摘就存成 `<@!40> <@5872…>` 这种"两个令牌、其中一个还是乱码"（2026-09-26 真机）。
+        别的**机器人**照常补令牌：群里 @ 了另一个机器人（同一个 QQ 群被两台机器人接着是常态），
+        "谁被 @ 了"这件事 AI 和界面都该看得见（2026-10-05：书爱 @ 绵绵那条在 Copree 侧只剩"你好"）。
+        顺带：两边都补令牌，认亲（_same_channel_text 摘令牌后比）也才认得出来是同一条。
         """
         mentions = [m for m in (d.get("mentions") or []) if isinstance(m, dict)]
         if not mentions or not self._copree_group_id:
@@ -1170,8 +1173,12 @@ class QqChannelPlugin(ServicePlugin):
                 # 原始提及先摘：留着它，AI 与界面看到的都是一串 openid
                 for marker in (f"<@!{origin}>", f"<@{origin}>"):
                     content = content.replace(marker + " ", "").replace(marker, "")
-                if user.get("bot") or user.get("is_you"):
-                    continue                  # 机器人自己：唤醒令牌已经点名，不再补一个
+                if user.get("is_you"):
+                    continue                  # 我自己：唤醒令牌已经点名，不再补一个
+                if user.get("bot") and user.get("is_you") is None:
+                    # 只标了"被点的是个机器人"、没标是不是我：按老规矩只摘不补——
+                    # 没把握时宁可不给自己建影子账号（真机是两条标记都给）
+                    continue
                 ensured = await ensure_channel_user(
                     db, kind=self.channel_kind, owner_scope=self.instance, origin=origin,
                     display_name=str(user.get("username") or ""),
