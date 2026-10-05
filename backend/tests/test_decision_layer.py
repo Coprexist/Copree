@@ -522,3 +522,30 @@ def test_long_script_keeps_out_of_the_listing():
     brief = brief_do({"action": "run_script", "code": body})
     assert len(brief["code"]) < 1200 and brief["code_chars"] == len(body), brief
     assert brief_do({"action": "run_script", "code": "print(1)"})["code"] == "print(1)"
+
+
+def test_decision_tools_are_in_the_backpack():
+    """四件套要归段：段决定它们进不进 AI 提示的「技能背包」与管理员背包，空段就是从两处漏掉"""
+    import app.tools  # noqa: F401  触发自动注册
+    from app.tools.base import ToolRegistry
+    from app.services.world.decision_skill import DECISION_TOOL_NAMES
+
+    seg = [t["name"] for t in ToolRegistry.get_segments()["self_management"]["tools"]]
+    for name in DECISION_TOOL_NAMES:
+        plugin = ToolRegistry.get_plugin(name)
+        assert plugin is not None, name
+        assert plugin.segment == "self_management", (name, plugin.segment)
+        assert plugin.admin_description, name
+        assert name in seg, (name, seg)
+
+
+def test_group_assistant_schemas_come_from_the_registry():
+    """群助手那份 schema 现取注册表（从前手抄字面量，参数改一处漏一处）"""
+    import app.tools  # noqa: F401
+    from app.tools.base import ToolRegistry
+    from app.services.world.decision_skill import DECISION_TOOL_NAMES, decision_tools
+
+    defs = {d["function"]["name"]: d for d in decision_tools()}
+    assert set(defs) == set(DECISION_TOOL_NAMES)
+    for name, d in defs.items():
+        assert d == ToolRegistry.get_plugin(name).to_definition(), name

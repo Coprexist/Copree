@@ -10,7 +10,8 @@ logger = logging.getLogger(__name__)
 
 class FileWrite(ToolPlugin):
     name = "file_write"
-    description = "在你的文件空间中创建或覆盖一个文件。会自动创建不存在的目录。"
+    description = ("在你的文件空间中创建或覆盖一个文件，会自动创建不存在的目录。"
+                   "路径相对你的文件空间根（开头的 / 同义）；此空间即 run_script 的工作目录，两边文件同一。")
     segment = "file_operations"
     parameters = {
         "path": {"type": "string", "description": "要写入的文件路径（相对于你的文件空间根目录）"},

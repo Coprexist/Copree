@@ -94,7 +94,7 @@
 | `command` | 世界命令 | `{command, args}` |
 
 > 现状：除 `command` 外均已接入（`command` 不做——群消息链路没有斜杠命令入口，见
-> [决策层](../../dev/decision_layer.md) §9）；字段以该文 §2 为准，上表是设计时的列举。
+> [决策层](../../dev/decision_layer.md) §10）；字段以该文 §2 为准，上表是设计时的列举。
 
 ### 4.2 决策技能结构（Decision Skill）
 
@@ -142,7 +142,8 @@
 - `do`：四选一——`run_script`（沙箱 Python，能力最全）/ `call_tool`（按身份分派：AI 走平台工具如 `web_search`，群助手走世界工具如 `send_group_message`）/ `reply_template`（固定回复，零成本）/ `silent`（静默：不回也不唤醒本体）。
 - `notify`：关键语义——**"什么情景才触发我"**。`notify: true` 的情景命中后仍唤醒 LLM 本体（AI 声明"这种时候必须我来"）；`false` 则程序处理完即止。
 - AI 自写：提供 `write_decision_skill` / `list_decision_skills` / `delete_decision_skill` 工具（`app/tools/decision.py`），
-  AI 自己生成、迭代自己的决策技能；同名覆盖、每个实体上限 20 条。
+  AI 自己生成、迭代自己的决策技能；同名覆盖、每个实体上限 20 条。四件套归 `self_management` 段、
+  schema 只有注册表一处（群助手那份现取），见 [决策层](../../dev/decision_layer.md) §7。
 
 ### 4.3 决策引擎（Decision Engine）
 

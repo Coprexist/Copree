@@ -647,13 +647,14 @@ async def _trigger_group_assistant(
 
             model = ga.model or settings.default_chat_model
             from app.ai.llm import chat_completion
-            # 决策技能工具（群助手自配置：list/write/delete_decision_skill）
-            from app.services.world.decision_skill import DECISION_TOOLS
+            # 决策技能工具（群助手自配置：list/write/delete_decision_skill）。
+            # schema 从注册表现取——与 AI 拿的是同一份，不在这里另抄一遍参数
+            from app.services.world.decision_skill import decision_tools
             resp = await chat_completion(
                 messages=messages, model=model,
                 api_base_url=api_base or "", api_key=api_key,
                 temperature=0.8, top_p=0.9, stream=False, db=db,
-                tools=DECISION_TOOLS,
+                tools=decision_tools(),
             )
             # 决策工具调用执行（自配置决策技能；仅工具调用时不回复，静默）
             for _tc in (resp or {}).get("tool_calls") or []:

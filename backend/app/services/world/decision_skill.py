@@ -80,6 +80,7 @@ def rule_schema_desc() -> str:
         "要说的话 print 成 JSON {\"reply\":\"...\"}）。列表里过长的正文只回显开头）/ "
         "silent（{action} 静默：这条消息不回、也不唤醒你本体，用来声明「这种消息不值得理」）。"
         "notify=true = 命中后仍唤醒本体（执行结果会作为一条系统提示给你）；false = 程序处理完即止。"
+        "脚本没跑成（报错/超时/工具失败）时不看 notify，一律把失败原因交回你本体——notify=false 挂了也会告诉你。"
         "未 @ 你的消息到不到得了你，取决于这个群/通道的消息覆盖面。"
         "同名覆盖更新，上限 20 条。"
     )
@@ -785,60 +786,27 @@ async def preview_decision(
 # 平台工具（AI 自配置决策技能，注入群 AI / 群助手）
 # ═══════════════════════════════════════════════════════════
 
-DECISION_TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "list_decision_skills",
-            "description": "查看你自己的决策技能列表（什么情景由程序自动处理、什么情景才触发你本体）。",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "write_decision_skill",
-            "description": rule_schema_desc(),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "rule": {"type": "object", "description": "完整决策技能对象（见 description）"},
-                },
-                "required": ["rule"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "delete_decision_skill",
-            "description": "删除你自己的一个决策技能（按 name）。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "要删除的技能名"},
-                },
-                "required": ["name"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "test_decision_skill",
-            "description": test_rule_desc(),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "event": {"type": "string", "description": "情景，默认 group_message"},
-                    "content": {"type": "string", "description": "样例消息正文"},
-                    "sender_name": {"type": "string", "description": "样例发送者的名字"},
-                    "sender_id": {"type": "integer", "description": "样例发送者的 id"},
-                    "is_mention": {"type": "boolean", "description": "样例算不算 @ 了你"},
-                    "rule": {"type": "object", "description": "要试的草稿规则；不传就按已存的规则逐条试"},
-                    "execute": {"type": "boolean", "description": "run_script 是否真跑（默认 false 只回显）"},
-                },
-            },
-        },
-    },
-]
+# 名字列表是唯一一处；schema 现取注册表（app/tools/decision.py 那四个插件），
+# 从前这里另抄了一份参数 schema——描述走了函数复用，参数没有，改一处漏一处。
+DECISION_TOOL_NAMES = (
+    "list_decision_skills",
+    "write_decision_skill",
+    "delete_decision_skill",
+    "test_decision_skill",
+)
+
+
+def decision_tools() -> list[dict]:
+    """决策四件套的 OpenAI 定义（AI 走注册表拿，群助手走这条拿同一份）。
+
+    惰性取：本模块被 app/tools/decision.py 顶层导入，顶层再反过来 import app.tools.base 会成环；
+    群助手不是注册表实体（kind=group_assistant），只有它需要在这里现取一份。
+    """
+    from app.tools.base import ToolRegistry
+
+    out: list[dict] = []
+    for name in DECISION_TOOL_NAMES:
+        plugin = ToolRegistry.get_plugin(name)
+        if plugin is not None:
+            out.append(plugin.to_definition())
+    return out

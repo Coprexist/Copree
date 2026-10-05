@@ -115,6 +115,7 @@
   从缓存里打掉。现在技能跟任务、状态栈摘要、当前时间一样沉尾部，开头只留走版本链冻结的锁定段。
 
 ### 🐛 修复
+- **决策四件套归位，schema 只剩一处**：`list/write/delete/test_decision_skill` 的 `segment` 一直是空的，于是它们进不了 AI 系统提示的「技能背包」，管理员侧按段分组也漏掉——AI 只从 function schema 知道有这几个函数，提示词里从来没提过。现在四个插件都归 `self_management` 段（`active`），并补齐 `admin_description` / `trigger_condition`（管理员卡片不再空白）；`tool_help` 顺手修掉「没归段却显示『— 段』」的标题。群助手那份手抄的 `DECISION_TOOLS` 字面量换成从注册表现取的 `decision_tools()`：描述本就复用函数，**参数 schema 是逐字抄的**，改一处漏一处；现在名字列表一处、定义一处（`app/tools/decision.py` 是唯一出处）。顺带把 `file_read` / `file_write` 的描述收敛成同一句口径（文件空间即 `run_script` 工作目录，两边同一份文件）。
 - **管理页的上传限制不再是「重启就没」**：`upload_max_size_mb` / `avatar_max_size_mb` 原先是进程内
   运行时覆盖（代码注释、界面文案都写着「重启后恢复 env 默认值」）——管理页改完，重启就回去了。
   现在跟别的运行时参数一样进**配置组**（`system_settings.runtime_config`，迁移无需加列）：保存即写 DB、

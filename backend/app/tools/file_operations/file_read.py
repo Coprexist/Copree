@@ -10,7 +10,8 @@ logger = logging.getLogger(__name__)
 
 class FileRead(ToolPlugin):
     name = "file_read"
-    description = "读取你自己文件空间中的一个文本文件。只能访问 /app/data/agents/{your_id}/ 下的文件。"
+    description = ("读取自己文件空间中的一个文本文件。路径相对你的文件空间根（开头的 / 同义）；"
+                   "此空间即 run_script 的工作目录，两边文件同一。")
     segment = "file_operations"
     parameters = {
         "path": {"type": "string", "description": "要读取的文件路径（相对于你的文件空间根目录）"},

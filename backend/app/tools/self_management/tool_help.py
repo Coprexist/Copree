@@ -135,8 +135,10 @@ class ToolHelp(ToolPlugin):
         # ── 2. 注册工具精确匹配 ──
         plugin = ToolRegistry.get_plugin(query)
         if plugin:
+            # 没归段的工具（如决策技能四件套）标题里不要留个空的「— 段」
+            seg = SKILL_SEGMENT_META.get(plugin.segment, {}).get("name") or plugin.segment
             lines = [
-                f"## {plugin.name} — {SKILL_SEGMENT_META.get(plugin.segment, {}).get('name', plugin.segment)}段",
+                f"## {plugin.name} — {seg}段" if seg else f"## {plugin.name}",
                 "",
                 plugin.description,
                 "",

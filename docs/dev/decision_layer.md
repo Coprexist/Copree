@@ -124,7 +124,29 @@ AI 不该被每条消息唤醒。事件先过一层决策：**AI 自己写的规
 - 规则描述里教两种口诀（`rule_schema_desc()`）：整句才触发 `{"content_clean":"签到"}`；
   提到就触发且不通知你（慎用，可能误触）`{"content_clean_contains":"签到"}`。
 
-## 7. 触发链路上的位置
+## 7. 工具与归属（决策四件套）
+
+决策工具是**注册表里的普通平台工具**（`app/tools/decision.py` 的四个 `ToolPlugin`），归
+`self_management` 段。段不是标签：AI 系统提示的「技能背包」与管理员背包都遍历
+`ToolRegistry.get_segments()`（`ai/llm._build_tools_segment` / `routers/admin` 的技能段接口），
+**空段就等于从这两处视图里漏掉**——此前就是这样：AI 只从 function schema 知道有这几个函数，
+提示词与管理员背包里都没有它们。
+
+| 工具 | 作用 | 状态 |
+|------|------|------|
+| `list_decision_skills` | 看自己配了哪些规则 | `active` |
+| `write_decision_skill` | 写/覆盖一条规则（描述即 `rule_schema_desc()`） | `active` |
+| `delete_decision_skill` | 按名字删一条 | `active` |
+| `test_decision_skill` | 试跑（描述即 `test_rule_desc()`） | `active` |
+
+- **schema 单源**：名字列表只有一处（`DECISION_TOOL_NAMES`），定义从注册表现取——AI 走
+  `ToolRegistry`，群助手走 `decision_tools()`（它不是注册表实体，只有它需要现取一份）。从前群助手
+  那份是手抄的字面量 `DECISION_TOOLS`：描述复用了函数，**参数 schema 是逐字抄的**。必须惰性取——
+  `app/tools/decision.py` 顶层 import 本模块，本模块顶层再 import `app.tools.base` 会成环。
+- **状态**：四件套只在 `active` 可用（`dnd` 时既看不了也改不了自己的规则）。要不要放进 `dnd`
+  是产品口径，改的话只动 `states`。
+
+## 8. 触发链路上的位置
 
 - **群消息**：决策层在 `mention_only` 拦截**之前**（AI 自写规则优先于平台默认兜底）。
 - **性能**：一条消息要给群里所有 AI 过一遍，规则按消息**批量预取**（`load_rules_map`，一条 in 查询），
@@ -132,7 +154,7 @@ AI 不该被每条消息唤醒。事件先过一层决策：**AI 自己写的规
   预取时把映射一并取出。
 - **不绑世界**：引擎不再要求 AI/群绑定世界。`world` 参数只服务群助手的 `call_tool`/`run_script`。
 
-## 8. 作用域（待落地）
+## 9. 作用域（待落地）
 
 技能挂在**实体**上（AI / 群助手），存储里没有群字段：现状是**一处配置、处处生效**——在哪个群 @ 它、
 说中关键词都会命中，`run_script` 的账本（AI 自己的文件空间）也共用同一份。要限定范围，现在只能靠条件
@@ -146,7 +168,7 @@ DSL 里的 `group_id`：由 AI 自己写，写漏了就是到处生效。
 
 原生作用域字段（引擎在命中前按帧 / 焦段过滤）尚未实现；在此之前 `group_id` 条件仍是唯一手段。
 
-## 9. 未落地
+## 10. 未落地
 
 | 情景 | 卡在哪 |
 |------|--------|
@@ -156,7 +178,7 @@ DSL 里的 `group_id`：由 AI 自己写，写漏了就是到处生效。
 > 日志或实际私信，取决于执行 do 之后两人是否已是好友（通过申请即成为好友，拒绝则发不出）。
 > 后者一律唤醒本体，唤醒链路见 `ai/alarm._process_world_event`。
 
-## 10. 验证
+## 11. 验证
 
 ```
 docker exec ai_group_backend bash -c 'export TEST_DATABASE_URL="${DATABASE_URL%/*}/${DATABASE_URL##*/}_test"; \
