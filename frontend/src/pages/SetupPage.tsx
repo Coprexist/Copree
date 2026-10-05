@@ -194,7 +194,7 @@ export default function SetupPage() {
       setInstanceLang(r.default_language || 'zh')
       setInstanceCredit(r.default_platform_credit ?? 0)
       setInstanceFileQuota(r.default_file_quota_mb ?? 100)
-      setInstanceConcurrency(r.default_concurrent_ai_limit ?? 3)
+      setInstanceConcurrency(r.default_concurrent_ai_limit ?? 2)
       setInstanceDefaultsLoaded(true)
     }).catch(() => {})
   }, [isAdmin, instanceDefaultsLoaded])

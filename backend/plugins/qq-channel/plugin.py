@@ -1231,7 +1231,7 @@ class QqChannelPlugin(ServicePlugin):
         if not uid:
             return 0
         is_ai = (await db.execute(
-            select(GroupMember.id).where(
+            select(GroupMember.member_id).where(
                 GroupMember.group_id == gid,
                 GroupMember.member_type == "ai",
                 GroupMember.member_id == int(uid),
@@ -1249,6 +1249,33 @@ class QqChannelPlugin(ServicePlugin):
 
         prefix = mention_token(self._target_user_id) if self._target_user_id else f"@{self._target_agent}"
         return f"{prefix} {content}"
+
+    def _note_route(self, qq_group: str, landing: int, msg_id: str, *, full: bool,
+                    peer_name: str = "", peer_openid: str = "", peer_user_id: int = 0) -> None:
+        """这个 QQ 群现在有可用的被动回复凭据了 → 记进路由表（入站唯一的写入口）。
+
+        为什么要先记一次、投递完再覆写一次：凭据是"腾讯刚把这条推给我"，从**收到**那一刻就
+        成立；而落库要先拉群信息、认落点（有时还要建群），慢的时候 AI 已经回完话了——那台
+        机器人就会被判成"没有凭据"，这条回话白丢（2026-10-05 真机：插件配置一存实例重启、
+        路由清空，紧接着第一条消息就踩中）。peer 信息要等投递完才有，所以覆写补齐。
+        """
+        self._routes[qq_group] = {
+            "qq": qq_group, "copree_group_id": int(landing or 0), "msg_id": msg_id, "seq": 0,
+            "ts": time.time(),
+            # 会话标识：AI 的回复发出去之后要写回它那一行（线程里的下一条还认得出这个群）
+            "origin": format_channel_origin(self.channel_kind, self.instance, qq_group),
+            # 出站摘 @ 要用它：QQ 的被动回复自己显示 @对方，正文里那个 @是谁要对得上
+            "peer_name": peer_name or "",
+            # 自测要在正文里 @ 回去：群消息里只有 member_openid 能当 @ 的目标
+            "peer_openid": peer_openid,
+            # 摘正文开头那个 @ 要用平台 id（入口归一之后它是 <@!id>，名字摘不动）
+            "peer_user_id": int(peer_user_id or 0),
+            # 这条是不是「@ 事件」（GROUP_AT_MESSAGE_CREATE）送来的：腾讯只在回复这种事件时
+            # 自己补一个 @对方。全量事件送来的消息哪怕正文 @ 了机器人它也不补——2026-09-26 实测：
+            # 09-25 与 08:28 两条 @ 事件的回复都自动出现 @；11:00 那条全量事件（正文 @ 了机器人）
+            # 发出去就没有 @。所以摘不摘看**事件类型**，不看"有没有点名"。
+            "at_event": not full,
+        }
 
     async def _handle_group_message(self, d: dict, *, addressed: bool, full: bool) -> None:
         author = d.get("author") or {}
@@ -1276,6 +1303,11 @@ class QqChannelPlugin(ServicePlugin):
         if self._allow and qq_group not in self._allow:
             logger.debug(f"QQ 群 {qq_group} 不在白名单，忽略")
             return
+        # 凭据一到手就成立：落点能从内存里的映射算出来就先记上（见 _note_route），
+        # 别等拉完群信息——那一段时间里 AI 回的话会因为"没有凭据"被整条跳过
+        known_landing = int(self._group_map.get(qq_group) or self._copree_group_id or 0)
+        if known_landing:
+            self._note_route(qq_group, known_landing, msg_id, full=full)
         # 群信息（群名/人数…）先拿：认领已有落点群要靠群名对号（见 channel._claim_landing），
         # 下面落库时还要用它对齐落点群名。今天问过就用手里的，不额外发请求。
         facts = await self._group_facts_of(qq_group)
@@ -1326,22 +1358,11 @@ class QqChannelPlugin(ServicePlugin):
             )
             peer_user_id, peer_name, copree_msg_id = delivered or (0, "", 0)
             self._remember_delivered(msg_id, copree_msg_id, content)
-            self._routes[qq_group] = {
-                "qq": qq_group, "copree_group_id": landing, "msg_id": msg_id, "seq": 0, "ts": time.time(),
-                # 会话标识：AI 的回复发出去之后要写回它那一行（线程里的下一条还认得出这个群）
-                "origin": format_channel_origin(self.channel_kind, self.instance, qq_group),
-                # 出站摘 @ 要用它：QQ 的被动回复自己显示 @对方，正文里那个 @是谁要对得上
-                "peer_name": peer_name or "",
-                # 自测要在正文里 @ 回去：群消息里只有 member_openid 能当 @ 的目标
-                "peer_openid": _openid,
-                # 摘正文开头那个 @ 要用平台 id（入口归一之后它是 <@!id>，名字摘不动）
-                "peer_user_id": peer_user_id,
-                # 这条是不是「@ 事件」（GROUP_AT_MESSAGE_CREATE）送来的：腾讯只在回复这种事件时
-                # 自己补一个 @对方。全量事件送来的消息哪怕正文 @ 了机器人它也不补——2026-09-26 实测：
-                # 09-25 与 08:28 两条 @ 事件的回复都自动出现 @；11:00 那条全量事件（正文 @ 了机器人）
-                # 发出去就没有 @。所以摘不摘看**事件类型**，不看"有没有点名"。
-                "at_event": not full,
-            }
+            # 落点已认准、peer 信息也有了：覆写一次（时间戳顺带刷新成投递完成的时刻）
+            self._note_route(
+                qq_group, landing, msg_id, full=full,
+                peer_name=str(peer_name or ""), peer_openid=_openid, peer_user_id=peer_user_id,
+            )
         except Exception as e:
             self.last_error = f"入站失败：{type(e).__name__}: {e}"
             logger.warning(f"QQ 群消息进 Copree 失败：{self.last_error}", exc_info=True)
@@ -2046,7 +2067,8 @@ class QqChannelPlugin(ServicePlugin):
             logger.info(f"QQ 群回复跳过：Copree 群 #{group_id} 还没有可用的被动回复凭据")
             self._replies.spawn(self._report_unreachable(
                 "group", {"copree_group_id": group_id},
-                "这个群还没有被动回复凭据（重启后群里还没人来过）：去群里 @ 一次机器人就能恢复",
+                "这台机器人在这个群里还没收到过消息（可能没开「接收所有消息」，或没人 @ 过它）："
+                "去群里 @ 一次它就能恢复",
             ), f"{self.key} 群回复凭据缺失提示")
             return
         # 只有「@ 事件」的回复才有腾讯自带的 @对方（见路由里 at_event 的注释）。那种情况摘掉开头
@@ -2172,7 +2194,9 @@ class QqChannelPlugin(ServicePlugin):
         where = f"（QQ {'群' if kind == 'group' else '用户'} …{target[-6:]}）" if target else ""
         if kind == "group" and route.get("copree_group_id"):
             where += f"（Copree 群 #{int(route['copree_group_id'])}）"
-        text = f"QQ 通道发不出消息{where}：{reason}"
+        # 带上是谁：同一个群可能有好几台机器人接着，两条一模一样的提示等于没说
+        who = str(self._target_agent or self.instance)
+        text = f"「{who}」的 QQ 通道发不出消息{where}：{reason}"
         try:
             from app.database import async_session
 
@@ -2432,6 +2456,12 @@ class QqChannelPlugin(ServicePlugin):
         elif passive_only:
             raise RuntimeError("被动回复窗口已过：先去那个会话里说一句（群里 @ 一次机器人）再自测")
         elif kind == "group":
+            if msg_id and fresh:
+                # 窗口还在，是**这条来消息的回复次数**用完了（群 5 次）——和"窗口过期"是
+                # 两回事，说清楚才知道该等什么（等下一句话来，而不是去重新 @）
+                raise RuntimeError(
+                    f"这条消息的回复次数用完了（一条最多 {limit} 次），等下一条消息再开口"
+                )
             # 群聊没有主动推送（2025-04-21 起下线），也没有召回字段：只能等下一次 @
             raise RuntimeError(f"被动回复窗口已过（{GROUP_WINDOW // 60} 分钟），QQ 群聊没有主动/召回能力")
         else:

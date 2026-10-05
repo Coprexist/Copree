@@ -7,6 +7,11 @@ from sqlalchemy import (
 )
 from app.database import Base
 
+# 同群同时跑几轮 LLM 的上限（群设置里可改；列值 NULL/0 也按它算）。
+# 全站只有这一处写死默认值：模型列默认、群设置面板回显、系统设置里的"新建群默认"、
+# 运行时信号量的兜底都从它取——以后改默认只改这里。
+DEFAULT_CONCURRENT_AI_LIMIT = 2
+
 
 class Group(Base):
     __tablename__ = "groups"
@@ -22,7 +27,7 @@ class Group(Base):
     bio = Column(String(300), nullable=True)
     speak_limit_per_minute = Column(Integer, default=0)  # 0 = 不限制
     speak_limit_window_seconds = Column(Integer, default=120)  # 时间窗口（秒）
-    concurrent_ai_limit = Column(Integer, default=3)  # 同群同时 LLM 调用上限，NULL/0=默认3
+    concurrent_ai_limit = Column(Integer, default=DEFAULT_CONCURRENT_AI_LIMIT)  # 同群同时 LLM 调用上限，NULL/0 按默认算
     # 群聊单条消息展示上限（超长折成前 75% + 后 25%，见 utils/pure/history.fold_text）；0 = 不截断
     max_msg_display_len = Column(Integer, default=2048)
     is_paused = Column(Boolean, default=False)  # 群管理暂停 AI 触发

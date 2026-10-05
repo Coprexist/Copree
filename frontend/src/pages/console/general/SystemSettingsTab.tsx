@@ -43,7 +43,7 @@ export default function SystemSettingsTab() {
       setFileQuota(settings.default_file_quota_mb ?? 100)
       setUploadMaxSizeMb(limits.upload_max_size_mb ?? 32)
       setAvatarMaxSizeMb(limits.avatar_max_size_mb ?? 10)
-      setDefaultConcurrentAiLimit(settings.default_concurrent_ai_limit ?? 3)
+      setDefaultConcurrentAiLimit(settings.default_concurrent_ai_limit ?? 2)
       setRegistrationEnabled(settings.registration_enabled ?? true)
       setAuditUserActions(settings.audit_user_actions ?? false)
       setAuditRetention(settings.audit_log_retention_days ?? 90)
@@ -360,7 +360,7 @@ export default function SystemSettingsTab() {
             className="w-32 px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50" />
           <button
             onClick={() => handleSave('concurrent_ai_limit', defaultConcurrentAiLimit)}
-            disabled={saving || defaultConcurrentAiLimit === (config?.default_concurrent_ai_limit ?? 3)}
+            disabled={saving || defaultConcurrentAiLimit === (config?.default_concurrent_ai_limit ?? 2)}
             className="px-3 py-2 bg-primary-500 text-white rounded-card hover:bg-primary-600 text-sm disabled:opacity-40 transition-colors"
           >{t('settings:save')}</button>
         </div>

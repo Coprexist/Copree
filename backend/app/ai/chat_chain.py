@@ -14,9 +14,12 @@ import logging
 import time
 from time import time as now
 
+from app.models.group import DEFAULT_CONCURRENT_AI_LIMIT
+
 logger = logging.getLogger(__name__)
 
-MAX_CONCURRENT_PER_GROUP = 3
+# 群没配并发数时的兜底上限（与群设置的默认值同一处来源）
+MAX_CONCURRENT_PER_GROUP = DEFAULT_CONCURRENT_AI_LIMIT
 
 # ── 红黑树颜色 ──
 RED, BLACK = True, False
@@ -265,6 +268,8 @@ class ChatChainManager:
         self._last_reply: dict[int, dict[int, dict]] = {}
         self._processing: dict[int, set[int]] = {}
         self._semaphores: dict[int, asyncio.Semaphore] = {}
+        # 每个信号量的上限（asyncio.Semaphore 没有公开读法）：群设置改了并发数要认出来换一个
+        self._semaphore_caps: dict[int, int] = {}
         self._priority_sem: dict[int, asyncio.Semaphore] = {}
         self._concurrency_overrides: dict[int, dict[int, int]] = {}  # {group_id: {ai_id: limit}}
 
@@ -397,16 +402,30 @@ class ChatChainManager:
         if proc:
             proc.discard(agent_id)
 
+    def _replace_semaphore(self, group_id: int, cap: int) -> asyncio.Semaphore:
+        """换一个并发信号量并记下它的上限（上限没有公开读法，自己记一份）
+
+        旧信号量上还挂着正在跑的那几轮：它们照旧跑完、不打断；之后进来的等待按新上限排队。
+        """
+        sem = asyncio.Semaphore(cap)
+        self._semaphores[group_id] = sem
+        self._semaphore_caps[group_id] = cap
+        return sem
+
     def get_semaphore(self, group_id: int, limit: int = 0) -> asyncio.Semaphore:
-        """获取并发信号量，AI自修改覆盖优先。"""
+        """获取并发信号量，AI自修改覆盖优先；群设置改过上限就换一个。
+
+        原来只在第一次建，之后 limit 变了也不认——面板上改了并发数得重启才生效
+        （2026-10-05 用户实测"改了保存、刷新又成 3"）。
+        """
         overrides = self._concurrency_overrides.get(group_id, {})
         if overrides:
             ai_min = min(overrides.values())
             if ai_min < (limit or MAX_CONCURRENT_PER_GROUP):
                 limit = ai_min
         cap = limit if limit and limit > 0 else MAX_CONCURRENT_PER_GROUP
-        if group_id not in self._semaphores:
-            self._semaphores[group_id] = asyncio.Semaphore(cap)
+        if self._semaphore_caps.get(group_id) != cap:
+            return self._replace_semaphore(group_id, cap)
         return self._semaphores[group_id]
 
 
@@ -433,11 +452,7 @@ class ChatChainManager:
         self._concurrency_overrides[group_id][ai_id] = max(1, min(limit, 10))
         effective = min(self._concurrency_overrides[group_id].values())
         # 更新信号量
-        old_sem = self._semaphores.get(group_id)
-        if old_sem:
-            self._semaphores[group_id] = asyncio.Semaphore(effective)
-        else:
-            self._semaphores[group_id] = asyncio.Semaphore(effective)
+        self._replace_semaphore(group_id, effective)
         # 启动自动恢复定时器
         self._schedule_restore(group_id)
         return effective
@@ -446,6 +461,7 @@ class ChatChainManager:
         """清除所有 AI 自修改并发覆盖，恢复群默认值"""
         self._concurrency_overrides.pop(group_id, None)
         self._semaphores.pop(group_id, None)  # 下次 get_semaphore 会重建
+        self._semaphore_caps.pop(group_id, None)
         # 取消恢复任务
         task = self._restore_tasks.pop(group_id, None)
         if task:

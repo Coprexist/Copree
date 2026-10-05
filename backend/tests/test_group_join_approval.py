@@ -283,3 +283,26 @@ async def test_group_settings_accept_discovery_flags(migrated_db):
         assert group.bio == "测试群简介", "群简介也要进白名单"
         await db.rollback()
 
+
+async def test_group_settings_accepts_concurrent_ai_limit(migrated_db):
+    """PATCH 链路：AI 并发数也要进白名单——面板发得出去、库里存得下、响应里回得来
+
+    2026-10-05 用户实测：面板上改了并发数、点保存，刷新又变回 3。原因是这个字段既不在
+    更新 schema 里、也不在白名单里，请求被静默丢掉；两个查询响应也不带它，前端只能兜底显示。
+    """
+    from app.chat.gm import update_group_settings
+    from app.database import async_session
+    from app.models.group import DEFAULT_CONCURRENT_AI_LIMIT
+
+    async with async_session() as db:
+        await _seed(db, auto_approve_join=True, approve_invites=False)
+        group = await update_group_settings(db, GROUP_ID, 5, {"concurrent_ai_limit": 5})
+        assert group.concurrent_ai_limit == 5, "并发数要能存下来"
+        await expect_value_error(
+            update_group_settings(db, GROUP_ID, 3, {"concurrent_ai_limit": 5}), "仅群主或管理员")
+        await db.rollback()
+
+    # 老默认值就是"没配过"：列表/设置回显都得给默认值，不能是 None
+    assert DEFAULT_CONCURRENT_AI_LIMIT == 2
+    await db.rollback()
+

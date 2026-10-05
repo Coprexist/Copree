@@ -23,7 +23,7 @@ from app.utils.pure.formatting import mask_api_key
 from app.utils.config_resolver import find_old_config
 from app.models.user import User
 from app.models.agent import Agent
-from app.models.group import Group
+from app.models.group import DEFAULT_CONCURRENT_AI_LIMIT, Group
 from app.models.redemption import RedemptionCode
 from app.routers.ws import manager as ws_manager
 from app.models.system_log import SystemLog
@@ -1542,7 +1542,7 @@ async def update_upload_limits(
 # ============================================================
 
 class BulkConcurrencyRequest(PydanticBaseModel):
-    concurrent_ai_limit: int = 3
+    concurrent_ai_limit: int = DEFAULT_CONCURRENT_AI_LIMIT
 
 
 @router.put("/groups/concurrency")

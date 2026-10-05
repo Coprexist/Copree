@@ -3,6 +3,8 @@
 """
 from pydantic import BaseModel, Field
 
+from app.models.group import DEFAULT_CONCURRENT_AI_LIMIT
+
 
 class GroupCreateRequest(BaseModel):
     """创建群聊请求"""
@@ -24,6 +26,8 @@ class GroupUpdateRequest(BaseModel):
     bio: str | None = Field(default=None, max_length=300)
     speak_limit_per_minute: int | None = Field(default=None, ge=-1, le=60)
     speak_limit_window_seconds: int | None = Field(default=None, ge=30, le=600)
+    # 同群同时跑几轮 LLM（面板给到 1-10，管理员批量接口给到 20）
+    concurrent_ai_limit: int | None = Field(default=None, ge=1, le=20)
     is_vector_accelerated: bool | None = None
     avatar_mode: str | None = Field(default=None, pattern=r'^(default|members|custom)$')
     avatar_url: str | None = None
@@ -53,6 +57,7 @@ class GroupResponse(BaseModel):
     bio: str | None = None
     speak_limit_per_minute: int = 0
     speak_limit_window_seconds: int = 120
+    concurrent_ai_limit: int = DEFAULT_CONCURRENT_AI_LIMIT
     my_role: str | None = None
     unread_count: int = 0
     has_mention: bool = False

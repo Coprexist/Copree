@@ -204,7 +204,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
   const [speakLimit, setSpeakLimit] = useState(group?.speak_limit_per_minute === -1 ? -1 : (group?.speak_limit_per_minute || 0))
   const [speakWindow, setSpeakWindow] = useState(group?.speak_limit_window_seconds || 120)
   const [speakEnabled, setSpeakEnabled] = useState((group?.speak_limit_per_minute ?? 0) >= 0)
-  const [concurrentAiLimit, setConcurrentAiLimit] = useState(group?.concurrent_ai_limit ?? 3)
+  const [concurrentAiLimit, setConcurrentAiLimit] = useState(group?.concurrent_ai_limit ?? 2)
   const [vectorAccel, setVectorAccel] = useState(group?.is_vector_accelerated || false)
   const [dndUntil, setDndUntil] = useState<string | null>(null)
   const [customDndMinutes, setCustomDndMinutes] = useState('')
@@ -256,6 +256,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
     }
     setSpeakLimit(group.speak_limit_per_minute || 0)
     setSpeakWindow(group.speak_limit_window_seconds || 120)
+    setConcurrentAiLimit(group.concurrent_ai_limit ?? 2)
     setVectorAccel(group.is_vector_accelerated || false)
     setAvatarMode((group.avatar_mode as any) || 'default')
     setIncludeAiAvatar(group.include_ai_in_avatar ?? true)

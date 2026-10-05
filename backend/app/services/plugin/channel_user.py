@@ -57,8 +57,25 @@ async def channel_contacts(
     return {int(uid): str(origin) for uid, origin in rows if uid is not None}
 
 
-async def _unique_username(db: Any, desired: str, fallback: str) -> str:
-    """撞名就加 #2、#3…（username 有唯一约束，通道侧昵称重名很常见）"""
+def _same_nickname(current: Any, desired: str) -> bool:
+    """这个名字已经是"想要的昵称"（原样或带唯一化后缀 #N）→ 不必再改。
+
+    为什么单列一条判据：改名原来只比 `row.username != nickname`，而昵称被更早的锚点占着时
+    改名结果必然带 `#N`，于是**每条消息都判定"要改名"**；几台机器人同时改就撞唯一约束
+    （2026-10-05 真机：IntegrityError 把整条入站消息带走，那台机器人因此没有被动凭据，
+    AI 的回话被跳过）。同一个人在每台机器人下各有一个锚点账号，这种撞车是常态。
+    """
+    want = str(desired or "").strip()
+    cur = str(current or "")
+    return bool(want) and (cur == want or cur.startswith(want + "#"))
+
+
+async def _unique_username(db: Any, desired: str, fallback: str, *, exclude_id: int = 0) -> str:
+    """撞名就加 #2、#3…（username 有唯一约束，通道侧昵称重名很常见）
+
+    exclude_id 给"改名"用：自己那行不算占用，否则永远找不到空位。先查后写在并发下仍可能
+    撞车——所以调用方按"尽力而为"处理（见改名分支）。
+    """
     from sqlalchemy import select
 
     from app.models.user import User
@@ -66,7 +83,10 @@ async def _unique_username(db: Any, desired: str, fallback: str) -> str:
     base = (desired or "").strip()[:40] or fallback
     for suffix in range(1, 50):
         candidate = base if suffix == 1 else f"{base}#{suffix}"
-        taken = (await db.execute(select(User.id).where(User.username == candidate))).first()
+        where = [User.username == candidate]
+        if exclude_id:
+            where.append(User.id != int(exclude_id))
+        taken = (await db.execute(select(User.id).where(*where))).first()
         if taken is None:
             return candidate
     return base
@@ -93,6 +113,8 @@ async def ensure_channel_user(
     from sqlalchemy import select
 
     from app.models.external import ExternalIdentity
+    from sqlalchemy.exc import IntegrityError
+
     from app.models.group import GroupMember
     from app.models.user import User
     from app.utils.auth import hash_password
@@ -153,12 +175,23 @@ async def ensure_channel_user(
         db.add(row)
         await db.flush()
         logger.info(f"外部通道账号已建号：{row.username}（{kind} …{origin[-6:]}）")
-    elif nickname and row.username != nickname:
+    elif nickname and not _same_nickname(row.username, nickname):
         # 第一次建号时可能还没拿到昵称，别让他永远停在占位名上：之后哪次拿到了就补上 ——
         # Copree 界面、AI 看到的说话人名、AI 回 @ 时用的名字，全都读这一列。
-        row.username = await _unique_username(db, nickname, placeholder)
-        await db.flush()
-        logger.info(f"外部通道账号改名：{row.username}（{kind} …{origin[-6:]}）")
+        # 已经是"这个名字（或它的 #N 写法）"就不动：重名规避是留给"同名的另一个人"的。
+        old_name = str(row.username or "")
+        try:
+            # 改名是尽力而为：同一瞬间另一个人也改到这个候选名时保留原名就够，
+            # 绝不能让整条消息因它失败——那台机器人连被动凭据都留不下（2026-10-05 真机）
+            async with db.begin_nested():
+                row.username = await _unique_username(
+                    db, nickname, placeholder, exclude_id=int(row.id)
+                )
+                await db.flush()
+            logger.info(f"外部通道账号改名：{row.username}（{kind} …{origin[-6:]}）")
+        except IntegrityError:
+            row.username = old_name
+            logger.warning(f"外部通道账号改名撞车，保留原名 {old_name}（{kind} …{origin[-6:]}）")
 
     # 外部身份那一行：通道侧昵称优先，拿不到就用本地显示名
     from app.services.plugin import pairing

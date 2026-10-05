@@ -974,7 +974,9 @@ async def test_full_mode_mirrors_everything_but_only_wakes_when_addressed(migrat
                                         "mentions": [{"id": "OTHER-BOT", "bot": True, "is_you": False,
                                                       "username": "绵绵"}]})
         rows = await _messages(GROUP_ID)
-        assert len(rows) == 2 and not rows[1][2].startswith("<@!"), rows
+        # 没点到我 → 不带**我的**唤醒令牌；被 @ 的那个机器人自己得看得见（补它的令牌）
+        assert len(rows) == 2 and not rows[1][2].startswith("<@!2>"), rows
+        assert "<@!" in rows[1][2] and rows[1][2].endswith("你看这个"), rows
 
         await plugin._on_group_message({**GROUP_EVENT, "id": "FULL-3", "content": "你看这个",
                                         "mentions": [{"id": "BOT-OPENID", "bot": True, "is_you": True}]})
@@ -1757,9 +1759,14 @@ async def test_merged_group_replies_only_through_the_owning_bot(migrated_db):
     from app.chat.gm import send_gm_message
     from app.database import async_session
 
+    from app.services.infrastructure.plugin_registry import PluginRegistry
+
     await _seed()
     bot_a = await _make_plugin("bot-a")
     bot_b = await _make_plugin("bot-b")
+    # 真实启动过的实例都在注册表里："作者归谁"要问它，没登记的兄弟看不见（见 _carrier）
+    PluginRegistry.register(bot_a)
+    PluginRegistry.register(bot_b)
     try:
         # 两个机器人都接同一个 Copree 群（这就是"合并"）；A 群里刚有人说过话
         bot_a._routes["QQGROUP-A"] = {
@@ -1784,8 +1791,11 @@ async def test_merged_group_replies_only_through_the_owning_bot(migrated_db):
         assert [s["target"] for s in bot_b._client.sent] == ["QQGROUP-B"], bot_b._client.sent
         assert bot_a._client.sent == [], f"不该由另一个机器人代发：{bot_a._client.sent}"
     finally:
+        PluginRegistry.unregister(bot_a.key)
+        PluginRegistry.unregister(bot_b.key)
         _cleanup(bot_a)
         _cleanup(bot_b)
+
 
 async def test_union_openid_binds_one_account_across_bots(migrated_db):
     """两台机器人认到同一个 union → 一个本地账号；两边的地址各留一份（@ 他要用各自那份）"""
@@ -1938,6 +1948,10 @@ async def test_each_bot_sends_only_its_own_ais_words(migrated_db):
         async with async_session() as db:
             await db.execute(text(
                 "INSERT INTO users (id, username, password_hash, type) VALUES (3, '小蓝', 'x', 'ai')"
+            ))
+            await db.execute(text(
+                "INSERT INTO group_members (group_id, member_type, member_id, role) "
+                f"VALUES ({GROUP_ID}, 'ai', 3, 'member')"
             ))
             await db.commit()
         now = time.time()
@@ -2189,3 +2203,26 @@ async def test_first_size_has_no_artificial_ceiling(migrated_db):
         assert plugin._first_size(3000) == 3000
     finally:
         _cleanup(plugin)
+async def test_route_is_remembered_even_when_delivery_fails(migrated_db):
+    """落库失败也不能让这台机器人丢了被动凭据：凭据是"腾讯刚推来这条"，从收到那刻就成立
+
+    2026-10-05 真机：锚点账号改名撞唯一约束 → 整条入站失败 → 路由没登记 → AI 的回话被判
+    "没有凭据"跳过。落点能从内存映射算出来就该先记上，投递完再覆写补 peer 信息。
+    """
+    await _seed()
+    plugin = await _make_plugin()
+    try:
+        async def _boom(*a, **k):
+            raise RuntimeError("落库炸了")
+
+        plugin._deliver_to_group = _boom
+        await plugin._on_group_message({**GROUP_EVENT, "id": "ROUTE-1", "group_openid": "QQGROUP-AAA"})
+
+        route = plugin._routes.get("QQGROUP-AAA")
+        assert route is not None, "收到消息就该有凭据（落库失败也一样）"
+        assert int(route["copree_group_id"]) == GROUP_ID, route
+        assert route["msg_id"] == "ROUTE-1", route
+    finally:
+        _cleanup(plugin)
+
+

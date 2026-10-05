@@ -4,6 +4,7 @@
 from typing import Protocol
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.models.group import DEFAULT_CONCURRENT_AI_LIMIT
 from app.models.system_settings import SystemSettings
 
 
@@ -32,7 +33,7 @@ class SQLAlchemySystemSettingsRepository:
             "default_language": row.default_language,
             "default_platform_credit": row.default_platform_credit or 0,
             "default_file_quota_mb": row.default_file_quota_mb,
-            "default_concurrent_ai_limit": row.default_concurrent_ai_limit or 3,
+            "default_concurrent_ai_limit": row.default_concurrent_ai_limit or DEFAULT_CONCURRENT_AI_LIMIT,
             "login_providers": getattr(row, "login_providers", ["direct"]) or ["direct"],
             "require_email_verification": getattr(row, "require_email_verification", False) or False,
             "registration_enabled": getattr(row, "registration_enabled", True) if getattr(row, "registration_enabled", True) is not None else True,

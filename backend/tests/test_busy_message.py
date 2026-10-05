@@ -41,6 +41,21 @@ def _event(content="<@!110> 在吗", message_id=2147, only=None):
     return event
 
 
+def test_group_concurrency_limit_follows_the_setting():
+    """群设置里的并发数改了要立刻生效：同一个群换一个信号量，而不是"只建一次"
+
+    2026-10-05 用户实测：面板上改完保存，实际并发还是老值（得重启才生效）。
+    """
+    from app.ai.chat_chain import chat_chain_manager as mgr
+
+    first = mgr.get_semaphore(4242, limit=5)
+    assert mgr.get_semaphore(4242, limit=5) is first, "上限没变就复用同一个"
+    assert mgr.get_semaphore(4242, limit=2) is not first, "上限变了要换一个"
+    mgr.reset_concurrency(4242)
+    assert mgr.get_semaphore(4242, limit=2) is not None
+    mgr.reset_concurrency(4242)
+
+
 async def test_busy_ai_gets_the_message_injected_into_its_running_turn(migrated_db):
     """正在跑一轮的 AI：消息进它当前那一轮的中断缓冲（下一轮 LLM 调用前注入），不再被丢掉"""
     from app.ai.chat_chain import chat_chain_manager

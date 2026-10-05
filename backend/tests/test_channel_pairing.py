@@ -744,3 +744,53 @@ async def test_live_mention_rule_follows_the_observed_push_mode(migrated_db):
                 await skill_bridge._unload_plugin(plugin_id)
 
 
+async def test_anchor_nickname_does_not_churn_or_die_on_conflict(migrated_db):
+    """同一个人在每台机器人下各有一个锚点账号：补昵称不能让它们互相撞死、也不能每条消息都再改一遍
+
+    2026-10-05 真机：几台机器人同时给同一个人的不同锚点补昵称 → 先查后写撞唯一约束 →
+    IntegrityError 把整条入站消息带走（那台机器人因此没有被动回复凭据，AI 的回话被跳过）。
+    """
+    from app.database import async_session
+    from app.services.plugin.channel_user import ensure_channel_user
+
+    async with async_session() as db:
+        first = await ensure_channel_user(
+            db, kind="qq", owner_scope="bot-a", origin="OPENID-A", display_name="小明",
+            origin_channel="qq", commit=False,
+        )
+        second = await ensure_channel_user(
+            db, kind="qq", owner_scope="bot-b", origin="OPENID-B", display_name="小明",
+            origin_channel="qq", commit=False,
+        )
+        await db.commit()
+    # 库里本来就有别人叫小明也没关系：两个人必须拿到不同的名字，后来那个带后缀
+    assert first[1] != second[1] and second[1].startswith("小明#"), (first, second)
+
+    # 还是那个昵称：名字不该再动（以前每次都从头找空位，几台一起就是撞车现场）
+    async with async_session() as db:
+        again = await ensure_channel_user(
+            db, kind="qq", owner_scope="bot-b", origin="OPENID-B", display_name="小明",
+            origin_channel="qq", commit=False,
+        )
+        await db.commit()
+    assert again[1] == second[1], (again, second)
+
+    # 真撞车（另一个人在同一个瞬间占了候选名）：保留原名，绝不抛出去把这条消息带崩
+    import app.services.plugin.channel_user as cu
+
+    async def _taken(db_, desired, fallback, *, exclude_id=0):
+        return "小明"
+
+    original, cu._unique_username = cu._unique_username, _taken
+    try:
+        async with async_session() as db:
+            renamed = await ensure_channel_user(
+                db, kind="qq", owner_scope="bot-b", origin="OPENID-B", display_name="小红",
+                origin_channel="qq", commit=False,
+            )
+            await db.commit()
+    finally:
+        cu._unique_username = original
+    assert renamed[1] == second[1], (renamed, second)     # 撞车 → 保留原名
+
+

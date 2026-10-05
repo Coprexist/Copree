@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc, and_, or_, update, delete, func as sqlfunc
-from app.models.group import Group, GroupMember
+from app.models.group import DEFAULT_CONCURRENT_AI_LIMIT, Group, GroupMember
 from app.models.message import Message
 from app.models.agent import Agent as AgentModel
 from app.utils.pure.history import make_entry
@@ -36,7 +36,10 @@ async def create_group(
     from app.models.system_settings import SystemSettings
     ss_result = await db.execute(select(SystemSettings).where(SystemSettings.id == 1))
     ss = ss_result.scalar_one_or_none()
-    default_limit = ss.default_concurrent_ai_limit if ss and ss.default_concurrent_ai_limit else 3
+    default_limit = (
+        ss.default_concurrent_ai_limit if ss and ss.default_concurrent_ai_limit
+        else DEFAULT_CONCURRENT_AI_LIMIT
+    )
 
     group = Group(
         name=name,
@@ -288,6 +291,7 @@ async def list_user_groups(db: AsyncSession, user_id: int) -> list[dict]:
             "bio": group.bio,
             "speak_limit_per_minute": group.speak_limit_per_minute or 0,
             "speak_limit_window_seconds": group.speak_limit_window_seconds or 120,
+            "concurrent_ai_limit": group.concurrent_ai_limit or DEFAULT_CONCURRENT_AI_LIMIT,
             "my_role": m.role,
             "unread_count": unread_count,
             "has_mention": group.id in has_mention,
@@ -772,7 +776,7 @@ async def update_group_settings(db: AsyncSession, group_id: int, operator_id: in
 
     allowed_fields = {
         "name", "announcement", "bio",
-        "speak_limit_per_minute", "speak_limit_window_seconds",
+        "speak_limit_per_minute", "speak_limit_window_seconds", "concurrent_ai_limit",
         "is_vector_accelerated",
         "avatar_mode", "avatar_url", "include_ai_in_avatar",
         # 发现与入群三开关

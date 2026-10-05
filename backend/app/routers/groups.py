@@ -14,6 +14,7 @@ from app.schemas.group import (
     SetDndRequest, UnreadSummaryItem, UnreadSummaryResponse, UnreadResponse,
     FederationShareRequest, GroupFederationStatus,
 )
+from app.models.group import DEFAULT_CONCURRENT_AI_LIMIT
 from app.chat.gm import (
     create_group,
     get_group,
@@ -439,6 +440,7 @@ async def update_group(
             "announcement": group.announcement,
             "speak_limit_per_minute": group.speak_limit_per_minute or 0,
             "speak_limit_window_seconds": group.speak_limit_window_seconds or 120,
+            "concurrent_ai_limit": group.concurrent_ai_limit or DEFAULT_CONCURRENT_AI_LIMIT,
             "avatar_mode": group.avatar_mode or "default",
             "avatar_url": group.avatar_url,
             "include_ai_in_avatar": group.include_ai_in_avatar,

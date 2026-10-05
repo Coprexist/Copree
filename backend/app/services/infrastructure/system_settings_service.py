@@ -5,6 +5,7 @@
 import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from app.models.group import DEFAULT_CONCURRENT_AI_LIMIT
 from app.models.system_settings import SystemSettings
 from app.repositories.infra_repo import InfraRepository, SQLAlchemyInfraRepository
 from app.utils.pure.provider_config import (
@@ -89,7 +90,7 @@ async def get_settings(db: AsyncSession) -> dict:
         "system_prompt_order": row.system_prompt_order,
         "federation_sync_interval_minutes": row.federation_sync_interval_minutes,
         "default_file_quota_mb": row.default_file_quota_mb,
-        "default_concurrent_ai_limit": row.default_concurrent_ai_limit or 3,
+        "default_concurrent_ai_limit": row.default_concurrent_ai_limit or DEFAULT_CONCURRENT_AI_LIMIT,
         "updated_by": row.updated_by,
         "updated_at": str(row.updated_at) if row.updated_at else None,
         # v0.2.0 邮箱认证（公开字段）
