@@ -86,6 +86,9 @@ export function ToolBubble({ name, label, detail, error, icon, running }: {
   // 展开内容只有一个来源：优先详情；没有详情时，只有多行摘要才值得展开
   const body = detail || (label.includes('\n') ? label : '')
   const expandable = !!body
+  // 状态色只留这一处：原来散在四个地方各写一遍三元，加第五个位置（工具名那格）时就漏了——
+  // 漏掉的表现是深色主题下工具名发白：它谁也不继承，只能继承页面字色
+  const tone = state === 'error' ? 'rgb(var(--tw-rose-400))' : 'rgb(var(--tw-mint-400))'
   return (
     <div
       className={`world-msg max-w-[90%] mx-auto text-2xs rounded-control overflow-hidden border ${
@@ -98,20 +101,20 @@ export function ToolBubble({ name, label, detail, error, icon, running }: {
         className={`flex items-center gap-1.5 px-2 py-1 ${expandable ? 'cursor-pointer' : ''}`}
         onClick={() => expandable && setExpanded((v) => !v)}
       >
-        <span className="shrink-0 flex items-center justify-center w-3.5 h-3.5 rounded-full border border-current/20" style={{ color: state === 'error' ? 'rgb(var(--tw-rose-400))' : 'rgb(var(--tw-mint-400))' }}>
+        <span className="shrink-0 flex items-center justify-center w-3.5 h-3.5 rounded-full border border-current/20" style={{ color: tone }}>
           {running ? <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" /> :
            error ? <span className="text-[9px] leading-none font-bold">!</span> :
            <span className="text-[8px] leading-none">✓</span>}
         </span>
-        <span className="shrink-0 flex items-center gap-1 text-current" style={{ color: state === 'error' ? 'rgb(var(--tw-rose-400))' : 'rgb(var(--tw-mint-400))' }}>
+        <span className="shrink-0 flex items-center gap-1 text-current" style={{ color: tone }}>
           {icon}
           <span className="font-medium">{running ? '执行中' : error ? '执行失败' : '已完成'}</span>
         </span>
         {name && (
-          <span className="shrink-0 px-1 rounded bg-current/10 font-medium" title={name}>{name}</span>
+          <span className="shrink-0 px-1 rounded bg-current/10 font-medium" style={{ color: tone }} title={name}>{name}</span>
         )}
         <span className="shrink-0 w-px h-2.5 bg-current/20 mx-0.5" aria-hidden />
-        <span className="flex-1 min-w-0 truncate" style={{ color: state === 'error' ? 'rgb(var(--tw-rose-400))' : 'rgb(var(--tw-mint-400))' }}>
+        <span className="flex-1 min-w-0 truncate" style={{ color: tone }}>
           {summary}
         </span>
         {expandable && (
@@ -119,7 +122,7 @@ export function ToolBubble({ name, label, detail, error, icon, running }: {
         )}
       </div>
       {expanded && (
-        <div className="px-2 pb-1.5 whitespace-pre-wrap text-current max-h-48 overflow-y-auto border-t border-current/10 pt-1.5" style={{ color: state === 'error' ? 'rgb(var(--tw-rose-400))' : 'rgb(var(--tw-mint-400))' }}>
+        <div className="px-2 pb-1.5 whitespace-pre-wrap text-current max-h-48 overflow-y-auto border-t border-current/10 pt-1.5" style={{ color: tone }}>
           {body}
         </div>
       )}

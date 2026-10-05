@@ -771,42 +771,20 @@ async def _save_ai_reply(world_repo: WorldRepository, world, content: str, reaso
 
 
 async def _resolve_world_credentials(world_repo: WorldRepository, world) -> tuple[str | None, str]:
-    """世界 AI 计费/凭证：账单人 = 世界主人（主人 Key → 池 Key → 全局默认 base）"""
-    from app.config import settings
-    from app.models.user import User
+    """世界 AI 计费/凭证：账单人 = 世界主人（解析规则见 services/agent/llm_credentials.py）"""
+    from app.services.agent.llm_credentials import resolve_user_credentials
 
-    api_key, api_base = None, settings.deepseek_base_url
-    owner = await world_repo.get(User, world.owner_id) if world.owner_id else None
-    if owner is not None:
-        try:
-            from app.utils.crypto import decrypt_api_key
-            if owner.api_key_encrypted:
-                api_key = decrypt_api_key(owner.api_key_encrypted)
-                api_base = owner.api_base_url or settings.deepseek_base_url
-            else:
-                from app.services.infrastructure.quota_service import find_best_pool_key
-                pool_key = await find_best_pool_key(world_repo, owner.id)
-                if pool_key:
-                    api_key = decrypt_api_key(pool_key.api_key_encrypted)
-                    api_base = pool_key.api_base_url or settings.deepseek_base_url
-        except Exception as e:
-            # 密钥解密失败等：降级到无 Key（走全局默认 base），让 LLM 层报清晰错误
-            logger.warning(f"🌐 世界 #{world.id} 凭证解析降级: {e}")
-            api_key, api_base = None, settings.deepseek_base_url
-    return api_key, api_base
+    return await resolve_user_credentials(world_repo, world.owner_id)
 
 
-async def resolve_world_chat_model(
-    world_repo: WorldRepository, world, api_base: str, wai=None,
+async def resolve_chat_model(
+    repo, api_base: str, *, explicit: str | None = None, owner_id: int | None = None,
 ) -> str:
-    """世界 AI 未显式指定模型时的默认模型解析——**唯一入口**。
-
-    world_chat_service / app.tools.world / world_suggestions 三处共用，
-    避免同一段优先级链被手抄多份后各自漂移。
+    """默认模型解析——**唯一入口**（世界对话 / 世界工具 / 建议 / 创建助手 共用）。
 
     优先级（高 → 低）：
-      1. 世界AI 自己指定的模型（wai.model）
-      2. 世界主人的用户级覆盖 users.global_chat_model（用户在 /settings 里配的）
+      1. 调用方显式指定的模型（世界侧 = 世界AI.model）
+      2. 主人的用户级覆盖 users.global_chat_model（用户在 /settings 里配的）
       3. 提供商配置 system_settings.provider_config 的 global_default_chat_model（管理员配的）
       4. 提供商预设 provider_presets.PRESETS 的 chat_model
       5. 平台全局默认 settings.default_chat_model
@@ -817,12 +795,11 @@ async def resolve_world_chat_model(
     from app.models.user import User
     from app.utils.pure.provider_config import find_provider_by_base_url
 
-    model = getattr(wai, "model", None)
-    if model:
-        return model
+    if explicit:
+        return explicit
 
-    # 1. 世界主人的用户级覆盖
-    owner = await world_repo.get(User, world.owner_id) if world.owner_id else None
+    # 1. 主人的用户级覆盖
+    owner = await repo.get(User, owner_id) if owner_id else None
     model = getattr(owner, "global_chat_model", None) if owner else None
     if model:
         return model
@@ -831,7 +808,7 @@ async def resolve_world_chat_model(
     from app.services.infrastructure.system_settings_service import get_providers
     from app.services.agent.provider_presets import PRESETS
 
-    provider = find_provider_by_base_url(await get_providers(world_repo), api_base)
+    provider = find_provider_by_base_url(await get_providers(repo), api_base)
     # 3. 管理员没配这个 base_url → 回退内置预设
     if provider is None:
         provider = find_provider_by_base_url(list(PRESETS.values()), api_base)
@@ -842,6 +819,15 @@ async def resolve_world_chat_model(
 
     # 4. 平台全局默认
     return settings.default_chat_model
+
+
+async def resolve_world_chat_model(
+    world_repo: WorldRepository, world, api_base: str, wai=None,
+) -> str:
+    """世界 AI 的模型：世界AI 自己指定的优先，其余走全站同一条链（见 resolve_chat_model）"""
+    return await resolve_chat_model(
+        world_repo, api_base, explicit=getattr(wai, "model", None), owner_id=world.owner_id,
+    )
 
 
 async def _stream_llm_once(

@@ -20,6 +20,7 @@ import ChatPage from '../pages/ChatPage'
 // ── 延迟加载的非首屏页面 ──
 const DMPage = lazy(() => import('../pages/DMPage'))
 const AgentsPage = lazy(() => import('../pages/AgentsPage'))
+const AgentCreatePage = lazy(() => import('../pages/AgentCreatePage'))
 const AgentDetailPage = lazy(() => import('../pages/AgentDetailPage'))
 const SettingsPage = lazy(() => import('../pages/SettingsPage'))
 const MePage = lazy(() => import('../pages/MePage'))
@@ -92,6 +93,7 @@ export function getProtectedRoutes(AdminGuardComponent: ComponentType<{ children
     // 旧地址兜底：改名前的 /friends 还留在书签、历史记录与外部链接里
     { path: 'friends', element: <Navigate to="/list" replace /> },
     { path: 'agents', element: <AgentsPage /> },
+    { path: 'agents/create', element: <AgentCreatePage /> },
     { path: 'agents/:id', element: <AgentDetailPage /> },
     { path: 'me', element: <MePage /> },
     { path: 'me/usage', element: <UsagePage /> },

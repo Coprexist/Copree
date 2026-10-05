@@ -7,8 +7,8 @@ import Toggle from '../components/Toggle'
 import { Button, Dialog, IconButton, PageHeader, Slider } from '../components/ui'
 import { useT, useLang } from '../i18n/I18nContext'
 import { fmtDate, fmtDateTime } from '../utils/time'
-import CreateAgentModal from '../components/CreateAgentModal'
-import { STATE_BADGE_COLORS, AI_TYPE_LABEL, CHAT_REFRESH_EVENT } from '../constants'
+
+import { STATE_BADGE_COLORS, AI_TYPE_LABEL } from '../constants'
 
 interface ModelOption {
   value: string
@@ -72,7 +72,7 @@ const stateLabelKeys: Record<string, string> = {
 
 export default function AgentsPage() {
   const [agents, setAgents] = useState<Agent[]>([])
-  const [showCreate, setShowCreate] = useState(false)
+
   const [showImport, setShowImport] = useState(false)
   const [editAgent, setEditAgent] = useState<Agent | null>(null)
   const [historyAgent, setHistoryAgent] = useState<Agent | null>(null)
@@ -124,7 +124,7 @@ export default function AgentsPage() {
         <Button size="sm" variant="outline" icon={<Upload size={13} />} onClick={() => setShowImport(true)}>
           {t('agents:import')}
         </Button>
-        <Button size="sm" icon={<Plus size={13} />} onClick={() => setShowCreate(true)}>
+        <Button size="sm" icon={<Plus size={13} />} onClick={() => navigate('/agents/create')}>
           {t('agents:create')}
         </Button>
       </PageHeader>
@@ -239,19 +239,7 @@ export default function AgentsPage() {
           </div>
         )}
 
-        {/* 创建弹窗 */}
-        {showCreate && (
-          <CreateAgentModal
-            onClose={() => setShowCreate(false)}
-            onCreated={() => {
-              setShowCreate(false)
-              loadAgents()
-              refreshUser()
-              // 后端给新 AI 落了一条私聊开场，侧栏得重拉列表才看得到这一项
-              window.dispatchEvent(new CustomEvent(CHAT_REFRESH_EVENT))
-            }}
-          />
-        )}
+        {/* 创建走整页流程（入口三选一 + 左助手右表单）：/agents/create */}
 
         {/* 编辑弹窗 */}
         {editAgent && (

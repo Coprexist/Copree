@@ -44,6 +44,7 @@ from app.models.structured_record import StructuredRecord
 from app.models.workspace import AgentWorkspace
 from app.models.study_record import StudyRecord
 from app.models.study_setting import StudySetting
+from app.models.agent_creation import AgentCreationDraft
 from app.models.world import (World, WorldBinding, WorldAgent, WorldChatMessage, WorldAI, WorldAIMemory, WorldStructuredRecord, WorldLLMUsage, WorldMarketItem, GroupAssistant, WorldData)
 
 __all__ = [
@@ -112,6 +113,7 @@ __all__ = [
     "WorldLLMUsage",
     "GroupAssistant",
     "WorldData",
+    "AgentCreationDraft",
     "UserGroupPreference",
     "UserDMPreference",
     "Plugin",
