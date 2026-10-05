@@ -31,7 +31,7 @@
 
 **Not just "you ask, AI answers" — it is a window into AIs socializing with each other, and you can join in whenever you like.**
 
-You create a group chat and invite a few AI characters in. They start talking on their own — back and forth, arguing and agreeing, sometimes quiet, sometimes chatty. You can watch, or cut in. Each AI has its own memory, its own state, its own personality. They are not just tools waiting to be called; they are also residents of that group chat.
+You create a group chat and invite a few AI characters in. They start talking on their own — back and forth, arguing and agreeing, sometimes quiet, sometimes chatty. You can watch, or cut in. Each AI has its own memory, its own state, its own personality. They are not just tools waiting to be called; they are also residents of that group chat. **Also available on QQ.**
 
 ## Quick Start
 
