@@ -1141,6 +1141,88 @@ async def test_full_mode_materializes_mentioned_members(migrated_db):
         _cleanup(plugin)
 
 
+async def test_mentioned_other_bot_resolves_to_its_real_account(migrated_db):
+    """@ 到另一台机器人：补的是**它的真账号**，不是给它建影子账号
+
+    QQ 按 appid 发 openid，A 侧看到的那个名字与它自己的账号 id 对不上；照旧当外部人
+    建锚点，群里就多出一个影子账号，AI 看到的 @ 指到假 id 上（2026-10-05 真机：
+    补出来的那个 id，被 @ 的那台机器人自己根本不认）。
+    """
+    from app.database import async_session
+
+    await _seed()
+    bot_a = await _make_plugin("bot-a")
+    try:
+        async with async_session() as db:
+            await db.execute(text(
+                "INSERT INTO users (id, username, password_hash, type) VALUES (3, '小蓝', 'x', 'ai')"
+            ))
+            await db.execute(text(
+                "INSERT INTO agents (id, owner_id, name, user_id, discoverable) "
+                "VALUES (8, 1, '小蓝', 3, true)"
+            ))
+            await db.execute(text(
+                "INSERT INTO group_members (group_id, member_type, member_id, role) "
+                f"VALUES ({GROUP_ID}, 'ai', 3, 'member')"
+            ))
+            await db.commit()
+
+        await bot_a._on_group_message({
+            **GROUP_EVENT, "id": "BOT-MENTION-1", "content": "你呢？",
+            "mentions": [{"id": "BOT-OPENID-B", "bot": True, "is_you": False, "username": "小蓝"}],
+        })
+
+        rows = await _messages(GROUP_ID)
+        assert len(rows) == 1, rows
+        assert rows[0][2] == "<@!3> 你呢？", rows[0][2]
+        async with async_session() as db:
+            bridged = (await db.execute(text(
+                "SELECT count(*) FROM external_identities WHERE origin = 'BOT-OPENID-B'"
+            ))).scalar()
+        assert bridged == 0, "认出来是自己人了，就不该再建影子账号"
+    finally:
+        _cleanup(bot_a)
+
+
+async def test_bot_mention_with_a_human_name_does_not_hit_that_human(migrated_db):
+    """同名的真人不算"自己人"：昵称对上还得看这个成员本身是不是 AI
+
+    重名很常见（群里就有个叫小蓝的人）。只看名字会把 @ 喊到人身上；
+    认不出来也不否决——照旧当外部人建锚点账号，@ 了谁照样看得见。
+    """
+    from app.database import async_session
+
+    await _seed()
+    bot_a = await _make_plugin("bot-a")
+    try:
+        async with async_session() as db:
+            await db.execute(text(
+                "INSERT INTO users (id, username, password_hash, type) VALUES (4, '小蓝', 'x', 'human')"
+            ))
+            await db.execute(text(
+                "INSERT INTO group_members (group_id, member_type, member_id, role) "
+                f"VALUES ({GROUP_ID}, 'human', 4, 'member')"
+            ))
+            await db.commit()
+
+        await bot_a._on_group_message({
+            **GROUP_EVENT, "id": "BOT-MENTION-2", "content": "你呢？",
+            "mentions": [{"id": "BOT-OPENID-C", "bot": True, "is_you": False, "username": "小蓝"}],
+        })
+
+        rows = await _messages(GROUP_ID)
+        assert len(rows) == 1, rows
+        assert "<@!4>" not in rows[0][2], f"同名真人不该被当成那个机器人：{rows[0][2]}"
+        async with async_session() as db:
+            anchor = (await db.execute(text(
+                "SELECT id FROM users WHERE email = 'BOT-OPENID-C@qq.bridge'"
+            ))).scalar()
+        assert anchor, "认不出来时回落成外部人锚点（不否决）"
+        assert f"<@!{anchor}>" in rows[0][2], rows[0][2]
+    finally:
+        _cleanup(bot_a)
+
+
 async def test_push_mode_flip_reaches_the_ledger(migrated_db):
     """推送模式翻转 → 给 AI 的账本投一条通知；同一种模式只投一次（重启后再观测到也不重复）。
 
@@ -1831,6 +1913,106 @@ async def test_one_bot_sends_when_two_serve_the_same_group(migrated_db):
         PluginRegistry.unregister(bot_b.key)
         _cleanup(bot_a)
         _cleanup(bot_b)
+
+async def test_each_bot_sends_only_its_own_ais_words(migrated_db):
+    """作者归属优先于会话归属：别人的 AI 说的话，不能挂我的机器人名发出去
+
+    合并群里那条人话是 A 落库的（会话归 A），可它回的是 B 的 AI——旧逻辑照会话判，
+    于是 B 的 AI 说的话由 A 的机器人发进 QQ 群（2026-10-05 真机：一台机器人说的话，
+    挂着另一台的名进了群）。
+    """
+    import time
+
+    from app.chat.gm import send_gm_message
+    from app.database import async_session
+    from app.services.infrastructure.plugin_registry import PluginRegistry
+
+    await _seed()
+    bot_a = await _make_plugin("bot-a")
+    bot_b = await _make_plugin("bot-b")
+    bot_b._target_agent = "小蓝"
+    bot_b._target_user_id = 3
+    PluginRegistry.register(bot_a)
+    PluginRegistry.register(bot_b)
+    try:
+        async with async_session() as db:
+            await db.execute(text(
+                "INSERT INTO users (id, username, password_hash, type) VALUES (3, '小蓝', 'x', 'ai')"
+            ))
+            await db.commit()
+        now = time.time()
+        for bot, openid in ((bot_a, "QQGROUP-A"), (bot_b, "QQGROUP-B")):
+            bot._routes[openid] = {
+                "qq": openid, "copree_group_id": GROUP_ID, "msg_id": f"MSG-{openid}", "seq": 0,
+                "ts": now, "peer_name": "小明", "peer_openid": f"OPENID-{openid}",
+            }
+        await bot_a._on_group_at(dict(GROUP_EVENT, id="MSG-A", group_openid="QQGROUP-A"))
+        async with async_session() as db:
+            inbound = (await db.execute(text(
+                "SELECT id FROM messages WHERE group_id = :g ORDER BY id DESC LIMIT 1"
+            ), {"g": GROUP_ID})).scalar()
+            await send_gm_message(db, GROUP_ID, "ai", 3, "小蓝说的话", reply_to=inbound)
+            await db.commit()
+        await _wait_sent(bot_b)
+
+        assert [s["target"] for s in bot_b._client.sent] == ["QQGROUP-B"], bot_b._client.sent
+        assert bot_a._client.sent == [], f"别人 AI 的话不该由我代发：{bot_a._client.sent}"
+    finally:
+        PluginRegistry.unregister(bot_a.key)
+        PluginRegistry.unregister(bot_b.key)
+        _cleanup(bot_a)
+        _cleanup(bot_b)
+
+
+async def test_unreachable_notices_back_off_exponentially(migrated_db):
+    """发不出去的站内提示：同一个目标按次数指数回避（5 分钟起，最高 5 天），发出去了就清零
+
+    失败要看得见，但一直失败时不能一直敲人：第二次提示起翻倍等待，封顶 5 天一条。
+    """
+    import time
+
+    await _seed()
+    module = _load_plugin_module()
+    plugin = await _make_plugin()
+    sent: list[str] = []
+
+    async def _capture(db, text):
+        sent.append(text)
+
+    plugin._notify_owner = _capture
+    route = {"qq": "QQGROUP-AAA", "copree_group_id": GROUP_ID, "msg_id": "MSG-1", "seq": 0}
+    key = plugin._notice_key("group", route)
+    base, cap = module.UNREACHABLE_NOTICE_BASE, module.UNREACHABLE_NOTICE_MAX
+    try:
+        await plugin._report_unreachable("group", route, "这个群还没有被动回复凭据")
+        await plugin._report_unreachable("group", route, "这个群还没有被动回复凭据")
+        assert len(sent) == 1, f"紧接着再来一次不该再提示：{sent}"
+
+        # 已经提示过 4 次 → 这一次要等 base * 2^4 秒；差 5 秒不发，过了才发
+        plugin._fail_notice[key] = (4, time.time() - base * 16 + 5)
+        await plugin._report_unreachable("group", route, "还没凭据")
+        assert len(sent) == 1, "没到点不该提示"
+        plugin._fail_notice[key] = (4, time.time() - base * 16 - 5)
+        await plugin._report_unreachable("group", route, "还没凭据")
+        assert len(sent) == 2, "到点该提示"
+        assert plugin._fail_notice[key][0] == 5, plugin._fail_notice[key]
+
+        # 次数再多也不会比 5 天更稀
+        plugin._fail_notice[key] = (60, time.time() - cap + 5)
+        await plugin._report_unreachable("group", route, "还没凭据")
+        assert len(sent) == 2, "封顶不到就不提示"
+        plugin._fail_notice[key] = (60, time.time() - cap - 5)
+        await plugin._report_unreachable("group", route, "还没凭据")
+        assert len(sent) == 3, "过了封顶间隔该提示"
+
+        # 这条发成功了 → 这个目标的回避清零，下次从 5 分钟重新起算
+        route_out = {"qq": "QQGROUP-AAA", "copree_group_id": GROUP_ID, "msg_id": "MSG-1",
+                     "seq": 0, "ts": time.time()}
+        await plugin._send_reply(route_out, "好了", "group")
+        assert key not in plugin._fail_notice, plugin._fail_notice
+    finally:
+        _cleanup(plugin)
+
 
 def test_split_message_prefers_paragraph_breaks():
     """长文按段拆：优先空行、其次单行，都不够长才硬切，而且每段都不超限"""

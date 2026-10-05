@@ -62,7 +62,8 @@ GROUP_WINDOW, GROUP_MAX = 300, 5
 DM_WINDOW, DM_MAX = 3600, 4
 # 互动召回（官方：只有单聊有 is_wakeup 字段；对方主动对话后 30 天内 4 个周期各 1 条）
 RECALL_PERIOD_DAYS = (1, 3, 7, 30)
-UNREACHABLE_NOTICE_INTERVAL = 300  # 同一个目标的"发不出去"提示最多 5 分钟一条，别刷屏
+UNREACHABLE_NOTICE_BASE = 300          # "发不出去"提示的起始回避间隔：5 分钟
+UNREACHABLE_NOTICE_MAX = 5 * 86400     # 一直发不出去就翻倍回避，最高 5 天一条，别把人刷烦
 UNION_TTL_SECONDS = 86400          # 补拉到的 union 缓存一天（没有也缓存，成员接口只有 30 QPM）
 UNION_CACHE_MAX = 2000             # 缓存条目上限：按群成员数增长，满了丢最早的
 MIRROR_WINDOW_SECONDS = 3          # 同一句 QQ 消息被两台机器人分别送进来的认亲窗口
@@ -534,8 +535,9 @@ class QqChannelPlugin(ServicePlugin):
         # 今天拉到的群信息（QQ 群 openid → 群名/简介/分类/标签/人数）：群名要用来对齐落点群名、
         # 也得给卡片和 AI 看，但它是低频变化的事实——按"今天第一条群消息"问一次，见 _group_facts_of
         self._group_facts: dict[str, dict[str, Any]] = {}
-        # "这条发不到 QQ"的站内提示上次时间（按目标）：失败要看得见，但不能刷屏
-        self._fail_notice: dict[str, float] = {}
+        # "这条发不到 QQ"的站内提示：按目标记 (已经提示过几次, 上次提示时间)。
+        # 失败要看得见，但不能刷屏——间隔按次数指数回避（5 分钟 → 翻倍 → 最高 5 天）
+        self._fail_notice: dict[str, tuple[int, float]] = {}
         # 补拉到的 union_openid（群:成员 → (时刻, union)）：成员接口只有 30 QPM，不能每条消息都问
         # 单条上限实测出来的两侧边界：最长发成功的一段 / 最短被拒的一段（0 = 还没测到）
         self._max_chars = 0
@@ -1071,9 +1073,9 @@ class QqChannelPlugin(ServicePlugin):
 
         全量事件里官方给 mentions，每条带 bot / is_you 两个标记，**只有 is_you 是"这条是我"**：
         bot 只说明"被点的是个机器人"，群里有两个机器人时，@ 另一个机器人同样带 bot: true
-        （2026-10-05 真机载荷：书爱 @ 绵绵那条是
-        `{"bot": true, "is_you": false, "username": "绵绵"}`——旧判据把它当成"我被 @ 了"，
-        于是给这条消息补上唤醒令牌，涵吾珑替绵绵答了话）。拿不到 mentions 再退回按名字判
+        （2026-10-05 真机载荷：`{"bot": true, "is_you": false, "username": "某成员"}`——旧判据把它
+        当成"我被 @ 了"，于是给这条消息补上唤醒令牌，另一台机器人替被 @ 的那台答了话）。
+        拿不到 mentions 再退回按名字判
         （@机器人 的前缀在两种事件里都被官方去掉了，所以名字判定是唯一兜底）。
         """
         for user in d.get("mentions") or []:
@@ -1152,8 +1154,9 @@ class QqChannelPlugin(ServicePlugin):
         QQ 写在正文里的原始提及是 `<@openid>`（**没有那个 `!`**，那是它自己的 id）：谁都不认，
         一律按 mentions 里的 origin 精确摘掉。**只有"我自己"那一条只摘不补**——点名由唤醒令牌负责，
         不摘就存成 `<@!40> <@5872…>` 这种"两个令牌、其中一个还是乱码"（2026-09-26 真机）。
-        别的**机器人**照常补令牌：群里 @ 了另一个机器人（同一个 QQ 群被两台机器人接着是常态），
-        "谁被 @ 了"这件事 AI 和界面都该看得见（2026-10-05：书爱 @ 绵绵那条在 Copree 侧只剩"你好"）。
+        别的**机器人**：认得出是本群某个 AI 的真身（见 _mentioned_bot_member）就补它的真令牌——
+        同一个 QQ 群被两台机器人接着时，"谁被 @ 了"AI 和界面都该看得见（2026-10-05：@ 另一个
+        机器人的那条在 Copree 侧只剩"你好"）；认不出照旧当外部人建锚点账号，不否决。
         顺带：两边都补令牌，认亲（_same_channel_text 摘令牌后比）也才认得出来是同一条。
         """
         mentions = [m for m in (d.get("mentions") or []) if isinstance(m, dict)]
@@ -1175,10 +1178,20 @@ class QqChannelPlugin(ServicePlugin):
                     content = content.replace(marker + " ", "").replace(marker, "")
                 if user.get("is_you"):
                     continue                  # 我自己：唤醒令牌已经点名，不再补一个
-                if user.get("bot") and user.get("is_you") is None:
-                    # 只标了"被点的是个机器人"、没标是不是我：按老规矩只摘不补——
-                    # 没把握时宁可不给自己建影子账号（真机是两条标记都给）
-                    continue
+                if user.get("bot"):
+                    # 另一个机器人：认得出是本群某个 AI 的真身，就补**它的真账号**。
+                    # 为什么不照旧直接建外部锚点：QQ 按 appid 发 openid，那样认不出它其实
+                    # 是自己人，造出来的是"名字#2"这种影子账号，AI 看到的 @ 就指到假 id 上
+                    # （2026-10-05 真机：A 侧补出的那个 id，被 @ 的那台机器人自己根本不认）。
+                    if user.get("is_you") is None:
+                        continue          # 没标是不是我：没把握，只摘不补（真机两条标记都给）
+                    if user.get("is_you") is False:
+                        uid = await self._mentioned_bot_member(db, str(user.get("username") or ""))
+                        if uid:
+                            tokens.append(mention_token(uid))
+                            continue
+                    # 认不出不是否决：它可能还没被列成 AI 成员（真实 QQ 小号接进来的机器人），
+                    # 也可能就是别家的机器人——那就照外部人走下面那条路，@ 了谁照样看得见。
                 ensured = await ensure_channel_user(
                     db, kind=self.channel_kind, owner_scope=self.instance, origin=origin,
                     display_name=str(user.get("username") or ""),
@@ -1192,6 +1205,39 @@ class QqChannelPlugin(ServicePlugin):
                 tokens.append(mention_token(uid))
             await db.commit()
         return ("".join(tokens) + " " + content) if tokens else content
+
+    async def _mentioned_bot_member(self, db: Any, name: str) -> int:
+        """被 @ 的机器人是不是本群某个 AI 的真身 → 它的 Copree 账号 id（不是就是 0）
+
+        两个面合起来认，不拿名字单点：
+        1. 昵称与成员**一字不差**，名单走入口那一套（resolve_member_ids）——
+           和正文里 @名字 的归一认的是同一份，不会两处漂移；
+        2. 同名的这个成员本身是 AI 账号，挡掉同名的真人（重名很常见，只看名字会把
+           @ 喊到人身上）。
+
+        认不出来不等于它不存在：可能还没被列成 AI 成员（真实 QQ 小号接进来的机器人、
+        别家的机器人），调用方回落到"当外部人建锚点账号"那条老路，不在这里否决。
+        """
+        name = str(name or "").strip()
+        gid = int(self._copree_group_id or 0)
+        if not name or not gid:
+            return 0
+        from sqlalchemy import select
+
+        from app.chat.gm import resolve_member_ids
+        from app.models.group import GroupMember
+
+        uid = (await resolve_member_ids(db, gid)).get(name)
+        if not uid:
+            return 0
+        is_ai = (await db.execute(
+            select(GroupMember.id).where(
+                GroupMember.group_id == gid,
+                GroupMember.member_type == "ai",
+                GroupMember.member_id == int(uid),
+            )
+        )).first()
+        return int(uid) if is_ai else 0
 
     def _with_mention_prefix(self, content: str) -> str:
         """两边语义对齐：QQ 里 @机器人 = 在 Copree 里 @这个 AI（群自己的唤醒规则仍然生效）。
@@ -1928,30 +1974,51 @@ class QqChannelPlugin(ServicePlugin):
             if p is not self and getattr(p, "id", "") == self.id and hasattr(p, "_route_for_outbound")
         ]
 
-    def _carrier(self, group_id: int, author_id: int) -> Any:
+    def _carrier(self, group_id: int, author_id: int, origin_instance: str = "") -> Any:
         """这条 AI 消息该由哪台机器人发出去（返回的就是那台实例）。
 
-        同一个 Copree 群可能被多台接着：本群没有来源可认时（AI 自己起的话头）谁都能发，
-        两边都发群里就是两条。选举规则确定性（先作者归属、再有可用被动凭据、最后实例名），
-        每台各算一次都得到同一个答案——用一个进程内的实例表就够了，不需要额外的账本。
+        同一句话只该有一台发（两边都发群里就是两条），判据按优先级：
+        1. **作者有主**：这条是某台实例绑的 AI 说的，就只让那台发。判据不看"接不接这个群、
+           有没有被动凭据"——会话是两台各自落库的，凭据说没就没，换台顶发就是用别人的
+           机器人身份说这句话（2026-10-05 真机：一台机器人说的话，挂着另一台的名进了 QQ 群）。
+           只认活着的实例（死掉的那台发不了，别堵着口子）；同一个 AI 被两台接着时按会话
+           归属认，都没有就按实例名定序。
+        2. 作者不归任何实例（群里别人的 AI 起的话头）：先看来消息的那台，再看谁有可用被动
+           凭据，最后按实例名定序——每台各算一次都得到同一个答案，不需要额外的账本。
         """
+        origin = str(origin_instance or "")
+        owners = [
+            p for p in [self] + self._siblings()
+            if self._alive(p)
+            and int(getattr(p, "_target_user_id", 0) or 0) == int(author_id or 0)
+        ]
+        if owners:
+            # 作者有主：只看它的实例。在线与否要看（死掉的实例发不了，别让它把口子堵住），
+            # 但"接不接这个群、有没有被动凭据"不改判据——换台顶发就是用别人的机器人身份
+            # 说这句话；发不出去那边会自己留痕提示
+            same = [p for p in owners if str(getattr(p, "instance", "") or "") == origin]
+            if same:
+                return same[0]
+            return min(owners, key=lambda p: str(getattr(p, "instance", "") or ""))
         candidates = [
             p for p in [self] + self._siblings()
             if self._alive(p) and p._serves_group(group_id)
         ]
         if not candidates:
             return self
+        if origin:
+            same = [p for p in candidates if str(getattr(p, "instance", "") or "") == origin]
+            if same:
+                return same[0]
         ready = [p for p in candidates if p._route_for_outbound(group_id, "") is not None]
-        pool = ready or candidates
-        owned = [
-            p for p in pool
-            if int(getattr(p, "_target_user_id", 0) or 0) == int(author_id or 0)
-        ]
-        pool = owned or pool
-        return min(pool, key=lambda p: str(getattr(p, "instance", "") or ""))
+        return min(ready or candidates, key=lambda p: str(getattr(p, "instance", "") or ""))
 
     async def _outbound_sink(self, db: Any, group_id: int, message: Any, source: str) -> None:
         """群消息出口：只转发绑定群里 AI 发的消息。
+
+        谁是发送方由 _carrier 一处定（作者归属优先，其次会话归属与凭据）：两台机器人接着
+        同一个 Copree 群时，"这条会话归我"不等于"这句话归我说"——照会话判会让 B 机器人用
+        自己的身份把 A 机器人的话发进 QQ 群（2026-10-05 真机）。
 
         必须 fire-and-forget：这个 sink 在 send_gm_message 里、commit 之前被调用，
         等一次 HTTP 往返会把"发消息"本身拖慢。
@@ -1964,13 +2031,12 @@ class QqChannelPlugin(ServicePlugin):
         if not text:
             return
         origin = await self._message_origin(db, message)
-        if origin is not None and origin[0] != self.instance:
-            # 这条来自别的实例的通道会话（同一个 Copree 群被两个机器人接着）：归它回。
-            # 我们插一手只会把它发进自己那个群——被动凭据也只在它那边
-            return
-        if origin is None and self._carrier(group_id, int(getattr(message, "sender_id", 0) or 0)) is not self:
-            # 没有来源可认（AI 自己起的话头）：同群还有别的机器人在接，选一台发，
-            # 否则两台各发一条，群里就是重复的
+        carrier = self._carrier(
+            group_id, int(getattr(message, "sender_id", 0) or 0), origin[0] if origin else ""
+        )
+        if carrier is not self:
+            # 这条归别的实例发（作者的机器人，或本群另有其人在接）。我们插一手只会把它发进
+            # 自己那个群——被动凭据也只在它那边
             return
         route = self._route_for_outbound(group_id, origin[1] if origin else "")
         if not route:
@@ -2065,6 +2131,9 @@ class QqChannelPlugin(ServicePlugin):
             )
             await self._report_unreachable(kind, route, str(e))
             return
+        # 这一段发出去了：这个目标的回避清零，下次再发不出去从 5 分钟重新起算
+        # （放在"太长没发完"之前：那算这一条没交代完，照样计数）
+        self._fail_notice.pop(self._notice_key(kind, route), None)
         if result.get("unsent"):
             await self._report_unreachable(
                 kind, route, f"消息太长，被动回复次数用完了，末尾 {result['unsent']} 字没发出去",
@@ -2079,6 +2148,12 @@ class QqChannelPlugin(ServicePlugin):
             origin=str(route.get("origin") or "") if kind == "group" else "",
         )
 
+    @staticmethod
+    def _notice_key(kind: str, route: dict) -> str:
+        """"发不出去"的提示按目标分别回避：同一个群、同一个人各算一份"""
+        target = str(route.get("qq") or "")
+        return f"{kind}:{target or route.get('copree_group_id') or ''}"
+
     async def _report_unreachable(self, kind: str, route: dict, reason: str) -> None:
         """这条发不到 QQ → 通知 AI 主人。
 
@@ -2087,11 +2162,13 @@ class QqChannelPlugin(ServicePlugin):
         只认 human/ai，插一条"系统"会被约束拒掉；冒充人说话又会惊动群里的 AI。
         """
         target = str(route.get("qq") or "")
-        key = f"{kind}:{target or route.get('copree_group_id') or ''}"
+        key = self._notice_key(kind, route)
         now = time.time()
-        if now - self._fail_notice.get(key, 0) < UNREACHABLE_NOTICE_INTERVAL:
-            return                      # 同一个目标最多 5 分钟提示一次，别把人刷烦
-        self._fail_notice[key] = now
+        missed, last = self._fail_notice.get(key, (0, 0.0))
+        wait = min(UNREACHABLE_NOTICE_BASE * (2 ** missed), UNREACHABLE_NOTICE_MAX)
+        if now - last < wait:
+            return                      # 指数回避：5 分钟起翻倍，最高 5 天一条（发成功即清零）
+        self._fail_notice[key] = (missed + 1, now)
         where = f"（QQ {'群' if kind == 'group' else '用户'} …{target[-6:]}）" if target else ""
         if kind == "group" and route.get("copree_group_id"):
             where += f"（Copree 群 #{int(route['copree_group_id'])}）"
