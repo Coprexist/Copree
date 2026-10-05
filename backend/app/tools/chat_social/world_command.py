@@ -4,8 +4,8 @@ world_command 工具 — 群 AI 操作绑定世界（命令统一交给世界程
 执行 = 以 AI 身份发群消息（source="user" 触发群消息钩子）→ 世界程序 handle() → SSE 生效，
 群里可见可审计，与用户共用同一套语法；工具定义与具体世界无关，命令清单走尾部动态块。
 
-目标群依次认：显式 group_id → 候选群里第一个绑了世界的（候选按新鲜度，本次回复所在的群在前）
-→ 世界帧上记的通道群。都没有就不猜，如实说「你手上没有绑了世界的群」——**不报**「群没绑世界」：
+目标群依次认：显式 group_id → 候选群里第一个绑了世界的（候选按新鲜度，本次回复所在的群在前，
+世界帧的通道群兜底）→ 都没有就不猜，如实说「你手上没有绑了世界的群」——**不报**「群没绑世界」：
 那会把"你在私信里"说成群的问题（线上误导过一次）。
 
 设计：docs/group_world/design/world_agent_capabilities.md（路径 B）
@@ -59,10 +59,12 @@ class WorldCommand(ToolPlugin):
                 return {"error": True, "message": f"群 {target_group} 未绑定世界（可在世界列表给群配置世界后使用）"}
         else:
             ctx = await current_context(db, agent_id, group_id)
-            target_group, worlds = await first_world_bound_group(db, ctx["group_ids"])
-            if not worlds and ctx["channel_group_id"]:
-                target_group = int(ctx["channel_group_id"])
-                worlds = await find_worlds_by_entity(db, "group", target_group)
+            # 候选群按优先级排：状态栈里的群会话（本次回复所在的群在前，按新鲜度）→ 世界帧的通道群。
+            # 通道群排最后：它记的是"他进世界时约定从哪个群出去"，群会话都被交接清掉时才轮到它
+            candidates = list(ctx["group_ids"])
+            if ctx["channel_group_id"]:
+                candidates.append(int(ctx["channel_group_id"]))
+            target_group, worlds = await first_world_bound_group(db, candidates)
             if not worlds:
                 return {"error": True, "message":
                         "不知道这条命令该发到哪个群：你手上没有绑了世界的群——"

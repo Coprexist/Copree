@@ -13,7 +13,7 @@ from app.tools.base import ToolPlugin, ToolRegistry
 
 
 class _EntryDenied(Exception):
-    """入口校验没通过：把话原样回给 AI（工具的错误约定是 {"error": True, "message": ...}）。"""
+    """进不去：把话原样回给 AI（工具的错误约定是 {"error": True, "message": ...}）。"""
 
 
 async def _resolve_channel_group(db, agent_id: int, chat_group_id: int | None, arguments: dict) -> int:
@@ -57,13 +57,20 @@ async def _resolve_world(db, agent, target_group: int, arguments: dict):
         raise _EntryDenied("world_id 必须是世界编号（整数）")
     if not any(w.id == world_id for w in await find_worlds_by_entity(db, "group", target_group)):
         # AI 直接绑定世界也算（世界技能那条路），但命令仍要从通道群出去
-        mine = await find_worlds_by_entity(db, "agent", agent.user_id or 0)
+        mine = await find_worlds_by_entity(db, "agent", agent.user_id) if agent.user_id else []
         if not any(w.id == world_id for w in mine):
             raise _EntryDenied(f"世界 #{world_id} 没绑群 {target_group}，也没绑定你，进不去")
     world = await db.get(World, world_id)
     if world is None:
-        raise _EntryDenied(f"世界 #{world_id} 不存在")
+        raise _EntryDenied(f"世界 #{world_id} 不存在")   # 防御：绑定行还在、世界行刚被删
     return world
+
+
+async def _ensure_member(db, group_id: int, agent_id: int) -> None:
+    """命令要以 AI 身份发到那个群：不是成员就进不去（发送侧也会拒）。"""
+    from app.chat.gm import _get_member
+    if await _get_member(db, group_id, "ai", agent_id) is None:
+        raise _EntryDenied(f"你不在群 {group_id} 里，进不去它的世界")
 
 
 async def _activate_world_frame(db, agent_id: int, world, target_group: int,
@@ -75,7 +82,8 @@ async def _activate_world_frame(db, agent_id: int, world, target_group: int,
     doing = f"在世界「{world.name}」里游玩（通道：群「{group_name}」）"
     existing = context_frames(await get_frames(db, agent_id), f"world:{world.id}")
     if existing:
-        frame = await restore_frame(db, agent_id, str(existing[-1].get("id") or ""), updates={
+        # 同一 ref 至多一帧（老数据的重复帧会在 _save 里合掉），所以 [0] 就是"那帧"
+        frame = await restore_frame(db, agent_id, str(existing[0].get("id") or ""), updates={
             "group_id": target_group,
             "label": f"世界「{world.name}」",
             "doing": doing,
@@ -131,19 +139,15 @@ class EnterWorld(ToolPlugin):
         try:
             target_group = await _resolve_channel_group(db, agent_id, group_id, arguments)
             world = await _resolve_world(db, agent, target_group, arguments)
+            await _ensure_member(db, target_group, agent_id)
         except _EntryDenied as denied:
             return {"error": True, "message": str(denied)}
-
-        # 命令要以 AI 身份发到那个群：不是成员就进不去（发送侧也会拒）
-        from app.chat.gm import _get_member
-        if await _get_member(db, target_group, "ai", agent_id) is None:
-            return {"error": True, "message": f"你不在群 {target_group} 里，进不去它的世界"}
 
         group_row = await db.get(Group, target_group)
         group_name = group_row.name if group_row is not None else f"群{target_group}"
         _, restored = await _activate_world_frame(
             db, agent_id, world, target_group, group_name, str(arguments.get("why") or ""))
-        await db.commit()
+        # 不 commit：提交是调用者的事（work_session 出块即提交），与 world_command 一致
 
         return {
             "success": True,
