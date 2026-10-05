@@ -78,6 +78,8 @@ interface ChatViewProps {
 }
 
 const PAGE_SIZE = 20
+// 一次补齐最多拉多少页：离开一天也就几百条；再多交给触底继续拉，别把首屏拖住
+const CATCH_UP_MAX_PAGES = 50
 
 // ── 模块级工具函数 ──
 
@@ -108,7 +110,7 @@ function useSentinel({
   loadingState: 'initial' | 'older' | 'newer' | null
   loadMessages: (params: {
     before_id?: number; after_id?: number; mode: 'initial' | 'older' | 'newer'
-  }) => Promise<void>
+  }) => Promise<Message[]>
 }) {
   useEffect(() => {
     const sentinel = sentinelRef.current
@@ -625,19 +627,13 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
       }
 
       setMessages((prev) => {
-        if (mode === 'older') {
-          // 去重：fetched 可能在 prev 中已存在（竞态）
-          const existingIds = new Set(prev.map((m) => m.id))
-          const unique = fetched.filter((m) => !existingIds.has(m.id))
-          return [...unique, ...prev]
-        } else if (mode === 'newer') {
-          // 游标 after_id 保证不重叠，但以防万一也去重
-          const existingIds = new Set(prev.map((m) => m.id))
-          const unique = fetched.filter((m) => !existingIds.has(m.id))
-          return [...prev, ...unique]
-        } else {
-          return fetched
-        }
+        if (mode === 'initial') return fetched
+        // 按 id 归并：两个方向都往同一份列表里插，谁在前谁在后由 id 说，不靠拼接顺序。
+        // 「往前插 / 往后接」只在列表本身没有洞时成立；补丢消息补的正是洞，那时拼接会把
+        // 新页塞到列表末尾（2026-10-04 群 69 那屏：10-03 的消息下面直接接 10-04 深夜的）
+        const byId = new Map(prev.map((m) => [m.id, m]))
+        for (const m of fetched) byId.set(m.id, m)
+        return [...byId.values()].sort((a, b) => a.id - b.id)
       })
 
       if (mode === 'older') {
@@ -677,12 +673,33 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
           // 首次访问且消息 ≤ PAGE_SIZE → 全部可见，无需未读标记
         }
       }
+      return fetched
     } catch (err) {
       console.error('加载消息失败:', err)
+      return [] as Message[]
     } finally {
       setLoadingState(null)
     }
   }, [conversationId, conversationType])
+
+  // 补齐游标之后丢掉的那段消息
+  // 断线/漏推期间缺的那一截：分页只会往前翻，够不着中间（观感："16 分钟前上面直接是 2 天前"）。
+  // 从游标处一页页往后拉、按 id 归并，直到不足一页。
+  // 返回补齐段的第一条 id（红线画它上面，不是当页最旧那条）；没补到就是 null
+  const catchUpFrom = useCallback(async (fromId: number | null): Promise<number | null> => {
+    if (!fromId) return null
+    let cursor = fromId
+    let boundary: number | null = null
+    for (let i = 0; i < CATCH_UP_MAX_PAGES; i++) {
+      const page = await loadMessages({ after_id: cursor, mode: 'newer' })
+      if (page.length > 0 && boundary === null) boundary = page[0].id
+      if (page.length < PAGE_SIZE) return boundary
+      const last = page[page.length - 1]?.id
+      if (!last || last === cursor) return boundary
+      cursor = last
+    }
+    return boundary
+  }, [loadMessages])
 
   // ============================================================
   // 滚动辅助
@@ -736,7 +753,15 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
       setGroupMembers(membersData)
     }
     await loadMessages({ mode: 'initial' })
-  }, [conversationId, conversationType, loadMessages])
+    // 上次已读位置落在最新那一页之前（离开超过一页的量）时，未读的主体正好夹在中间：
+    // 只加载最新一页的话，红线只能画在当页最旧那条上，中间那批也翻不到
+    const stored = localStorage.getItem(`lastRead_${conversationType}_${conversationId}`)
+    const lastReadId = stored ? parseInt(stored) : null
+    const newest = newestIdRef.current
+    if (!lastReadId || !newest || lastReadId >= newest) return
+    const boundary = await catchUpFrom(lastReadId)
+    if (boundary) setFirstUnreadId(boundary)
+  }, [conversationType, conversationId, loadMessages, catchUpFrom])
 
   // Tauri 那条"3 秒窗口没开成 → 整页兜底跳转"的待定标记：用户改选标准界面、切走对话后作废
   const immersivePending = useRef(false)
@@ -872,6 +897,18 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
     containerRef, sentinelRef: bottomSentinelRef, cursorRef: newestIdRef,
     hasMore: hasMoreAfter, direction: 'newer', loadingState, loadMessages,
   })
+
+  // 断线重连：把掉线期间漏掉的消息补上（WS 只推「此刻之后」的，掉线那一段没人补，
+  // 不补的话列表就永久断成两截）。首次连接不算重连——那条路由初始加载负责。
+  const wasConnectedRef = useRef(false)
+  useEffect(() => {
+    if (!connected) {
+      wasConnectedRef.current = false
+      return
+    }
+    if (wasConnectedRef.current) catchUpFrom(newestIdRef.current)
+    wasConnectedRef.current = true
+  }, [connected, catchUpFrom])
 
   // ============================================================
   // 滚动监听：isAtBottom + showJumpToUnread（使用 rAF 节流 DOM 查询）

@@ -26,3 +26,30 @@
   ＋ i18n 三语，并修标签键大小写（`admin.apikeyPool` vs 字典里的 `admin.apiKeyPool`）。
   真机验证：key#1 → `decrypt_failed`；临时 key 指本地 Ollama → `ok`「连接成功，8 个模型可用」。
 - **用户已重填池 Key #1**：实测解密 OK（明文长度 35）——③ 收工。
+
+## 本轮线上问题修复（2026-10-04 ~ 10-05）
+
+- **决策技能代发的消息没落库**（QQ 那侧收到、Copree 侧缺了好几屏）：命中规则后走的是 flush → 广播 → 通道出口，
+  而出口在调用方 commit **之前**跑；可决策分支与"仅工具调用"分支都是直接 return，那一轮的 session 谁都没提交，
+  回滚时消息就没了（群 69 的 messages 里 `2310 → 2312 → 2314` 空着 2311/2313，正是「排行/打劫」两条脚本代发）。
+  修法：把提交并进「开会话」——后台轮次统一走 `database.work_session()`（与 HTTP 的 `get_db` 同一份实现：
+  出块即提交、抛错回滚），散在各文件里的手动提交一并收回。验证：`tests/test_work_session.py`；
+  语义（不是 savepoint，嵌套是两笔独立事务）写进 `app/database.py` 的 docstring。
+- **AI 主动 compact 完，下一轮又弹回原文**：手动 `compress_context` 只换了当轮内存里的 messages，没走解锁点
+  ——账本没重写，下一轮 `build_messages` 又把原文端回来（群 69 实测：当轮 13 条，下一轮 120 条）。
+  修法：解锁整套抽到 `services/history/context_unlock.py`（空闲压缩 / 轮内自动压缩 / AI 主动压缩三处共用），
+  手动压缩成功后照样重写账本、复位触发状态、对齐前缀版本与环境；`executor` 只转发。
+- **群聊消息列表断成两截，中间那批永远翻不到**（16 分钟前的消息上面直接接 2 天前的）：
+  `get_gm_messages(after_id=…)` 取的是「按时间倒序的最新 limit 条」，可它是分页游标——贴游标往后挪时每次都跳到末尾，
+  中间那段谁也够不着，返回的还是倒序。修法：`after_id` 与 `before_id` 互为镜像（按 id 升序、贴游标一页）；
+  要「最近一窗」的地方（AI 补历史）单独走 `get_gm_messages_after_watermark`；前端改成按 id 归并，
+  并在进会话、断线重连两处补齐缺口（`CATCH_UP_MAX_PAGES` 页上限）。
+- **私信里调 world_command 报「需要群绑定世界」**（AI 进不了世界）：真因是 `group_id is None`（私信），
+  不是群没绑世界——群 59 早在 09-10 就绑了世界 45。修法：新增 `enter_world` 把 (世界, 通道群) 记成状态帧，
+  命令的目标群按「离他最近的事实」认（显式 → 候选群里第一个绑世界的 → 世界帧的通道群），一个都没有时如实说
+  「你手上没有绑了世界的群」。文档见 [世界 AI 能力](../group_world/design/world_agent_capabilities.md)。
+- **同一个会话的状态帧攒成一串**（某 AI 的 `group:59` 三个活帧）：`push_state` 的去重只跟栈顶比身份，
+  离开再回来就压新帧，旧的仍留在运行集合，摘要把它们当成几段正在进行的事、帧位也被白占。
+  修法：认帧认 `context_ref`（同会话切回原帧，**帧 id 稳定**）；不变量兜在唯一写入点 `_save`（重复帧归并）。
+  规则表见 [帧生命周期](../dev/frame_lifecycle.md)「同一段会话至多一帧」；测试 `tests/test_frame_lifecycle.py`。
+

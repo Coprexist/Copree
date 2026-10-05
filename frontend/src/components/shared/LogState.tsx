@@ -61,15 +61,16 @@ export function groupByState<T>(
   return groups
 }
 
-/** 帧类型说人话：group_chat / dm 有对应说法，AI 自己压的帧（work 之类）照原样 */
+/** 帧类型说人话：group_chat / dm / world 有对应说法，AI 自己压的帧（work 之类）照原样 */
 const STATE_TYPE_KEYS: Record<string, string> = {
   group_chat: 'logs:stateTypeGroup',
   dm: 'logs:stateTypeDm',
+  world: 'logs:stateTypeWorld',
 }
 
-/** 后端把会话标签拼成「群「名字」」/「私信「名字」」；类型已经交代过这件事，名字里就不重复了 */
+/** 后端把标签拼成「群「名字」」/「私信「名字」」/「世界「名字」」；类型交代过这件事，名字里就不重复 */
 function stateName(label: string): string {
-  const matched = /^(?:群|私信)「([\s\S]*)」$/.exec(label)
+  const matched = /^(?:群|私信|世界)「([\s\S]*)」$/.exec(label)
   return matched ? matched[1] : label
 }
 

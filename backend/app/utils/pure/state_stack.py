@@ -8,11 +8,14 @@
 make_state_frame(): 构建单个状态帧（交接驱动：handoff/completed_handoff）
 normalize_order(): 排成 [历史区][运行区，当前帧在末尾]——全仓 stack[-1] 等于当前帧的依据
 current()/running()/by_id()/retired(): 运行集合与存储的各自视图
+merge_same_context(): 同一段会话只留一帧（重复帧归并进最近激活的那帧）——写入点的不变量
 retire_overflow()/drop_overflow()/drop_retired_overflow(): 容量闸的两条走法（挂起待交接 / 平台直接代销）与积压硬底
 format_state_stack_summary(): 存储 → AI 可读摘要（只渲染当前帧 + 交接信息 + 待交接计数）
 parse_state_summary(): 摘要 → 当时的当前帧身份（写与读共用一份标记，见 STATE_SUMMARY_MARK）
 
 情感向量纯函数见 emotion.py（独立模块）。
+
+契约（状态、容量闸、同会话归并）：docs/dev/frame_lifecycle.md。
 """
 from __future__ import annotations
 
@@ -59,6 +62,9 @@ _FRAME_FIELDS = (
     "id", "type", "context_ref", "label", "why", "doing", "todo", "plan", "journal",
     "created_at", "status", "emotion", "emotion_text", "source_emotion",
     "tools", "skills", "call_count", "handoff", "completed_handoff",
+    # group_id：世界帧（type=world）的通道群——命令要落到一个具体的群，世界本身不记这个。
+    # 一个世界可能绑好几个群（世界 36 → 群 24/48/49/50/51），所以群必须跟着帧走。
+    "group_id",
     # last_active_at：帧最后一次被**调用**的时刻（LLM 调用与决策调用都算）。容量超限时据此挑
     # 「最久没被调用」的帧，不按创建时间——长期在用的会话帧不该因为建得早就被挂起
     "last_active_at",
@@ -288,6 +294,95 @@ def context_frames(stack: list[dict], context_ref: str) -> list[dict]:
     """某个会话名下**还在跑的**帧（会话本身消失了，它们再也跑不起来）。"""
     ref = str(context_ref or "")
     return [f for f in running(stack) if ref and f.get("context_ref") == ref]
+
+
+def _blank(value) -> bool:
+    """这个字段算「没写过」吗（归并时只在空白处补）——空串与空容器都算没写。"""
+    return value is None or value == "" or value == {} or value == []
+
+
+def _union_list(a, b) -> list:
+    """并集保序去重——通知 / 便签 / 尾巴这类"事实清单"用。"""
+    out = list(a or [])
+    for item in (b or []):
+        if item not in out:
+            out.append(item)
+    return out
+
+
+def _merge_handoff(keeper_handoff, other_handoff) -> dict:
+    """交接包：from_* 这类字段幸存者优先，"原文尾巴"取并集——一次性交接不该因为归并丢掉。"""
+    out = dict(keeper_handoff or {})
+    for key, value in (other_handoff or {}).items():
+        if key == "tail":
+            out["tail"] = _union_list(out.get("tail"), value)
+        elif _blank(out.get(key)):
+            out[key] = value
+    return out
+
+
+def _merge_frame_into(keeper: dict, frame: dict) -> None:
+    """把一个被归并帧并进幸存者（规则表见 merge_same_context 的说明与 docs/dev/frame_lifecycle.md）。"""
+    for key, value in frame.items():
+        if key in ("id", "created_at", "status", "last_active_at") or _blank(value):
+            continue
+        if key == "call_count":
+            keeper[key] = int(keeper.get(key) or 0) + int(value or 0)
+        elif key == "tool_uses":
+            cur = dict(keeper.get(key) or {})
+            for k, v in (value or {}).items():
+                cur[k] = max(int(cur.get(k) or 0), int(v or 0))
+            keeper[key] = cur
+        elif key == "delivered":
+            cur = dict(keeper.get(key) or {})
+            for k, v in (value or {}).items():
+                cur.setdefault(k, v)
+            keeper[key] = cur
+        elif key in ("pending_notices", "notes", "tail"):
+            keeper[key] = _union_list(keeper.get(key), value)
+        elif key in ("handoff", "completed_handoff"):
+            keeper[key] = _merge_handoff(keeper.get(key), value)
+        elif _blank(keeper.get(key)):
+            keeper[key] = value
+
+
+def merge_same_context(stack: list[dict]) -> list[dict]:
+    """同一段会话只留一帧：运行集合里同 context_ref 的重复帧归并进一帧，返回被归并的帧。
+
+    重复来自"push 只跟栈顶比身份"（线上实测：某 AI 的 group:59 攒了三帧）。挂起/销掉是事后清
+    症状，不变量要落在唯一写入点（_save）——这样哪条路径 push 都攒不出第二帧。
+
+    规则表（契约级，改这里必须同步 docs/dev/frame_lifecycle.md「同一段会话至多一帧」）：
+    留「当前帧优先、其次最近激活」那帧；**未列出的字段一律幸存者优先**（同名值有意丢弃）；
+    last_active_at 取组内最大（created_at 取幸存者的：它只是容量闸排序的兜底，重建会归零）；
+    call_count 求和、tool_uses 逐键取大、delivered 键并集；pending_notices / notes / tail 与
+    交接包的 tail 取并集。被归并帧置 ended 并记 merged_into（留痕：不是他自己结束的）。
+    """
+    groups: dict[str, list[dict]] = {}
+    for frame in running(stack):
+        ref = str(frame.get("context_ref") or "")
+        if ref:
+            groups.setdefault(ref, []).append(frame)
+    merged: list[dict] = []
+    for frames in groups.values():
+        if len(frames) < 2:
+            continue
+        keeper = max(frames, key=lambda f: (
+            f.get("status") == "active",
+            str(f.get("last_active_at") or f.get("created_at") or ""),
+        ))
+        for frame in frames:
+            if frame is keeper:
+                continue
+            _merge_frame_into(keeper, frame)
+            frame["status"] = ENDED_STATUS
+            frame["merged_into"] = str(keeper.get("id") or "")
+            merged.append(frame)
+        # 刚被用过的那一帧，时间戳不该停在旧值上（容量闸按它挑"最久没用"）
+        stamps = [str(f.get("last_active_at") or f.get("created_at") or "") for f in frames]
+        if max(stamps):
+            keeper["last_active_at"] = max(stamps)
+    return merged
 
 
 def retire_context_frames(stack: list[dict], context_ref: str) -> list[str]:

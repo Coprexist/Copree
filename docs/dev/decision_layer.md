@@ -100,6 +100,8 @@ AI 不该被每条消息唤醒。事件先过一层决策：**AI 自己写的规
 代发一律经 `decision_skill.send_group_reply`：标 `source="world"`（不回灌世界程序钩子），
 且 AI 唤醒队列只收人类消息，因此不存在"自己说一句又把自己叫醒"的环。
 
+代发路径自己**不 commit**：提交由开会话那一步负责（`app/database.py::work_session`，出块即提交）。「代发与落库同生共死」是契约——2026-10-04 群 69 丢的 2311/2313 就是漏在调用方没提交上。
+
 ## 6. 试跑工具（`test_decision_skill`）
 
 `app/tools/decision.py` 的 `test_decision_skill`（描述来自 `decision_skill.test_rule_desc()`）能**不落库**地试一条规则——

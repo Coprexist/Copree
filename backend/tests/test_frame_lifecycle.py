@@ -208,3 +208,92 @@ async def test_platform_drop_notice_is_delivered_and_marker_cleared(migrated_db)
         frames = await get_frames(db, 1)
         assert not (current(frames).get("pending_notices") or []), "投过就清标记"
         assert await _deliver_handover(db, await _agent(db), out) == []
+
+
+# ═══════════════════════════════════════════════════════════════
+# 同一段会话至多一帧（规则表见 docs/dev/frame_lifecycle.md）
+# ═══════════════════════════════════════════════════════════════
+
+async def test_same_context_comes_back_to_the_same_frame(migrated_db):
+    """同一段会话只有一帧：切走再切回来是**切回原帧**（帧 id 不变），不叠第二帧"""
+    from app.database import async_session
+    from app.services.agent.state_stack_service import _get_stack, current, push_state
+    from app.utils.pure.state_stack import context_frames, make_state_frame
+
+    async with async_session() as db:
+        await _seed(db)
+        await _open(db, 1)
+        first = (await _get_stack(db, 1))[0]["id"]
+
+        await _open(db, 2)                      # 切走（原帧被压成 suspended）
+        _, msg = await push_state(db, 1, make_state_frame(
+            type_="group_chat", context_ref="group:1", doing="回来"))
+        await db.commit()
+
+        frames = await _get_stack(db, 1)
+        live = context_frames(frames, "group:1")
+        assert len(live) == 1, f"同会话不该攒出第二帧：{live}"
+        assert live[0]["id"] == first, "帧身份不变（闹钟记的帧指针长期有效）"
+        assert "切回" in msg
+        assert current(frames)["context_ref"] == "group:1", "切回来就是当前帧"
+
+
+async def test_duplicate_frames_are_merged_at_the_write_point(migrated_db):
+    """老数据里的重复帧在下一次写栈时归并：留最近激活那帧，其余 ended 留痕，字段照规则表合"""
+    from app.database import async_session
+    from app.services.agent.state_stack_service import _save, get_frames
+    from app.utils.pure.state_stack import context_frames, make_state_frame
+
+    async with async_session() as db:
+        await _seed(db)
+        old = make_state_frame(type_="group_chat", context_ref="group:1", doing="旧的",
+                               why="旧原因", call_count=2, tail=["a"])
+        old["status"] = "suspended"
+        old["last_active_at"] = "2026-01-01T00:00:00+00:00"
+        new = make_state_frame(type_="group_chat", context_ref="group:1", doing="新的", call_count=3)
+        new["last_active_at"] = "2026-02-01T00:00:00+00:00"
+
+        await _save(db, 1, [old, new])
+        await db.commit()
+
+        frames = await get_frames(db, 1)
+        live = context_frames(frames, "group:1")
+        assert [f["id"] for f in live] == [new["id"]], "最近激活的那帧活下来"
+        assert live[0]["doing"] == "新的", "内容字段幸存者优先"
+        assert live[0]["why"] == "旧原因", "幸存者没写过的地方才补"
+        assert live[0]["call_count"] == 5, "计数求和"
+        assert live[0]["last_active_at"] == "2026-02-01T00:00:00+00:00", "时间取组内最大"
+        ended = [f for f in frames if f["status"] == "ended"]
+        assert [f["id"] for f in ended] == [old["id"]]
+        assert ended[0]["merged_into"] == new["id"], "归并要留痕：它不是他自己结束的"
+
+
+async def test_merge_keeps_temporary_facts(migrated_db):
+    """归并不丢临时事实：pending_notices / notes / tail 与交接包的原文尾巴取并集"""
+    from app.database import async_session
+    from app.services.agent.state_stack_service import _save, get_frames
+    from app.utils.pure.state_stack import context_frames, make_state_frame
+
+    async with async_session() as db:
+        await _seed(db)
+        keep = make_state_frame(type_="group_chat", context_ref="group:1", doing="活的", tail=["b"],
+                                notes=[{"id": "n1"}], handoff={"from_type": "dm", "tail": ["t1"]})
+        keep["last_active_at"] = "2026-02-01T00:00:00+00:00"
+        old = make_state_frame(type_="group_chat", context_ref="group:1", doing="旧的", tail=["a"],
+                               notes=[{"id": "n2"}],
+                               handoff={"from_doing": "旧交接", "tail": ["t2"]},
+                               pending_notices=[{"kind": "platform_drop", "id": "d1"}])
+        old["status"] = "suspended"
+        old["last_active_at"] = "2026-01-01T00:00:00+00:00"
+
+        await _save(db, 1, [old, keep])
+        await db.commit()
+
+        live = context_frames(await get_frames(db, 1), "group:1")
+        assert len(live) == 1
+        assert live[0]["tail"] == ["b", "a"], "原文尾巴并集"
+        assert [n["id"] for n in live[0]["notes"]] == ["n1", "n2"]
+        assert [n["id"] for n in live[0]["pending_notices"]] == ["d1"], "还没告诉他的事实不许丢"
+        assert live[0]["handoff"]["tail"] == ["t1", "t2"]
+        assert live[0]["handoff"]["from_doing"] == "旧交接", "交接包里的空位补齐"
+

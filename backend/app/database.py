@@ -5,6 +5,8 @@
 import logging
 
 from sqlalchemy import text
+from contextlib import asynccontextmanager
+
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 
@@ -45,8 +47,17 @@ class Base(DeclarativeBase):
     pass
 
 
-async def get_db() -> AsyncSession:
-    """FastAPI 依赖注入：获取数据库会话"""
+@asynccontextmanager
+async def work_session():
+    """一段工作的会话：出块即提交，抛错回滚。HTTP（get_db）与后台轮次共用这一份。
+
+    提交是「这段工作算数」的唯一开关：散在调用方手里时，忘一处就把已经发出去的消息一起丢掉
+    （2026-10-04 决策技能代发那四条）。并进开会话这一步之后，不开这个口子就跑不了。
+
+    **不是 savepoint**：每次调用是新会话 + 新事务。嵌套时内层独立——内层提交外层回滚也带不走，
+    内层回滚也不影响外层；要"一起成一起败"就把同一个 session 往下传，别用嵌套。
+    后台 fire-and-forget 的 create_task 是**重叠**而非嵌套：外层不等内层。速查 docs/CODE_WIKI.md §5.3。
+    """
     async with async_session() as session:
         try:
             yield session
@@ -54,6 +65,12 @@ async def get_db() -> AsyncSession:
         except Exception:
             await session.rollback()
             raise
+
+
+async def get_db() -> AsyncSession:
+    """FastAPI 依赖注入：获取数据库会话（HTTP 形态的 work_session）"""
+    async with work_session() as session:
+        yield session
 
 
 async def check_db_connection() -> bool:

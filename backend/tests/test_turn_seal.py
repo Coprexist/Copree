@@ -140,7 +140,7 @@ async def test_sync_group_history_uses_the_shared_context_key(migrated_db):
         assert [e["actor"] for e in entries] == ["user", "self"], \
             [(e["kind"], e["actor"], e["ref"]) for e in entries]
 
-        # 增量同步：after_id 有值时 get_gm_messages 返回**倒序**，必须按 id 归正（实测踩过）
+        # 增量同步：水位之后只补「最近一窗」（get_gm_messages_after_watermark 按 id 归正）
         await db.execute(text(
             "INSERT INTO messages (group_id, sender_type, sender_id, content) "
             "VALUES (64, 'human', 1, '第二句')"

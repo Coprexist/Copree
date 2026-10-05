@@ -52,8 +52,12 @@
 | `backend/tests/test_tool_chain.py` | 单元（零网络） | 5 | 工具调用链校验：悬空 `tool_calls` 补齐（2026-09-14「执行到一半 400」的根因）、不伪造成功、幂等、纯对话不动 |
 | `backend/tests/test_session_title.py` | 单元（零网络） | 4 | 对话命名：清洗/限长、只写当前会话、默认会话兜底、空名清除 |
 | `backend/tests/test_agent_resolution.py` | 集成（真库） | 2 | 群成员 `member_id` 解析优先级 |
+| `backend/tests/test_work_session.py` | 集成（真库 + 探针表） | 4 | `work_session` 四态：出块提交 / 抛错回滚 / 内层回滚不影响外层 / 内层提交不被外层回滚带走（**不是 savepoint**） |
+| `backend/tests/test_frame_lifecycle.py` | 集成（真库） | 11 | 帧的存储与运行两层、容量闸与后事、同会话归并规则、稳定帧 id 复活 |
+| `backend/tests/test_world_entry.py` | 集成（真库） | 9 | `enter_world` 记通道群/复活原帧/换群刷新、`world_command` 目标群四档与如实报错 |
 
-合计 **245 条**（`run_without_pytest.py` 全量约 **19s**；2026-09-25 提速前是 108s，见 §1.5）。
+合计 **700 条**（`run_without_pytest.py` 全量 **46s**，2026-10-05 实测；2026-09-25 提速前是 108s，见 §1.5）。
+下表只列了部分文件，条数一律以运行器输出为准。
 
 辅助文件：
 
@@ -80,8 +84,8 @@ docker exec -w /app \
   ai_group_backend python tests/run_without_pytest.py
 ```
 
-运行器只实现了 `pytest.fixture` 与 `pytest.mark`。需要参数化、插件、覆盖率就去装 pytest，
-不要往运行器里加功能。
+运行器只实现了 `pytest.fixture` 与 `pytest.mark`，**没有 `pytest.raises`**：用例里要判异常就手动
+`try/except + assert`（仓里既有用例都这么写）；需要参数化、插件、覆盖率就去装 pytest，不要往运行器里加功能。
 
 运行器接受**选择器**（子串匹配 `文件名::用例名`），用于只跑改动涉及的部分：
 

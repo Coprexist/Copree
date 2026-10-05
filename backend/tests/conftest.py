@@ -3,8 +3,8 @@ pytest 全局配置 — 测试用独立数据库 ai_group_chat_test（不碰生�
 
 - 连接串**必须由环境变量提供**：真实口令不进仓库（历史版本曾把口令写死在此文件，
   已进 git 历史，口令没轮换过就等于公开）
-- fixture `test_db`：每个测试独立事务回滚（或建表）
-- 迁移测试需要真实建表：用 alembic upgrade head 到测试库
+- fixture `migrated_db`（session 级）：用模型 metadata `drop_all` + `create_all` 建全量表
+  —— **不跑 alembic**（历史迁移链无法从空库重建，模型即 schema，见 docs/guides/test_strategy.md §8.3）
 - 数据根目录在导入时指向临时目录：用例别写真实数据卷，非容器环境也写不动
 """
 import os
@@ -67,9 +67,6 @@ def _tune_test_db() -> None:
         engine.dispose()
 
 
-_tune_test_db()
-
-
 @pytest.fixture(scope="session")
 def anyio_backend():
     return "asyncio"
@@ -81,6 +78,11 @@ async def migrated_db():
     from sqlalchemy.ext.asyncio import create_async_engine
     import app.models  # noqa: F401  确保全部模型注册到 Base.metadata
     from app.database import Base
+
+    # GUC 在这里设而不是模块级：import conftest 不该连库（IDE / --collect-only 也走这条路）。
+    # 也不能挪进 pytest_configure —— 自带 runner（tests/run_without_pytest.py）不走 pytest 钩子，
+    # 而上面那几行环境变量必须在那之前就位，否则测试会打到生产库。
+    _tune_test_db()
 
     engine = create_async_engine(TEST_DATABASE_URL)
     async with engine.begin() as conn:

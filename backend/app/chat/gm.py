@@ -479,17 +479,24 @@ async def get_gm_messages(
     after_id: int | None = None,
     after_time: datetime | None = None,
 ) -> list[Message]:
-    """获取群聊消息（支持游标分页 + 按时间过滤未读）"""
+    """获取群聊消息（支持游标分页 + 按时间过滤未读）
+
+    两种口径：分页贴游标取一页（after 是 before 的镜像）；补历史取最近一窗（另见
+    get_gm_messages_after_watermark）。缘由见 docs/dev/conversation_history.md 第二批 b-4。
+    """
     query = select(Message).where(Message.group_id == group_id)
 
     if after_time:
         query = query.where(Message.created_at > after_time)
         query = query.order_by(desc(Message.created_at))
     elif before_id:
+        # 贴着游标往前一页（游标方向 = 翻旧消息）
         query = query.where(Message.id < before_id)
     elif after_id:
+        # 贴着游标往后一页、按 id 升序：after 是 before 的镜像。原先"按时间倒序取最新一窗"
+        # 等于每次都跳到末尾，中间那批永远取不到（2026-10-04 群 69 实测）。
         query = query.where(Message.id > after_id)
-        query = query.order_by(desc(Message.created_at))
+        query = query.order_by(Message.id)
     else:
         query = query.order_by(desc(Message.created_at))
 
@@ -500,6 +507,21 @@ async def get_gm_messages(
     if not after_id:
         messages = list(reversed(messages))
     return messages
+
+
+async def get_gm_messages_after_watermark(db: AsyncSession, group_id: int, after_id: int | None,
+                                           limit: int = 20) -> list[Message]:
+    """水位之后**最新**的一窗（AI 补历史用，与 sync_dm_history 同一口径）
+
+    与 get_gm_messages(after_id=…) 不同：分页要贴游标一页页往前挪，补历史要"最近一窗 + 缺口
+    条目"。按 id 排序取窗——同一秒插入的两条靠时间戳判不出先后（实测踩过）。
+    """
+    query = select(Message).where(Message.group_id == group_id)
+    if after_id:
+        query = query.where(Message.id > after_id)
+    query = query.order_by(desc(Message.id)).limit(limit)
+    rows = list((await db.execute(query)).scalars().all())
+    return list(reversed(rows))     # 归正为按 id 升序
 
 
 def gm_message_to_dict(message: Message, sender_name: str | None = None,

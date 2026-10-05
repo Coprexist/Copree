@@ -85,6 +85,20 @@ class CompressContext(ToolPlugin):
                 # 更新 context 中的消息引用（原地替换）
                 messages.clear()
                 messages.extend(new_messages)
+                # 解锁点：只换内存里的数组等于没压——下一轮 build_messages 又从账本把原文端回来。
+                # 线上实测（2026-10-04 群 69）：AI 自己 compact 完当轮 13 条，下一轮弹回 120 条。
+                if agent is not None:
+                    from app.services.history.context_unlock import unlock_context
+                    await unlock_context(
+                        db, agent,
+                        group_id=group_id,
+                        session_id=context.get("session_id"),
+                        conversation_type=context.get("conversation_type")
+                        or ("group" if group_id else "dm"),
+                        summary=stats.get("summary") or "",
+                        trigger_user_id=context.get("trigger_user_id"),
+                    )
+                    context["_precompressed"] = True   # 本轮已经压过，别再让空闲那条路重复压
                 logger.info(
                     f"AI agent_id={agent_id} 主动压缩上下文："
                     f"{stats['before_tokens']} → {stats['after_tokens']} tokens "

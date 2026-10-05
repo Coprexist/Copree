@@ -12,7 +12,7 @@
 | 请求里的 tools 数组 | effective 快照 ∩ 当前允许集 | **同名定义不动**（走快照）；增删工具、状态闸变化会改 | 平台发布增删工具、`thinking_enabled` / `delay_reply_allowed` 变化 |
 | 账本历史 | `agent_history_entries` | **重写**成「摘要 + 事件原样搬运 + 最近 N 条」 | 无（段内只追加） |
 | 事件条目（缺口 / 便签投递 / 便签撤下 / 能力变更通知 / 状态后事告知 / 空焦段告知） | 同上（账本条目） | 带 `drop_on_unlock` 的（便签投递、撤下通知、后事告知、空焦段告知）**离场**；其余**原样保留**（缺口为何保留、非压缩条目会累积，见[会话历史与前缀缓存](./conversation_history.md) §13） | 无 |
-| 状态帧本身（会话帧） | `agents.state_stack`（全量存储） | **不重建**（`ensure_active_frame` 同 `context_ref` 直接 return） | 出运行集合只是改 status（`ended` / `retired`），**记录仍在**；只有 `finish_frame`（他表态后事办完）与平台代销会删记录，见「帧的存储与运行」 |
+| 状态帧本身（会话帧） | `agents.state_stack`（全量存储） | **不重建**（一个 `context_ref` 只有一帧：`ensure_active_frame` / `push_state` 认出同会话就切回原帧，`_save` 再兜底归并） | 出运行集合只是改 status（`ended` / `retired`），**记录仍在**；只有 `finish_frame`（他表态后事办完）与平台代销会删记录，见「帧的存储与运行」 |
 | `tool_uses` / `delivered`（触发规则状态 + 空焦段告知的投递进度） | 会话帧字段 | **归零**（解锁清单里的 `reset_trigger_state`） | 随帧状态复位：解锁归零、帧被弹出后即不在运行集合（不再参与）。**换会话不归零**，见下节 |
 | 便签副本 `frame.notes` | 会话帧字段 | **清空**（`release_active_frame_notes`） | 无 |
 | 环境（在哪个会话、接没接渠道、绑没绑世界） | 会话帧字段 + 帧上的锁定副本 | **换新**：锁定副本对齐现值，下一次请求用新环境 | 环境变化只置脏 + 落一条通知，不碰前缀；帧的锁定副本随帧记录一起保留（帧不再被静默裁掉） |
@@ -28,12 +28,39 @@
 顺序不变量：数组 = **[历史区][运行区，当前帧在末尾]**。读写各收口一次（`_get_stack` 读时归一化、
 `_save` 唯一写入点），所以全仓把 `stack[-1]` 当"当前帧"用的地方不必改，也不会有漏改的半吊子。
 
+### 同一段会话至多一帧
+
+**身份是 `context_ref`**（`group:{id}` / `dm:{session_id}` / `world:{id}` / `file:xxx`），不是帧实例 id：
+一段会话的"现在"只有一个说法。`push_state` 认出运行集合里已有同 `context_ref` 的活帧就**切回那一帧**
+（就地更新、**帧 id 不变**——帧 id 是闹钟之类记着的长期指针），只有真新会话才压新帧；`_save`
+（唯一写入点）再兜一道归并，任何写栈的路径都过它，不必每个 push 点各自记得。
+
+**归并规则**（`app/utils/pure/state_stack.py::merge_same_context`；字段冲突一律照此表，不另作判断）：
+
+| 字段 | 归并时 |
+|---|---|
+| `id` / `status` | 幸存者的——**帧身份不变** |
+| `created_at` | 幸存者的：它是「这条记录的生日」（`restore_frame` 重建时归零），不是「会话开始时间」——全仓只有容量闸排序拿它当 `last_active_at` 的兜底，闹钟/计划板按的是**帧 id**，所以取最早没有意义 |
+| `retired_at` / `merged_into` | 幸存者优先（`merged_into` 只长在被归并的帧上） |
+| 内容字段：`type` / `label` / `why` / `doing` / `todo` / `plan` / `journal` / `emotion` / `emotion_text` / `source_emotion` / `tools` / `skills` / `env_locked` / `env_notified` / `semantic_focus` / `group_id` | **幸存者优先**；被合并方的同名值**有意丢弃**（同一段会话的"现在"只有一个说法），幸存者为空才补 |
+| `last_active_at` | 取组内最大——这帧刚被用过，不该因为时间戳旧被当成"最久没用" |
+| `call_count` | 求和 |
+| `tool_uses` | 逐键取大（计数不重复累加） |
+| `delivered` | 键并集，值取幸存者（投过就是投过） |
+| `pending_notices` / `notes` | 并集去重（还没告诉他 / 还挂在他帧上的事实，各有 id 幂等） |
+| `tail` 与 `handoff` / `completed_handoff` 的 `tail` | 并集去重（一次性交接的原文尾巴不该因为归并丢掉） |
+| 被归并的帧 | `status=ended`（记录留着，不删）+ `merged_into=幸存者 id`，留痕：它不是他自己结束的 |
+| **未列出的字段** | 一律**幸存者优先**，被合并方的值丢弃——将来给帧加字段不必回头改这张表 |
+
+**留谁**：当前帧优先（`active`），其次最近被激活的那帧（`last_active_at` 最大）。被归并帧只可能来自
+`push_state` 之外的老数据（线上实测某 AI 的 `group:59` 攒了三帧）——下一次写栈时自愈，无需迁移。
+
 | status | 含义 | 在运行集合 |
 |---|---|---|
 | `active` | 当前帧 | 是 |
 | `paused` | 被压着，还要回来 | 是 |
 | `suspended` | 会话切走了，等它回来 | 是 |
-| `ended` | 已结束（`pop_state` / `close_state`），记录留在存储 | 否 |
+| `ended` | 已结束（`pop_state` / `close_state`，或同会话重复帧被归并），记录留在存储 | 否 |
 | `retired` | 待交接：会话已消失、或容量超限被挑中 | 否 |
 
 **删除点只有两处**（其余一律只改 status）：
@@ -43,6 +70,14 @@
 - 平台**代销**——绕过他表态的删除，因此必留下一条「平台代销」的账本条目（有据可查，不静默）。
   三种来由：挂起积压超 `capacity × 2`、这档 AI 不接手后事（见下）、会话已消失（群解散）。
   来由写进告知里：他得知道是自己没交接完，还是这档本来就不归他交接。
+
+**待交接帧（retired）的归宿**：它不会自己消失，只有两条路——
+
+1. **他交接完**：调 `finish_frame`（主路径；它只拒在跑的帧，retired 不在运行集合里，可销），销完留一条账本告知；
+2. **平台代销**：挂起积压超过 `capacity` × 2 时由 `drop_retired_overflow` 删掉最旧的那批，留一条「平台代销」条目。检查发生在**下一次写栈**（`_save`）里——
+   所以一个不再被写栈的 AI 会一直留着待交接帧；这是有意的：代销必留痕，不做后台静默清扫。
+
+会话已消失（群解散）的帧也走这两条：`dispose_context_frames` 只是按档位把它放进挂起（retired）或直接代销（dropped），之后的归宿同上。
 
 **谁办后事由档位定**：`agents.retire_handover_self`（预设 chat/immersive 关、digital_life 开，
 AI 可自改）。开 = 超容量的帧挂起待交接（记录留着，办完调 `finish_frame` 销掉）；
@@ -109,11 +144,11 @@ compact / clear 时才把锁定副本刷成现值、同事务清脏，这一步�
 
 ## 代码坐标
 
-- 解锁清单与解锁动作：`app/ai/executor.py`（`UNLOCK_STEPS` / `_unlock_context`）
+- 解锁清单与解锁动作：`app/services/history/context_unlock.py`（`UNLOCK_STEPS` / `unlock_context`；`app/ai/executor.py` 只转发）
 - 文本源与 tools 的解锁：`app/services/capability_versioning.py`（`apply_pending_changes` / `mark_effective_latest` / `get_effective_definitions`）
 - 账本重写：`app/services/history/context_sync.py`（`rewrite_context`）
 - 状态帧：`app/services/agent/state_stack_service.py`（`ensure_active_frame` / `release_active_frame_notes` / `load_trigger_state` / `dispose_context_frames`）
-- 帧的存储/运行分界与容量闸：`app/utils/pure/state_stack.py`（`running` / `current` / `normalize_order` / `context_frames` / `_overflow` / `retire_overflow` / `drop_overflow` / `drop_retired_overflow`）
+- 帧的存储/运行分界、容量闸与同会话归并：`app/utils/pure/state_stack.py`（`running` / `current` / `normalize_order` / `context_frames` / `merge_same_context` / `_overflow` / `retire_overflow` / `drop_overflow` / `drop_retired_overflow`）
 - 后事告知的文案与幂等键：`app/utils/pure/handover.py`；销帧工具：`app/tools/self_management/finish_frame.py`
 - 告知落历史：`app/ai/llm.py`（`_deliver_handover` / `_deliver_focus_notices`，与便签/能力变更通知同一出口）
 - 档位开关：`agents.retire_handover_self`（迁移 `0083`，预设值在 `agent_service.CONFIG_PROFILES`）

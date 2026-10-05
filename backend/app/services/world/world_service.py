@@ -350,6 +350,19 @@ async def find_world_by_entity(repo: WorldRepository, entity_type: str, entity_i
     return result.scalar_one_or_none()
 
 
+async def first_world_bound_group(db, group_ids: list[int]) -> tuple[int, list]:
+    """按给定顺序挑第一个**绑了世界**的群：返回 (群号, 该群绑的世界)；都不绑返回 (0, [])
+
+    顺序即优先级（调用方按新鲜度排好：本次回复所在的群在前）。世界命令落到哪个群、
+    从哪个群进世界，都只认绑了世界的群——没绑的群拿去发世界命令必然失败。
+    """
+    for group_id in group_ids:
+        worlds = await find_worlds_by_entity(db, "group", group_id)
+        if worlds:
+            return int(group_id), worlds
+    return 0, []
+
+
 async def find_worlds_by_entity(repo: WorldRepository, entity_type: str, entity_id: int) -> list:
     """按入口反查多个世界（群/agent 可绑多个世界）"""
     from app.models.world import World, WorldBinding

@@ -57,7 +57,7 @@ class EnterGroup(ToolPlugin):
         except Exception:
             pass
 
-        # Push 状态帧
+        # 切到群帧（同群再进＝切回原帧，不叠第二帧）
         frame = make_state_frame(
             type_="group_chat",
             context_ref=f"group:{target_group}",

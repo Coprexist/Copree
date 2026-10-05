@@ -1345,79 +1345,83 @@ async def build_messages(
     messages.append({"role": "system", "content": current_ctx})
 
     # 绑定世界（群绑定 + agent 直接绑定）→ 能力清单 + 世界侧 skill 变更通知（动态尾部，缓存友好）
-    if group_id or True:
-        try:
-            from app.models.world import World, WorldBinding
-            from app.services.world.world_service import find_worlds_by_entity
-            # v0.3.4: 世界绑定 AI 统一存 user_id
-            bound = await find_worlds_by_entity(db, "agent", agent.user_id or 0)
-            if group_id:
-                bound += await find_worlds_by_entity(db, "group", group_id)
-            # 绑定类型（分层注入）：skill.types 声明了该类型才注入（群绑定的类型 + agent 绑定的类型）
-            # v0.3.4: agent 绑定存 user_id（entity_id 查询必须用 user_id，不能用 agent.id）
-            type_slugs: set[str] = set()
-            bind_rows = (await db.execute(
-                select(WorldBinding).where(
-                    WorldBinding.world_id.in_([w.id for w in bound]),
-                    WorldBinding.entity_type.in_(("agent", "group")),
-                    WorldBinding.entity_id.in_([agent.user_id or 0] + ([group_id] if group_id else [])),
-                )
-            )).scalars().all()
-            for br in bind_rows:
-                if br.group_type_slug:
-                    type_slugs.add(br.group_type_slug)
-            from app.services.world.world_skill_runtime import build_world_tools, build_world_tools_for_type
-            seen = set()
-            # 同名技能跨世界统计（清单注明：可用 world_id 参数指定执行哪个世界的版本）
-            name_worlds: dict[str, list[int]] = {}
-            for w in bound:
-                if w.id in seen:
-                    continue
-                seen.add(w.id)
-                for t in build_world_tools(w.id):
-                    nm = ((t or {}).get("function") or {}).get("name")
-                    if nm:
-                        name_worlds.setdefault(nm, []).append(w.id)
-            dup_hint = {nm: wids for nm, wids in name_worlds.items() if len(wids) > 1}
-            seen = set()
-            for w in bound:
-                if w.id in seen:
-                    continue
-                seen.add(w.id)
-                # 世界侧 skills 能力清单（按绑定类型分层注入：types 匹配的 + 通用才给）
-                # 多类型绑定 → 取并集（任一类型可用就注入）；未绑定类型 → 只给通用 skill
-                type_filter = sorted(type_slugs) if type_slugs else None
-                skill_names = []
-                if type_filter:
-                    for ts in type_filter:
-                        for t in build_world_tools_for_type(w.id, ts):
-                            nm = ((t or {}).get("function") or {}).get("name")
-                            if nm and nm not in skill_names:
-                                skill_names.append(nm)
-                else:
-                    skill_names = [t["function"]["name"] for t in build_world_tools_for_type(w.id, None)]
-                dup_note = ""
-                if dup_hint:
-                    parts = [f"{nm}（世界 {'/'.join(map(str, wids))} 都有，调用时可用 world_id 参数指定目标世界）" for nm, wids in dup_hint.items()]
-                    dup_note = f"；注意：{'；'.join(parts)}"
-                wc_line = "；另有 world_command 可发文本命令（由世界程序解析，如 旅人移动到 2,3 / 我去 2,3 / 身份 签到）" if skill_names else "。可用 world_command 发送文本命令（由世界程序解析，如 旅人移动到 2,3 / 我去 2,3 / 身份 签到）"
-                messages.append({"role": "system", "content":
-                    f"【本群世界】本群绑定世界「{w.name}」（#{w.id}）。"
-                    + (f"你已获得世界颁布的技能工具，像调普通工具一样直接 function calling 调用：{'、'.join(skill_names)}" if skill_names else "")
-                    + dup_note
-                    + wc_line
-                    + "。命令会以你的名义出现在群里，可见可审计。"})
-                # 世界源能力变更通知（版本化懒加载：增量 changelog，known 更新同轮）
-                from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
-                from app.services.capability_versioning import build_change_notice
-                notice = await build_change_notice(
-                    SQLAlchemyCapabilityRepository(db), agent, [f"world-{w.id}"],
-                    state=session_ref, foci=getattr(agent, "foci", None))
-                if notice:
-                    messages.append({"role": "system", "content": notice})
-                    await db.commit()
-        except Exception:
-            pass
+    try:
+        from app.models.world import World, WorldBinding
+        from app.services.world.world_service import find_worlds_by_entity
+        # v0.3.4: 世界绑定 AI 统一存 user_id
+        bound = await find_worlds_by_entity(db, "agent", agent.user_id or 0)
+        if group_id:
+            bound += await find_worlds_by_entity(db, "group", group_id)
+        # 绑定类型（分层注入）：skill.types 声明了该类型才注入（群绑定的类型 + agent 绑定的类型）
+        # v0.3.4: agent 绑定存 user_id（entity_id 查询必须用 user_id，不能用 agent.id）
+        type_slugs: set[str] = set()
+        bind_rows = (await db.execute(
+            select(WorldBinding).where(
+                WorldBinding.world_id.in_([w.id for w in bound]),
+                WorldBinding.entity_type.in_(("agent", "group")),
+                WorldBinding.entity_id.in_([agent.user_id or 0] + ([group_id] if group_id else [])),
+            )
+        )).scalars().all()
+        for br in bind_rows:
+            if br.group_type_slug:
+                type_slugs.add(br.group_type_slug)
+        from app.services.world.world_skill_runtime import build_world_tools, build_world_tools_for_type
+        seen = set()
+        # 同名技能跨世界统计（清单注明：可用 world_id 参数指定执行哪个世界的版本）
+        name_worlds: dict[str, list[int]] = {}
+        for w in bound:
+            if w.id in seen:
+                continue
+            seen.add(w.id)
+            for t in build_world_tools(w.id):
+                nm = ((t or {}).get("function") or {}).get("name")
+                if nm:
+                    name_worlds.setdefault(nm, []).append(w.id)
+        dup_hint = {nm: wids for nm, wids in name_worlds.items() if len(wids) > 1}
+        seen = set()
+        for w in bound:
+            if w.id in seen:
+                continue
+            seen.add(w.id)
+            # 世界侧 skills 能力清单（按绑定类型分层注入：types 匹配的 + 通用才给）
+            # 多类型绑定 → 取并集（任一类型可用就注入）；未绑定类型 → 只给通用 skill
+            type_filter = sorted(type_slugs) if type_slugs else None
+            skill_names = []
+            if type_filter:
+                for ts in type_filter:
+                    for t in build_world_tools_for_type(w.id, ts):
+                        nm = ((t or {}).get("function") or {}).get("name")
+                        if nm and nm not in skill_names:
+                            skill_names.append(nm)
+            else:
+                skill_names = [t["function"]["name"] for t in build_world_tools_for_type(w.id, None)]
+            dup_note = ""
+            if dup_hint:
+                parts = [f"{nm}（世界 {'/'.join(map(str, wids))} 都有，调用时可用 world_id 参数指定目标世界）" for nm, wids in dup_hint.items()]
+                dup_note = f"；注意：{'；'.join(parts)}"
+            # enter_world 那句必须说：命令要落到一个具体的群，AI 不先进世界就不知道从哪出去
+            wc_line = (
+                "；另有 world_command 可发文本命令（由世界程序解析，如 旅人移动到 2,3 / 我去 2,3 / 身份 签到）"
+                if skill_names else
+                "。可用 world_command 发送文本命令（由世界程序解析，如 旅人移动到 2,3 / 我去 2,3 / 身份 签到）"
+            ) + "；要玩这个世界（包括在私信里）先调 enter_world 进世界，命令才知道从哪个群出去"
+            messages.append({"role": "system", "content":
+                f"【本群世界】本群绑定世界「{w.name}」（#{w.id}）。"
+                + (f"你已获得世界颁布的技能工具，像调普通工具一样直接 function calling 调用：{'、'.join(skill_names)}" if skill_names else "")
+                + dup_note
+                + wc_line
+                + "。命令会以你的名义出现在群里，可见可审计。"})
+            # 世界源能力变更通知（版本化懒加载：增量 changelog，known 更新同轮）
+            from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
+            from app.services.capability_versioning import build_change_notice
+            notice = await build_change_notice(
+                SQLAlchemyCapabilityRepository(db), agent, [f"world-{w.id}"],
+                state=session_ref, foci=getattr(agent, "foci", None))
+            if notice:
+                messages.append({"role": "system", "content": notice})
+                await db.commit()
+    except Exception:
+        pass
     return messages
 
 

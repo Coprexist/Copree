@@ -436,7 +436,8 @@ async def lifespan(app: FastAPI):
 | `engine` | 异步引擎（pool_size=10, max_overflow=40） |
 | `async_session` | 异步会话工厂（expire_on_commit=False） |
 | `Base` | `DeclarativeBase` 声明式基类 |
-| `get_db()` | FastAPI 依赖注入用的会话生成器 |
+| `work_session()` | 一段工作的会话：**出块即提交、抛错回滚**；HTTP 与后台轮次共用（嵌套不是 savepoint） |
+| `get_db()` | FastAPI 依赖注入用的会话生成器（`work_session` 的 HTTP 形态） |
 | `check_db_connection()` | 数据库健康检查 |
 
 ### 5.4 AI 核心模块 (app/ai/)

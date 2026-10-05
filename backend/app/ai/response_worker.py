@@ -18,7 +18,7 @@ import re
 import time
 from datetime import datetime, timezone, timedelta
 from sqlalchemy import select
-from app.database import async_session
+from app.database import work_session
 from app.models.agent import Agent as AgentModel
 from app.models.group import Group, GroupMember
 from app.models.user import User
@@ -154,7 +154,8 @@ async def ai_response_worker():
                 await metrics.record_queue_depth(message_queue.qsize())
             except Exception:
                 pass
-            async with async_session() as db:
+            # 每个事件一段工作：路由里写下的东西（帧、待办、投递标记）出块即提交
+            async with work_session() as db:
                 try:
                     await _process_event(db, event)
                 except Exception as e:
@@ -492,7 +493,9 @@ async def _process_group_event(db, event: dict):
         async def _trigger_one(aid, chan_sem):
             async with chan_sem:
                 try:
-                    async with async_session() as inner_db:
+                    # work_session：出块即提交。决策技能代发是 flush + 广播 + 通道出口，提前
+                    # return 的路径全靠它兜住（2026-10-04 群 69「排行/打劫」四条就丢在手动提交上）
+                    async with work_session() as inner_db:
                         await _maybe_trigger_ai_reply(
                             inner_db, aid, group_id, group, content, message_id,
                             chain_depth=next_depth,
@@ -558,7 +561,8 @@ async def _trigger_group_assistant(
     system_prompt + 最近群消息 → chat_completion → 发群消息 + 用量记账。
     与群视界 AI 同形态：无账号、无好友、不入群成员表。"""
     try:
-        async with async_session() as db:
+        # work_session：出块即提交——群助手那几条提前 return（决策命中、仅工具调用）也落库
+        async with work_session() as db:
             from app.models.world import GroupAssistant, World
             from app.config import settings
             from app.utils.crypto import decrypt_api_key

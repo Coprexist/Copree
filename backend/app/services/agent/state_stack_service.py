@@ -7,6 +7,8 @@
 
 顺序不变量（normalize_order）：数组 = [历史区][运行区，当前帧在末尾]。读写各收口一次
 （_get_stack 读时归一化、_save 唯一写入点），于是全仓 stack[-1] 恒等于当前帧。
+身份不变量：一个 context_ref（一段会话）至多一帧——push 认出同会话就切回原帧（帧 id 稳定），
+_save 再兜底归并（规则表见 pure.merge_same_context）；契约 docs/dev/frame_lifecycle.md。
 
 纯函数在 utils/pure/state_stack.py，本层只做 DB 编排。
 """
@@ -22,7 +24,7 @@ from app.utils.pure.state_stack import (
     make_state_frame, format_state_stack_summary, format_handoff_tail,
     DEFAULT_FRAME_CAPACITY, ENDED_STATUS,
     by_id, context_frames, current, drop_context_frames, drop_overflow,
-    drop_retired_overflow, is_running, normalize_order, resume_target, retired,
+    drop_retired_overflow, is_running, merge_same_context, normalize_order, resume_target, retired,
     retire_context_frames, retire_overflow, running, touch,
 )
 from app.utils.pure.emotion import decay_emotion, apply_emotion_update
@@ -100,15 +102,21 @@ def _attach_notices(stack: list[dict], agent_id: int, notes: list[dict]) -> None
 
 
 async def _save(db: AsyncSession, agent_id: int, stack: list[dict]) -> list[dict]:
-    """**帧的唯一写入点**：归一化顺序 + 容量处置，再落库。返回挂起待交接的帧 id。
+    """**帧的唯一写入点**：归一化顺序 + 同会话归并 + 容量处置，再落库。返回挂起待交接的帧 id。
 
-    容量处置放在这里而不是各调用点：存储帧数超限要让谁走，与"谁触发的那次写入"无关；
-    分开写就会出现"push 走一套、切会话走另一套"的半吊子状态。
+    同一段会话归并（见 pure.merge_same_context）与容量处置都放这里：都是"帧本身的状态"，
+    与"谁触发的那次写入"无关；分散到各调用点就会出现"push 一套、切会话另一套"。
+    归一是**原地**的，调用方手里那份栈与落库的是同一份。
     走的方式按这档 AI 的取向分两条（挂起待交接 / 平台代销），但**都不静默**：
     挂起的会收到清单，代销的会收到一条「平台代销」告知。
     """
     db = _ensure_repo(db)
-    stack = normalize_order(stack)
+    # 原地归一 + 同会话归并：都是"帧本身的状态"，各 push 点不必各自记得
+    stack[:] = normalize_order(stack)
+    merged = merge_same_context(stack)
+    if merged:
+        logger.warning(f"Agent({agent_id}) 同一会话的重复帧已归并：{[f.get('id') for f in merged]}")
+        stack[:] = normalize_order(stack)
     capacity = await _frame_capacity(db, agent_id)
     if await _retire_handover_self(db, agent_id):
         retired_ids = retire_overflow(stack, capacity)
@@ -166,12 +174,14 @@ async def get_frames(db: AsyncSession, agent_id: int) -> list[dict]:
 
 
 async def restore_frame(db: AsyncSession, agent_id: int, frame_id: str,
-                        origin_context_ref: str = "") -> dict:
+                        origin_context_ref: str = "", updates: dict | None = None) -> dict:
     """把当前帧换成指定帧（闹钟唤醒用）：帧还在存储里就复活它，从没记过才重建同型帧。
 
     帧不再被 pop/close 删掉，所以"计划排给谁"这个指针长期有效——连已结束的帧都能按 id 复活。
     重建只发生在**这个 id 从来没存在过**时（老数据、或帧被代销/交接删了之后）；
     重建**沿用原 frame_id**，身份不因中间发生什么而换人。
+    updates：复活时一并写回的字段——帧的身份没变、内容要跟着这次进来的地方更新
+    （同世界换群进：世界帧上的通道群要指向这个群）。
     返回恢复好的帧（没有帧身份可用时返回 {}）。
     """
     db = _ensure_repo(db)
@@ -183,15 +193,19 @@ async def restore_frame(db: AsyncSession, agent_id: int, frame_id: str,
     if frame is None:
         if not origin_context_ref:
             return {}
-        # 键的口径只有两种：群是 group:{id}，私信就是 session_id（context_sync.context_ref）
         frame = make_state_frame(
-            type_="group_chat" if origin_context_ref.startswith("group:") else "dm",
+            # 键的口径有三种：群 group:{id}、世界 world:{id}、私信就是 session_id（context_sync.context_ref）
+            type_=("group_chat" if origin_context_ref.startswith("group:")
+                   else "world" if origin_context_ref.startswith("world:")
+                   else "dm"),
             context_ref=origin_context_ref, id=frame_id or None,
             why="闹钟唤醒", doing="执行自己排下的计划",
         )
         stack.append(frame)
     if prev is not None and prev is not frame:
         prev["status"] = "suspended"
+    if updates:
+        frame.update(updates)
     frame["status"] = "active"
     touch(frame)
     await _save(db, agent_id, stack)
@@ -292,50 +306,54 @@ def _left_conversation(prev: dict | None) -> dict:
 async def push_state(
     db: AsyncSession, agent_id: int, frame: dict,
 ) -> tuple[list[dict], str]:
-    """
-    Push 新状态帧到栈顶。自动将原栈顶 active → paused。
+    """把状态切到这一帧：同会话（context_ref）已有活帧就**切回它**（就地更新，帧 id 不变），
+    没有才压新帧。帧 id 是闹钟之类记着的长期指针，同会话换一次入口不能换 id。
+
+    原当前帧压成 paused，「从哪来 / 在干嘛 / 原文尾巴」打成交接包记在切过去的那帧上。
     返回 (新栈, 消息)。
     """
     db = _ensure_repo(db)
     stack = await _get_stack(db, agent_id)
+    # 先认当前帧再动栈：新帧一 append 就自己也成了 active，那时再取 current 会取到它自己
+    prev = current(stack)
 
-    # 去重：栈顶与新帧 type + context_ref 相同 → 合并更新，不 push
-    if stack and stack[-1].get("type") == frame.get("type") and stack[-1].get("context_ref") == frame.get("context_ref"):
-        stack[-1].update({k: v for k, v in frame.items() if v is not None and k not in ("id", "created_at", "status")})
-        await _save(db, agent_id, stack)
-        logger.info(f"Agent({agent_id}) push 去重: [{frame.get('type')}] {frame.get('context_ref', '')}")
-        return stack, f"状态帧 [{frame.get('type')}] 已存在，已合并更新"
+    same = context_frames(stack, str(frame.get("context_ref") or ""))
+    existing = same[-1] if same else None
+    if existing is None:
+        target = frame
+        stack.append(target)
+    else:
+        # 切回同一段会话：就地更新。push 只带"这次要写的"，没写的字段照旧（置空不动它）
+        target = existing
+        target.update({k: v for k, v in frame.items()
+                       if v is not None and k not in ("id", "created_at", "status")})
 
-    # 原栈顶 active → paused，并作为新帧的“来源状态情感”+“交接信息”
-    source_emotion = {}
-    handoff = {}
-    if stack and stack[-1].get("status") == "active":
-        prev = stack[-1]
+    if prev is not None and prev is not target:
         prev["status"] = "paused"
-        source_emotion = {
-            "type": prev.get("type"),
-            "emotion": prev.get("emotion") or {},
-            "emotion_text": prev.get("emotion_text") or "",
-        }
+        if not target.get("source_emotion"):
+            target["source_emotion"] = {
+                "type": prev.get("type"),
+                "emotion": prev.get("emotion") or {},
+                "emotion_text": prev.get("emotion_text") or "",
+            }
         # 交接打包：从哪来 / 在干嘛 / 原文尾巴（旧交接不重复注入——切换时一次性携带）
-        handoff = _left_conversation(prev)
-
-    frame["status"] = "active"
-    if not frame.get("source_emotion"):
-        frame["source_emotion"] = source_emotion
-    if not frame.get("handoff"):
-        frame["handoff"] = handoff
-    stack.append(frame)
+        if not target.get("handoff"):
+            target["handoff"] = _left_conversation(prev)
+    target["status"] = "active"
+    touch(target)
 
     await _save(db, agent_id, stack)
 
-    # P4: 自动写 JOURNAL
-    await _auto_journal(db, agent_id, "push", frame)
-    # P4: 自动追加 TODO
-    await _auto_todo(db, agent_id, frame)
+    if existing is None:
+        # P4: 自动写 JOURNAL
+        await _auto_journal(db, agent_id, "push", target)
+        # P4: 自动追加 TODO
+        await _auto_todo(db, agent_id, target)
+        logger.info(f"Agent({agent_id}) push [{target.get('type')}]: {target.get('doing', '')[:50]}")
+        return stack, f"已压入状态帧 [{target.get('type')}]"
 
-    logger.info(f"Agent({agent_id}) push [{frame.get('type')}]: {frame.get('doing', '')[:50]}")
-    return stack, f"已压入状态帧 [{frame.get('type')}]"
+    logger.info(f"Agent({agent_id}) 切回 [{target.get('type')}] {target.get('context_ref', '')}")
+    return stack, f"已切回状态帧 [{target.get('type')}]（同一段会话只有一帧，帧身份不变）"
 
 
 async def pop_state(
@@ -824,6 +842,40 @@ async def get_active_frame_tools(db: AsyncSession, agent_id: int) -> tuple[list[
         return None, None
     top = stack[-1]
     return top.get("tools"), top.get("skills")
+
+
+async def current_context(db: AsyncSession, agent_id: int,
+                          fallback_group_id: int | None = None) -> dict:
+    """AI 现在在哪：本次回复所在的群 + 状态栈里最近的群/世界（一次扫描）
+
+    世界命令与进世界都要「平台自己记着的事实」（帧就是平台记的），各写一份扫描迟早会分叉。
+    返回：
+    - group_ids：候选群，按新鲜度排——本次回复所在的群排第一，然后是栈里最近的群会话（去重）；
+    - world_id / channel_group_id：栈里最近那条世界帧的世界号与通道群（没进过世界就是 None）。
+    """
+    groups: list[int] = [int(fallback_group_id)] if fallback_group_id is not None else []
+    world_id: int | None = None
+    channel_group_id: int | None = None
+    for frame in reversed(running(await _get_stack(db, agent_id))):
+        ref = str(frame.get("context_ref") or "")
+        if ref.startswith("group:"):
+            try:
+                group = int(ref.split(":", 1)[1])
+            except ValueError:
+                continue
+            if group not in groups:
+                groups.append(group)
+        elif world_id is None and frame.get("type") == "world" and ref.startswith("world:"):
+            try:
+                world_id = int(ref.split(":", 1)[1])
+            except ValueError:
+                continue
+            raw_group = frame.get("group_id")
+            try:
+                channel_group_id = int(raw_group) if raw_group else None
+            except (TypeError, ValueError):
+                channel_group_id = None
+    return {"group_ids": groups, "world_id": world_id, "channel_group_id": channel_group_id}
 
 
 async def persist_last_task_as_state(

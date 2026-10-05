@@ -140,10 +140,8 @@ async def sync_group_history(db: AsyncSession, agent, group_id: int, *, cap: int
     entries = await history_service.read(db, agent.id, ref)
     watermark = latest_message_ref(entries)
 
-    rows = await gm.get_gm_messages(db, group_id, limit=cap, after_id=watermark or None)
-    # 顺序按 **id** 归正：水位就是按 id 记的，而 get_gm_messages 在 after_id 有值时返回倒序
-    # （chronological 靠时间戳判先后，同一秒插入的两条判不出来——实测踩过）
-    rows = sorted(rows, key=lambda m: m.id)
+    # 水位之后**最新**的一窗（不是最旧的一页）：见 gm.get_gm_messages_after_watermark
+    rows = await gm.get_gm_messages_after_watermark(db, group_id, watermark or None, limit=cap)
 
     agent_name = getattr(agent, "name", "") or ""
     agent_user_id = getattr(agent, "user_id", None)

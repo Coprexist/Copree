@@ -10,7 +10,7 @@
   一个坏/慢不拖累别的，也不拖累"发消息"本身（2026-09-25 线上事故：按名字覆盖注册，
   第二个 QQ 通道把第一个的出口顶掉，群 64 的 AI 回复被静默丢弃——所以改成句柄 + 并发）
 - `register_sink` 返回**句柄**，stop 时用句柄注销（按名字注销 = 清掉该名字下所有出口）
-- 调用发生在调用方 commit 之前（sink 内不要 commit 别人的 session）
+- 调用发生在调用方 commit 之前（sink 内不要 commit 别人的 session）——代发与落库同生共死的契约见 docs/dev/decision_layer.md
 """
 from __future__ import annotations
 
