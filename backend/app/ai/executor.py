@@ -523,9 +523,13 @@ async def _tool_call_loop(
     provider_supports_thinking: bool | None = None,
     trigger: str = "user",
     is_federated: bool = False,
+    pending_delivery: list[dict] | None = None,
 ) -> None:
     """
     工具调用循环：LLM 必须通过工具调用来执行所有操作（包括发消息）。
+
+    pending_delivery：build_messages 收集的"这次渲染进请求、还没投递过的账本条目"。
+    请求真的发出去（响应回来）之后才标记已读——解锁丢弃只看这个标记。
 
     铁律：文字不能自动发出去。想说话必须调 send_gm（群聊）或 send_dm（私信）。
     
@@ -986,6 +990,12 @@ async def _tool_call_loop(
                             credit_source = current_credit_source
                             api_key = current_api_key
                             api_base_url = current_api_base
+                            # 响应回来了 = 这条请求体真的发出去过；本轮带上、还没投递的账本条目
+                            # 到此才算「已读」（解锁丢弃只看它，没投出去的原样搬进新账本）
+                            if pending_delivery:
+                                from app.services.history import history_service
+                                await history_service.mark_seen(db, pending_delivery)
+                                pending_delivery.clear()
                             break  # 成功
                         except ServerError as e:
                             if server_retry < MAX_SERVER_RETRIES:

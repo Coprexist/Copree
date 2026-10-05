@@ -215,3 +215,46 @@ async def test_script_path_stays_inside_the_sandbox():
     finally:
         shutil.rmtree(workdir / "scripts", ignore_errors=True)
         _cleanup(workdir, [])
+
+
+def test_ai_file_paths_stay_inside_the_agents_own_space():
+    """AI 视角的路径一律换算到 agents/{id}/ 里：前缀化之后不存在第二个文件世界"""
+    from app.services.content.file_service import ai_stored_path, ai_view_path
+
+    assert ai_stored_path(7, "notes/a.md") == "agents/7/notes/a.md"
+    assert ai_stored_path(7, "/notes/a.md") == "agents/7/notes/a.md"   # 开头斜杠 = 文件空间根
+    assert ai_stored_path(7, "/") == "agents/7"
+    assert ai_view_path(7, "agents/7/notes/a.md") == "notes/a.md"
+    for escaped in ("../other/x.md", "notes/../../x", "a/../../../b", "..\\x"):
+        try:
+            ai_stored_path(7, escaped)
+        except ValueError:
+            continue
+        raise AssertionError(f"越界路径没被拒绝: {escaped}")
+
+
+async def test_file_tools_land_where_scripts_run(migrated_db):
+    """file_write 写的文件，run_script 当场看得见；file_read 读回的也是同一份。
+
+    以前 file_* 落在 data/ 根、脚本锁在 data/agents/{id}/：同一个「我的文件」分成两处，
+    改完再读像是"读到旧缓存"，脚本 os.listdir 又找不到刚写的脚本。
+    """
+    from app.database import async_session
+    from app.services.content.file_service import ai_list_files, ai_read_file, ai_write_file
+    from db_reset import clear
+
+    async with async_session() as db:
+        await clear(db, "file_metadata", "file_references", "file_collaborators")
+        await ai_write_file(db, PROBE_ID, "probe_shared.json", '{"n": 1}')
+        await db.commit()
+        try:
+            assert (agent_dir(PROBE_ID) / "probe_shared.json").read_text(encoding="utf-8") == '{"n": 1}'
+            run = await run_agent_code(
+                PROBE_ID, code="import os; print([n for n in os.listdir('.') if n.startswith('probe')])")
+            assert run["success"], run
+            assert "probe_shared.json" in run["stdout"], run["stdout"]
+            assert await ai_read_file(db, PROBE_ID, "probe_shared.json") == '{"n": 1}'
+            listing = await ai_list_files(db, PROBE_ID, "/")
+            assert [f["path"] for f in listing] == ["probe_shared.json"], listing
+        finally:
+            _cleanup(agent_dir(PROBE_ID), ["probe_shared.json"])

@@ -11,7 +11,7 @@
 | 前缀文本（system 段、昵称、提示词、记忆索引） | `capability_versions` 文本源快照（键含状态） | **换新**：该状态的 effective 对齐 latest，下一次请求用最新文本 | 只有解锁点（`apply_pending_changes`） |
 | 请求里的 tools 数组 | effective 快照 ∩ 当前允许集 | **同名定义不动**（走快照）；增删工具、状态闸变化会改 | 平台发布增删工具、`thinking_enabled` / `delay_reply_allowed` 变化 |
 | 账本历史 | `agent_history_entries` | **重写**成「摘要 + 事件原样搬运 + 最近 N 条」 | 无（段内只追加） |
-| 事件条目（缺口 / 便签投递 / 便签撤下 / 能力变更通知 / 状态后事告知 / 空焦段告知） | 同上（账本条目） | 带 `drop_on_unlock` 的（便签投递、撤下通知、后事告知、空焦段告知）**离场**；其余**原样保留**（缺口为何保留、非压缩条目会累积，见[会话历史与前缀缓存](./conversation_history.md) §13） | 无 |
+| 事件条目（缺口 / 便签投递 / 便签撤下 / 能力变更通知 / 状态后事告知 / 空焦段告知） | 同上（账本条目） | 带 `drop_on_unlock` 的**投递过的才离场**（`flags.seen` 在 LLM 响应回来时打；没投出去的——比如轮次之外落的失败通知——原样搬进新账本）；其余**原样保留**（缺口为何保留、非压缩条目会累积，见[会话历史与前缀缓存](./conversation_history.md) §13） | 无 |
 | 状态帧本身（会话帧） | `agents.state_stack`（全量存储） | **不重建**（一个 `context_ref` 只有一帧：`ensure_active_frame` / `push_state` 认出同会话就切回原帧，`_save` 再兜底归并） | 出运行集合只是改 status（`ended` / `retired`），**记录仍在**；只有 `finish_frame`（他表态后事办完）与平台代销会删记录，见「帧的存储与运行」 |
 | `tool_uses` / `delivered`（触发规则状态 + 空焦段告知的投递进度） | 会话帧字段 | **归零**（解锁清单里的 `reset_trigger_state`） | 随帧状态复位：解锁归零、帧被弹出后即不在运行集合（不再参与）。**换会话不归零**，见下节 |
 | 便签副本 `frame.notes` | 会话帧字段 | **清空**（`release_active_frame_notes`） | 无 |

@@ -286,7 +286,7 @@ class AgentHistoryEntry(Base):
     actor = Column(String(16), nullable=False, default="system", comment="self=我 / user=用户 / world=外界 / system=平台")
     content = Column(Text, nullable=False, comment="渲染好的最终字节（渲染即落库）")
     ref = Column(String(128), nullable=True, comment="来源锚点：message_id / tool_call_id（水位推导与排查用）")
-    flags = Column(json_column(), default=dict, comment="可压/已撤下等标记（只由解锁点改写）")
+    flags = Column(json_column(), default=dict, comment="可压/已投递（seen）等标记；解锁点重写，投递标记由 LLM 响应回来时写")
     created_at = Column(DateTime, server_default=func.now())
 
     __table_args__ = (

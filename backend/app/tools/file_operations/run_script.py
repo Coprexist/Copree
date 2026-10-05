@@ -16,7 +16,7 @@ class RunScript(ToolPlugin):
     segment = "file_operations"
     parameters = {
         "code": {"type": "string", "description": "要执行的 Python 代码"},
-        "path": {"type": "string", "description": "可选：先把代码存成脚本文件（沙箱目录内的相对路径，如 scripts/daily.py）再执行"},
+        "path": {"type": "string", "description": "可选：先把代码存成脚本文件（文件空间内的相对路径，如 scripts/daily.py）再执行。决策技能 do.run_script 的 entry 就指这个路径，长脚本可以先存这里"},
     }
     required = ["code"]
     states = ["active", "dnd"]

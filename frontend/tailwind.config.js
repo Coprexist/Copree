@@ -61,6 +61,26 @@ export default {
           800: 'rgb(var(--tw-mint-800) / <alpha-value>)',
           900: 'rgb(var(--tw-mint-900) / <alpha-value>)',
         },
+        azure: {
+          50:  'rgb(var(--tw-azure-50) / <alpha-value>)',
+          100: 'rgb(var(--tw-azure-100) / <alpha-value>)',
+          200: 'rgb(var(--tw-azure-200) / <alpha-value>)',
+          300: 'rgb(var(--tw-azure-300) / <alpha-value>)',
+          400: 'rgb(var(--tw-azure-400) / <alpha-value>)',     // 冷色文字/图标
+          500: 'rgb(var(--tw-azure-500) / <alpha-value>)',     // 色条/实底
+          600: 'rgb(var(--tw-azure-600) / <alpha-value>)',
+          700: 'rgb(var(--tw-azure-700) / <alpha-value>)',
+        },
+        cyan: {
+          50:  'rgb(var(--tw-cyan-50) / <alpha-value>)',
+          100: 'rgb(var(--tw-cyan-100) / <alpha-value>)',
+          200: 'rgb(var(--tw-cyan-200) / <alpha-value>)',
+          300: 'rgb(var(--tw-cyan-300) / <alpha-value>)',
+          400: 'rgb(var(--tw-cyan-400) / <alpha-value>)',     // 柔青（备用）
+          500: 'rgb(var(--tw-cyan-500) / <alpha-value>)',
+          600: 'rgb(var(--tw-cyan-600) / <alpha-value>)',
+          700: 'rgb(var(--tw-cyan-700) / <alpha-value>)',
+        },
         rose: {
           50:  'rgb(var(--tw-rose-50) / <alpha-value>)',
           100: 'rgb(var(--tw-rose-100) / <alpha-value>)',

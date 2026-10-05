@@ -1155,7 +1155,9 @@ async def test_push_mode_flip_reaches_the_ledger(migrated_db):
                                         "mentions": []})
         assert plugin.observed_full_mode() is True
         entries = await _ledger(7)
-        assert len(entries) == 1 and entries[0]["flags"]["channel_mode"] == "full", entries
+        # 业务幂等锚点在 ref 上（flags 是平台语义位，插件不碰）；通知走 api.report_notice
+        assert len(entries) == 1 and entries[0]["ref"] == "channel_mode:full", entries
+        assert entries[0]["flags"] == {}, "长期通知不带 drop_on_unlock"
         assert "全量模式" in entries[0]["content"], entries[0]
 
         # 同一种模式：再观测到不重复；"重启"（全新实例，内存里没有旧模式）也不重复
@@ -1173,7 +1175,7 @@ async def test_push_mode_flip_reaches_the_ledger(migrated_db):
         # 关掉全量：@ 事件回来 → 再投一条"停止"
         await plugin._on_group_at({**GROUP_EVENT, "id": "MODE-AT-2"})
         entries = await _ledger(7)
-        assert len(entries) == 2 and entries[1]["flags"]["channel_mode"] == "at", entries
+        assert len(entries) == 2 and entries[1]["ref"] == "channel_mode:at", entries
         assert "停止" in entries[1]["content"], entries[1]
     finally:
         _cleanup(plugin)

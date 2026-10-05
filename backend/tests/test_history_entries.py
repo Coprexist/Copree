@@ -148,7 +148,7 @@ async def test_events_land_in_the_ledger_not_just_this_turn(migrated_db):
 
 
 async def test_rewrite_keeps_summary_events_and_tail(migrated_db):
-    """解锁重写：摘要 + 事件原样搬运 + 最近 N 条；带 drop_on_unlock 的一次性条目随解锁离场"""
+    """解锁重写：摘要 + 事件原样搬运 + 最近 N 条；**投递过**的一次性条目随解锁离场"""
     from app.database import async_session
     from app.services.history import history_service as hs
     from app.services.history.context_sync import rewrite_context
@@ -162,20 +162,30 @@ async def test_rewrite_keeps_summary_events_and_tail(migrated_db):
             gap_entry(5, ref="m5"),
             make_entry("message", "老的2", actor="self"),
             make_entry("notice", "常驻通知"),
-            make_entry("notice", "一次性通知", flags={"drop_on_unlock": True}),
+            make_entry("notice", "没投出去的一次性通知", flags={"drop_on_unlock": True}),
+            make_entry("notice", "已投递的一次性通知", flags={"drop_on_unlock": True}),
             make_entry("message", "新的1", actor="user"),
             make_entry("message", "新的2", actor="self"),
         ])
         await db.commit()
 
+        # 「已投递」只有平台的投递路径打得出来（append 会剥掉调用方传的 seen）——
+        # 缺口与之同理：它总与那批消息同批投递，所以这两条一起标
+        rows = await hs.read(db, 1, "group:64")
+        await hs.mark_seen(db, [e for e in rows
+                                 if e["kind"] == "gap" or e["content"] == "已投递的一次性通知"])
+        await db.commit()
+
         out = await rewrite_context(db, agent, "group:64", summary="[摘要] 前面聊了化学", keep_last=2)
 
-        # 缺口（drop_on_unlock）与一次性通知随解锁离场；常驻通知与最近 N 条留下
-        assert [e["kind"] for e in out] == ["summary", "notice", "message", "message"]
-        assert "一次性通知" not in [e["content"] for e in out]
+        # 已投递的一次性通知随解锁离场；没投出去的、常驻通知与最近 N 条留下
+        assert [e["kind"] for e in out] == ["summary", "notice", "notice", "message", "message"]
+        contents = [e["content"] for e in out]
+        assert "已投递的一次性通知" not in contents
+        assert "没投出去的一次性通知" in contents, "没投出去的不许丢（AI 还没看见）"
         assert [e["content"] for e in out[-2:]] == ["新的1", "新的2"], "保留最新的 N 条"
-        assert [e["seq"] for e in out] == [1, 2, 3, 4], "重写后 seq 从 1 重排"
-        assert await hs.count(db, 1, "group:64") == 4
+        assert [e["seq"] for e in out] == [1, 2, 3, 4, 5], "重写后 seq 从 1 重排"
+        assert await hs.count(db, 1, "group:64") == 5
         assert await rewrite_context(db, agent, "group:none", summary="x", keep_last=2) == [], "账本空就不动"
 
 
@@ -265,4 +275,77 @@ def test_tool_ledger_note_keeps_what_the_tool_did():
     assert tool_ledger_note(None) == "ok"
     assert tool_ledger_note({"error": True, "message": "没有群聊上下文"}) == "失败：没有群聊上下文"
     assert tool_ledger_note({"success": False, "message": "不行", "__note": "x"}) == "失败：不行", "失败优先于摘要"
+
+async def test_append_ignores_seen_and_report_notice_owns_the_flags(migrated_db):
+    """写入方碰不到 seen；通知长什么样由平台定（插件走 report_notice）
+
+    seen 是「请求真的发出去」的投递信号：调用方自己塞进来会让条目谎报已投递、
+    解锁时被直接丢掉——所以写入时剥掉它（语义卫生，不是安全边界）。
+    """
+    from app.database import async_session
+    from app.models.agent import Agent
+    from app.services.history import history_service as hs
+    from app.services.plugin.api import report_notice
+    from app.utils.pure.history import make_entry, undelivered
+
+    async with async_session() as db:
+        await _seed(db)
+        agent = await db.get(Agent, 1)
+
+        await hs.append(db, 1, "group:64", [make_entry(
+            "notice", "调用方想自己打已读", flags={"drop_on_unlock": True, "seen": True})])
+        await db.commit()
+        rows = await hs.read(db, 1, "group:64")
+        assert rows[0]["flags"] == {"drop_on_unlock": True}, rows[0]["flags"]
+        assert [e["id"] for e in undelivered(rows)] == [rows[0]["id"]], "没投递过就是没投递过"
+
+        # 正门：插件只说「哪段会话、说了什么、是不是一次性的」
+        await report_notice(db, agent, "group:64", "通道模式变了",
+                            ref="channel_mode:full", transient=False)
+        await report_notice(db, agent, "group:64", "投一次就够")
+        await db.commit()
+        rows = await hs.read(db, 1, "group:64")
+        long_lived, one_shot = rows[1], rows[2]
+        assert long_lived["kind"] == "notice" and long_lived["ref"] == "channel_mode:full"
+        assert long_lived["flags"] == {}, "长期通知不带 drop_on_unlock"
+        assert one_shot["flags"] == {"drop_on_unlock": True}, "一次性由平台打旗子"
+
+
+async def test_a_notice_is_dropped_only_after_it_was_delivered(migrated_db):
+    """没投出去的 drop_on_unlock 条目，解锁时不许丢。
+
+    失败通知是在轮次之外落的（非 @ 被拦、入群退群），要等下一次唤醒才带上它；旧规则
+    「解锁即丢」会在 AI 看见之前把它压掉——它永远不知道技能没办成。
+    """
+    from types import SimpleNamespace
+
+    from app.database import async_session
+    from app.services.history import history_service as hs
+    from app.services.history.context_sync import rewrite_context
+    from app.utils.pure.history import make_entry, undelivered
+
+    async with async_session() as db:
+        await _seed(db)
+        agent, ref = SimpleNamespace(id=1), "group:64"
+        await hs.append(db, 1, ref, [
+            make_entry("message", "[#1] 有人: 打劫", actor="user", ref="1"),
+            make_entry("notice", "- 你的决策技能没办成：台账坏了", flags={"drop_on_unlock": True}),
+        ])
+        await db.commit()
+
+        entries = await hs.read(db, 1, ref)
+        assert [e["kind"] for e in undelivered(entries)] == ["notice"], "还没投出去"
+        assert all(e.get("id") for e in entries), "投递标记按 id 定位，append 必须回填 id"
+
+        # 没投出去 → 解锁重写时原样搬进新账本
+        await rewrite_context(db, agent, ref, summary="摘要", keep_last=1)
+        await db.commit()
+        assert "notice" in [e["kind"] for e in await hs.read(db, 1, ref)], "没投出去就被压掉了"
+
+        # 投递过（请求真的发出去）→ 再解锁才离场
+        await hs.mark_seen(db, await hs.read(db, 1, ref))
+        await db.commit()
+        await rewrite_context(db, agent, ref, summary="摘要", keep_last=1)
+        await db.commit()
+        assert "notice" not in [e["kind"] for e in await hs.read(db, 1, ref)], "投过了就该离场"
 

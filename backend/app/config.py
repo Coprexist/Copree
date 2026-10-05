@@ -303,17 +303,12 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-# 运行时可覆盖的配置（不持久化，重启后恢复为 env 默认值）
-_runtime_overrides: dict = {}
-
-def get_runtime_setting(key: str, default=None):
-    return _runtime_overrides.get(key, default)
-
-def set_runtime_setting(key: str, value):
-    _runtime_overrides[key] = value
-
+# 上传/头像大小上限走「配置组」机制（system_settings.runtime_config，DB 持久化 + 热生效）：
+# 覆盖由 app_config_service 在启动 / 保存时灌进 Settings（见 db_config_source），这里只读当前生效值。
+# 以前这里有一套进程内 _runtime_overrides，管理页改完重启就回 env 默认——已删。
 def get_effective_avatar_max_size_mb() -> int:
-    return int(get_runtime_setting("avatar_max_size_mb", settings.avatar_max_size_mb))
+    return int(settings.avatar_max_size_mb)
+
 
 def get_effective_upload_max_size_mb() -> int:
-    return int(get_runtime_setting("upload_max_size_mb", settings.upload_max_size_mb))
+    return int(settings.upload_max_size_mb)

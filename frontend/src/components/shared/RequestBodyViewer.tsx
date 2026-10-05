@@ -14,17 +14,19 @@ import { foldDuration, foldTransition } from './collapseMotion'
 
 type Kind = 'system' | 'state' | 'injected' | 'user' | 'assistant' | 'roundTools' | 'toolCall' | 'toolResult' | 'reasoning' | 'error'
 
-/** 分块配色：左竖条定色、底色调淡；工具那两类再叠虚线框 + 等宽字体，同色系也不会混 */
+// 分块配色：左竖条定色、底色调淡，一个色相只承担一类（图例才分得清）：
+//   灰=系统提示 / 天蓝=思考 / 琥珀=平台注入（状态栈、插入的消息）/ 紫=人说的话与工具链 / 绿=AI 说的话 / 红=收尾报错
+// 工具链同色相三档 + 虚线框；思考改用主题第五色系 azure 天蓝（以前跟状态栈、工具调用同是紫，撞在一起）
 const STYLES: Record<Kind, { bar: string; box: string; key: string }> = {
   system:     { bar: 'bg-textMuted/40',   box: 'bg-canvas border-border',                          key: 'logs:kindSystem' },
-  state:      { bar: 'bg-primary-500',    box: 'bg-canvas border-primary-500/30',                  key: 'logs:kindState' },
+  state:      { bar: 'bg-accent-500',     box: 'bg-accent-500/5 border-accent-500/30',             key: 'logs:kindState' },
   injected:   { bar: 'bg-accent-500',     box: 'bg-accent-500/10 border-accent-500/30 border-dashed', key: 'logs:kindInjected' },
-  user:       { bar: 'bg-primary-500',    box: 'bg-primary-500/10 border-primary-500/30',           key: 'logs:kindUser' },
+  user:       { bar: 'bg-primary-400',    box: 'bg-primary-500/10 border-primary-500/30',           key: 'logs:kindUser' },
   assistant:  { bar: 'bg-mint-500',       box: 'bg-mint-500/10 border-mint-500/30',                 key: 'logs:kindAssistant' },
-  roundTools: { bar: 'bg-primary-400',    box: 'bg-primary-500/5 border-primary-500/30 border-dashed', key: 'logs:kindRoundTools' },
+  roundTools: { bar: 'bg-primary-500/70', box: 'bg-primary-500/5 border-primary-500/30 border-dashed', key: 'logs:kindRoundTools' },
   toolCall:   { bar: 'bg-primary-500',    box: 'bg-primary-500/10 border-primary-500/40 border-dashed', key: 'logs:kindToolCall' },
-  toolResult: { bar: 'bg-accent-500',     box: 'bg-accent-500/10 border-accent-500/40 border-dashed', key: 'logs:kindToolResult' },
-  reasoning:  { bar: 'bg-primary-400/60', box: 'bg-elevated border-border',                        key: 'logs:kindReasoning' },
+  toolResult: { bar: 'bg-primary-500/40', box: 'bg-primary-500/5 border-primary-500/30 border-dashed', key: 'logs:kindToolResult' },
+  reasoning:  { bar: 'bg-azure-500',      box: 'bg-elevated border-azure-500/25',                   key: 'logs:kindReasoning' },
   error:      { bar: 'bg-rose-500',       box: 'bg-rose-500/10 border-rose-500/30',                 key: 'logs:kindError' },
 }
 

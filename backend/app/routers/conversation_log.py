@@ -51,7 +51,8 @@ async def update_my_log_settings(
 @router.get("/conversation-log/agents/{agent_id}/logs")
 async def get_agent_logs_user(
     agent_id: int,
-    limit: int = Query(20, ge=1, le=100),
+    # 一次读全（条数已由裁剪定好）：limit 只是防呆上限，别拿它当「保留多少」的旋钮
+    limit: int = Query(500, ge=1, le=2000),
     offset: int = Query(0, ge=0),
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),

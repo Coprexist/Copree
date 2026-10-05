@@ -1019,9 +1019,15 @@ async def build_messages(
     system_prompt_override: str | None = None,
     prompt_owner: int | None = None,
     context_config: ContextConfig | None = None,
+    pending_delivery: list[dict] | None = None,
 ) -> list[dict]:
     """
     构建发送给 LLM 的消息列表（6 段系统提示词 + 历史消息）。
+
+    pending_delivery：调用方给一个 list，函数把"这次渲染进请求、还没投递过的账本条目"
+    追加进去（见 utils/pure/history.undelivered）。真正的标记由 executor 在 LLM 响应
+    回来之后做——渲染了却没发出去不算看过。
+    
 
     六段结构（固定段在前以最大化 prompt cache 命中）：
     1. core_identity   — 核心规则 + 工具铁律 + 深度推理
@@ -1245,7 +1251,7 @@ async def build_messages(
         
         from app.models.message import Message as MessageModel
         from app.services.history.context_sync import append_events, sync_group_history
-        from app.utils.pure.history import FOLD_LIMIT, ROLE_BY_ACTOR, latest_message_ref, make_entry
+        from app.utils.pure.history import FOLD_LIMIT, ROLE_BY_ACTOR, latest_message_ref, make_entry, undelivered
 
         # 群设置优先；没设过就用折叠默认值。0 是"不折叠"，不能当假值兜掉
         max_len = getattr(group_obj, "max_msg_display_len", None) if group_obj else None
@@ -1284,6 +1290,9 @@ async def build_messages(
             if entry["actor"] == "user":
                 last_user_idx = len(messages) - 1
                 last_user_orm = (await db.get(MessageModel, int(entry["ref"]))) if entry.get("ref") else None
+
+        if pending_delivery is not None:
+            pending_delivery.extend(undelivered(ledger))
 
         if context_config_parser.should_inject_image(context_config):
             _n_img = _attach_image_to_message(messages, last_user_idx, last_user_orm, settings.data_dir)
@@ -1435,8 +1444,9 @@ async def build_dm_messages(
     trigger_user_id: int | None = None,
     system_prompt_override: str | None = None,
     prompt_owner: int | None = None,
+    pending_delivery: list[dict] | None = None,
 ) -> list[dict]:
-    """构建 DM 私信的消息列表（6 段系统提示词 + DM 历史消息）"""
+    """构建 DM 私信的消息列表（6 段系统提示词 + DM 历史消息；pending_delivery 同 build_messages）"""
     from app.models.dm import DMMessage, DMSession
     from sqlalchemy import select as sa_select
 
@@ -1605,7 +1615,7 @@ async def build_dm_messages(
     # ── DM 历史消息：账本（只追加 + 缺口）——与群聊同一套入口 ──
     from app.models.dm import DMMessage as DMMessageModel
     from app.services.history.context_sync import append_events, sync_dm_history
-    from app.utils.pure.history import ROLE_BY_ACTOR, make_entry
+    from app.utils.pure.history import ROLE_BY_ACTOR, make_entry, undelivered
 
 
     # 记忆条目抢在 sync 之前落账本：位置就是"当轮新消息之前"（同群聊）
@@ -1630,6 +1640,9 @@ async def build_dm_messages(
         if entry["actor"] == "user":
             last_user_idx = len(messages) - 1
             last_user_orm = (await db.get(DMMessageModel, int(entry["ref"]))) if entry.get("ref") else None
+
+    if pending_delivery is not None:
+        pending_delivery.extend(undelivered(ledger))
 
     # 🖼️ 为最后一条用户消息注入图片附件
     _n_img = _attach_image_to_message(messages, last_user_idx, last_user_orm, settings.data_dir)

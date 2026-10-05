@@ -230,6 +230,16 @@ def is_compressible(entry: dict) -> bool:
     return entry.get("kind") not in NEVER_COMPRESSIBLE
 
 
+def undelivered(entries: list[dict]) -> list[dict]:
+    """这批账本条目里"还没投出去过"的那些（带 drop_on_unlock 且未 seen）。
+
+    它们等着随下一次请求投出去——投递的判定与解锁丢弃共用同一个 flags.seen（唯一出处）。
+    """
+    return [e for e in (entries or [])
+            if (e.get("flags") or {}).get("drop_on_unlock")
+            and not (e.get("flags") or {}).get("seen")]
+
+
 def entries_to_messages(entries: list[dict]) -> list[dict]:
     """账本 → 发给模型的 messages（投影；顺序就是 seq 顺序）。"""
     out: list[dict] = []

@@ -103,6 +103,10 @@ async def test_unlock_drops_one_shot_entries_and_resets_trigger_state(migrated_d
         ])
         await db.commit()
 
+        # 这些一次性条目在真实链路里都随本轮请求投递（LLM 响应回来才标 seen）
+        await hs.mark_seen(db, await hs.read(db, 1, ref))
+        await db.commit()
+
         agent = await db.get(Agent, 1)
         await _unlock_context(db, agent, group_id=999002, session_id=None,
                               conversation_type="group", summary="[摘要] 测试")

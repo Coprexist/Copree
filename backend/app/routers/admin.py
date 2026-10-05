@@ -1515,17 +1515,22 @@ async def get_upload_limits(
 async def update_upload_limits(
     req: UploadLimitsRequest,
     admin: dict = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
 ):
-    """更新文件/头像上传大小限制（运行时，重启后恢复默认值）"""
-    from app.config import set_runtime_setting, get_effective_upload_max_size_mb, get_effective_avatar_max_size_mb
+    """更新文件/头像上传大小限制（落 runtime 配置组：热生效、重启不丢）"""
+    from app.config import get_effective_upload_max_size_mb, get_effective_avatar_max_size_mb
+    from app.services.infrastructure.app_config_service import save_group_config
+    values: dict = {}
     if req.upload_max_size_mb is not None:
         if req.upload_max_size_mb < 1 or req.upload_max_size_mb > 1024:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="上传大小限制需在 1-1024 MB 之间")
-        set_runtime_setting("upload_max_size_mb", req.upload_max_size_mb)
+        values["upload_max_size_mb"] = req.upload_max_size_mb
     if req.avatar_max_size_mb is not None:
         if req.avatar_max_size_mb < 1 or req.avatar_max_size_mb > 100:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="头像大小限制需在 1-100 MB 之间")
-        set_runtime_setting("avatar_max_size_mb", req.avatar_max_size_mb)
+        values["avatar_max_size_mb"] = req.avatar_max_size_mb
+    if values:
+        await save_group_config(db, "runtime", values)
     return {
         "upload_max_size_mb": get_effective_upload_max_size_mb(),
         "avatar_max_size_mb": get_effective_avatar_max_size_mb(),
@@ -2809,6 +2814,11 @@ class ConvLogConfigBody(PydanticBaseModel):
     compression_threshold: int | None = Field(None, ge=1, le=100)
     idle_threshold_percent: int | None = Field(None, ge=1, le=99)
     compress_target_percent: int | None = Field(None, ge=1, le=99)
+    # 保留策略旋钮：None = 不改（要回代码默认就直接清库里的值）
+    idle_keep: int | None = Field(None, ge=1, le=500)
+    aged_keep: int | None = Field(None, ge=1, le=500)
+    idle_days: int | None = Field(None, ge=1, le=365)
+    aged_days: int | None = Field(None, ge=1, le=365)
 
 
 class ConvLogAgentSettingsBody(PydanticBaseModel):
@@ -2833,7 +2843,10 @@ async def update_conv_log_config(
     db: AsyncSession = Depends(get_db),
 ):
     """更新对话日志全局配置"""
-    from app.services.content.conversation_log_service import update_config
+    from app.services.content.conversation_log_service import KEEP_KNOB_NAMES, update_config
+    # 只有本次**显式提交**的旋钮才处理（Pydantic 的 model_fields_set 区分「没传」与「传了 null」）：
+    # 传了 null = 清除回代码默认
+    knobs = {name: getattr(req, name) for name in req.model_fields_set if name in KEEP_KNOB_NAMES}
     try:
         result = await update_config(
             SQLAlchemyContentRepository(db),
@@ -2845,6 +2858,7 @@ async def update_conv_log_config(
             compression_threshold=req.compression_threshold,
             idle_threshold_percent=req.idle_threshold_percent,
             compress_target_percent=req.compress_target_percent,
+            knobs=knobs,
         )
         await _log_admin_action(
             db, admin["user_id"], "update_conv_log_config", "system", 1,
@@ -2896,7 +2910,7 @@ async def update_agent_conv_log_settings(
 @router.get("/conversation-log/agents/{agent_id}/logs")
 async def get_agent_conv_logs(
     agent_id: int,
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(500, ge=1, le=2000),
     offset: int = Query(0, ge=0),
     admin: dict = Depends(require_admin),
     db: AsyncSession = Depends(get_db),

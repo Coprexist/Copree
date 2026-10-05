@@ -453,3 +453,72 @@ async def test_script_preview_runs_only_when_asked(migrated_db):
                                      {"content": "签到"}, execute=True)
         assert ran["script"]["executed"] is True, ran["script"]
         assert ran["reply"] == "dry=1", ran
+
+
+async def test_run_script_can_run_a_file_from_the_agents_space(migrated_db):
+    """长脚本外置：技能只写 entry，沙箱按入口文件跑（存的地方就是跑的地方）"""
+    from app.database import async_session
+    from app.services.sandbox.agent_sandbox import script_path
+    from app.services.world.decision_skill import run_decision_engine
+
+    script = script_path(24, "scripts/probe_daily.py")
+    script.write_text(
+        'import json, os\n'
+        'ctx = json.loads(os.environ["DECISION_CTX"])\n'
+        'print(json.dumps({"reply": "脚本收到的：" + ctx["content"]}))\n',
+        encoding="utf-8",
+    )
+    try:
+        async with async_session() as db:
+            await _seed(db)
+            ok, err = await _save(db, {
+                "name": "外置脚本", "when": {"event": "group_message", "conditions": {"content_contains": "签到"}},
+                "do": {"action": "run_script", "entry": "scripts/probe_daily.py"}, "notify": False,
+            })
+            assert ok, err
+            dec = await run_decision_engine(db, "agent", 24, None, "group_message", _incoming())
+            assert dec["hit"] and dec["handled"], dec
+            assert "脚本收到的：我来签到" in dec["reply"], dec
+    finally:
+        script.unlink(missing_ok=True)
+
+
+async def test_a_broken_script_preview_still_says_the_event_comes_back(migrated_db):
+    """试跑里脚本没跑成 → wakes_owner 必须是 true。
+
+    真跑时失败与 notify 无关（failure_note 一律交回本体）；回显原先只照抄 notify，
+    于是「success=false + wakes_owner=false」自相矛盾——写规则的 AI 会以为失败被静默吞了。
+    """
+    from app.database import async_session
+    from app.services.world.decision_skill import preview_decision
+
+    async with async_session() as db:
+        await _seed(db)
+        await _save(db, {
+            "name": "会崩的脚本", "when": {"event": "group_message", "conditions": {"content_contains": "签到"}},
+            "do": {"action": "run_script", "code": "raise RuntimeError('台账坏了')"}, "notify": False,
+        })
+        out = await preview_decision(db, "agent", 24, None, "group_message", {"content": "签到"}, execute=True)
+        assert out["script"]["success"] is False, out["script"]
+        assert out["wakes_owner"] is True, out
+        assert "交回" in out["why"], out
+
+
+def test_long_script_keeps_out_of_the_listing():
+    """脚本正文上限放宽到 50000，但不许原样进上下文：列表回显只给开头"""
+    from app.services.world.decision_skill import _MAX_SCRIPT_CHARS, brief_do, validate_rule
+
+    def check(do):
+        return validate_rule({"name": "脚本", "when": {"event": "group_message"}, "do": do, "notify": False})
+
+    body = "x = 1\n" * 4000                      # 24000 字，旧上限（4000）装不下
+    assert check({"action": "run_script", "code": body})[0] is True
+    assert _MAX_SCRIPT_CHARS >= 50000
+    assert check({"action": "run_script", "code": "y = 1\n" * 10000})[0] is False   # 60000 字
+    assert check({"action": "run_script"})[0] is False                              # 两样都没给
+    assert check({"action": "run_script", "entry": "../x.py"})[0] is False          # entry 越界
+    assert check({"action": "run_script", "code": "print(1)", "entry": "a.py"})[0] is False   # 二选一
+
+    brief = brief_do({"action": "run_script", "code": body})
+    assert len(brief["code"]) < 1200 and brief["code_chars"] == len(body), brief
+    assert brief_do({"action": "run_script", "code": "print(1)"})["code"] == "print(1)"

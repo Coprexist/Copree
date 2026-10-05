@@ -54,7 +54,9 @@ function Hunk({ label, removed, messages, names }: {
   )
 }
 
-export default function LogBrowser({ agentId, basePath = '/conversation-log', exportLog, limit = 30 }: Props) {
+// limit 只是防呆上限（后端按保留策略返回：最多的那段状态 30 / 其余 5，老状态 10 / 2）——
+// 它**不是**「保留多少条」的旋钮，写死小数会让列表看起来比实际保留的少
+export default function LogBrowser({ agentId, basePath = '/conversation-log', exportLog, limit = 500 }: Props) {
   const t = useT()
   const lang = useLang()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -91,7 +93,12 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
   }, [agentId, basePath, limit])
 
   const groups = useMemo(() => groupByState(logs, logStateOf), [logs])
-  const active = groups.find(group => stateKeyOf(group.frame) === (stateKey ?? '')) ?? null
+  // 「列表视图」与「无状态组」是两回事：前者 URL 上没有 state 参数（null），后者是空串 key。
+  // 用 ?? '' 兜底会把两者混成一个——点「返回状态列表」删掉参数后又被算回无状态组，
+  // 于是那个按钮看起来点不动（有「无状态」轮次的 AI 必然撞上）。
+  const active = stateKey === null
+    ? null
+    : (groups.find(group => stateKeyOf(group.frame) === stateKey) ?? null)
   const items = active?.items ?? []
   // 选中项失效（换了个 AI、日志被裁掉）就退回这段状态里最新的一条
   const currentId = wantedLogId && items.some(log => log.id === wantedLogId) ? wantedLogId : (items[0]?.id ?? null)

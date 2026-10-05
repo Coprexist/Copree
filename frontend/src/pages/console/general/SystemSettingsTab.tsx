@@ -208,7 +208,7 @@ export default function SystemSettingsTab() {
         </div>
       </div>
 
-      {/* 单文件上传大小限制（运行时，重启后恢复 env 默认值） */}
+      {/* 单文件上传大小限制（落 runtime 配置组：热生效、重启不丢） */}
       <div className="bg-surface rounded-card border border-border p-4">
         <label className="block text-sm font-medium mb-1 text-textSecondary">单文件上传大小上限</label>
         <p className="text-xs text-textMuted mb-2">控制用户上传单个文件的最大尺寸（不含头像）</p>
@@ -232,7 +232,7 @@ export default function SystemSettingsTab() {
         </div>
       </div>
 
-      {/* 头像上传大小限制（运行时，重启后恢复 env 默认值） */}
+      {/* 头像上传大小限制（落 runtime 配置组：热生效、重启不丢） */}
       <div className="bg-surface rounded-card border border-border p-4">
         <label className="block text-sm font-medium mb-1 text-textSecondary">头像上传大小上限</label>
         <p className="text-xs text-textMuted mb-2">控制用户/AI 上传头像的最大尺寸</p>

@@ -62,6 +62,10 @@ export const adminConfigZh: TranslationDict = {
   'displayTimezoneHint': 'AI 看到的时间用哪个时区，如 Asia/Shanghai（中国）或 UTC。',
   'summaryCacheTtl': '摘要缓存 TTL（秒）',
   'summaryCacheTtlHint': '对话摘要缓存多久。600 = 10 分钟。调大省 token，调小更实时。',
+  'uploadMaxSize': '单文件上传大小上限（MB）',
+  'uploadMaxSizeHint': '用户上传单个文件的上限，不含头像。落 runtime 配置组，重启不丢。',
+  'avatarMaxSize': '头像上传大小上限（MB）',
+  'avatarMaxSizeHint': '用户 / AI 上传头像的上限。同样落 runtime 配置组。',
 }
 
 export const adminConfigEn: TranslationDict = {
@@ -113,6 +117,10 @@ export const adminConfigEn: TranslationDict = {
   'displayTimezoneHint': 'Timezone AI sees, e.g. Asia/Shanghai or UTC.',
   'summaryCacheTtl': 'Summary Cache TTL (s)',
   'summaryCacheTtlHint': 'How long conversation summaries are cached. 600 = 10 min. Higher saves tokens, lower is more realtime.',
+  'uploadMaxSize': 'Max upload size per file (MB)',
+  'uploadMaxSizeHint': 'Per-file upload limit for users, avatars excluded. Stored in the runtime config group, survives restarts.',
+  'avatarMaxSize': 'Max avatar upload size (MB)',
+  'avatarMaxSizeHint': 'Avatar upload limit for users and AIs. Also stored in the runtime config group.',
 }
 
 export const adminConfigJa: TranslationDict = {
@@ -164,4 +172,8 @@ export const adminConfigJa: TranslationDict = {
   'displayTimezoneHint': 'AI が見る時刻のタイムゾーン。例：Asia/Shanghai または UTC。',
   'summaryCacheTtl': '要約キャッシュ TTL（秒）',
   'summaryCacheTtlHint': '会話要約のキャッシュ時間。600 = 10 分。大きく = トークン節約、小さく = よりリアルタイム。',
+  'uploadMaxSize': 'ファイル 1 件の最大サイズ（MB）',
+  'uploadMaxSizeHint': 'ユーザーが 1 ファイルをアップロードできる上限（アバターを除く）。runtime 設定グループに保存され、再起動しても残ります。',
+  'avatarMaxSize': 'アバターの最大サイズ（MB）',
+  'avatarMaxSizeHint': 'ユーザー / AI のアバター上限。同じく runtime 設定グループに保存されます。',
 }

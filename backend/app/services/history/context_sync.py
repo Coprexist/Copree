@@ -65,10 +65,12 @@ async def rewrite_context(db: AsyncSession, agent, context_ref: str, *,
     kept_seqs = {e["seq"] for e in (entries[-keep_last:] if keep_last > 0 else [])}
 
     def _survives(e: dict) -> bool:
-        # 带 `drop_on_unlock` 的（便签投递/撤下通知）**只活到解锁**：哪怕落在保留窗口里也走
-        # ——解锁是便签唯一的退出点（§6「解锁必须整套」），它不该靠「最近 N 条」侥幸活着
-        if (e.get("flags") or {}).get("drop_on_unlock"):
-            return False
+        # 带 `drop_on_unlock` 的（便签投递/撤下通知）**投递过才离场**：没投出去的原样搬进
+        # 新账本——解锁只发生在某次唤醒内部，条目若是在轮次之外落的（失败通知就是），
+        # 这一轮不一定带得上它，丢了就再也没人看见。锁定态的渲染不改账本，不会断缓存。
+        flags = e.get("flags") or {}
+        if flags.get("drop_on_unlock"):
+            return not flags.get("seen")
         return e["seq"] in kept_seqs or not is_compressible(e)
 
     events = [e for e in entries if _survives(e)]   # 顺序天然还是 seq 顺序（保留的是后缀）

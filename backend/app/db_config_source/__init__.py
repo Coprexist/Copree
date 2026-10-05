@@ -43,16 +43,26 @@ def get_db_override(field_name: str) -> Any | None:
 
 
 def set_db_overrides(values: dict[str, Any]) -> None:
-    """整体替换缓存（启动加载 / 保存后同步）"""
-    _db_overrides.clear()
-    for k, v in values.items():
-        if v is not None:
+    """把一组配置并进缓存（启动加载 / 保存后同步）。
+
+    为什么不整体替换：配置组是各自独立的（embedding / runtime…），而启动时逐组加载、
+    保存时逐组写回——整体替换等于「最后加载的那组吃掉前面所有组」，前面那些组的
+    DB 覆盖白存了。值为 None 的键视为「这个字段没有覆盖」，从缓存里去掉。
+    """
+    for k, v in (values or {}).items():
+        if v is None:
+            _db_overrides.pop(k, None)
+        else:
             _db_overrides[k] = v
 
 
-def clear_db_overrides() -> None:
-    """清空缓存（恢复默认时）"""
-    _db_overrides.clear()
+def clear_db_overrides(keys: list[str] | None = None) -> None:
+    """清缓存：keys 给定就只清这几个键（恢复某一组默认时用），不给就整体清空"""
+    if keys is None:
+        _db_overrides.clear()
+        return
+    for k in keys:
+        _db_overrides.pop(k, None)
 
 
 # ═══════════════════════════════════════════════════════════════

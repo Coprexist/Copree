@@ -69,6 +69,10 @@ async def test_note_is_delivered_once_then_retired_then_dropped_on_unlock(migrat
         await db.commit()
         assert [e["kind"] for e in await hs.read(db, 1, "group:64")] == ["note", "notice"]
 
+        # 真实链路里这两条随本轮请求投递出去（LLM 响应回来才标 seen）；投递过才允许离场
+        await hs.mark_seen(db, await hs.read(db, 1, "group:64"))
+        await db.commit()
+
         left = await rewrite_context(db, (await db.get(Agent, 1)), "group:64",
                                     summary="[摘要] 测试", keep_last=20)
         await db.commit()

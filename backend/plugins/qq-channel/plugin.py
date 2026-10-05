@@ -1007,8 +1007,8 @@ class QqChannelPlugin(ServicePlugin):
         from app.database import async_session
         from app.models.agent import Agent
         from app.services.history import history_service as hs
-        from app.services.history.context_sync import append_events, context_ref
-        from app.utils.pure.history import make_entry
+        from app.services.history.context_sync import context_ref
+        from app.services.plugin import api
 
         async with async_session() as db:
             agent = (await db.execute(
@@ -1021,10 +1021,11 @@ class QqChannelPlugin(ServicePlugin):
             said = _last_channel_mode(await hs.read(db, agent.id, ref)) or _channel_mode(False)
             if said == _channel_mode(full):
                 return
-            await append_events(db, agent, ref, [make_entry(
-                "notice", _channel_mode_notice(full),
-                flags={"channel_mode": _channel_mode(full)},
-            )])
+            # 走公共面：条目长什么样（类型 / drop_on_unlock / 已读）由平台定，通道只说事实
+            await api.report_notice(
+                db, agent, ref, _channel_mode_notice(full),
+                ref=f"{_CHANNEL_MODE_REF}{_channel_mode(full)}", transient=False,
+            )
             await db.commit()
             logger.info(
                 f"QQ 通道[{self.instance}] 群推送模式变化，已给 AI 账本投递通知（{_channel_mode(full)}）"
@@ -2315,17 +2316,25 @@ class QqChannelPlugin(ServicePlugin):
         return False
 
 
+# 业务幂等锚点写在条目的 ref 上（flags 留给平台语义位：drop_on_unlock / seen / compressible）
+_CHANNEL_MODE_REF = "channel_mode:"
+
+
 def _channel_mode(full: bool) -> str:
-    """账本 flag 里的模式取值（写和读都走它，两处各写一遍迟早漂）"""
+    """模式取值（写进 ref、也按它判，两处各写一遍迟早漂）"""
     return "full" if full else "at"
 
 
 def _last_channel_mode(entries: list[dict]) -> str | None:
     """账本里最后一次"通道推送模式"通知说的是哪个模式（没说 → None）"""
     for entry in reversed(entries or []):
-        mode = (entry.get("flags") or {}).get("channel_mode")
-        if mode:
-            return str(mode)
+        ref = str(entry.get("ref") or "")
+        if ref.startswith(_CHANNEL_MODE_REF):
+            return ref[len(_CHANNEL_MODE_REF):]
+        # 兼容改造前投的旧条目（当时锚点塞在 flags 里）——不认它就白重投一次
+        legacy = (entry.get("flags") or {}).get("channel_mode")
+        if legacy:
+            return str(legacy)
     return None
 
 

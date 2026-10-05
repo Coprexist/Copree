@@ -562,6 +562,27 @@ def parse_state_summary(summary: str) -> dict:
     return {}
 
 
+def state_key_of(frame: dict | None) -> str:
+    """帧身份的编码：`type|label`（无状态帧时空串）。
+
+    与前端 components/shared/LogState.tsx 的 stateKeyOf 同一口径——它同时是列表分组键与
+    URL 参数。日志表把它存成一列（写日志时算一次），裁剪就能按状态分桶而不必回读 messages。
+    """
+    if not frame or not frame.get("type"):
+        return ""
+    return f"{frame['type']}|{frame.get('label') or ''}"
+
+
+def frame_of_state_key(key: str | None) -> dict:
+    """state_key_of 的逆；空串还原成空帧（与 state_frame_of 读不到时同形）。"""
+    if not key:
+        return {}
+    at = key.find("|")
+    frame_type = key if at < 0 else key[:at]
+    label = "" if at < 0 else key[at + 1:]
+    return {"type": frame_type, "label": label} if frame_type else {}
+
+
 def state_frame_of(messages: list[dict]) -> dict:
     """从一份请求体里读回当时的状态帧身份（那轮没注入状态摘要时返回空）。
 

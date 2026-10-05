@@ -43,6 +43,7 @@ async def append(db: AsyncSession, agent_id: int, context_ref: str, entries: lis
     )).scalar() or 0
 
     out: list[dict] = []
+    rows: list[AgentHistoryEntry] = []
     for offset, entry in enumerate(entries, start=1):
         row = AgentHistoryEntry(
             agent_id=agent_id,
@@ -52,12 +53,39 @@ async def append(db: AsyncSession, agent_id: int, context_ref: str, entries: lis
             actor=entry.get("actor") or "system",
             content=entry["content"],
             ref=(entry.get("ref") or None),
-            flags=dict(entry.get("flags") or {}),
+            # seen（已读）是平台的投递信号——请求真的发出去时由 executor 打，写入方传什么都不认。
+            # 这不是安全闸（同进程的调用方想绕总有别的路），是别让照抄示例的人把语义写反。
+            flags={k: v for k, v in (entry.get("flags") or {}).items() if k != "seen"},
         )
         db.add(row)
-        out.append({**entry, "seq": base + offset})
+        rows.append(row)
     await db.flush()
+    # id 回填：append 的返回值与 read 同形（投递标记按 id 定位，缺 id 就标不上）
+    out = [{**entry, "seq": base + offset, "id": row.id}
+           for offset, (entry, row) in enumerate(zip(entries, rows), start=1)]
     return out
+
+
+async def mark_seen(db: AsyncSession, entries: list[dict]) -> int:
+    """把**已随请求发出**的条目标为已读（唯一入口）。
+
+    解锁重写丢弃带 drop_on_unlock 的条目时只看这一个标记：投递过的才离场，没投出去的
+    原样搬进新账本——失败通知这类"没人唤醒时落的条目"不会在 AI 看见之前被压掉。
+    调用点在 LLM 响应回来之后（executor），不在渲染时：build 了却没发出去不算看过。
+    """
+    ids = [int(e["id"]) for e in (entries or [])
+           if e.get("id")
+           and (e.get("flags") or {}).get("drop_on_unlock")
+           and not (e.get("flags") or {}).get("seen")]
+    if not ids:
+        return 0
+    rows = (await db.execute(
+        select(AgentHistoryEntry).where(AgentHistoryEntry.id.in_(ids))
+    )).scalars().all()
+    for row in rows:
+        row.flags = {**(row.flags or {}), "seen": True}
+    await db.flush()
+    return len(rows)
 
 
 async def read(db: AsyncSession, agent_id: int, context_ref: str, *,

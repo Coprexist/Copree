@@ -43,7 +43,16 @@ AI 不该被每条消息唤醒。事件先过一层决策：**AI 自己写的规
 ## 3. 校验
 
 - `when.event` 必须在 §2 表内 —— 写个不存在的事件名等于永远不触发，不如当场拒绝并列出可选值。
-- `do.action` 四选一，各自必填项校验（`reply` / `name` / `code`；`silent` 无必填项），文本与脚本上限 4000 字符。
+- `do.action` 四选一，各自必填项校验（`reply` / `name` / `code|entry`；`silent` 无必填项）。
+  两个上限不是一回事：代发文本（`reply`）4000 字，脚本正文（`code`）50000 字。正文更长的脚本先落到
+  文件空间（`run_script` 的 `path`），技能里只写 `entry` 指它——存的地方就是跑的地方。
+  列表与试跑回显过长的正文时只给开头 + 全文长度（`brief_do`）：技能存在 config 里，原样回显
+  等于每次列表都把几万字灌进上下文。
+- `code` 与 `entry` **二选一**：沙箱的入口判定是 entry 优先，两个都给会跑 entry、`code` 静默失效，
+  所以写入时就拒掉。入口文件本身抛异常时，回执与 `code` 模式逐字一致（同一个 runner 模板、
+  同一条 `stderr` 末行）。
+- 试跑回显的 `wakes_owner` 与真跑口径对齐：脚本没跑成时它必须是 `true`——真跑的失败与 `notify`
+  无关，一律经 `failure_note` 交回本体；只照抄 `notify` 会出现「success=false + 不唤醒」的自相矛盾。
 - `silent` 是「不回应」的正式表达：命中即静默（不代发、不唤醒本体）。此前只能给 `reply_template`
   塞一句空话，或让 `run_script` 打印空 JSON 绕过去。
 - 关键词运算与阈值写入时校验（`utils/pure/conditions.py`）：`similar` 的关键词/阈值、

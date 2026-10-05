@@ -126,6 +126,16 @@ CONFIG_GROUPS: dict[str, dict] = {
                 "type": "number", "label_key": "summaryCacheTtl",
                 "hint_key": "summaryCacheTtlHint",
             },
+            # 上传/头像大小上限：以前是进程内运行时覆盖（重启回 env 默认），现在跟别的运行时
+            # 参数一样落 DB —— 管理页改完热生效，重启也还在
+            "upload_max_size_mb": {
+                "type": "number", "label_key": "uploadMaxSize",
+                "hint_key": "uploadMaxSizeHint",
+            },
+            "avatar_max_size_mb": {
+                "type": "number", "label_key": "avatarMaxSize",
+                "hint_key": "avatarMaxSizeHint",
+            },
         },
         "encrypted": [],
     },
@@ -243,7 +253,7 @@ async def clear_group_config(db: AsyncSession, group: str) -> dict:
     if row is not None and getattr(row, schema["column"], None):
         setattr(row, schema["column"], None)
         await db.commit()
-    clear_db_overrides()
+    clear_db_overrides(_editable_keys(group))   # 只清本组：别的组的覆盖不受影响
     _refresh_settings()
     logger.info(f"🗑️ 配置已恢复默认 [{group}]")
     return {}

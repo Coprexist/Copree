@@ -181,9 +181,39 @@ def service(
     return wrapper
 
 
+async def report_notice(
+    db,
+    agent,
+    context_ref: str,
+    text: str,
+    *,
+    ref: str = "",
+    transient: bool = True,
+) -> list[dict]:
+    """给某个会话的 AI 留一条账本通知 —— 插件写通知的唯一入口（公共契约）。
+
+    插件只说三件事：哪段会话（context_ref）、说了什么（text）、这条是不是「投一次就够」
+    （transient）。条目长什么样由平台定：类型是 notice、transient 才带 drop_on_unlock；
+    「已读」（seen）永远是平台在请求真的发出去之后打的，插件不碰。
+
+    业务幂等锚点写 ref（账本按它判「这条说过没有」，例：channel_mode:full）——
+    业务数据放 ref、平台语义位放 flags，两者不混。
+
+    与其他 append 一致：本函数只 flush，事务边界留给调用方（写完记得 commit）。
+    """
+    from app.services.history.context_sync import append_events
+    from app.utils.pure.history import make_entry
+
+    return await append_events(db, agent, context_ref, [make_entry(
+        "notice", text, ref=ref,
+        flags={"drop_on_unlock": True} if transient else {},
+    )])
+
+
 __all__ = [
     "skill",
     "service",
+    "report_notice",
     "ServicePlugin",
     "ServiceDef",
     "get_service_def",

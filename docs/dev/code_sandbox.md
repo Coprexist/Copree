@@ -17,14 +17,18 @@ AI 原本就有独立目录 `data/agents/{agent_id}/`（代码里一直叫它"AI
 | 能力 | 落在哪里 | 边界来源 |
 |------|---------|---------|
 | 代码执行 | 沙箱目录 | `run_script` 工具 / 决策技能 `do.run_script` → `sandbox/runner` |
-| 脚本存取（`run_script` 的 `path`） | 沙箱目录 | `agent_sandbox.script_path`（越界直接拒绝） |
+| 脚本存取（`run_script` 的 `path`、决策技能 `do.entry`） | 沙箱目录 | `agent_sandbox.script_path`（越界直接拒绝） |
 | OpenCLI 文件操作 | 沙箱目录 | `opencli_service._resolve_agent_path` |
-| `file_*` 工具 | **共享的 `data/` 树** | 数据库元数据鉴权（`file_service`），不是目录隔离 |
+| `file_*` 工具 | 沙箱目录 | 路径经 `file_service.ai_stored_path` 前缀化，元数据鉴权照旧 |
 
-> ⚠️ 两套空间并存是历史遗留：`file_*` 工具写的是共享 `data/` 树、靠 `file_metadata` 判权限
-> （`file_read` 的工具描述声称"只能访问 `/app/data/agents/{your_id}/`"，与实现不一致）。
-> 沙箱选的是独立目录那套（真正的文件系统隔离），所以 `run_script` 的脚本不会出现在 `file_list` 里。
-> 把 `file_*` 也迁到独立目录的收敛方案不在本次范围内，先如实记录。
+`file_*` 曾经落在共享的 `data/` 树（历史遗留）：同一个「我的文件」分成两处，`file_write` 写出来的
+脚本 `run_script` 里 `os.listdir` 找不到，两侧还各留一份同名不同内容的文件——AI 改完再读像是
+「读到旧缓存」。现在四个入口（脚本、记忆、OpenCLI、`file_*`）都落在 `data/agents/{id}/`：
+
+- AI 面向的路径不带前缀，存储层用 `ai_stored_path` 拼上 `agents/{id}/`，回显用 `ai_view_path` 剥掉；
+  规范化后仍以 `..` 开头的一律拒绝。
+- 存量记录的搬迁见 `backend/scripts/migrate_ai_files_to_sandbox.py`（幂等；目标位置已有同名文件时
+  不覆盖——沙箱那一份才是真在跑的，被取代的旧副本归档到 `agents/{id}/.superseded/`，不删）。
 
 ## 3. 为什么收成一层
 

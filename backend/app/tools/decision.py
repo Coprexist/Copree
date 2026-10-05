@@ -28,9 +28,9 @@ class ListDecisionSkills(ToolPlugin):
         self, db: AsyncSession, agent_id: int, group_id: int | None,
         arguments: dict, context: dict,
     ) -> dict:
-        from app.services.world.decision_skill import get_decision_rules
+        from app.services.world.decision_skill import get_decision_rules, rule_brief
         rules = await get_decision_rules(db, "agent", agent_id)
-        return {"success": True, "rules": rules, "count": len(rules)}
+        return {"success": True, "rules": [rule_brief(r) for r in rules], "count": len(rules)}
 
 
 class WriteDecisionSkill(ToolPlugin):
@@ -105,11 +105,11 @@ async def handle_decision_tool(
     except json.JSONDecodeError:
         return {"success": False, "error": "参数解析失败"}
     from app.services.world.decision_skill import (
-        get_decision_rules, save_decision_rule, delete_decision_rule,
+        get_decision_rules, save_decision_rule, delete_decision_rule, rule_brief,
     )
     if name == "list_decision_skills":
         rules = await get_decision_rules(db, kind, entity_id)
-        return {"success": True, "rules": rules, "count": len(rules)}
+        return {"success": True, "rules": [rule_brief(r) for r in rules], "count": len(rules)}
     if name == "write_decision_skill":
         rule = args.get("rule") or {}
         ok, err = await save_decision_rule(db, kind, entity_id, rule)

@@ -39,8 +39,12 @@ from app.utils.pure.conditions import explain_conditions, match_conditions  # no
 # 技能校验
 # ═══════════════════════════════════════════════════════════
 
-_MAX_RULES = 20          # 每实体技能上限
-_MAX_DO_SCRIPT = 4000    # run_script 脚本/回复文本上限（字符）
+_MAX_RULES = 20             # 每实体技能上限
+# 两个上限不是一回事，别合成一个：reply 是一条群消息的量级，脚本正文是源代码。
+# 脚本正文放宽到 5 万字也不会撑上下文——前提是列表/试跑回显走 brief_do（见下）。
+_MAX_REPLY_CHARS = 4000     # reply_template 代发文本上限（字符）
+_MAX_SCRIPT_CHARS = 50000   # run_script 脚本正文上限（字符）
+_BRIEF_CODE_CHARS = 1000    # 回显时脚本正文保留的长度，超出只给开头 + 全文长度
 
 _DO_ACTIONS = ("reply_template", "call_tool", "run_script", "silent")
 
@@ -69,8 +73,11 @@ def rule_schema_desc() -> str:
         "similar 认错别字，长度用 content_len），并可 and/or/not 自由嵌套；拿不准先 test_decision_skill 试跑一条样例。"
         "do 四选一：reply_template（{action, reply} 固定回复，零成本；可用占位 "
         "{sender_name} {sender_id} {group_id} {content} {now}）/ call_tool（{action, name, arguments} 调平台工具）/ "
-        "run_script（{action, code} 沙箱脚本：在你自己的文件空间里跑，不能联网。本次事件的全部字段由"
-        "环境变量 DECISION_CTX 给到（JSON，字段见 test_decision_skill 的返回；要说的话 print 成 JSON {\"reply\":\"...\"}））/ "
+        "run_script（{action, code} 或 {action, entry} 沙箱脚本：在你自己的文件空间里跑，不能联网。"
+        f"code 是脚本正文（≤{_MAX_SCRIPT_CHARS} 字）；更长的脚本先用 run_script 工具存成文件（path），"
+        "技能里只写 entry 指它（如 scripts/daily.py）——存的地方就是跑的地方。"
+        "本次事件的全部字段由环境变量 DECISION_CTX 给到（JSON，字段见 test_decision_skill 的返回；"
+        "要说的话 print 成 JSON {\"reply\":\"...\"}）。列表里过长的正文只回显开头）/ "
         "silent（{action} 静默：这条消息不回、也不唤醒你本体，用来声明「这种消息不值得理」）。"
         "notify=true = 命中后仍唤醒本体（执行结果会作为一条系统提示给你）；false = 程序处理完即止。"
         "未 @ 你的消息到不到得了你，取决于这个群/通道的消息覆盖面。"
@@ -85,6 +92,8 @@ def test_rule_desc() -> str:
         "不发消息、不落库、不唤醒你本体。不传 rule 就按你已存的规则逐条试（草稿可以只传 rule 不存）。"
         "run_script 默认只回显不执行，execute=true 才真跑（脚本里能读到 DRY_RUN=1）。"
         "返回里的 ctx 就是脚本环境变量 DECISION_CTX 的全部字段。"
+        "字段分两类：ctx/checked/reply/script(execute=true) 是真跑出来的，hit/call/script(execute=false) "
+        "只是规则回显（没执行）；would 是计划动作。wakes_owner 按真跑口径给（脚本没跑成也是 true）。"
     )
 
 
@@ -113,18 +122,51 @@ def validate_rule(rule: dict) -> tuple[bool, str]:
     if action == "reply_template":
         if not str(do.get("reply") or "").strip():
             return False, "reply_template 需要 reply 文本"
-        if len(str(do["reply"])) > _MAX_DO_SCRIPT:
-            return False, f"reply 过长（≤{_MAX_DO_SCRIPT} 字）"
+        if len(str(do["reply"])) > _MAX_REPLY_CHARS:
+            return False, f"reply 过长（≤{_MAX_REPLY_CHARS} 字）"
     if action == "call_tool":
         if not str(do.get("name") or "").strip():
             return False, "call_tool 需要 name（平台工具名）"
     if action == "run_script":
         code = str(do.get("code") or "")
-        if not code.strip():
-            return False, "run_script 需要 code（Python 脚本）"
-        if len(code) > _MAX_DO_SCRIPT:
-            return False, f"code 过长（≤{_MAX_DO_SCRIPT} 字）"
+        entry = str(do.get("entry") or "")
+        if not code.strip() and not entry.strip():
+            return False, "run_script 需要 code（脚本正文）或 entry（文件空间里已存的脚本文件）"
+        if code.strip() and entry.strip():
+            # 沙箱的入口判定是 entry 优先：两个都给会跑 entry，code 静默失效——不如当场说清
+            return False, "code 与 entry 二选一（同时给会跑 entry，code 不会被执行）"
+        if len(code) > _MAX_SCRIPT_CHARS:
+            return False, f"code 过长（≤{_MAX_SCRIPT_CHARS} 字；更长的脚本先存成文件，用 entry 跑）"
+        if entry:
+            parts = [seg for seg in entry.replace("\\", "/").split("/") if seg not in ("", ".")]
+            if entry.startswith("/") or ".." in parts:
+                return False, "entry 只能是文件空间内的相对路径（如 scripts/daily.py）"
     return True, ""
+
+
+def brief_do(do: dict) -> dict:
+    """do 的回显摘要：脚本正文过长只给开头 + 全文长度（列表与试跑回显的唯一出处）。
+
+    技能存在 config jsonb 里、正文可以很长；原样回显就是每次列表都把这几十万字灌进
+    上下文。正文本身在库里一字不少，要改就重写，要跑就走 code/entry。
+    """
+    do = dict(do or {})
+    if str(do.get("action") or "") != "run_script":
+        return do
+    code = str(do.get("code") or "")
+    if len(code) > _BRIEF_CODE_CHARS:
+        do["code"] = (code[:_BRIEF_CODE_CHARS]
+                      + f"\n…（脚本正文共 {len(code)} 字，此处只回显前 {_BRIEF_CODE_CHARS} 字）")
+        do["code_chars"] = len(code)
+    return do
+
+
+def rule_brief(rule: dict) -> dict:
+    """技能对象的回显摘要（list_decision_skills 用）"""
+    out = dict(rule or {})
+    if isinstance(out.get("do"), dict):
+        out["do"] = brief_do(out["do"])
+    return out
 
 
 # ═══════════════════════════════════════════════════════════
@@ -354,6 +396,11 @@ async def leave_ledger_notice(db, agent_id: int, group_id: int, note: str) -> No
 
     两种来源：notify=true 的执行结果；以及"没人叫它"的失败——入群退群没有唤醒链路，
     群消息被触发模式拦下时同样没有，不记进账本它就永远不会知道技能没办成。
+
+    条目带 drop_on_unlock，**投递过才离场**（flags.seen 由 executor 在 LLM 响应回来时打）：
+    "看过一次就不再重复"由它保证，而"还没投出去"的条目在解锁重写时原样搬进新账本——
+    本函数正是落在轮次之外（被拦下 / 入群退群都没有唤醒链路），所以原来"解锁即丢"会让
+    这条通知在 AI 看见之前就没了。
     """
     from app.models.agent import Agent
     from app.services.history.context_sync import append_events, context_ref
@@ -548,9 +595,14 @@ async def execute_do(db, world, do: dict, ctx: dict, *, kind: str = "", entity_i
             return {"success": bool(result.get("success")), "result": result}
         if action == "run_script":
             code = str(do.get("code") or "")
+            entry = str(do.get("entry") or "")
             if kind == "agent":
                 from app.services.sandbox.agent_sandbox import run_agent_code
-                return _script_result(await run_agent_code(entity_id, code=code, ctx=ctx))
+                # entry：正文太长塞不进技能时，脚本先落到文件空间（run_script 的 path），技能里只留入口
+                return _script_result(await run_agent_code(
+                    entity_id, code=code or None, entry=entry or None, ctx=ctx))
+            if entry:
+                return {"success": False, "error": "entry 只适用于 AI 自己的文件空间，群助手请用 code"}
             from app.services.world.skill_sandbox import run_skill_in_sandbox
             result = await run_skill_in_sandbox(db, world, {"name": "_decision_script", "code": code}, {"ctx": ctx})
             return {"success": bool(result.get("success", result.get("ok"))), "result": result}
@@ -650,6 +702,14 @@ async def preview_decision(
     匹配与渲染都走真跑那条路（find_hit / explain_conditions / render_reply_template），
     所以试跑结果就是真跑结果；差别只在 do 不落外部效果：run_script 默认不执行
     （execute=True 才跑，并给脚本 DRY_RUN=1），call_tool 永不执行。
+
+    返回字段分两类，读的时候别混（wakes_owner 曾经只照抄 notify，与 script.success=false
+    自相矛盾，写规则的 AI 据此以为失败会被静默吞掉）：
+      真跑出来  ctx（真实链路的上下文构造器）/ checked（真匹配与原因）/ reply（reply_template
+                真渲染）/ script（execute=true 的真结果）/ wakes_owner（脚本没跑成时给 true：
+                失败与 notify 无关，一律交回本体）
+      配置回显  hit（命中的那条规则）/ call（call_tool 永不执行）/ script（execute=false 时只是回显）
+      would 是判定出的计划动作，不是结果。
     """
     event_type = str(event_type or "group_message")
     if event_type not in SCENARIOS:
@@ -683,7 +743,7 @@ async def preview_decision(
 
     do = hit.get("do") or {}
     action = str(do.get("action") or "")
-    out["hit"] = {"name": str(hit.get("name") or ""), "do": do, "notify": bool(hit.get("notify"))}
+    out["hit"] = {"name": str(hit.get("name") or ""), "do": brief_do(do), "notify": bool(hit.get("notify"))}
     out["wakes_owner"] = bool(hit.get("notify"))
     if action == "reply_template":
         out["would"], out["reply"] = "reply", render_reply_template(do.get("reply"), ctx).strip()
@@ -698,14 +758,22 @@ async def preview_decision(
     elif action == "run_script":
         out["would"] = "run_script"
         code = str(do.get("code") or "")
+        entry = str(do.get("entry") or "")
         if not execute:
-            out["script"] = {"executed": False, "code_len": len(code),
+            out["script"] = {"executed": False, "code_len": len(code), "entry": entry,
                              "note": "未执行；execute=true 才真跑（脚本会看到 DRY_RUN=1）"}
         elif kind == "agent":
             from app.services.sandbox.agent_sandbox import run_agent_code
             out["script"] = {"executed": True,
-                             **_script_result(await run_agent_code(entity_id, code=code, ctx=ctx, dry_run=True))}
+                             **_script_result(await run_agent_code(
+                                 entity_id, code=code or None, entry=entry or None,
+                                 ctx=ctx, dry_run=True))}
             out["reply"] = str(out["script"].get("reply") or "")
+            if out["script"].get("success") is False:
+                # 真跑时失败与 notify 无关，一律交回本体（failure_note → 唤醒或账本）。
+                # 试跑若只照抄 notify，就会出现「脚本没跑成 + wakes_owner=false」的自相矛盾回显。
+                out["wakes_owner"] = True
+                out["why"] = "脚本没跑成；真跑时这件事会交回你（notify=false 也交）"
         else:
             out["script"] = {"executed": False, "note": "群助手的脚本请在真实事件上验证"}
     else:

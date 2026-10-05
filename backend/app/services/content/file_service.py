@@ -43,6 +43,37 @@ def _get_physical_path(relative_path: str) -> str:
     return os.path.join(settings.data_dir, relative_path)
 
 
+# ── AI 文件空间：路径换算的唯一入口 ──
+# AI 的文件空间就是它的沙箱目录 data/agents/{id}/（run_script、记忆、OpenCLI 都在这里，
+# 由 app/paths.agent_dir 解析）。file_* 以前直接落在 data/ 根，同一个「我的文件」分成两处：
+# file_write 写出来的脚本，run_script 里 os.listdir 找不到；两侧还各留一份同名不同内容的
+# 文件，AI 改完再读像是"读到旧缓存"。AI 侧一律经下面两个函数换算，存储路径全库唯一。
+AI_FILE_ROOT = "agents"
+
+
+def ai_stored_path(agent_id: int, file_path: str) -> str:
+    """AI 视角的路径 → 存储路径（agents/{id}/...）；爬出自己文件空间当场拒绝。
+
+    开头的斜杠按「文件空间根」理解（AI 习惯写 /notes/a.md），不是系统绝对路径；
+    前缀化之后 .. 只可能爬到别人的文件空间，所以规范化后仍以 .. 开头的一律拒绝。
+    """
+    rel = str(file_path or "").strip().replace("\\", "/").lstrip("/")
+    norm = os.path.normpath(rel) if rel else ""
+    if norm in (".", "/"):
+        norm = ""
+    elif norm.startswith(".."):
+        raise ValueError("路径不合法：只能访问你自己文件空间内的文件")
+    root = f"{AI_FILE_ROOT}/{agent_id}"
+    return f"{root}/{norm}" if norm else root
+
+
+def ai_view_path(agent_id: int, stored_path: str) -> str:
+    """存储路径 → AI 视角（剥掉 agents/{id}/ 前缀），列表与界面回显用"""
+    prefix = f"{AI_FILE_ROOT}/{agent_id}/"
+    path = str(stored_path or "")
+    return path[len(prefix):] if path.startswith(prefix) else path
+
+
 def _check_permission(metadata: FileMetadata, requester_type: str, requester_id: int,
                       required_perm: str = "read") -> bool:
     """
@@ -864,8 +895,7 @@ async def notify_file_changed(db: AsyncSession, file_id: int, change_type: str,
 async def ai_read_file(db: AsyncSession, agent_id: int, file_path: str) -> str:
     db = _ensure_repo(db)
     """AI 读取文件（自动追踪引用）"""
-    if not _check_path_safe(file_path):
-        raise ValueError("路径不合法：仅支持相对路径")
+    file_path = ai_stored_path(agent_id, file_path)
 
     physical_path = _get_physical_path(file_path)
     if not os.path.exists(physical_path):
@@ -902,8 +932,7 @@ async def ai_write_file(db: AsyncSession, agent_id: int, file_path: str,
                         content: str, collaboration_mode: str = "solo") -> FileMetadata:
     db = _ensure_repo(db)
     """AI 写入文件（创建或覆盖）"""
-    if not _check_path_safe(file_path):
-        raise ValueError("路径不合法：仅支持相对路径")
+    file_path = ai_stored_path(agent_id, file_path)
 
     physical_path = _get_physical_path(file_path)
     os.makedirs(os.path.dirname(physical_path), exist_ok=True)
@@ -959,18 +988,21 @@ async def ai_write_file(db: AsyncSession, agent_id: int, file_path: str,
 
 
 async def ai_list_files(db: AsyncSession, agent_id: int, path: str = "/") -> list[dict]:
-    """AI 列出目录"""
-    return await list_files(db, path, "ai", agent_id)
+    """AI 列出目录（回显 AI 视角的路径，不带 agents/{id}/ 前缀）"""
+    files = await list_files(db, ai_stored_path(agent_id, path) + "/", "ai", agent_id)
+    for item in files:
+        item["path"] = ai_view_path(agent_id, item["path"])
+    return files
 
 
 async def ai_delete_file(db: AsyncSession, agent_id: int, file_path: str) -> bool:
     db = _ensure_repo(db)
     """AI 删除文件"""
-    if not _check_path_safe(file_path):
-        raise ValueError("路径不合法：仅支持相对路径")
-
     result = await db.execute(
-        select(FileMetadata).where(FileMetadata.path == file_path)
+        select(FileMetadata).where(
+            FileMetadata.path == ai_stored_path(agent_id, file_path),
+            FileMetadata.owner_type == "ai", FileMetadata.owner_id == agent_id,
+        )
     )
     metadata = result.scalar_one_or_none()
     if metadata is None:
@@ -983,11 +1015,11 @@ async def ai_share_file(db: AsyncSession, agent_id: int, file_path: str,
                         target_type: str, target_id: int, role: str = "collaborator") -> dict:
     db = _ensure_repo(db)
     """AI 分享文件给其他 AI 或用户"""
-    if not _check_path_safe(file_path):
-        raise ValueError("路径不合法：仅支持相对路径")
-
     result = await db.execute(
-        select(FileMetadata).where(FileMetadata.path == file_path)
+        select(FileMetadata).where(
+            FileMetadata.path == ai_stored_path(agent_id, file_path),
+            FileMetadata.owner_type == "ai", FileMetadata.owner_id == agent_id,
+        )
     )
     metadata = result.scalar_one_or_none()
     if metadata is None:

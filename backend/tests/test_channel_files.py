@@ -73,9 +73,10 @@ async def test_send_file_tells_the_ai_that_qq_will_not_get_it(migrated_db):
         await db.execute(text(
             "INSERT INTO group_members (group_id, member_type, member_id, role) "
             "VALUES (64, 'ai', 2, 'member')"))
+        # AI 的文件一律存 agents/{id}/ 下（file_service.ai_stored_path）；工具参数仍是 AI 视角的路径
         await db.execute(text(
             "INSERT INTO file_metadata (path, owner_type, owner_id, size, mime_type, collaboration_mode) "
-            "VALUES ('workspace/a.md', 'ai', 24, 10, 'text/markdown', 'solo')"))
+            "VALUES ('agents/24/workspace/a.md', 'ai', 24, 10, 'text/markdown', 'solo')"))
         await db.commit()   # 通道配置由 _seed 建好（qq-channel → 群 64）
 
         result = await SendFile().execute(

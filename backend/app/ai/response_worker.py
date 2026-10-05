@@ -927,9 +927,12 @@ async def _maybe_trigger_ai_reply(
     use_vector = group.is_vector_accelerated and ai_only
     if group.is_vector_accelerated and not ai_only:
         logger.info(f"群 {group_id} 含人类成员，跳过向量加速（使用常规历史窗口）")
+    # 这次请求带上、还没投递过的账本条目：LLM 响应回来后才标记已读（build 了没发不算）
+    pending_delivery: list[dict] = []
     messages = await build_messages(
         db, agent, group_id,
         vector_accelerated=use_vector,
+        pending_delivery=pending_delivery,
         api_base_url=api_base,
         api_key=api_key,
         trigger_user_id=trigger_user_id,
@@ -1067,6 +1070,7 @@ async def _maybe_trigger_ai_reply(
             provider_supports_thinking=provider_info.get("thinking_supported"),
             trigger="user",
             is_federated=False,
+            pending_delivery=pending_delivery,
         ))
     except Exception as e:
         logger.error(f"❌ AI {agent.name} 群聊回复异常 (group={group_id}): {e}", exc_info=True)
@@ -1189,7 +1193,8 @@ async def _trigger_dm_ai_reply(
     from app.ai.llm import build_dm_messages, resolve_model
     # v0.1.3: DM 中 sender_id 即为触发用户
     # 同上：覆盖本身 + 覆盖属于谁（人格版本源要按它分）
-    messages = await build_dm_messages(db, agent, session_id, api_base_url=api_base, api_key=api_key, trigger_user_id=sender_id, system_prompt_override=effective_cfg.get("system_prompt_override"), prompt_owner=sender_id)
+    pending_delivery: list[dict] = []
+    messages = await build_dm_messages(db, agent, session_id, api_base_url=api_base, api_key=api_key, trigger_user_id=sender_id, system_prompt_override=effective_cfg.get("system_prompt_override"), prompt_owner=sender_id, pending_delivery=pending_delivery)
 
     # 获取工具（能力版本化：按 effective 版本取定义快照）
     from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
@@ -1252,6 +1257,7 @@ async def _trigger_dm_ai_reply(
             pool_key_id=pool_key_id,
             provider_supports_thinking=provider_info.get("thinking_supported"),
             trigger="user",
+            pending_delivery=pending_delivery,
         ))
     except Exception as e:
         logger.error(f"❌ AI {agent_name} DM 回复异常 (session={session_id}): {e}", exc_info=True)

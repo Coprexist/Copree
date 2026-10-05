@@ -14,8 +14,14 @@ class ConversationLogConfig(Base):
     __tablename__ = "conversation_log_config"
 
     id = Column(Integer, primary_key=True, default=1)
-    # 系统硬上限（所有 AI 保留的最大对话数）
-    max_conversation_logs = Column(Integer, default=30)
+    # 活跃状态（3 天内动过的那段会话）保留多少条
+    max_conversation_logs = Column(Integer, default=20)
+    # 保留策略的其余旋钮：**NULL = 用代码默认**（默认只留在 utils/pure/conversation_log 一处，
+    # 与下面的压缩系数同款约定——管理员改过的才落库）
+    idle_keep = Column(Integer, nullable=True)   # 沉寂状态留几条
+    aged_keep = Column(Integer, nullable=True)   # 老旧状态留几条
+    idle_days = Column(Integer, nullable=True)   # 多少天没动算沉寂
+    aged_days = Column(Integer, nullable=True)   # 多少天没动算老旧
     # 新用户的默认保留数
     default_user_conversation_logs = Column(Integer, default=20)
     # 全局默认：用户是否可以查看 AI 对话日志
@@ -58,5 +64,9 @@ class ConversationLog(Base):
     model = Column(String(50), nullable=True)
     # 是否启用了深度推理
     thinking_enabled = Column(Boolean, default=False)
+
+    # 这轮是在哪段状态下发出的：帧身份 `type|label`（state_key_of 算一次存下）。
+    # 裁剪按它分桶（每段状态各留几条）、列表按它归堆；空串 = 那轮没注入状态摘要。
+    state_key = Column(String(128), nullable=True, index=True)
 
     created_at = Column(DateTime, server_default=func.now(), index=True)

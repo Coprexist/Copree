@@ -35,6 +35,7 @@ class SendFile(ToolPlugin):
     async def execute(self, db: AsyncSession, agent_id: int, group_id: int | None,
                       arguments: dict, context: dict) -> dict:
         from app.models.file import FileMetadata
+        from app.services.content.file_service import ai_stored_path
         from app.chat.gm import send_gm_message, gm_message_to_dict
         from app.chat.dm import send_dm_message, get_or_create_dm_session
         from app.models.agent import Agent as AgentModel
@@ -74,7 +75,7 @@ class SendFile(ToolPlugin):
         for fp in paths:
             result = await db.execute(
                 select(FileMetadata).where(
-                    FileMetadata.path == fp,
+                    FileMetadata.path == ai_stored_path(agent_id, fp),
                     FileMetadata.owner_type == "ai",
                     FileMetadata.owner_id == agent_id,
                 )

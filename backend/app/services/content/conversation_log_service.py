@@ -11,7 +11,10 @@ from sqlalchemy import select, delete, func, text
 from app.models.conversation_log import ConversationLogConfig, ConversationLog
 from app.repositories.content_repo import ContentRepository
 from app.utils.pure.cache_stats import cache_hit_rate_pct
-from app.utils.pure.state_stack import state_frame_of
+from app.utils.pure.conversation_log import (
+    LogRetention, cap_per_state, plan_log_trim,
+)
+from app.utils.pure.state_stack import frame_of_state_key, state_frame_of, state_key_of
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +113,8 @@ async def save_conversation_log(
             has_output=has_output,
             model=model,
             thinking_enabled=thinking_enabled,
+            # 状态身份在这里算一次存下：裁剪按它分桶、列表按它归堆，都不必回读整份 messages
+            state_key=state_key_of(state_frame_of(messages)),
         )
         content_repo.add(log)
         await content_repo.flush()
@@ -131,25 +136,31 @@ async def save_conversation_log(
         return None
 
 
-async def _trim_old_logs(content_repo: ContentRepository, agent_id: int):
-    """保留最近 N 条日志，删除更旧的"""
-    # 获取此 AI 的保留上限
-    limit = await _get_agent_log_limit(content_repo, agent_id)
+# 一次裁剪最多看多少行：每 AI 的账 = 各状态保留数之和（几十到几百），留足余量就够，
+# 不为「理论上无限的状态数」把整表读进内存
+TRIM_SCAN_LIMIT = 2000
 
-    # 查询超出限制的旧记录 ID
+
+async def _trim_old_logs(content_repo: ContentRepository, agent_id: int):
+    """按状态分桶保留：判定是纯函数（utils/pure/conversation_log.plan_log_trim），这里只做 IO。
+
+    只取 id / state_key / created_at 三列：messages 是整份请求体，按它分组等于把几十万字
+    搬进内存只为算个分组。
+    """
+    retention = await _get_retention(content_repo, agent_id)
     result = await content_repo.execute(
-        select(ConversationLog.id)
+        select(ConversationLog.id, ConversationLog.state_key, ConversationLog.created_at)
         .where(ConversationLog.agent_id == agent_id)
-        .order_by(ConversationLog.created_at.desc())
-        .offset(limit)
-        .limit(1000)
+        .order_by(ConversationLog.created_at.desc(), ConversationLog.id.desc())
+        .limit(TRIM_SCAN_LIMIT)
     )
-    old_ids = [row[0] for row in result.all()]
+    rows = [{"id": r[0], "state_key": r[1], "created_at": r[2]} for r in result.all()]
+    old_ids = plan_log_trim(rows, retention, now=datetime.now(timezone.utc).replace(tzinfo=None))
     if old_ids:
         await content_repo.execute(
             delete(ConversationLog).where(ConversationLog.id.in_(old_ids))
         )
-        logger.info(f"清理 agent={agent_id} 的 {len(old_ids)} 条旧对话日志（保留最近 {limit} 条）")
+        logger.info(f"清理 agent={agent_id} 的 {len(old_ids)} 条旧对话日志（{_retention_text(retention)}）")
 
 
 async def _get_agent_log_limit(content_repo: ContentRepository, agent_id: int) -> int:
@@ -165,7 +176,37 @@ async def _get_agent_log_limit(content_repo: ContentRepository, agent_id: int) -
 
     # 回退到全局上限
     config = await _get_config(content_repo)
-    return config.max_conversation_logs if config else 30
+    return config.max_conversation_logs if config else 20
+
+
+# 保留策略的旋钮（读、写、校验共用这一份；默认值本身在 utils/pure/conversation_log）
+# 路由凭 KEEP_KNOB_NAMES 判断「这次提交了哪些旋钮」（显式传 null = 清除回默认）
+_KEEP_KNOBS = {
+    "idle_keep": "沉寂状态保留数",
+    "aged_keep": "老旧状态保留数",
+    "idle_days": "沉寂阈值天数",
+    "aged_days": "老旧阈值天数",
+}
+KEEP_KNOB_NAMES = tuple(_KEEP_KNOBS)
+
+
+async def _get_retention(content_repo: ContentRepository, agent_id: int) -> LogRetention:
+    """这个 AI 的保留策略（唯一入口）：活跃档可按 AI 覆盖，其余档来自全局配置。
+
+    配置里为 NULL 的旋钮**不传**（让值对象的默认生效）——默认值只有
+    utils/pure/conversation_log 一处，别在这里再抄一份。
+    """
+    config = await _get_config(content_repo)
+    values = {"active_keep": await _get_agent_log_limit(content_repo, agent_id)}
+    for knob in _KEEP_KNOBS:
+        values[knob] = getattr(config, knob, None)
+    return LogRetention(**{k: v for k, v in values.items() if v is not None})
+
+
+def _retention_text(retention: LogRetention) -> str:
+    """保留口径说人话（日志与界面同一句的来源）"""
+    return (f"活跃（{retention.idle_days} 天内动过）{retention.active_keep} 条、"
+            f"沉寂 {retention.idle_keep} 条、超 {retention.aged_days} 天 {retention.aged_keep} 条")
 
 
 # ── 配置 ──
@@ -193,6 +234,8 @@ async def get_config_dict(content_repo: ContentRepository) -> dict:
         # 两个系数旋钮：None = 未设置（用代码默认），前端据此显示占位
         "idle_threshold_percent": getattr(config, "idle_threshold_percent", None),
         "compress_target_percent": getattr(config, "compress_target_percent", None),
+        # 保留策略的旋钮（同上：None = 用代码默认）
+        **{knob: getattr(config, knob, None) for knob in _KEEP_KNOBS},
     }
 
 
@@ -206,8 +249,14 @@ async def update_config(
     compression_threshold: int | None = None,
     idle_threshold_percent: int | None = None,
     compress_target_percent: int | None = None,
+    knobs: dict[str, int | None] | None = None,
 ) -> dict:
-    """更新全局配置"""
+    """更新全局配置
+
+    knobs：保留策略旋钮。**出现在这个 dict 里**才处理——值为 None 表示「清除该旋钮、
+    回代码默认」（前端留空就是这个意思）；没出现的旋钮一律不动。这样「留空 = 用默认」
+    才真的成立，而不是留空被当成"不改"、设过之后再也回不去。
+    """
     config = await _get_config(content_repo)
 
     if max_conversation_logs is not None:
@@ -236,6 +285,19 @@ async def update_config(
             continue
         if value < 1 or value > 99:   # 0/100 会贴到区间端点，等于没有这一档
             raise ValueError(f"{label}必须在 1-99 之间")
+        setattr(config, field, value)
+
+    # 保留策略的旋钮（条数上限 500、天数上限 365，与前端输入框一致）
+    for field, label in _KEEP_KNOBS.items():
+        if knobs is None or field not in knobs:
+            continue
+        value = knobs[field]
+        if value is None:          # 清除：回代码默认（默认只存在 utils/pure/conversation_log）
+            setattr(config, field, None)
+            continue
+        hi = 365 if field.endswith("_days") else 500
+        if value < 1 or value > hi:
+            raise ValueError(f"{label}必须在 1-{hi} 之间")
         setattr(config, field, value)
 
     config.updated_by = updated_by
@@ -294,33 +356,30 @@ async def get_agent_logs(
     agent_id: int,
     user_id: int | None = None,
     is_admin: bool = False,
-    limit: int = 20,
+    limit: int = 500,
     offset: int = 0,
 ) -> list[dict]:
-    """获取 AI 的对话日志列表（摘要，不含完整 messages）"""
-    # 权限检查
+    """获取 AI 的对话日志列表（摘要，不含完整 messages）
+
+    条数已由裁剪定好（每段状态各留几条，见 utils/pure/conversation_log），这里照实读出来；
+    普通用户再多一道「每段状态最多看几条」（per-user 覆盖 / 全局默认 default_user_conversation_logs），
+    管理员不受它限制——保留策略本身已经封过顶，再叠一道只会让分组看起来残缺。
+    """
     if not is_admin:
         if not await _user_can_view_agent_logs(content_repo, agent_id, user_id):
             raise ValueError("无权查看此 AI 的对话日志")
 
-    # 确定有效保留数
-    if is_admin:
-        effective_limit = await _get_agent_log_limit(content_repo, agent_id)
-    else:
-        user_limit = await get_user_log_limit(content_repo, user_id)
-        effective_limit = min(
-            user_limit["effective"],
-            await _get_agent_log_limit(content_repo, agent_id),
-        )
-
     result = await content_repo.execute(
         select(ConversationLog)
         .where(ConversationLog.agent_id == agent_id)
-        .order_by(ConversationLog.created_at.desc())
-        .limit(min(limit, effective_limit))
+        .order_by(ConversationLog.created_at.desc(), ConversationLog.id.desc())
+        .limit(max(1, int(limit)))
         .offset(offset)
     )
-    logs = result.scalars().all()
+    logs = list(result.scalars().all())
+    if not is_admin:
+        user_limit = await get_user_log_limit(content_repo, user_id)
+        logs = cap_per_state(logs, lambda log: log.state_key or "", int(user_limit["effective"]))
 
     return [_log_to_summary(log) for log in logs]
 
@@ -397,21 +456,6 @@ async def attach_mention_names(repo, detail: dict) -> dict:
     ]
     detail["mention_names"] = await mention_names(repo, contents)
     return detail
-
-
-async def get_agent_log_stats(content_repo: ContentRepository, agent_id: int) -> dict:
-    """获取 AI 日志统计"""
-    result = await content_repo.execute(
-        select(func.count(ConversationLog.id)).where(ConversationLog.agent_id == agent_id)
-    )
-    total = result.scalar() or 0
-    limit = await _get_agent_log_limit(content_repo, agent_id)
-
-    return {
-        "agent_id": agent_id,
-        "total_logs": total,
-        "retention_limit": limit,
-    }
 
 
 # ── Token 用量聚合查询 ──
@@ -778,11 +822,21 @@ _STATUS_MARKS = (
 
 
 def _run_status(messages: list[dict], has_output: bool) -> str:
-    """判一轮的结局：只看 AI 侧留下的字（工具返回也算），命中标记就按标记算"""
+    """判这一轮的结局：只看 AI 侧留下的字（工具返回也算），命中标记就按标记算。
+
+    边界 = **最后一条 user 消息之后**。账本里会长住历史轮次的工具失败
+    （"[本轮工具] xxx(失败…)"、某次 run_script 的 Traceback），扫整份 messages
+    等于把「前面失败过」算成「这轮失败」——线上一条 687 条的长会话就是这么被标红的。
+    """
+    msgs = [m for m in (messages or []) if isinstance(m, dict)]
+    start = 0
+    for i in range(len(msgs) - 1, -1, -1):     # 找本轮起点：最后一条 user 之后
+        if msgs[i].get("role") == "user":
+            start = i + 1
+            break
     text = "\n".join(
-        str(msg.get("content") or "")
-        for msg in messages or []
-        if isinstance(msg, dict) and msg.get("role") in ("assistant", "tool")
+        str(m.get("content") or "") for m in msgs[start:]
+        if m.get("role") in ("assistant", "tool")
     )
     for status, marks in _STATUS_MARKS:
         if any(mark in text for mark in marks):
@@ -855,7 +909,8 @@ def _log_to_summary(log: ConversationLog) -> dict:
         "status": _run_status(msgs, bool(log.has_output)),
         # 这轮是在哪段状态下发出的（帧身份 = type + label）：不同状态的请求体前缀本就不同，
         # 列表按它归堆才看得出「这段状态的上下文长什么样」
-        "state_frame": state_frame_of(msgs),
+        # 以列（写入时算的）为准；列为空 = 迁移前没回填上的老行，退回现算一次
+        "state_frame": frame_of_state_key(log.state_key) or state_frame_of(msgs),
         "model": log.model,
         "thinking_enabled": log.thinking_enabled,
         "preview": preview,

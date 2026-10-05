@@ -15,7 +15,20 @@ interface GlobalConfig {
   compression_threshold: number
   idle_threshold_percent: number | null
   compress_target_percent: number | null
+  // 保留策略旋钮：null = 用后端代码默认（占位提示「留空 = 用默认」）
+  idle_keep: number | null
+  aged_keep: number | null
+  idle_days: number | null
+  aged_days: number | null
 }
+
+/** 保留策略的四个旋钮（label 是三语 key；与后端 _KEEP_KNOBS 同名同序） */
+const KEEP_KNOBS = [
+  { field: 'idle_keep', label: 'admin:convlogIdleKeep', max: 500 },
+  { field: 'aged_keep', label: 'admin:convlogAgedKeep', max: 500 },
+  { field: 'idle_days', label: 'admin:convlogIdleDays', max: 365 },
+  { field: 'aged_days', label: 'admin:convlogAgedDays', max: 365 },
+] as const
 
 interface AgentSettings {
   agent_id: number
@@ -156,6 +169,23 @@ export default function ConversationLogTab() {
                 onChange={e => setConfig({ ...config, max_conversation_logs: parseInt(e.target.value) || 30 })}
                 className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
               />
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {KEEP_KNOBS.map(({ field, label, max }) => (
+                <div key={field}>
+                  <label className="block text-xs font-medium text-textSecondary mb-1">{t(label)}</label>
+                  <input
+                    type="number" min={1} max={max}
+                    value={config[field] ?? ''}
+                    placeholder={t('admin:convlogKnobDefault')}
+                    onChange={e => setConfig({
+                      ...config,
+                      [field]: e.target.value === '' ? null : parseInt(e.target.value),
+                    } as GlobalConfig)}
+                    className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                  />
+                </div>
+              ))}
             </div>
             <div>
               <label className="block text-xs font-medium text-textSecondary mb-1">{t('admin:convlogDefaultLimit')}</label>

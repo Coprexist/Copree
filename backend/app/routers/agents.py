@@ -781,12 +781,14 @@ async def get_agent_storage(
         .order_by(FM.size.desc())
         .limit(50)
     )
+    from app.services.content.file_service import ai_view_path
     for f in file_list_result.scalars().all():
+        view = ai_view_path(agent_id, f.path)   # 界面照旧看 AI 视角的路径，不带 agents/{id}/ 前缀
         files.append({
             "id": f.id,
-            "path": f.path,
+            "path": view,
             "size": f.size or 0,
-            "name": f.path.rsplit("/", 1)[-1] if "/" in f.path else f.path,
+            "name": view.rsplit("/", 1)[-1],
         })
 
     # 3. 配额（默认每 AI 100MB）
