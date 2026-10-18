@@ -19,7 +19,7 @@ def test_specs_are_a_safe_subset_of_the_api_range():
 def test_clamp_pulls_extremes_back_and_keeps_reasonable_values():
     from app.utils.pure import model_params
 
-    assert model_params.clamp("temperature", 2.0) == 1.3
+    assert model_params.clamp("temperature", 2.0) == 1.5, "1.5 是官方建议的上限，2.0 才该被拉回来"
     assert model_params.clamp("temperature", 0.95) == 0.95, "正常值原样返回"
     assert model_params.clamp("temperature", -1) == 0.2
     assert model_params.clamp("presencePenalty", 2.0) == 1.0
@@ -31,7 +31,7 @@ def test_field_description_says_why_not_to_max_it():
     from app.utils.pure import model_params
 
     text = model_params.describe("temperature")
-    for part in ("建议", "1.3", "跑偏"):
+    for part in ("建议", "1.5", "跑题"):
         assert part in text, part
 
 
@@ -43,6 +43,6 @@ def test_creator_form_clamps_the_same_way():
         "temperature": 2.0, "topP": 1.0,
         "presencePenalty": 2.0, "frequencyPenalty": 2.0,
     })
-    assert cleaned["temperature"] == 1.3
+    assert cleaned["temperature"] == 1.5
     assert cleaned["presencePenalty"] == 1.0 and cleaned["frequencyPenalty"] == 1.0
     assert cleaned["topP"] == 1.0
