@@ -380,7 +380,9 @@ async def send_dm_message(
     session = result.scalar_one_or_none()
     if session is None:
         raise ValueError("会话不存在")
-    if sender_id not in (session.user1_id, session.user2_id):
+    # 系统身份（sender_id=0）不属于任何一端，但它是平台自己的通知通道（配额耗尽、使用自有 Key
+    # 提示等）；普通发言仍然只能是会话双方之一。这两件事混在一起时，系统提示必然发不出去。
+    if sender_id != 0 and sender_id not in (session.user1_id, session.user2_id):
         raise ValueError("无权在此会话中发言")
 
     receiver_id = session.user2_id if session.user1_id == sender_id else session.user1_id

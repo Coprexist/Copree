@@ -434,10 +434,15 @@ async def _maybe_trigger_dm_ai_reply(
     if sender_id == agent.owner_id:
         dm_quota.reset_by_creator(agent, now)
 
-    # 发送方是 AI → AI↔AI 场景：双向限额检查，任一超限则不触发（消息已入库，AI 下次打开会话能看到）
+    # 发信人身份决定走哪套规则，两套并列、不叠加（docs/dev/ai_ai_dm_quota.md:34-36）：
+    #   human→AI：「对话权限与限额」——allow_others_chat / own_key / 余额，谁聊谁付
+    #   AI↔AI：    只受双向限额——接收方那一轮记接收方创建者的账
+    # AI 的 Key 存在 agents.api_key_encrypted，AI 用户的 users.api_key_encrypted 恒为空，
+    # 把 own_key 那套套到 AI 发信人身上等于永久拉黑别的 AI（v0.3.2 的对话链直接哑掉）
     sender_is_ai = await db.scalar(
-        select(User.id).where(User.id == sender_id, User.type == "ai")
-    )
+        select(User.type).where(User.id == sender_id)
+    ) == "ai"
+    sender_agent = None
     if sender_is_ai:
         sender_agent = await db.scalar(
             select(Agent).where(Agent.user_id == sender_id)
@@ -445,15 +450,15 @@ async def _maybe_trigger_dm_ai_reply(
         if sender_agent is None:
             return
         if not dm_quota.quota_allows(sender_agent, "send", now) or not dm_quota.quota_allows(agent, "receive", now):
+            # 限额是 AI↔AI 唯一该拦的地方；拦下也把「有人找过」记进状态栈，
+            # 否则 AI 下次开口时完全不知道这条私信来过（同上文档「超配额也建帧」）
+            await _note_dm_contact(db, agent, session_id, sender_id)
             return
-        dm_quota.consume(sender_agent, "send", now)
-        dm_quota.consume(agent, "receive", now)
-        await db.flush()
 
-    # ── v0.1.8: 对话权限与限额决策 ──
+    # ── v0.1.8: 对话权限与限额决策（只对 human→AI；AI↔AI 在上面按限额处理完了）──
     is_owner = sender_id == agent.owner_id
 
-    if not is_owner:
+    if not is_owner and not sender_is_ai:
         # 检查是否允许他人对话
         if not agent.allow_others_chat:
             # 禁止模式
@@ -539,6 +544,12 @@ async def _maybe_trigger_dm_ai_reply(
         agent.others_chat_used = 0
         await db.flush()
 
+    # 限额在「确定要交给这个 AI」之后才扣：被权限 / 余额 / 限额拒掉的轮次不该计费
+    if sender_agent is not None:
+        dm_quota.consume(sender_agent, "send", now)
+        dm_quota.consume(agent, "receive", now)
+        await db.flush()
+
     # ── 忙时中断注入：AI 正在执行，直接注入当前 tool loop ──
     from app.ai.executor import add_pending_interrupt, is_agent_running
     if await is_agent_running(agent.id):
@@ -561,7 +572,7 @@ async def _maybe_trigger_dm_ai_reply(
                 "session_id": session_id,
                 "message_id": msg["id"],
                 "content": msg["content"],
-                "sender_type": "human" if sender_id != receiver_id else "ai",
+                "sender_type": "ai" if sender_is_ai else "human",
                 "sender_id": sender_id,
                 "chain_depth": 0,
                 "force_own_key": force_own_key,  # v0.1.8
@@ -570,26 +581,41 @@ async def _maybe_trigger_dm_ai_reply(
             logger.warning("AI 回复队列已满，丢弃 DM 事件")
 
 
-async def _send_system_dm_notice(db: AsyncSession, session_id: str, agent, text: str):
-    """向 DM 会话发送系统提示消息"""
-    from app.chat.dm import send_dm_message
-    from app.models.user import User as UserModel
+async def _note_dm_contact(db: AsyncSession, agent, session_id: str, sender_id: int) -> None:
+    """把「这个私信会话里有人找过我」记进状态栈——不触发回复的路径也要记。
+
+    与 response_worker 的帧维护同一个入口（ensure_active_frame）：那边是「真要回」时把帧
+    置顶，这里是「没回也得知道」。失败只告警：一条私信不该因为状态栈写不进去就丢掉。
+    """
     try:
-        # 获取系统用户
-        sys_result = await db.execute(
-            select(UserModel).where(UserModel.id == 0)
+        from app.services.agent.state_stack_service import ensure_active_frame
+        from app.utils.display_name import display_name
+
+        name = await display_name(db, sender_id)
+        await ensure_active_frame(
+            db, agent.id, "dm", session_id, title=name, actor_name=name,
         )
-        sys_user = sys_result.scalar_one_or_none()
-        if sys_user is None:
-            return
-        # 以系统用户身份发消息
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"私信拒绝路径建帧失败（非致命）: {e}")
+
+
+async def _send_system_dm_notice(db: AsyncSession, session_id: str, agent, text: str):
+    """向 DM 会话发送系统提示消息
+
+    sender_id=0 是系统身份，不属于会话任何一端，所以走 send_dm_message 的系统放行
+    （chat/dm.py 的成员校验放 0 通过）；message_type 标出来，前端才把它当通知样式。
+    """
+    from app.chat.dm import send_dm_message
+    try:
         await send_dm_message(
             db, session_id=session_id,
-            sender_id=0, sender_type="system",
+            sender_id=0,
             content=f"🤖 {agent.name}：{text}",
+            message_type="system",
         )
-    except Exception:
-        pass
+    except Exception as e:
+        # 以前这里 except: pass——提示发不出去几个月都没人发现（三个调用点全是死代码）
+        logging.getLogger(__name__).warning(f"私信系统提示发送失败（非致命）: {e}")
 
 
 async def _notify_owner_quota_exhausted(db: AsyncSession, agent, used: int, quota: int):
@@ -607,12 +633,13 @@ async def _notify_owner_quota_exhausted(db: AsyncSession, agent, used: int, quot
         dm = await get_or_create_dm_session(db, agent.user_id, agent.owner_id)
         await send_dm_message(
             db, session_id=dm["session_id"],
-            sender_id=0, sender_type="system",
+            sender_id=0,
             content=(
                 f"📊 你的 AI「{agent.name}」已被其他人触发 {used} 次对话，"
                 f"已达到配额上限（{quota} 条），已自动关闭「允许他人对话」。"
                 f"你可以在 AI 设置中重置计数或调整配额。"
             ),
+            message_type="system",
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"配额耗尽通知发送失败（非致命）: {e}")
