@@ -10,7 +10,7 @@ import { ClipboardList, Globe, Send, Sparkles, Square } from 'lucide-react'
 import MarkdownContent from '../shared/MarkdownContent'
 import { ToolBubble } from '../shared/ChatPanelAtoms'
 import { useT } from '../../i18n/I18nContext'
-import { getDraft, runCreatorTurn, type CreationDraft, type TurnFrame } from './creationApi'
+import { getDraft, runCreatorTurn, MAX_TURN_CHARS, type CreationDraft, type TurnFrame } from './creationApi'
 import type { AgentForm } from './types'
 
 type Item =
@@ -29,7 +29,7 @@ export default function CreationAssistantPanel({ draft, onForm, className = '' }
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const abortRef = useRef<AbortController | null>(null)
-  const bottomRef = useRef<HTMLDivElement | null>(null)
+  const listRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     let alive = true
@@ -39,7 +39,12 @@ export default function CreationAssistantPanel({ draft, onForm, className = '' }
     return () => { alive = false }
   }, [draft.id])
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ block: 'end' }) }, [items])
+  // 直接滚动列表本身：scrollIntoView 会连带滚动外层页面（窄屏整页可滚），
+  // 每来一帧就把页面拽走一次，用户刚点完的输入框会跑到屏幕外
+  useEffect(() => {
+    const list = listRef.current
+    if (list) list.scrollTop = list.scrollHeight
+  }, [items])
 
   /** 往「最后一条助手消息」追加——工具气泡会插在中间，不能假设它在末尾 */
   const appendToAssistant = (fn: (last: { kind: 'assistant'; text: string; reasoning?: string }) => Item) =>
@@ -85,7 +90,7 @@ export default function CreationAssistantPanel({ draft, onForm, className = '' }
       } else if (frame.type === 'notice') {
         setItems((prev) => [...prev, { kind: 'assistant', text: frame.message || '' }])
       } else if (frame.type === 'error') {
-        setError(frame.message || t('modal:creatorFailed'))
+        setError(String(frame.message || t('modal:creatorFailed')))
       }
     }
     try {
@@ -118,7 +123,10 @@ export default function CreationAssistantPanel({ draft, onForm, className = '' }
         <Sparkles size={13} /> {t('modal:creatorTitle')}
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto scroll-floor space-y-2 pr-1">
+      {/* 窄屏这条列表跟着整页滚（高度封顶 38vh，溢出自滚），宽屏才吃掉面板剩下的高度；
+          不挂 scroll-floor：它是封顶的自滚列表，不会被压扁，而 160px 的下限会把
+          手机上一整屏的高度钉死在对话区，下面的表单反而被挤走 */}
+      <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto space-y-2 pr-1 max-h-[38vh] md:max-h-none">
         {items.length === 0 && (
           <p className="text-xs text-textMuted leading-relaxed">{t('modal:creatorEmpty')}</p>
         )}
@@ -151,7 +159,6 @@ export default function CreationAssistantPanel({ draft, onForm, className = '' }
             </div>
           )
         })}
-        <div ref={bottomRef} />
       </div>
 
       {error && <p className="text-xs text-rose-400 mt-2 shrink-0">{error}</p>}
@@ -162,6 +169,7 @@ export default function CreationAssistantPanel({ draft, onForm, className = '' }
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
           rows={2}
+          maxLength={MAX_TURN_CHARS}
           placeholder={t('modal:creatorPlaceholder')}
           className="flex-1 min-w-0 px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50 resize-none"
         />

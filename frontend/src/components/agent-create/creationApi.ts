@@ -6,7 +6,7 @@
  *
  * 这里不用 utils/sse.ts 的 streamSse：那条是 GET 重连流，断线重发等于重跑一轮对话。
  */
-import { api, getApiBaseUrl } from '../../api/client'
+import { api, errorText, getApiBaseUrl } from '../../api/client'
 import type { AgentForm } from './types'
 
 export interface CreationDraft {
@@ -22,6 +22,9 @@ export interface CreationDraft {
 }
 
 export interface TranscriptItem { role: 'user' | 'assistant'; content: string }
+
+/** 一轮消息的长度上限，与后端 TurnRequest.message 的 max_length 同值（超了后端回 422） */
+export const MAX_TURN_CHARS = 2000
 
 export interface TurnFrame {
   type: 'text' | 'reasoning' | 'tool' | 'tool_result' | 'form' | 'notice' | 'done' | 'error'
@@ -66,9 +69,9 @@ export async function runCreatorTurn(
     signal,
   })
   if (!res.ok || !res.body) {
-    let detail = `HTTP ${res.status}`
-    try { detail = (await res.json())?.detail || detail } catch { /* 非 JSON 就用状态码 */ }
-    onFrame({ type: 'error', message: detail })
+    let detail: unknown
+    try { detail = (await res.json())?.detail } catch { /* 非 JSON 就用状态码 */ }
+    onFrame({ type: 'error', message: errorText(detail, `HTTP ${res.status}`) })
     return
   }
   const reader = res.body.getReader()

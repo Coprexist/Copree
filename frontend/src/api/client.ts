@@ -55,6 +55,35 @@ function handleUnauthorized(path: string) {
   window.location.href = '/login'
 }
 
+/**
+ * 后端 detail 有三种形状：一句话、字段校验错误数组（FastAPI 422 过滤后的
+ * `{loc, msg, type}`）、以及少数自定义对象。错误文本最终会被塞进 JSX，
+ * 直接把数组/对象交出去会让 React 抛 "Objects are not valid as a React child"、
+ * 整页白屏——**这类归一化只允许在这里做**，调用方拿到的永远是字符串。
+ */
+export function errorText(detail: unknown, fallback = 'Request failed'): string {
+  const list = Array.isArray(detail) ? detail : [detail]
+  const parts = list.map(oneErrorPart).filter(Boolean)
+  return parts.length ? parts.join('；') : fallback
+}
+
+function oneErrorPart(item: unknown): string {
+  if (item === null || item === undefined) return ''
+  if (typeof item === 'string') return item.trim()
+  if (typeof item === 'number' || typeof item === 'boolean') return String(item)
+  if (typeof item !== 'object') return ''
+  const row = item as Record<string, unknown>
+  // 422 的字段校验行：loc 末段就是字段名（首段固定是 body/query/path，对人没信息）
+  const text = [row.msg, row.message, row.detail, row.error].find((v): v is string => typeof v === 'string' && v.trim() !== '')
+  if (text) {
+    const field = Array.isArray(row.loc)
+      ? row.loc.filter((v) => typeof v === 'string' && v !== 'body').pop()
+      : undefined
+    return field ? `${field}: ${text}` : text
+  }
+  try { return JSON.stringify(item) } catch { return '' }
+}
+
 class ApiError extends Error {
   status: number
   detail: string
@@ -107,7 +136,7 @@ async function request<T = any>(
     try { const body = JSON.parse(await res.clone().text()); if (body.maintenance) {
       localStorage.setItem('_maint_detected', '1')
       window.dispatchEvent(new CustomEvent('maintenance-mode', { detail: body }))
-      throw new ApiError(body.detail || '服务器维护中', 503)
+      throw new ApiError(errorText(body.detail, '服务器维护中'), 503)
     } } catch {}
   }
 
@@ -133,7 +162,7 @@ async function request<T = any>(
   }
 
   if (!res.ok) {
-    throw new ApiError(data.detail || `Request failed (${res.status})`, res.status)
+    throw new ApiError(errorText(data.detail, `Request failed (${res.status})`), res.status)
   }
 
   return data
@@ -180,7 +209,7 @@ async function uploadFile(path: string, file: File): Promise<any> {
   }
 
   if (!res.ok) {
-    throw new ApiError(data.detail || `上传失败 (${res.status})`, res.status)
+    throw new ApiError(errorText(data.detail, `上传失败 (${res.status})`), res.status)
   }
   return data
 }
@@ -229,9 +258,9 @@ async function downloadFile(path: string, fallbackName: string,
   })
   if (res.status === 401) { handleUnauthorized(path); throw new ApiError('Unauthorized', 401) }
   if (!res.ok) {
-    let detail = `HTTP ${res.status}`
-    try { detail = (await res.json())?.detail || detail } catch { /* 非 JSON 就用状态码 */ }
-    throw new ApiError(detail, res.status)
+    let detail: unknown
+    try { detail = (await res.json())?.detail } catch { /* 非 JSON 就用状态码 */ }
+    throw new ApiError(errorText(detail, `HTTP ${res.status}`), res.status)
   }
   saveBlob(await res.blob(), filenameFromDisposition(res.headers.get('Content-Disposition')) || fallbackName)
 }

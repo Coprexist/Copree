@@ -355,16 +355,18 @@ export default function CreateAgentPanel({
           <h2 className="text-lg font-semibold text-textPrimary">{t('modal:createAgentTitle')}</h2>
         </div>
 
-        {/* 内容区：带草稿时左助手右表单；表单区自己滚动 */}
-        <div className="flex-1 flex flex-col md:flex-row min-h-0 gap-4">
+        {/* 内容区：宽屏左右分栏（表单区自己滚）；窄屏一路排下来、整块跟着页面滚。
+            以前窄屏给助手面板钉 38% 高，键盘一弹这格就剩不到一个输入框的高度，
+            列表的最小高度把「输入框 + 发送键」顶出面板、压在表单字段上 */}
+        <div className="flex-1 flex flex-col md:flex-row min-h-0 gap-4 overflow-y-auto md:overflow-visible">
         {draft && (
           <CreationAssistantPanel
             draft={draft}
             onForm={applyAssistantForm}
-            className="h-[38%] md:h-auto md:w-[330px] shrink-0 border-b md:border-b-0 md:border-r border-border pb-3 md:pb-0 md:pr-4"
+            className="shrink-0 md:w-[330px] border-b md:border-b-0 md:border-r border-border pb-3 md:pb-0 md:pr-4"
           />
         )}
-        <div className="flex-1 min-w-0 overflow-y-auto md:overflow-visible pb-[var(--safe-bottom)] md:pb-0">
+        <div className="min-w-0 md:flex-1 md:min-h-0 md:overflow-y-auto scroll-floor pb-[var(--safe-bottom)] md:pb-0">
 
         {/* ── 名称输入 ── */}
         <div className="mb-4">
