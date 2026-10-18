@@ -8,7 +8,8 @@ import ExternalLinkSafe from '../components/ExternalLinkSafe'
 import { AI_TYPE_LABEL } from '../constants'
 import { fmtTokenNum, cacheHitRatePct } from '../utils/format'
 import { NOTICE_TEXT_CLASS, useNotice } from '../hooks/useNotice'
-import { getStatusTextStyle, STATUS_COLORS, BG_SURFACE_LIGHT, BG_SURFACE_DARK } from '../utils/statusColor'
+import { getStatusTextStyle, BG_SURFACE_LIGHT, BG_SURFACE_DARK } from '../utils/statusColor'
+import StatusColorPicker from '../components/shared/StatusColorPicker'
 import VerificationCodeInput from '../components/VerificationCodeInput'
 import { useTheme } from '../context/ThemeContext'
 import {
@@ -668,35 +669,7 @@ export default function MePage() {
               </div>
               <div>
                 <label className="block text-xs font-medium text-textSecondary mb-1">{t('me:statusColorLabel')}</label>
-                <div className="flex items-center gap-2 flex-wrap">
-                  {STATUS_COLORS.map(c => (
-                    <button
-                      key={c.value}
-                      type="button"
-                      onClick={() => setEditStatusColor(c.value)}
-                      className={`w-6 h-6 rounded-full border-2 transition-all ${
-                        editStatusColor === c.value
-                          ? 'border-primary-400 scale-110 shadow-md'
-                          : c.value === ''
-                            ? 'border-border bg-canvas hover:border-textMuted'
-                            : 'border-transparent hover:scale-105'
-                      }`}
-                      style={c.value ? { backgroundColor: c.value } : undefined}
-                      title={c.label}
-                    >
-                      {c.value === '' && <X size={10} className="text-textMuted m-auto" />}
-                    </button>
-                  ))}
-                  <div className="relative">
-                    <input
-                      type="color"
-                      value={editStatusColor || '#000000'}
-                      onChange={e => setEditStatusColor(e.target.value)}
-                      className="w-6 h-6 rounded-full cursor-pointer border-2 border-border hover:border-primary-400 transition-colors"
-                      title={t('me:statusColorCustom')}
-                    />
-                  </div>
-                </div>
+                <StatusColorPicker value={editStatusColor} onChange={setEditStatusColor} />
               </div>
               <div>
                 <label className="block text-xs font-medium text-textSecondary mb-1">{t('me:passwordField')}</label>

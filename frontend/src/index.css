@@ -253,6 +253,24 @@
   padding-bottom: var(--safe-area-inset-bottom);
 }
 
+/* 能横滑但不该画出滚动条的地方（页签条这类）：滚动照旧，5px 的滚动条别挤在那儿 */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+/**
+ * 滚动区的地板：弹性容器里的滚动区（flex-1 min-h-0 overflow-y-auto）一旦被压到 0 高，
+ * 滚动条就缩成一个点、内容整块看不见（对话日志正文就栽在这上面）。
+ * 给这类容器一个最小高度：宁可让外层长出去一点，也不把内容藏掉。
+ */
+.scroll-floor {
+  min-height: 10rem;
+}
+
 /* 移动端触摸优化 — 最小触摸区域 44px */
 @media (max-width: 767px) {
   button, a, [role="button"] {

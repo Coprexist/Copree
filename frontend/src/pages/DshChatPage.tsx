@@ -606,7 +606,7 @@ export default function DshChatPage() {
           <span className="text-xs font-medium text-textSecondary flex-1 truncate">{t('tool:dsh.sessions')}</span>
           <span className="text-3xs text-textMuted shrink-0">{sessions.length}</span>
         </div>
-        <div className="flex-1 min-h-0 overflow-y-auto py-1">
+        <div className="flex-1 min-h-0 overflow-y-auto scroll-floor py-1">
           {sessions.length === 0 && (
             <p className="px-3 py-2 text-xs text-textMuted">{t('tool:dsh.noSessions')}</p>
           )}

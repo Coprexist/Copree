@@ -124,7 +124,7 @@ export default function ConsolePage() {
         >
           {/* 滚动只发生在内层：外层 overflow-hidden 才不会让拖拽手柄的溢出变成横向滚动条
               （overflow-y-auto 会把 overflow-x 一起算成 auto，手柄原来挂在 -right-1.5 上） */}
-          <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col">
+          <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden flex flex-col scroll-floor">
             {/* 顶部一行：回应用的出口 + 折叠开关。两者都是"外壳"级动作，各占一行太空，
                 排在一起后列表能多显示一行，视觉上也正好一头一尾（左边离开、右边收放） */}
             <div className={'flex items-center border-b border-border shrink-0 mt-1 ' + (collapsed ? '' : 'pr-1.5')}>

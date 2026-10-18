@@ -118,7 +118,7 @@ export default function CreationAssistantPanel({ draft, onForm, className = '' }
         <Sparkles size={13} /> {t('modal:creatorTitle')}
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto space-y-2 pr-1">
+      <div className="flex-1 min-h-0 overflow-y-auto scroll-floor space-y-2 pr-1">
         {items.length === 0 && (
           <p className="text-xs text-textMuted leading-relaxed">{t('modal:creatorEmpty')}</p>
         )}

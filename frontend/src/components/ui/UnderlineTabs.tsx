@@ -52,17 +52,25 @@ export default function UnderlineTabs<T extends string>({
   const valueRef = useRef(value)
   const [indicator, setIndicator] = useState<{ left: number; width: number } | null>(null)
 
-  /** 量当前页签在行里的位置。量而不是写死百分比：文案宽度会变
+  /** 量当前页签在行里的位置（分数像素也要留住）。量而不是写死百分比：文案宽度会变
    *  （换语言、角标出现/消失），百分比立刻就对不上了 */
   const measure = useCallback(() => {
-    const el = rowRef.current?.querySelector<HTMLButtonElement>(`[data-tab-key="${valueRef.current}"]`)
-    if (!el) {
+    const row = rowRef.current
+    const el = row?.querySelector<HTMLButtonElement>(`[data-tab-key="${valueRef.current}"]`)
+    if (!row || !el) {
       setIndicator(null)
       return
     }
-    const next = { left: el.offsetLeft, width: el.offsetWidth }
+    // 用 rect 而不是 offsetLeft/offsetWidth：后者是整数，缩放成非整数倍率时会被取整
+    // 同样的滚动量也要补回去：rect 是屏幕坐标，指示器排的是内容坐标
+    const rect = el.getBoundingClientRect()
+    const base = row.getBoundingClientRect()
+    const next = {
+      left: rect.left - base.left + row.scrollLeft,
+      width: rect.width,
+    }
     // 值没变就交回同一个对象：否则每量一次都触发一轮渲染
-    setIndicator(prev => (prev && prev.left === next.left && prev.width === next.width ? prev : next))
+    setIndicator(prev => (prev && Math.abs(prev.left - next.left) < 0.5 && Math.abs(prev.width - next.width) < 0.5 ? prev : next))
   }, [])
 
   // 首帧量一次（元素带着终值挂载，所以不会从 1px 宽滑过去），之后每次切页签重量
@@ -81,7 +89,10 @@ export default function UnderlineTabs<T extends string>({
   }, [animated, itemKeys, measure])
 
   return (
-    <div ref={rowRef} className={`relative flex gap-1 border-b border-border overflow-x-auto ${className}`}>
+    // 指示器留在滚动层里面：页签条横滑时它跟着内容一起走，不需要另记滚动量
+    // （记 scrollLeft 再补 transform 那套，一旦那份 state 没跟上滚动，就会整条错位到新页签右边）。
+    // 横向滚动条用 .no-scrollbar 不画出来：它占的那 5px 会把指示器顶到离底边一整条滚动条高的地方
+    <div ref={rowRef} className={`relative flex gap-1 border-b border-border overflow-x-auto no-scrollbar ${className}`}>
       {items.map((item) => (
         <button
           key={item.key}
@@ -97,13 +108,15 @@ export default function UnderlineTabs<T extends string>({
           {item.badge}
         </button>
       ))}
-      {/* 指示器只动 transform，宽度走 scaleX（基准 1px）：平移与宽度变化都留在合成层。
-          动画开着时页签自己的下边框一律透明——两条线并存会露出"新页签已经画好了"的破绽 */}
+      {/* 位置与长度都直接写成 px，不拿 1px 的底去 scaleX：缩放成非整数倍率时那 1px 会被
+          按设备像素取整，被它乘出来的长度就跟页签对不上了（真机就是这样"长度不随缩放"）。
+          动画开着时页签自己的下边框一律透明——两条线并存会露出"新页签已经画好了"的破绽。
+          bottom-0 = 紧贴底边那条灰线上方（不是压上去）：两条线都看得见 */}
       {animated && indicator && (
         <span
           aria-hidden
-          className="pointer-events-none absolute bottom-0 left-0 h-0.5 w-px origin-left bg-primary-500 transition-transform duration-200 ease-out motion-reduce:transition-none"
-          style={{ transform: `translateX(${indicator.left}px) scaleX(${indicator.width})` }}
+          className="pointer-events-none absolute bottom-0 h-0.5 bg-primary-500 transition-[left,width] duration-200 ease-out motion-reduce:transition-none"
+          style={{ left: indicator.left, width: indicator.width }}
         />
       )}
     </div>

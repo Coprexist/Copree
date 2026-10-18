@@ -8,10 +8,10 @@ import { api } from '../api/client'
 import {
   Globe, Check, User, Key, Bot, Mail, Shield, Sparkles,
   Upload, Loader2, Eye, EyeOff, ChevronLeft, ChevronRight,
-  Server, X, Pen, ExternalLink, Star } from 'lucide-react'
+  Server, ExternalLink, Star } from 'lucide-react'
 
 import AvatarCropModal from '../components/AvatarCropModal'
-import { STATUS_COLORS } from '../utils/statusColor.tsx'
+import StatusColorPicker from '../components/shared/StatusColorPicker'
 import { getApiKeyUrl } from '../utils/providers.tsx'
 
 // ─── 步骤配置 ──────────────────────────────────────────────
@@ -566,44 +566,7 @@ export default function SetupPage() {
           {/* 状态颜色 */}
           <div>
             <label className="block text-sm font-medium text-textSecondary mb-2">{t('setup:statusColor')}</label>
-            <div className="flex items-center gap-2 flex-wrap">
-              {STATUS_COLORS.map(c => (
-                <button
-                  key={c.value}
-                  type="button"
-                  onClick={() => setStatusColor(c.value)}
-                  className={`w-6 h-6 rounded-full border-2 transition-all ${
-                    statusColor === c.value
-                      ? 'border-primary-400 scale-110 shadow-md'
-                      : c.value === ''
-                        ? 'border-border bg-canvas hover:border-textMuted'
-                        : 'border-transparent hover:scale-105'
-                  }`}
-                  style={c.value ? { backgroundColor: c.value } : undefined}
-                  title={c.label}
-                >
-                  {c.value === '' && <X size={10} className="text-textMuted m-auto" />}
-                </button>
-              ))}
-              <div className="relative">
-                <div
-                  className="w-6 h-6 rounded-full border-2 border-primary-400 scale-110 shadow-md transition-all relative overflow-hidden"
-                  style={{ backgroundColor: statusColor || '#6366f1' }}
-                  title={t('me:statusColorCustom')}
-                >
-                  {/* 居中笔图标表示可自定义 */}
-                  <span className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                    <Pen size={10} className="text-white/70 drop-shadow" />
-                  </span>
-                  <input
-                    type="color"
-                    value={statusColor || '#6366f1'}
-                    onChange={e => setStatusColor(e.target.value)}
-                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                  />
-                </div>
-              </div>
-            </div>
+            <StatusColorPicker value={statusColor} onChange={setStatusColor} />
           </div>
         </div>
       )

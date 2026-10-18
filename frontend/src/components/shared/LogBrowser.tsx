@@ -13,7 +13,8 @@ import { saveElementAsHtml } from '../../utils/exportHtml'
 import { useT, useLang } from '../../i18n/I18nContext'
 import type { Lang } from '../../i18n/languages'
 import { fmtDateTime } from '../../utils/time'
-import RequestBodyViewer from './RequestBodyViewer'
+import RequestBodyViewer, { type RequestBodyViewerApi } from './RequestBodyViewer'
+import OutlineNav, { type OutlineEntry } from './OutlineNav'
 import { RunStatusChip } from './RunStatus'
 import {
   StateChip, groupByState, logStateOf, stateKeyOf, stateFrameOfKey, type LogStateFrame,
@@ -79,6 +80,22 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
   const [exporting, setExporting] = useState(false)
   // 「原始 JSON」按钮在这一行、开关组在正文里，两边靠这个 id 对上（见 RequestBodyViewer）
   const rawSwitchId = useId()
+  /**
+   * 正文书签：条目由正文自己按分块报上来（正文是分片补渲染的，DOM 里未必齐），
+   * 点条目时按 id 找回块号交给正文去铺、去滚。
+   */
+  const viewerApi = useRef<RequestBodyViewerApi | null>(null)
+  const blockIndex = useRef(new Map<string, number>())
+  const [blocks, setBlocks] = useState<OutlineEntry[]>([])
+  const collectBlocks = useCallback((list: OutlineEntry[]) => {
+    blockIndex.current = new Map(list.map((entry, index) => [entry.id, index]))
+    setBlocks(list)
+  }, [])
+  const bodyScroller = useCallback(() => viewerApi.current?.scroller() ?? null, [])
+  const revealBlock = useCallback((id: string) => {
+    const index = blockIndex.current.get(id)
+    if (index !== undefined) viewerApi.current?.revealBlock(index)
+  }, [])
 
   const stateKey = searchParams.get('state')
   const wantedLogId = Number(searchParams.get('log')) || null
@@ -239,25 +256,30 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
       <p className="text-3xs text-textMuted">{showDelta ? (comparable ? changeLine : t('logs:deltaFirst')) : ''}</p>
 
       {/* 两栏共用一个高度上限：各自的滚动区等高，左右才对齐（限高原先各挂各的，图例把右侧顶下去） */}
-      <div className="flex flex-col lg:flex-row gap-3 max-h-[70vh] min-h-0">
-        <aside className="lg:w-60 shrink-0 min-h-0 overflow-y-auto space-y-0.5">
+      <div className="flex flex-col lg:flex-row gap-3 max-h-[70vh] min-h-[18rem]">
+        {/* 手机端这段历史横着排成一条可滑的带子，桌面端仍竖着立成一窄栏。
+            竖着铺的话它一直是整段撑开的高度（shrink-0，不被压缩），把同一列里的正文挤成 0 高：
+            请求体明明在 DOM 里、屏上一条也看不见，只剩「#id 下载…」那一行和图例 */}
+        <aside className="shrink-0 min-h-0 lg:w-60 lg:overflow-y-auto lg:scroll-floor">
           <div className="text-3xs text-textMuted px-2 pb-1">{t('logs:stateHistory')}</div>
-          {items.map(log => (
-            <button
-              key={log.id}
-              type="button"
-              onClick={() => go({ state: stateKey, log: String(log.id) })}
-              className={`w-full text-left px-2 py-1.5 rounded-control border transition-colors ${
-                log.id === currentId ? 'border-primary-500/60 bg-primary-500/5' : 'border-transparent hover:bg-canvas'
-              }`}
-            >
-              <div className="flex items-center gap-1.5">
-                <span className="text-3xs font-mono text-textMuted">#{log.id}</span>
-                <RunStatusChip status={log.status} />
-              </div>
-              <div className="text-3xs text-textMuted">{log.message_count} · {timeOf(log.created_at, lang)}</div>
-            </button>
-          ))}
+          <div className="flex gap-1 overflow-x-auto pb-1 lg:flex-col lg:gap-0.5 lg:overflow-x-visible lg:pb-0">
+            {items.map(log => (
+              <button
+                key={log.id}
+                type="button"
+                onClick={() => go({ state: stateKey, log: String(log.id) })}
+                className={`shrink-0 lg:w-full text-left px-2 py-1.5 rounded-control border transition-colors ${
+                  log.id === currentId ? 'border-primary-500/60 bg-primary-500/5' : 'border-transparent hover:bg-canvas'
+                }`}
+              >
+                <div className="flex items-center gap-1.5">
+                  <span className="text-3xs font-mono text-textMuted">#{log.id}</span>
+                  <RunStatusChip status={log.status} />
+                </div>
+                <div className="text-3xs text-textMuted">{log.message_count} · {timeOf(log.created_at, lang)}</div>
+              </button>
+            ))}
+          </div>
         </aside>
 
         <div ref={exportRef} className="flex-1 min-w-0 flex flex-col min-h-0">
@@ -310,8 +332,8 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
             </div>
           )}
           {/* 限高与滚动挪进 RequestBodyViewer：滚动条要落在图例下面，不能从图例右侧穿上去；
-              这里只负责占满剩余高度 */}
-          <div className="min-h-0 min-w-0 flex flex-col">
+              这里只负责占满剩余高度；宽屏再让出一窄列给正文书签（窄屏由它自己的浮起按钮给） */}
+          <div className="min-h-0 min-w-0 flex flex-col xl:flex-row xl:gap-2">
           {bodyLoading ? (
             <div className="flex items-center gap-2 text-xs text-textMuted py-6 justify-center">
               <Loader2 size={13} className="animate-spin will-change-transform" /> {t('common:loading')}
@@ -321,7 +343,7 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
             // 每截自己两格、顶端对齐，左右对着看（只删的占左格、只增的占右格）。
             // 这层滚动容器是必须的：完整视图的滚动与横向裁剪在 RequestBodyViewer 内部，
             // 改变量这条支路没有它，长值就直接画到面板外面去了
-            <div className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden pr-1 space-y-2">
+            <div className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden scroll-floor pr-1 space-y-2">
               {delta.ops.map((op: any, index: number) => {
                 if (op.tag === 'equal') {
                   return (
@@ -337,7 +359,8 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
                 const fresh = op.tag === 'delete' ? [] : (op.tag === 'replace' ? (op.added || []) : (op.messages || []))
                 return (
                   <div key={index} className="space-y-2 min-w-0">
-                    <div className="grid grid-cols-2 gap-2 min-w-0">
+                    {/* 窄屏上左右并置只剩一格宽，长值会被裁掉，改成一上一下：删的在上、增的在下 */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 min-w-0">
                       <div className="text-3xs text-rose-400 min-w-0">
                         {gone.length > 0 && t('logs:hunkRemoved').replace('{n}', String(gone.length))}
                       </div>
@@ -346,7 +369,7 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
                       </div>
                     </div>
                     {Array.from({ length: Math.max(gone.length, fresh.length) }).map((_, i) => (
-                      <div key={i} className="grid grid-cols-2 gap-2 items-stretch min-w-0">
+                      <div key={i} className="grid grid-cols-1 sm:grid-cols-2 gap-2 items-stretch min-w-0">
                         <div className="min-w-0 overflow-hidden">
                           {gone[i] && <Hunk removed messages={[gone[i]]} names={detail?.mention_names} />}
                         </div>
@@ -361,6 +384,9 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
             </div>
           ) : (
             <RequestBodyViewer
+              className="min-w-0 xl:flex-1"
+              apiRef={viewerApi}
+              onBlocks={collectBlocks}
               renderAll={exporting}
               onAllRendered={finishExport}
               raw={rawBody}
@@ -368,6 +394,18 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
               rawSwitchId={rawSwitchId}
               messages={detail?.messages || []}
               mentionNames={detail?.mention_names}
+            />
+          )}
+          {/* 改变量是两截对看，没有稳定的「第几块」，那条路上不摆书签 */}
+          {!bodyLoading && !(showDelta && comparable) && (
+            <OutlineNav
+              entries={blocks}
+              scroller={bodyScroller}
+              onReveal={revealBlock}
+              heading={t('outline:logTitle')}
+              searchLabel={t('outline:searchBody')}
+              linkable={false}
+              railClassName="hidden xl:flex xl:flex-col xl:w-44 xl:shrink-0 min-h-0"
             />
           )}
           </div>

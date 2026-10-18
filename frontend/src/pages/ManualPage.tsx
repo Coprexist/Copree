@@ -1,9 +1,10 @@
-import { useState, useEffect, type ReactNode, type JSX } from 'react'
+import { useState, useEffect, useRef, type ReactNode, type JSX } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { ArrowLeft, Loader2, BookOpen } from 'lucide-react'
 import MermaidBlock from '../components/MermaidBlock'
+import OutlineNav from '../components/shared/OutlineNav'
 
 /** 手册配置：路径 → { 文档路径, 标题 } */
 const MANUAL_CONFIG: Record<string, { docPath: string; title: string }> = {
@@ -84,6 +85,8 @@ export default function ManualPage() {
   const [error, setError] = useState<string | null>(null)
   const navigate = useNavigate()
   const location = useLocation()
+  // 正文容器：右侧「本页目录」从这个容器里读 h1–h4（标题的 id 由 HeadingRenderer 给）
+  const docRef = useRef<HTMLDivElement>(null)
 
   const config = MANUAL_CONFIG[location.pathname] || MANUAL_CONFIG['/manual']
 
@@ -109,74 +112,77 @@ export default function ManualPage() {
   }, [location.hash, content])
 
   return (
-    <div className="max-w-4xl mx-auto p-4 md:p-6 pb-24 md:pb-6">
-      {/* 头部导航 */}
-      <div className="flex items-center gap-3 mb-6">
-        <button
-          onClick={() => navigate(-1)}
-          className="p-1.5 rounded-control hover:bg-elevated text-textSecondary hover:text-textPrimary transition-colors"
-          title="返回"
-        >
-          <ArrowLeft size={20} />
-        </button>
-        <BookOpen size={20} className="text-primary-400" />
-        <h1 className="text-lg font-bold text-textPrimary">{config.title}</h1>
-      </div>
-
-      {/* 内容区 */}
-      {error ? (
-        <div className="bg-rose-400/10 border border-rose-400/20 rounded-card p-6 text-center">
-          <p className="text-rose-400 font-medium">加载失败</p>
-          <p className="text-textMuted text-sm mt-1">{error}</p>
+    <div className="mx-auto w-full max-w-[78rem] p-4 md:p-6 pb-24 md:pb-6 xl:flex xl:items-start xl:gap-10">
+      <div ref={docRef} className="mx-auto w-full min-w-0 max-w-4xl">
+        {/* 头部导航 */}
+        <div className="flex items-center gap-3 mb-6">
           <button
-            onClick={() => window.open(config.docPath, '_blank')}
-            className="mt-4 text-sm text-primary-400 hover:text-primary-500 transition-colors"
+            onClick={() => navigate(-1)}
+            className="p-1.5 rounded-control hover:bg-elevated text-textSecondary hover:text-textPrimary transition-colors"
+            title="返回"
           >
-            尝试直接打开文件 →
+            <ArrowLeft size={20} />
           </button>
+          <BookOpen size={20} className="text-primary-400" />
+          <h1 className="text-lg font-bold text-textPrimary">{config.title}</h1>
         </div>
-      ) : content === null ? (
-        <div className="flex justify-center py-12">
-          <Loader2 size={24} className="animate-spin text-textMuted" />
-        </div>
-      ) : (
-        <div className="doc-content prose prose-sm md:prose-base max-w-none
-          prose-headings:text-textPrimary prose-headings:font-semibold
-          prose-h1:text-2xl prose-h1:mt-8 prose-h1:mb-4 prose-h1:pb-2 prose-h1:border-b prose-h1:border-border
-          prose-h2:text-xl prose-h2:mt-6 prose-h2:mb-3
-          prose-h3:text-lg prose-h3:mt-5 prose-h3:mb-2
-          prose-p:text-textSecondary prose-p:leading-relaxed prose-p:my-3
-          prose-a:text-primary-400 prose-a:no-underline hover:prose-a:text-primary-300
-          prose-code:bg-elevated prose-code:text-accent-400 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-xs
-          prose-pre:bg-elevated prose-pre:border prose-pre:border-border prose-pre:rounded-card
-          prose-table:border prose-table:border-border
-          prose-th:bg-elevated prose-th:text-textPrimary prose-th:px-3 prose-th:py-2 prose-th:text-xs prose-th:font-medium
-          prose-td:px-3 prose-td:py-2 prose-td:text-sm prose-td:text-textSecondary
-          prose-tr:border-b prose-tr:border-border
-          prose-blockquote:border-l-2 prose-blockquote:border-primary-400 prose-blockquote:text-textMuted prose-blockquote:pl-4 prose-blockquote:italic
-          prose-strong:text-textPrimary
-          prose-li:text-textSecondary
-          prose-hr:border-border
-          [&_table]:w-full [&_table]:overflow-x-auto
-          [&_table_th]:text-left
-          [&_table_td]:text-left
-          [&_img]:rounded-card [&_img]:max-w-full
-        ">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            components={{
-              code: CodeRenderer,
-              a: DocLink,
-              h1: (p: any) => <HeadingRenderer level={1} {...p} />,
-              h2: (p: any) => <HeadingRenderer level={2} {...p} />,
-              h3: (p: any) => <HeadingRenderer level={3} {...p} />,
-              h4: (p: any) => <HeadingRenderer level={4} {...p} />,
-            }}
-          >
-            {content}
-          </ReactMarkdown>
-        </div>
-      )}
+
+        {/* 内容区 */}
+        {error ? (
+          <div className="bg-rose-400/10 border border-rose-400/20 rounded-card p-6 text-center">
+            <p className="text-rose-400 font-medium">加载失败</p>
+            <p className="text-textMuted text-sm mt-1">{error}</p>
+            <button
+              onClick={() => window.open(config.docPath, '_blank')}
+              className="mt-4 text-sm text-primary-400 hover:text-primary-500 transition-colors"
+            >
+              尝试直接打开文件 →
+            </button>
+          </div>
+        ) : content === null ? (
+          <div className="flex justify-center py-12">
+            <Loader2 size={24} className="animate-spin text-textMuted" />
+          </div>
+        ) : (
+          <div className="doc-content prose prose-sm md:prose-base max-w-none
+            prose-headings:text-textPrimary prose-headings:font-semibold
+            prose-h1:text-2xl prose-h1:mt-8 prose-h1:mb-4 prose-h1:pb-2 prose-h1:border-b prose-h1:border-border
+            prose-h2:text-xl prose-h2:mt-6 prose-h2:mb-3
+            prose-h3:text-lg prose-h3:mt-5 prose-h3:mb-2
+            prose-p:text-textSecondary prose-p:leading-relaxed prose-p:my-3
+            prose-a:text-primary-400 prose-a:no-underline hover:prose-a:text-primary-300
+            prose-code:bg-elevated prose-code:text-accent-400 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-xs
+            prose-pre:bg-elevated prose-pre:border prose-pre:border-border prose-pre:rounded-card
+            prose-table:border prose-table:border-border
+            prose-th:bg-elevated prose-th:text-textPrimary prose-th:px-3 prose-th:py-2 prose-th:text-xs prose-th:font-medium
+            prose-td:px-3 prose-td:py-2 prose-td:text-sm prose-td:text-textSecondary
+            prose-tr:border-b prose-tr:border-border
+            prose-blockquote:border-l-2 prose-blockquote:border-primary-400 prose-blockquote:text-textMuted prose-blockquote:pl-4 prose-blockquote:italic
+            prose-strong:text-textPrimary
+            prose-li:text-textSecondary
+            prose-hr:border-border
+            [&_table]:w-full [&_table]:overflow-x-auto
+            [&_table_th]:text-left
+            [&_table_td]:text-left
+            [&_img]:rounded-card [&_img]:max-w-full
+          ">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                code: CodeRenderer,
+                a: DocLink,
+                h1: (p: any) => <HeadingRenderer level={1} {...p} />,
+                h2: (p: any) => <HeadingRenderer level={2} {...p} />,
+                h3: (p: any) => <HeadingRenderer level={3} {...p} />,
+                h4: (p: any) => <HeadingRenderer level={4} {...p} />,
+              }}
+            >
+              {content}
+            </ReactMarkdown>
+          </div>
+        )}
+      </div>
+      <OutlineNav targetRef={docRef} />
     </div>
   )
 }

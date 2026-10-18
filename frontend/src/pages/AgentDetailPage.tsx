@@ -6,7 +6,8 @@ import { STATE_BADGE_COLORS } from '../constants'
 import Toggle from '../components/Toggle'
 import { useT, useLang } from '../i18n/I18nContext'
 import { fmtDate, fmtDateTime } from '../utils/time'
-import { getStatusTextStyle, STATUS_COLORS } from '../utils/statusColor.tsx'
+import { getStatusTextStyle } from '../utils/statusColor.tsx'
+import StatusColorPicker from '../components/shared/StatusColorPicker'
 import {
   ArrowLeft, Trash2, Download, Upload, Key, Edit3,
   Image, HardDrive, Brain, Copy, Check, X, RefreshCw, Bot, Settings, User,
@@ -803,35 +804,20 @@ export default function AgentDetailPage() {
                 </div>
                 <div>
                   <label className="text-xs text-textMuted">{t('me:statusColorLabel')}</label>
-                  <div className="flex items-center gap-2 flex-wrap mt-1">
-                    {STATUS_COLORS.map(c => (
-                      <button key={c.value} type="button"
-                        onClick={() => { setProfileStatusColor(c.value); handleUpdateAgentField('status_color', c.value || null) }}
-                        className={`w-6 h-6 rounded-full border-2 transition-all ${
-                          (profileStatusColor || '') === c.value
-                            ? 'border-primary-400 scale-110 shadow-md'
-                            : c.value === ''
-                              ? 'border-border bg-canvas hover:border-textMuted'
-                              : 'border-transparent hover:scale-105'
-                        }`}
-                        style={c.value ? { backgroundColor: c.value } : undefined}
-                        title={c.label}
-                      >
-                        {c.value === '' && <X size={10} className="text-textMuted m-auto" />}
-                      </button>
-                    ))}
-                    <div className="relative">
-                      <input type="color" value={profileStatusColor || '#000000'}
-                        onChange={e => setProfileStatusColor(e.target.value)}
-                        onBlur={e => {
-                          if (e.target.value !== (agent?.status_color || '')) {
-                            handleUpdateAgentField('status_color', e.target.value || null)
-                          }
-                        }}
-                        className="w-6 h-6 rounded-full cursor-pointer border-2 border-border hover:border-primary-400 transition-colors"
-                        title={t('me:statusColorCustom')} />
-                    </div>
-                  </div>
+                  <StatusColorPicker
+                    className="flex items-center gap-2 flex-wrap mt-1"
+                    value={profileStatusColor || ''}
+                    onChange={color => {
+                      setProfileStatusColor(color)
+                      handleUpdateAgentField('status_color', color || null)
+                    }}
+                    // 自定义取色器是拖动式的：停手（blur）再落库，别每拖一格发一次请求
+                    onCommit={color => {
+                      if (color !== (agent?.status_color || '')) {
+                        handleUpdateAgentField('status_color', color || null)
+                      }
+                    }}
+                  />
                 </div>
               </div>
             </div>

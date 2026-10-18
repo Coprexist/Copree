@@ -47,7 +47,7 @@ export default function PageShell({
       <PageHeader title={title} subtitle={subtitle} onBack={onBack} leading={leading}>
         {actions}
       </PageHeader>
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="flex-1 min-h-0 overflow-y-auto scroll-floor">
         {flush ? (
           children
         ) : (

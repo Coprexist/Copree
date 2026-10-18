@@ -500,33 +500,38 @@ export default function WorldDesignPage() {
   const [tabIndicator, setTabIndicator] = useState<{ left: number; width: number } | null>(null)
   const railContentIn = useEnterTransition([railCollapsed])
   const railListIn = useEnterTransition([railTab])
-  // will-change 只在指示器真的在滑的那 200ms 里挂着：常驻会占显存、还逼着合成层常驻
-  const [tabSliding, setTabSliding] = useState(false)
-  const tabSlideTimer = useRef<number | null>(null)
   const switchRailTab = useCallback((next: 'chat' | 'files') => {
     if (next === railTab) return
     setRailTab(next)
-    setTabSliding(true)
-    if (tabSlideTimer.current) window.clearTimeout(tabSlideTimer.current)
-    // 过渡 duration-200，留一点余量再撤 will-change
-    tabSlideTimer.current = window.setTimeout(() => setTabSliding(false), 260)
   }, [railTab])
-  useEffect(() => () => { if (tabSlideTimer.current) window.clearTimeout(tabSlideTimer.current) }, [])
 
   /** 量当前页签在页签行里的位置：共享指示器靠它平移过去。
-   *  量而不是写死百分比——文案宽度会变（未读徽标出现/消失，以后换词也会变） */
+   *  量而不是写死百分比——文案宽度会变（未读徽标出现/消失，以后换词也会变）。
+   *  用 rect 而不是 offsetLeft/offsetWidth：后者是整数，缩放成非整数倍率时会取整，
+   *  再被当成指示器的长度写上去就差一截（页签条那边同一个毛病，见 UnderlineTabs） */
   const measureRailTab = useCallback(() => {
     const el = railTabRefs.current[railTab]
-    if (!el) return
-    const next = { left: el.offsetLeft, width: el.offsetWidth }
+    const row = el?.offsetParent as HTMLElement | null
+    if (!el || !row) return
+    const rect = el.getBoundingClientRect()
+    const base = row.getBoundingClientRect()
+    const next = { left: rect.left - base.left, width: rect.width }
     // 值没变就交回同一个对象：否则每量一次都触发一轮渲染
-    setTabIndicator((prev) => (prev && prev.left === next.left && prev.width === next.width ? prev : next))
+    setTabIndicator((prev) => (prev
+      && Math.abs(prev.left - next.left) < 0.5 && Math.abs(prev.width - next.width) < 0.5 ? prev : next))
   }, [railTab])
   useEffect(() => { measureRailTab() }, [measureRailTab, chatUnreadCount, railCollapsed])
   useEffect(() => {
     // 窗口变宽变窄、字号变化都会动到页签宽度，进来重算一次
     window.addEventListener('resize', measureRailTab)
     return () => window.removeEventListener('resize', measureRailTab)
+  }, [measureRailTab])
+  /** 页签行要等世界数据回来才渲染，靠上面那组依赖等不到它出现（挂载时 ref 还是空的，
+   *  之后没有任何东西变了，指示器就一直不画）。所以行一挂上就量一次——子节点的 ref
+   *  在同一个提交里先于父节点赋值，这里量得到页签 */
+  const attachRailRow = useCallback((el: HTMLDivElement | null) => {
+    if (!el) return
+    requestAnimationFrame(() => measureRailTab())
   }, [measureRailTab])
 
   // 会话快照来自面板里那个 useWorldChat：值没变时引用不变，setState 会被 Object.is 吃掉，
@@ -963,7 +968,7 @@ export default function WorldDesignPage() {
                 <>
                   {/* 页签行：下划线是行内一条**共享的**指示器，靠 translateX 滑到当前页签
                       （各自淡入淡出会闪）；行必须是 relative——offsetLeft 就是相对它量的 */}
-                  <div className="relative flex items-center gap-3 h-9 px-2 border-b border-border shrink-0">
+                  <div ref={attachRailRow} className="relative flex items-center gap-3 h-9 px-2 border-b border-border shrink-0">
                     <RailTab
                       active={railTab === 'chat'}
                       label={t('tool:world.rail.tab.chat')}
@@ -981,17 +986,17 @@ export default function WorldDesignPage() {
                     <button onClick={() => setRailCollapsed(true)} className="icon-btn-sm" title={t('tool:world.rail.collapse')} aria-label={t('tool:world.rail.collapse')}>
                       <PanelLeftClose size={15} />
                     </button>
-                    {/* 指示器只动 transform：宽度走 scaleX（基准 1px），连"改宽度"都不做，
-                        滑动与宽度变化就都留在合成层；will-change 只在滑的那 200ms 挂着，滑完撤掉 */}
+                    {/* 位置与长度都直接写 px，不拿 1px 的底去 scaleX：那 1px 在非整数缩放/DPR 下
+                        会被按设备像素取整，乘出来的长度就跟页签对不上了（页签条那边同一个毛病） */}
                     {tabIndicator && (
                       <span
                         aria-hidden
-                        className={`pointer-events-none absolute -bottom-px left-0 h-0.5 w-px origin-left bg-primary-500 transition-transform duration-200 ease-out motion-reduce:transition-none ${tabSliding ? 'will-change-transform' : ''}`}
-                        style={{ transform: `translateX(${tabIndicator.left}px) scaleX(${tabIndicator.width})` }}
+                        className="pointer-events-none absolute bottom-0 h-0.5 bg-primary-500 transition-[left,width] duration-200 ease-out motion-reduce:transition-none"
+                        style={{ left: tabIndicator.left, width: tabIndicator.width }}
                       />
                     )}
                   </div>
-                  <div className="flex-1 min-h-0 overflow-y-auto">
+                  <div className="flex-1 min-h-0 overflow-y-auto scroll-floor">
                     {/* 切页签：新列表淡入 + 上移 3px（150ms ease-out），只为止住"啪一下换掉"的突兀 */}
                     <div className={`transition-[opacity,transform] duration-150 ease-out motion-reduce:transition-none ${railListIn ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-1'}`}>
                       {railTab === 'chat' ? (

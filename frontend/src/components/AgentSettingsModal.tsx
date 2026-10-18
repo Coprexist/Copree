@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { api } from '../api/client'
 import { useT } from '../i18n/I18nContext'
 import { ArrowLeft, X, Loader2, RotateCw, Ticket, ChevronRight, MessageSquare } from 'lucide-react'
-import { STATUS_COLORS } from '../utils/statusColor.tsx'
+import StatusColorPicker from './shared/StatusColorPicker'
 import SkillBackpack from './SkillBackpack'
 import ChannelModal from './channels/ChannelModal'
 import Toggle from './Toggle'
@@ -431,26 +431,7 @@ export default function AgentSettingsModal({
                 </div>
                 <div>
                   <label className="block text-xs font-medium mb-1 text-textSecondary">{t('me:statusColorLabel')}</label>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    {STATUS_COLORS.map(c => (
-                      <button key={c.value} type="button" onClick={() => setStatusColor(c.value)}
-                        className={`w-6 h-6 rounded-full border-2 transition-all ${
-                          statusColor === c.value ? 'border-primary-400 scale-110 shadow-md'
-                          : c.value === '' ? 'border-border bg-canvas hover:border-textMuted'
-                          : 'border-transparent hover:scale-105'
-                        }`}
-                        style={c.value ? { backgroundColor: c.value } : undefined}
-                        title={c.label}
-                      >
-                        {c.value === '' && <X size={10} className="text-textMuted m-auto" />}
-                      </button>
-                    ))}
-                    <div className="relative">
-                      <input type="color" value={statusColor || '#000000'} onChange={e => setStatusColor(e.target.value)}
-                        className="w-6 h-6 rounded-full cursor-pointer border-2 border-border hover:border-primary-400 transition-colors"
-                        title={t('me:statusColorCustom')} />
-                    </div>
-                  </div>
+                  <StatusColorPicker value={statusColor} onChange={setStatusColor} />
                 </div>
               </Section>
 

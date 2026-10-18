@@ -5,9 +5,10 @@
  * 交接 / 人说的话 / AI 说的话 / 本轮工具 / 工具调用 / 工具返回 / 思考 / 收尾与报错。
  * 正文一律原样显示（不截断）：能当 Markdown 读的走 Markdown，JSON 走格式化，其余原样。
  */
-import { Fragment, memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, memo, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
 import { ChevronRight } from 'lucide-react'
 import MarkdownContent from './MarkdownContent'
+import { scrollToAnchor } from '../../utils/scrollAnchor'
 import { useT } from '../../i18n/I18nContext'
 import { escapeHtml, renderMentionChips, type MentionNames } from '../../utils/mentions'
 import { foldDuration, foldTransition } from './collapseMotion'
@@ -245,9 +246,17 @@ function toolArgs(call: any): string {
   return typeof raw === 'string' ? raw : textOf(raw)
 }
 
+/** 书签里那一行小字：这一段正文的开头几个字（换行压成空格，认出是哪段就够了） */
+function excerptOf(text: string, title?: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim()
+  const head = flat.length > 48 ? flat.slice(0, 48) + '…' : flat
+  if (!title) return head
+  return head ? `${title} · ${head}` : title
+}
+
 /** memo：分片补渲染时只有新块要算，已铺好的那些不该被带着重算一遍（片越小、补的次数越多，这一层越值钱） */
-const Block = memo(function Block({ index, msgIndex, kind, title, source, marks = [], tone = 'normal', children }: {
-  index: number; msgIndex: number; kind: Kind; title?: string; tone?: Tone; children: React.ReactNode
+const Block = memo(function Block({ index, msgIndex, blockId, kind, title, source, marks = [], tone = 'normal', children }: {
+  index: number; msgIndex: number; blockId: string; kind: Kind; title?: string; tone?: Tone; children: React.ReactNode
   /** 这一块的原始文本（那条消息本身）；给了才摆「原文 / 渲染」开关 */
   source?: string
   /** 从正文里拆出来的标记（时间 / 谁 / msg_id / @了谁），摆在块头供扫读 */
@@ -266,7 +275,11 @@ const Block = memo(function Block({ index, msgIndex, kind, title, source, marks 
   useHeightTransition(bodyElRef, open ? 'open' : 'closed', !open)
   useHeightTransition(viewElRef, showSource ? 'source' : 'rendered')
   return (
-    <div data-log-block="" className={`flex gap-2 rounded-control border ${style.box} overflow-hidden ${
+    <div
+      id={blockId}
+      data-log-block=""
+      data-block-index={index}
+      className={`flex gap-2 rounded-control border ${style.box} overflow-hidden ${
       tone === 'removed' ? 'opacity-70 ring-1 ring-rose-500/30' : ''
     }`}>
       <div className={`w-1 shrink-0 ${style.bar}`} />
@@ -431,7 +444,15 @@ function Body({ text, mono = false, names }: { text: string; mono?: boolean; nam
   )
 }
 
-export default function RequestBodyViewer({ messages, className = '', legend = true, tone = 'normal', mentionNames, raw, onToggleRaw, rawSwitchId, renderAll = false, onAllRendered, lazy = true }: {
+/** 正文暴露给外层的两件事：书签目录据此跳转与算进度 */
+export interface RequestBodyViewerApi {
+  /** 把第 index 块铺进 DOM 并滚过去（分片是惰性补的，目录点到的块可能还没渲染） */
+  revealBlock: (index: number) => void
+  /** 正文自己的滚动容器 */
+  scroller: () => HTMLElement | null
+}
+
+export default function RequestBodyViewer({ messages, className = '', legend = true, tone = 'normal', mentionNames, raw, onToggleRaw, rawSwitchId, renderAll = false, onAllRendered, lazy = true, apiRef, onBlocks }: {
   messages: any[]
   className?: string
   /** 拼在改变量里时不重复摆图例和原始 JSON 开关（一屏摆好几截，图例只该出现一次） */
@@ -452,6 +473,10 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
   onAllRendered?: () => void
   /** 长日志分片渲染；拼进改变量的小截传 false，它们一次渲染完更省事 */
   lazy?: boolean
+  /** 外层要「跳到第几块」时用它（正文书签） */
+  apiRef?: Ref<RequestBodyViewerApi>
+  /** 分块清单（块的身份、标题、开头几个字、全文）——书签目录的条目就是它 */
+  onBlocks?: (blocks: { id: string; text: string; detail: string; terms: string }[]) => void
 }) {
   const t = useT()
   const list = Array.isArray(messages) ? messages : []
@@ -468,7 +493,7 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
   const logJson = useMemo(() => JSON.stringify(list).replace(/</g, '\\u003c'), [list])
 
   const blocks = useMemo(() => {
-    const out: { kind: Kind; title?: string; source: string; marks: Mark[]; body: React.ReactNode; msgIndex: number }[] = []
+    const out: { kind: Kind; title?: string; source: string; plain: string; marks: Mark[]; body: React.ReactNode; msgIndex: number }[] = []
     // 工具返回自己不带函数名，只能拿 tool_call_id 回上面那条工具调用里认
     const callNames = new Map<string, string>()
     for (const msg of list) {
@@ -481,7 +506,7 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
       if (msg?.reasoning_content) {
         const thinking = textOf(msg.reasoning_content)
         out.push({
-          kind: 'reasoning', title: String(msg.role || ''), source: thinking, marks: [], msgIndex: mi,
+          kind: 'reasoning', title: String(msg.role || ''), source: thinking, plain: thinking, marks: [], msgIndex: mi,
           body: <Body text={thinking} names={mentionNames} />,
         })
       }
@@ -519,7 +544,7 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
       }
       // 原文 = 这条消息本身（库里的字段一个不少），跟上面渲染出来的视图对得上
       out.push({
-        kind, title, source: JSON.stringify(msg, null, 2), msgIndex: mi,
+        kind, title, source: JSON.stringify(msg, null, 2), plain: content, msgIndex: mi,
         marks: headerMarks(content),
         body,
       })
@@ -533,6 +558,30 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
   /** 上一片开始的时刻与这一片的大小：拿上一片实际花的时间调大小，弱机与大块自动铺得少些 */
   const lastStartRef = useRef(0)
   const stepRef = useRef(STEP_BLOCKS)
+  /** 正文的滚动容器与每块的锚点前缀（useId 保证同页多个正文互不撞 id，改变量里那几截也是） */
+  const flatRef = useRef<HTMLDivElement>(null)
+  const blockBase = useId()
+
+  /** 目录点到的块可能还没补上：先把 shown 顶到它，再交给统一的「滚到某一段」去对齐 */
+  const revealBlock = useCallback((index: number) => {
+    setShown(n => (n > index ? n : index + 1))
+    scrollToAnchor(() => ({
+      scroller: flatRef.current,
+      target: flatRef.current?.querySelector<HTMLElement>(`[data-block-index='${index}']`) ?? null,
+    }), { gap: 8 })
+  }, [])
+  useImperativeHandle(apiRef, () => ({ revealBlock, scroller: () => flatRef.current }), [revealBlock])
+
+  // 分块清单交给外层当书签条目：块的身份就是它的锚点 id，标题是类别 + 块号，检索文本是这条的原文
+  useEffect(() => {
+    if (!onBlocks) return
+    onBlocks(blocks.map((block, index) => ({
+      id: `${blockBase}-${index}`,
+      text: `${t(STYLES[block.kind].key)} #${index}`,
+      detail: excerptOf(block.plain, block.title),
+      terms: block.source,
+    })))
+  }, [blocks, blockBase, onBlocks, t])
   // 拼进改变量的那几截本来就没几块，不分片：它们始终是完整的，导出这类视图不必等
   useEffect(() => { setShown(lazy ? FIRST_BLOCKS : blocks.length) }, [list, lazy, blocks.length])
   useEffect(() => {
@@ -578,7 +627,7 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
     <div id={viewId} ref={switchElRef} data-value={showRaw ? 'raw' : 'segments'} className="switch">
       <div data-case="segments" className="space-y-1.5">
         {(renderAll ? blocks : blocks.slice(0, shown)).map((block, i) => (
-          <Block key={i} index={i} msgIndex={block.msgIndex} kind={block.kind} title={block.title} source={block.source} marks={block.marks} tone={tone}>
+          <Block key={i} index={i} blockId={`${blockBase}-${i}`} msgIndex={block.msgIndex} kind={block.kind} title={block.title} source={block.source} marks={block.marks} tone={tone}>
             {block.body}
           </Block>
         ))}
@@ -623,7 +672,7 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
       {/* 图例固定在上、正文自己滚：滚动条因此只覆盖正文区，不会从图例右侧穿上去；
           改变量视图一屏摆好几截，不给它限高滚动 */}
       {legend ? (
-        <div data-export-flat className="flex-1 min-h-0 overflow-y-auto pr-1">{switchBody}</div>
+        <div ref={flatRef} data-export-flat className="flex-1 min-h-0 overflow-y-auto scroll-floor pr-1">{switchBody}</div>
       ) : switchBody}
     </div>
   )
