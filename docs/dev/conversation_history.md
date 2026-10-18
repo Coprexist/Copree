@@ -99,7 +99,8 @@ messages、**不落库**、随轮消失（决策技能那条没人被唤醒时�
 | 消息到达，它没在这个群跑着一轮 | 正常开一轮（抢 claim） | `ai/response_worker.py` `chat_chain_manager.try_claim` |
 | 消息到达，它**正在这个群**跑一轮 | 投进**当前轮**的中断缓冲 | `_inject_busy_group_message` → `executor.add_pending_interrupt` |
 | 消息到达，它正在**别的会话**跑 | 按会话记进缓冲，等本会话下一轮 | `_maybe_trigger_ai_reply` 4.5 段 |
-| 落在最后一次注入之后 | 轮末捞出、**单独排一轮**（只叫这一个 AI） | `_requeue_leftover_interrupts` |
+| 落在最后一次注入之后（群） | 轮末捞出、**单独排一轮**（只叫这一个 AI） | `_requeue_leftover_interrupts` |
+| 落在最后一次注入之后（私信） | 同上，按会话捞、按会话重排 | `_requeue_leftover_dm_interrupts` |
 
 - **注入点 = 每次 LLM 调用之前**（`executor` 工具循环里发请求前 `drain_pending_interrupts`），拼成一条
   user 消息（`interrupt_message_block`）。粒度是**每个工具步**，不是每轮。
@@ -109,6 +110,8 @@ messages、**不落库**、随轮消失（决策技能那条没人被唤醒时�
   收尾之后到达的那条走"重排成一轮"。这不是丢消息。
 - 历史：这里曾经是"抢不到 claim 就 continue"，注释写着"LLM 跑完自然看到"——但跑着的那一轮开局就把
   上下文构建好了、中途不重读群历史，于是 2026-10-04 群 69 同一句话连发三条只回一条。
+- 私信侧原来只有注入、没有轮末重排（2026-10-18 补上）：AI 回完一条后 2 秒又来一条，触发时它仍被
+  标成"在跑"，消息进缓冲、之后没人再叫——1_163 那次连发两条只回一条就是这个。
 
 ## 5. 轮末结算：end_turn
 

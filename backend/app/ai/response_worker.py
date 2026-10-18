@@ -140,6 +140,39 @@ async def _requeue_leftover_interrupts(agent_id: int, ai_user_id: int, group_id:
         logger.info(f"🔁 AI(agent={agent_id}) 正忙时到达的 {requeued} 条消息改为单独排一轮（群 {group_id}）")
 
 
+async def _requeue_leftover_dm_interrupts(agent_id: int, session_id: str, chain_depth: int) -> None:
+    """私信这一轮跑完还没投出去的中断消息 → 自己排一轮。
+
+    群聊侧一直有这道兜底（_requeue_leftover_interrupts），私信没有：AI 正忙时到达的第二条私信
+    会被注入缓冲，而它往往已经过了本轮最后一次注入点，之后没有任何人再叫它——表现出来就是
+    「连发两条，只回了一条」。注入点在每轮 LLM 调用之前，链路见
+    docs/dev/conversation_history.md §4.2。
+    """
+    leftovers = await drain_pending_interrupts(agent_id, session_id=session_id)
+    requeued = 0
+    for pm in leftovers:
+        if pm.get("type") == "notice":
+            continue        # 通知是提前量，账本那条才是底子：没赶上就丢掉
+        if pm.get("type") != "user_message":
+            await restore_pending_interrupts(agent_id, [pm])   # 认不出的类型原样放回
+            continue
+        try:
+            message_queue.put_nowait({
+                "conversation_type": "dm",
+                "session_id": session_id,
+                "message_id": pm.get("message_id"),
+                "content": pm.get("content") or "",
+                "sender_type": "human",
+                "sender_id": pm.get("sender_id"),
+                "chain_depth": chain_depth,
+            })
+            requeued += 1
+        except asyncio.QueueFull:
+            logger.warning("AI 回复队列已满，私信忙时到达的消息重排失败（这条不会被回应）")
+    if requeued:
+        logger.info(f"🔁 AI(agent={agent_id}) 正忙时到达的 {requeued} 条私信改为单独排一轮（会话 {session_id}）")
+
+
 async def ai_response_worker():
     """
     后台主循环：持续消费消息队列，为每条消息检查并触发 AI 回复。
@@ -304,12 +337,16 @@ async def _process_dm_event(db, event: dict):
     }))
 
     # 简化的 DM 回复触发（不需要群聊那样的 DND/意愿检查）
-    await _trigger_dm_ai_reply(
-        db, agent, session_id, content, message_id,
-        chain_depth=chain_depth + 1,
-        sender_id=sender_id,
-        force_own_key=force_own_key,
-    )
+    try:
+        await _trigger_dm_ai_reply(
+            db, agent, session_id, content, message_id,
+            chain_depth=chain_depth + 1,
+            sender_id=sender_id,
+            force_own_key=force_own_key,
+        )
+    finally:
+        # 收尾兜底：这一轮没赶上的忙时私信自己排一轮（与群聊侧同一套口径）
+        await _requeue_leftover_dm_interrupts(agent.id, session_id, chain_depth + 1)
 
 
 async def _publish_skill_event(event: dict) -> None:
@@ -1146,8 +1183,10 @@ async def _trigger_dm_ai_reply(
         await add_pending_interrupt(agent_id, {
             "type": "user_message",
             "content": content,
+            "message_id": message_id,
             "session_id": session_id,
             "sender_id": sender_id,
+            "sender_name": await display_name(db, sender_id),
         })
         logger.info(f"AI {agent_name}({agent_id}) 正忙，DM 中断消息已注入")
         return

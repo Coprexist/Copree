@@ -161,6 +161,18 @@
   从缓存里打掉。现在技能跟任务、状态栈摘要、当前时间一样沉尾部，开头只留走版本链冻结的锁定段。
 
 ### 🐛 修复
+- **私信连发两条只回一条**：AI 正忙时到达的第二条私信会被注入它的中断缓冲（`response_worker.py:1145`），
+  而这时它往往已经过了本轮最后一次注入点；群聊侧一直有轮末重排兜底（`_requeue_leftover_interrupts`），
+  私信侧只有注入、没有重排，于是那条消息再也没人叫。2026-10-18 会话 1_163 实测：09:40:45「你好」回了，
+  09:40:52「你是AI吗」、09:41:21「打这么久的字？？」两条都没触发（`llm_call_count` 4 次只对应两轮）。
+  现在 `_process_dm_event` 在轮末 finally 里按会话重排（`_requeue_leftover_dm_interrupts`，只捞本会话、
+  带原 `message_id`），与群聊同一套口径。
+- **模型只说了人话时，消息会凭空消失（或者憋成乱码）**：AI 偶尔整轮只返回文字、不调 `send_gm/send_dm`
+  （`intent` 解析失败）。旧逻辑最多注入 10 次 `system_reminder` 要它改用工具重说：每一遍都是整段上下文
+  重跑（1_163 实测 prompt 23212 token），而且第 2、3 遍输出已经退化成胡话，最后发出去的是一段乱码。
+  现在提醒只发一次；仍然只说人话就把这句**直接发出去**（`executor._deliver_plain_text`，走
+  `dispatch_tool_call` 与真正的工具调用同一条路，广播/账本/AI 互触发完全一致），用户得到的是回应而不是沉默。
+  用例 `tests/test_plain_reply_fallback.py`（5 条）。
 - **新建的 AI / 新建的会话第一轮要把整条能力变更历史念一遍**：`build_change_notice` 把"本状态还没有
   进度记录"当成 known=0（`services/capability_versioning.py:574` 的 `or 0`），于是 v1→vN 的 changelog
   全部命中注入条件。实测库里 platform 源已到 v57、changelog 合计 8.0k 字，新建 AI 首轮的通知

@@ -503,6 +503,60 @@ async def _notify_force_own_key_failure(db, agent, user, failures: list[str]) ->
 # 工具调用循环
 # ============================================================
 
+def _dm_peer_id(session_id: str | None, self_user_id: int | None) -> int | None:
+    """私信会话 id 是「小id_大id」，对方 = 两个里面不是自己的那个。"""
+    if not session_id or self_user_id is None:
+        return None
+    try:
+        a, b = (int(x) for x in str(session_id).split("_"))
+    except (TypeError, ValueError):
+        return None
+    if self_user_id == a:
+        return b
+    if self_user_id == b:
+        return a
+    return None
+
+
+async def _deliver_plain_text(
+    db, agent, conversation_type: str, group_id: int | None,
+    session_id: str | None, text: str, context: dict,
+) -> dict | None:
+    """模型只说了人话、没调工具时，把这句当消息投出去。
+
+    为什么要有：content 已经是给用户看的话。不发的话这轮就是沉默，用户看到的是「不理我」，
+    而真相只是模型这一轮忘了 JSON 协议。宁可发出去（哪怕语气不对），也不该让消息凭空消失。
+
+    走 dispatch 而不是直接写库：广播、账本、AI 互触发这些副作用必须和一次真正的
+    send_gm / send_dm 完全一致，否则「直发」会变成一条没人收到、也不算数的影子消息。
+    """
+    text = (text or "").strip()
+    if not text:
+        return None
+    from app.services.tool_registry import dispatch_tool_call
+
+    try:
+        if conversation_type == "group" and group_id:
+            result = await dispatch_tool_call(
+                db, agent.id, group_id, "send_gm", {"content": text}, context)
+        elif conversation_type == "dm" and session_id:
+            peer = _dm_peer_id(session_id, getattr(agent, "user_id", None))
+            if peer is None:
+                return None
+            result = await dispatch_tool_call(
+                db, agent.id, None, "send_dm",
+                {"target_user_id": peer, "content": text}, context)
+        else:
+            return None
+    except Exception as e:
+        logger.warning(f"AI {agent.name}({agent.id}) 文字直发失败（非致命）: {e}")
+        return None
+    if not (result or {}).get("success"):
+        logger.warning(f"AI {agent.name}({agent.id}) 文字直发被拒: {result}")
+        return None
+    return result
+
+
 async def _tool_call_loop(
     db,
     agent,
@@ -1182,49 +1236,70 @@ async def _tool_call_loop(
                 reminder_max = 1
             else:  # 'every_time'
                 reminder_max = 10
-            if content and not tool_calls and not _pending_results and _reminder_extra < reminder_max:
-                logger.info(
-                    f"AI {agent.name}({agent.id}) 返回了文字但无工具调用"
-                    f"（intent={parsed_intent or '解析失败'}），"
-                    f"注入提醒: {content[:80]}"
-                )
-                reminder_assistant_msg = {
-                    "role": "assistant",
-                    "content": content,
-                    "tool_calls": [{
-                        "id": "system_reminder",
-                        "type": "function",
-                        "function": {
-                            "name": "system_reminder",
-                            "arguments": "{}",
-                        },
-                    }],
-                }
-                if response.get("reasoning_content"):
-                    reminder_assistant_msg["reasoning_content"] = response["reasoning_content"]
-                messages.append(reminder_assistant_msg)
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": "system_reminder",
-                    "content": json.dumps({
-                        "reminder": True,
-                        "message": (
-                            "你刚才返回了文字但没有调用任何工具。"
-                            "文字不能自动发送——如果你想在群聊发言，请调用 send_gm 工具；私信请用 send_dm。"
-                            "括号表情可以写在 send_gm/send_dm 的 content 里发出去，"
-                            "但不能只返回括号文字而不调工具。"
-                            "请现在就调用 send_gm/send_dm 或你需要的其他工具。"
-                            "如果你决定不再继续回复，请调用 end_turn 工具来结束本轮。"
-                        ),
-                    }, ensure_ascii=False),
-                })
-                if reminder_grace != 'off':
-                    _reminder_extra += 1
-                    _free_next = True
-                logger.info(f"AI {agent.name}({agent.id}) system_reminder 注入"
-                            f"（grace={reminder_grace}, 额外={_reminder_extra}）")
-                await asyncio.sleep(0.3)
-                continue
+            if content and not tool_calls and not _pending_results:
+                # 提醒只发一次：协议讲一遍就够。反复要它「改用工具重说」既烧 token（每一遍都是
+                # 整段上下文重跑），也会把模型逼成胡话——曾经一个晚上重试到第 10 遍才憋出一段乱码。
+                # 提醒过还只会说人话，就把这句直接发出去（见下方兜底投递）。
+                if _reminder_extra >= min(reminder_max, 1):
+                    delivered = await _deliver_plain_text(
+                        db, agent, conversation_type, group_id, session_id, content, context)
+                    if delivered:
+                        _has_sent_message = True
+                        logger.info(
+                            f"AI {agent.name}({agent.id}) 只返回了文字没调工具，"
+                            f"已直发为消息（msg={delivered.get('message_id')}）"
+                        )
+                        await _seal(response.get("reasoning_content") or "")
+                        await _save_conversation_log_safe(
+                            db, agent, messages, conversation_type,
+                            group_id, session_id,
+                            has_output=True, model=model, token_usage=total_usage,
+                        )
+                        return
+                    logger.warning(f"AI {agent.name}({agent.id}) 文字直发未成功，本轮按沉默收尾")
+                else:
+                    logger.info(
+                        f"AI {agent.name}({agent.id}) 返回了文字但无工具调用"
+                        f"（intent={parsed_intent or '解析失败'}），"
+                        f"注入提醒: {content[:80]}"
+                    )
+                    reminder_assistant_msg = {
+                        "role": "assistant",
+                        "content": content,
+                        "tool_calls": [{
+                            "id": "system_reminder",
+                            "type": "function",
+                            "function": {
+                                "name": "system_reminder",
+                                "arguments": "{}",
+                            },
+                        }],
+                    }
+                    if response.get("reasoning_content"):
+                        reminder_assistant_msg["reasoning_content"] = response["reasoning_content"]
+                    messages.append(reminder_assistant_msg)
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": "system_reminder",
+                        "content": json.dumps({
+                            "reminder": True,
+                            "message": (
+                                "你刚才返回了文字但没有调用任何工具。"
+                                "文字不能自动发送——如果你想在群聊发言，请调用 send_gm 工具；私信请用 send_dm。"
+                                "括号表情可以写在 send_gm/send_dm 的 content 里发出去，"
+                                "但不能只返回括号文字而不调工具。"
+                                "请现在就调用 send_gm/send_dm 或你需要的其他工具。"
+                                "如果你决定不再继续回复，请调用 end_turn 工具来结束本轮。"
+                            ),
+                        }, ensure_ascii=False),
+                    })
+                    if reminder_grace != 'off':
+                        _reminder_extra += 1
+                        _free_next = True
+                    logger.info(f"AI {agent.name}({agent.id}) system_reminder 注入"
+                                f"（grace={reminder_grace}, 额外={_reminder_extra}）")
+                    await asyncio.sleep(0.3)
+                    continue
 
             # ── 无工具调用也没有文字 → 退出 ──
             if not tool_calls:
