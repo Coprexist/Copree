@@ -161,6 +161,13 @@
   从缓存里打掉。现在技能跟任务、状态栈摘要、当前时间一样沉尾部，开头只留走版本链冻结的锁定段。
 
 ### 🐛 修复
+- **新建的 AI / 新建的会话第一轮要把整条能力变更历史念一遍**：`build_change_notice` 把"本状态还没有
+  进度记录"当成 known=0（`services/capability_versioning.py:574` 的 `or 0`），于是 v1→vN 的 changelog
+  全部命中注入条件。实测库里 platform 源已到 v57、changelog 合计 8.0k 字，新建 AI 首轮的通知
+  **8236 字**（≈5k token）；每新开一个会话状态都会再来一遍——前缀本来就是 latest 的内容，念的全是旧账。
+  现在 `known is None`（首见）只把 known 结清到 latest、不注入内容，增量注入只在"本状态确有已知进度
+  且落后"时发生：同一实测位置，首轮 0 字，落后一个版本的一轮 659 字。设计与用例同步：
+  `docs/dev/capability_lazy_loading.md`「变更流程」，`tests/test_capability_scope.py::test_first_sight_settles_silently`。
 - **主站 AI 的 `read_manual` 在这套部署里一直是坏的**：路径硬编码 `/copree/docs/guides/用户手册.md`
   （`tools/chat_social/read_manual.py:10`），而 compose 只挂了 `data` 与 `backend`，容器里没有
   `/copree`——每次调用都返回「手册文件不存在」，AI 想问平台功能问不到，只能凭记忆答。现在文档根按

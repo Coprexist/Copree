@@ -32,10 +32,10 @@ async def _reset(db, *sources: str):
 
 
 async def test_every_state_gets_its_own_notice(migrated_db):
-    """作用域=全部 → 两个状态各收一次；同一个状态不重复收
+    """作用域=全部 → 变更按状态各收一次，谁先构建也替不了别人勾掉
 
-    首见只看**变更**：起点版本（v1）没有 changelog，"从无到有"不是变更（内容是它前缀里
-    本来就有的东西）。所以这里先造出一次真实变更（v2），两个状态才各有一条可收的。
+    首见（状态还没拼过前缀）不补发历史——它拿到的就是最新内容，见
+    test_first_sight_settles_silently。这里测的是"变更发生之后，每个已存在的状态各收一次"。
     """
     from app.database import async_session
     from app.services.capability_versioning import (
@@ -47,21 +47,53 @@ async def test_every_state_gets_its_own_notice(migrated_db):
         await _reset(db, SRC)
         await ensure_source_version(repo, SRC, _defs("t1"), "测试源", scope=SCOPE_ALL)
 
-        fresh = {}
-        assert await build_change_notice(repo, fresh, [SRC], state="group:0") is None, \
+        a = {}
+        assert await build_change_notice(repo, a, [SRC], state="group:1") is None, \
             "只有起点版本时没有可告知的变更（内容就在它眼前的前缀里）"
-        assert fresh["cap_known_versions"] == {"group:0|" + SRC: 1}, "但要与最新结清，免得每轮重扫"
+        assert a["cap_known_versions"] == {"group:1|" + SRC: 1}, "但要与最新结清，免得每轮重扫"
 
         await ensure_source_version(repo, SRC, _defs("t1", "t2"), "测试源", scope=SCOPE_ALL)  # v2
 
-        a, b = {}, {}
-        assert await build_change_notice(repo, a, [SRC], state="group:1") is not None
-        assert await build_change_notice(repo, b, [SRC], state="group:2") is not None, \
-            "另一个状态也必须收到——修前它会被先构建的那个状态替它勾掉"
-
+        first = await build_change_notice(repo, a, [SRC], state="group:1")
+        assert first is not None and "v1→v2" in first, "已存在的状态收到这次变更"
         assert a["cap_known_versions"] == {"group:1|" + SRC: 2}
-        assert b["cap_known_versions"] == {"group:2|" + SRC: 2}, "两个状态各记一份键"
+
+        await ensure_source_version(repo, SRC, _defs("t1", "t3"), "测试源", scope=SCOPE_ALL)  # v3
+
+        b = {"cap_known_versions": {"group:2|" + SRC: 2}}
+        assert await build_change_notice(repo, a, [SRC], state="group:1") is not None, "a 收到 v3"
+        late = await build_change_notice(repo, b, [SRC], state="group:2")
+        assert late is not None and "v2→v3" in late, \
+            "另一个状态也收到——修前它会被先构建的那个状态替它勾掉"
         assert await build_change_notice(repo, a, [SRC], state="group:1") is None, "同一状态不重复发"
+
+
+async def test_first_sight_settles_silently(migrated_db):
+    """新建的 AI / 新建的会话不重放历史：首见只结清 known，之后的新变更照常送到
+
+    实测口径：库里的 platform 源已攒到 v57、changelog 合计 8.2k 字，按旧写法（known 当 0）
+    新建的 AI 第一轮就会把 v1→v57 全念一遍。
+    """
+    from app.database import async_session
+    from app.services.capability_versioning import (
+        build_change_notice, ensure_source_version, SCOPE_ALL,
+    )
+
+    async with async_session() as db:
+        repo = await _repo(db)
+        await _reset(db, SRC)
+        await ensure_source_version(repo, SRC, _defs("t1"), "测试源", scope=SCOPE_ALL)
+        await ensure_source_version(repo, SRC, _defs("t2"), "测试源", scope=SCOPE_ALL)
+        await ensure_source_version(repo, SRC, _defs("t3"), "测试源", scope=SCOPE_ALL)  # v3
+
+        fresh = {}
+        assert await build_change_notice(repo, fresh, [SRC], state="group:new") is None, \
+            "新状态的前缀本来就用最新内容，历史 changelog 对它没有信息量"
+        assert fresh["cap_known_versions"]["group:new|" + SRC] == 3, "首见也要结清，免得每轮重扫"
+
+        await ensure_source_version(repo, SRC, _defs("t4"), "测试源", scope=SCOPE_ALL)  # v4
+        notice = await build_change_notice(repo, fresh, [SRC], state="group:new")
+        assert notice is not None and "v3→v4" in notice, "首见之后的新变更照常通知"
 
 
 async def test_legacy_flat_key_is_adopted_once_per_state(migrated_db):

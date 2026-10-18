@@ -554,8 +554,9 @@ async def build_change_notice(
     两件事分开（见模块头）：该不该送到我 = 版本 scope 是否覆盖本状态；我收过没有 = 本状态自己的键。
     known 一律推进到 latest（哪怕这段没有可发的内容）——被作用域排除的版本要与本状态"结清"，
     否则每轮都要重扫一遍。
-    首见（本状态还没有这条源的 known）不会凭空冒通知：起点版本（v1）不写 changelog，
-    见 `ensure_source_version`——"从无到有"不是变更，内容是它眼前前缀里本来就有的东西。
+    首见不冒通知：本状态还没有这条源的 known，说明它的前缀还没拼过（含新建的 AI、
+    新建的会话），它拿到的就是 latest——起点版本（v1）不写 changelog 是同一个道理：
+    "从无到有"不是变更，内容是它眼前前缀里本来就有的东西。首见只把 known 推到 latest 结清。
     """
     from app.models.agent import CapabilityVersion
 
@@ -570,7 +571,14 @@ async def build_change_notice(
         )).scalar_one_or_none()
         if latest is None:
             continue
-        known = read_progress(holder, "cap_known_versions", state, source) or 0
+        known = read_progress(holder, "cap_known_versions", state, source)
+        if known is None:
+            # 首见：这条源在本状态还没有任何进度记录——说明这个状态的前缀还没拼过，
+            # 它拿到的本来就是 latest，历史 changelog 描述的变更全都在里面了。
+            # 旧写法把 known 当 0 处理，于是新建的 AI / 新建的会话第一轮就把 v1→vN 的
+            # 全部变更重放一遍（实测 platform 源 57 版、8.2k 字，纯烧 token）。
+            write_progress(holder, "cap_known_versions", state, source, latest.version)
+            continue
         if known >= latest.version:
             continue
         # 取 known+1 .. latest 的 changelog（增量：只注入新变化）

@@ -91,8 +91,10 @@ async def test_custom_changelog_is_used_instead_of_the_auto_diff(migrated_db):
         await ensure_source_version(repo, SRC, _defs("t1", "改了说明"), "测试源",
                                     scope=SCOPE_ALL, changelog="补了 t1 的说明")
 
-        notice = await build_change_notice(repo, {}, [SRC], state="group:1")
-        assert "补了 t1 的说明" in notice, notice
+        # 先有过进度（v1）才会收到 v2 的通知；首见的处理见 test_capability_scope
+        holder = {"cap_known_versions": {"group:1|" + SRC: 1}}
+        notice = await build_change_notice(repo, holder, [SRC], state="group:1")
+        assert notice and "补了 t1 的说明" in notice, notice
         assert "+ " not in notice, "给了文案就不再自动算改变量"
 
 
