@@ -1,38 +1,34 @@
-"""模型只说了人话、没调工具时的兜底投递：消息不能凭空消失
+"""模型只说了人话、没调工具时的兜底：记账本，不替它发
 
-背景（2026-10-18）：新建的 AI 在私信里偶尔整轮只返回文字（intent 解析失败），旧逻辑最多注入
-10 次 system_reminder 要它改用工具重说；结果用户等两三分钟，等来的是沉默或者一段乱码。
-现在提醒只发一次，第二次仍然只说人话就把这句直接发出去。
+背景（2026-10-18，会话 1_163）：AI 偶尔整轮只返回文字（intent 解析失败）。旧逻辑连注 10 次
+system_reminder 要它改用工具重说；中间一版改成"直接把这段文字发出去"，但正文可能是它给自己
+记的过程，也可能是准备发给另一个会话的话——平台分不清"这句是给谁的"，代发就是替它说错人。
+最终口径：提醒一次；仍然只说话就把「这段话 + 平台当时的提醒」写进账本，下一轮它自己补发。
 """
 
 
-class _Agent:
-    id = 51
-    name = "陈屿"
-    user_id = 163
+def test_unsent_text_goes_to_the_ledger_with_the_reminder():
+    from app.utils.pure.history import unsent_text_entry
+
+    entry = unsent_text_entry("在，咋了", "文字不会自动发出去：私信请调用 send_dm")
+    assert entry["kind"] == "note" and entry["actor"] == "system"
+    assert entry["flags"] == {"drop_on_unlock": True}, "只活到解锁：compact 之后它就是过期信息"
+    assert "【没发出去的话】" in entry["content"]
+    assert "> 在，咋了" in entry["content"]
+    assert "平台当时的提醒：文字不会自动发出去：私信请调用 send_dm" in entry["content"]
+
+    # 空正文不能变成一条只有提醒的假条目；长正文截断在 8 行，别把整段过程抄进账本
+    assert "> " not in unsent_text_entry("", "提醒")["content"]
+    many = unsent_text_entry("\n".join(f"第{i}行" for i in range(20)), "提醒")
+    assert "第7行" in many["content"] and "第8行" not in many["content"]
 
 
-def _install(fake):
-    """把 dispatch_tool_call 换成假实现，返回还原函数（runner 里没有 monkeypatch fixture）。"""
-    import app.services.tool_registry as tr
+def test_auto_send_path_is_gone():
+    """账本取代了"替它发出去"。有人把这套投递加回来，这条会红——它会绕过"这句是给谁的"这个判断。"""
+    import app.ai.executor as ex
 
-    old = tr.dispatch_tool_call
-    tr.dispatch_tool_call = fake
-
-    def restore():
-        tr.dispatch_tool_call = old
-
-    return restore
-
-
-def test_dm_peer_is_the_other_side_of_the_session_id():
-    from app.ai.executor import _dm_peer_id
-
-    assert _dm_peer_id("1_163", 163) == 1
-    assert _dm_peer_id("1_163", 1) == 163
-    assert _dm_peer_id("1_163", 999) is None, "自己不在这个会话里 → 宁可投不出去，也别投错人"
-    assert _dm_peer_id(None, 1) is None
-    assert _dm_peer_id("garbage", 1) is None
+    assert not hasattr(ex, "_deliver_plain_text")
+    assert not hasattr(ex, "_looks_like_monologue")
 
 
 async def test_dm_leftover_messages_are_requeued():
@@ -72,71 +68,3 @@ async def test_dm_leftover_messages_are_requeued():
         executor._pending_interrupts.clear()
         while not rw.message_queue.empty():
             rw.message_queue.get_nowait()
-
-
-async def test_plain_text_in_dm_is_delivered_as_send_dm():
-    from app.ai.executor import _deliver_plain_text
-
-    calls = []
-
-    async def fake(db, agent_id, group_id, tool_name, args, context):
-        calls.append((agent_id, group_id, tool_name, args))
-        return {"success": True, "message_id": 42}
-
-    restore = _install(fake)
-    try:
-        got = await _deliver_plain_text(None, _Agent(), "dm", None, "1_163", "  在，咋了 ", {})
-    finally:
-        restore()
-
-    assert got and got["message_id"] == 42
-    assert calls == [(51, None, "send_dm", {"target_user_id": 1, "content": "在，咋了"})], \
-        "内容去掉首尾空白，走 send_dm，收件人是会话另一端"
-
-
-async def test_plain_text_in_group_is_delivered_as_send_gm():
-    from app.ai.executor import _deliver_plain_text
-
-    calls = []
-
-    async def fake(db, agent_id, group_id, tool_name, args, context):
-        calls.append((agent_id, group_id, tool_name, args))
-        return {"success": True, "message_id": 7}
-
-    restore = _install(fake)
-    try:
-        got = await _deliver_plain_text(None, _Agent(), "group", 12, None, "在", {})
-    finally:
-        restore()
-
-    assert got and calls == [(51, 12, "send_gm", {"content": "在"})]
-
-
-async def test_plain_text_is_dropped_safely_when_delivery_fails():
-    from app.ai.executor import _deliver_plain_text
-
-    calls = []
-
-    async def fake(db, agent_id, group_id, tool_name, args, context):
-        calls.append(tool_name)
-        return {"error": True, "message": "无权在此会话中发言"}
-
-    restore = _install(fake)
-    try:
-        assert await _deliver_plain_text(None, _Agent(), "dm", None, "1_163", "在", {}) is None
-        assert await _deliver_plain_text(None, _Agent(), "dm", None, "1_163", "   ", {}) is None
-        assert await _deliver_plain_text(None, _Agent(), "alarm", None, None, "在", {}) is None
-    finally:
-        restore()
-
-    assert calls == ["send_dm"], "空文本 / 非群聊私信的场景不该再发一次"
-
-    async def boom(*a, **kw):
-        raise RuntimeError("boom")
-
-    restore = _install(boom)
-    try:
-        assert await _deliver_plain_text(None, _Agent(), "group", 12, None, "在", {}) is None, \
-            "投递异常不能把整轮打挂"
-    finally:
-        restore()

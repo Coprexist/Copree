@@ -170,9 +170,11 @@
 - **模型只说了人话时，消息会凭空消失（或者憋成乱码）**：AI 偶尔整轮只返回文字、不调 `send_gm/send_dm`
   （`intent` 解析失败）。旧逻辑最多注入 10 次 `system_reminder` 要它改用工具重说：每一遍都是整段上下文
   重跑（1_163 实测 prompt 23212 token），而且第 2、3 遍输出已经退化成胡话，最后发出去的是一段乱码。
-  现在提醒只发一次；仍然只说人话就把这句**直接发出去**（`executor._deliver_plain_text`，走
-  `dispatch_tool_call` 与真正的工具调用同一条路，广播/账本/AI 互触发完全一致），用户得到的是回应而不是沉默。
-  用例 `tests/test_plain_reply_fallback.py`（5 条）。
+  现在提醒只发一次；仍然只说话就**不替它发**，而是把「这段没发出去的话 + 平台当时的提醒」写进账本
+  （`utils/pure/history.unsent_text_entry`，kind=note、只活到解锁），下一轮它自己看得到、自己补发。
+  为什么不代发：正文里可能是它给自己记的过程，也可能是准备发给另一个会话的话——平台分不清"这句
+  是给谁的"，代发就是替它说错人（思考走 `reasoning_content`，从来不在这条路径上）。
+  用例 `tests/test_plain_reply_fallback.py`（3 条，含一条源码级守卫：代发路径不许被加回来）。
 - **新建的 AI / 新建的会话第一轮要把整条能力变更历史念一遍**：`build_change_notice` 把"本状态还没有
   进度记录"当成 known=0（`services/capability_versioning.py:574` 的 `or 0`），于是 v1→vN 的 changelog
   全部命中注入条件。实测库里 platform 源已到 v57、changelog 合计 8.0k 字，新建 AI 首轮的通知

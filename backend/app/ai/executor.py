@@ -34,6 +34,14 @@ _CLOSING_TOOLS = ("send_gm", "send_dm", "end_turn")
 _FORCED_THINKING_MAX = 6000
 
 # 收尾轮指令：轮次已用尽，这一轮白送（不占额度）
+# 只说话、不调工具时的提醒文案。工具轮里的 system_reminder 与轮末账本条目共用这一份——
+# 两处各写一遍，迟早出现"账本说 A、提醒说 B"，而这条文字就是 AI 唯一能学到的纠错说明。
+_PROSE_REMINDER = (
+    "你刚才返回了文字但没有调用任何工具。文字不会自动发出去：在群里发言请调用 send_gm，"
+    "私信请调用 send_dm；括号表情要写进 send_* 的 content 里，不能只返回括号文字；"
+    "不想回复就调用 end_turn 结束本轮。"
+)
+
 _CLOSING_INSTRUCTION = (
     "[收尾] 工具轮次已经用完，这一轮是白送的：现在只能 send_gm/send_dm/end_turn。\n"
     "- 把已经查到、有把握的先发出去；没查到就说没查到，别硬编；\n"
@@ -503,60 +511,6 @@ async def _notify_force_own_key_failure(db, agent, user, failures: list[str]) ->
 # 工具调用循环
 # ============================================================
 
-def _dm_peer_id(session_id: str | None, self_user_id: int | None) -> int | None:
-    """私信会话 id 是「小id_大id」，对方 = 两个里面不是自己的那个。"""
-    if not session_id or self_user_id is None:
-        return None
-    try:
-        a, b = (int(x) for x in str(session_id).split("_"))
-    except (TypeError, ValueError):
-        return None
-    if self_user_id == a:
-        return b
-    if self_user_id == b:
-        return a
-    return None
-
-
-async def _deliver_plain_text(
-    db, agent, conversation_type: str, group_id: int | None,
-    session_id: str | None, text: str, context: dict,
-) -> dict | None:
-    """模型只说了人话、没调工具时，把这句当消息投出去。
-
-    为什么要有：content 已经是给用户看的话。不发的话这轮就是沉默，用户看到的是「不理我」，
-    而真相只是模型这一轮忘了 JSON 协议。宁可发出去（哪怕语气不对），也不该让消息凭空消失。
-
-    走 dispatch 而不是直接写库：广播、账本、AI 互触发这些副作用必须和一次真正的
-    send_gm / send_dm 完全一致，否则「直发」会变成一条没人收到、也不算数的影子消息。
-    """
-    text = (text or "").strip()
-    if not text:
-        return None
-    from app.services.tool_registry import dispatch_tool_call
-
-    try:
-        if conversation_type == "group" and group_id:
-            result = await dispatch_tool_call(
-                db, agent.id, group_id, "send_gm", {"content": text}, context)
-        elif conversation_type == "dm" and session_id:
-            peer = _dm_peer_id(session_id, getattr(agent, "user_id", None))
-            if peer is None:
-                return None
-            result = await dispatch_tool_call(
-                db, agent.id, None, "send_dm",
-                {"target_user_id": peer, "content": text}, context)
-        else:
-            return None
-    except Exception as e:
-        logger.warning(f"AI {agent.name}({agent.id}) 文字直发失败（非致命）: {e}")
-        return None
-    if not (result or {}).get("success"):
-        logger.warning(f"AI {agent.name}({agent.id}) 文字直发被拒: {result}")
-        return None
-    return result
-
-
 async def _tool_call_loop(
     db,
     agent,
@@ -658,11 +612,14 @@ async def _tool_call_loop(
                 else "一条消息都没发出去——上面的工具过程别当成已经说过的话。")
         return f"{reason}{tail}"
 
-    async def _seal(reasoning: str = "", cutoff: str = "") -> None:
+    async def _seal(reasoning: str = "", cutoff: str = "",
+                    unsent: tuple[str, str] | None = None) -> None:
         """三个出口（end_turn 工具 / intent=end_turn / 循环走完）共用这一次封存。
 
         不是 AI 自己收的尾（轮次用尽、模型只回了文字）时思考必须留：它是「为什么在干这件事」
         的唯一记录；只发过消息的轮次没有这个负担，照旧不留。
+
+        unsent：这一轮只写了文字、没调发送工具的（正文, 平台提醒）——写进账本，下一个自己看得到。
         """
         if not (_end_turn or _self_ended) and _did_real_work():
             _settlement["keep_thinking"] = True
@@ -671,7 +628,7 @@ async def _tool_call_loop(
             await _seal_turn(
                 db, agent, group_id=group_id, session_id=session_id,
                 conversation_type=conversation_type, tool_log=_tool_log,
-                settlement=_settlement, reasoning=reasoning, cutoff=cutoff,
+                settlement=_settlement, reasoning=reasoning, cutoff=cutoff, unsent=unsent,
             )
         except Exception as e:
             logger.warning(f"轮末封存失败（非致命，下一轮只少了这一笔）: {e}")
@@ -1239,24 +1196,20 @@ async def _tool_call_loop(
             if content and not tool_calls and not _pending_results:
                 # 提醒只发一次：协议讲一遍就够。反复要它「改用工具重说」既烧 token（每一遍都是
                 # 整段上下文重跑），也会把模型逼成胡话——曾经一个晚上重试到第 10 遍才憋出一段乱码。
-                # 提醒过还只会说人话，就把这句直接发出去（见下方兜底投递）。
+                # 提醒过还只说话，**不替它发**：正文可能是它给自己记的过程，也可能是准备发给另一个
+                # 会话的话，平台分不清"这句是给谁的"，代发就是替它说错人。改写进账本（下一轮自己补）。
                 if _reminder_extra >= min(reminder_max, 1):
-                    delivered = await _deliver_plain_text(
-                        db, agent, conversation_type, group_id, session_id, content, context)
-                    if delivered:
-                        _has_sent_message = True
-                        logger.info(
-                            f"AI {agent.name}({agent.id}) 只返回了文字没调工具，"
-                            f"已直发为消息（msg={delivered.get('message_id')}）"
-                        )
-                        await _seal(response.get("reasoning_content") or "")
-                        await _save_conversation_log_safe(
-                            db, agent, messages, conversation_type,
-                            group_id, session_id,
-                            has_output=True, model=model, token_usage=total_usage,
-                        )
-                        return
-                    logger.warning(f"AI {agent.name}({agent.id}) 文字直发未成功，本轮按沉默收尾")
+                    logger.info(
+                        f"AI {agent.name}({agent.id}) 提醒后仍只返回文字，不代发、写入账本: {content[:60]}"
+                    )
+                    await _seal(response.get("reasoning_content") or "",
+                                unsent=(content.strip(), _PROSE_REMINDER))
+                    await _save_conversation_log_safe(
+                        db, agent, messages, conversation_type,
+                        group_id, session_id,
+                        has_output=_has_sent_message, model=model, token_usage=total_usage,
+                    )
+                    return
                 else:
                     logger.info(
                         f"AI {agent.name}({agent.id}) 返回了文字但无工具调用"
@@ -1283,14 +1236,7 @@ async def _tool_call_loop(
                         "tool_call_id": "system_reminder",
                         "content": json.dumps({
                             "reminder": True,
-                            "message": (
-                                "你刚才返回了文字但没有调用任何工具。"
-                                "文字不能自动发送——如果你想在群聊发言，请调用 send_gm 工具；私信请用 send_dm。"
-                                "括号表情可以写在 send_gm/send_dm 的 content 里发出去，"
-                                "但不能只返回括号文字而不调工具。"
-                                "请现在就调用 send_gm/send_dm 或你需要的其他工具。"
-                                "如果你决定不再继续回复，请调用 end_turn 工具来结束本轮。"
-                            ),
+                            "message": _PROSE_REMINDER,
                         }, ensure_ascii=False),
                     })
                     if reminder_grace != 'off':
@@ -1531,18 +1477,23 @@ def _context_ref(group_id, session_id, conversation_type) -> str:
 
 async def _seal_turn(db, agent, *, group_id, session_id, conversation_type,
                      tool_log: list[dict], settlement: dict, reasoning: str = "",
-                     cutoff: str = "") -> None:
+                     cutoff: str = "", unsent: tuple[str, str] | None = None) -> None:
     """**轮末封存**：把轮内的东西（工具轮历史 + 轮末结算）写进账本。
 
     不封存的话，AI 下一轮只看得见消息、看不见自己上一轮干了什么——工具轮历史原本只活在当轮
     messages 里，轮一结束就没了。这里是它进账本的唯一入口。
     """
     from app.services.history.context_sync import append_events
-    from app.utils.pure.history import cutoff_entry, handoff_entry, thinking_entry, tools_entry
+    from app.utils.pure.history import (
+        cutoff_entry, handoff_entry, thinking_entry, tools_entry, unsent_text_entry,
+    )
 
     entries = []
     if tool_log:
         entries.append(tools_entry(tool_log))
+    if unsent:
+        # 只说了话没发出去：把那句话和平台当时的提醒一起留给下一个自己（见 history.unsent_text_entry）
+        entries.append(unsent_text_entry(*unsent))
     if cutoff:
         entries.append(cutoff_entry(cutoff))
     note = (settlement.get("key_note") or "").strip()

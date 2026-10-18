@@ -98,6 +98,23 @@ def fold_text(content: str, *, limit: int = FOLD_LIMIT, expand_id: int | None = 
     return content[:head_n] + "\n" + marker + "\n" + content[-tail_n:]
 
 
+def unsent_text_entry(text: str, reminder: str = "") -> dict:
+    """这一轮只写了文字、没调发送工具：把那段话和平台当时的提醒一起交给下一个自己。
+
+    为什么记进账本而不是替它发出去：正文里可能是它给自己记的过程，也可能是准备发给另一个会话的话，
+    平台分不清"这句是给谁的"——代发就是替它说错人。留在账本里，下一轮它自己看得到、自己补发。
+    """
+    body = (text or "").strip()
+    note = "【没发出去的话】上一轮你只写了文字、没有调用 send_gm/send_dm，下面这段没有发给任何人：\n"
+    if body:
+        note += "\n".join("> " + line for line in body.splitlines()[:8]) + "\n"
+    if (reminder or "").strip():
+        note += f"平台当时的提醒：{reminder.strip()}"
+    # 只活到解锁：它讲的是"上一轮那句话"，compact 之后已经不在近期上下文里，留着只会误导。
+    return make_entry("note", note, actor="system", ref="unsent",
+                      flags={"drop_on_unlock": True})
+
+
 def gap_text(count: int) -> str:
     """缺口事件文字（唯一来源：主站群聊截断提示也读这里，避免两处各写一遍）。"""
     return (f"（更早还有 {int(count)} 条未读消息没有列在上面；要看原文用 read_conversation 往回翻"
