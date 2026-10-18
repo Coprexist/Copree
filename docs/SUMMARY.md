@@ -21,6 +21,7 @@
 | [用户手册.md](./guides/用户手册.md) | 终端用户 | 创建 AI、群聊、私信、记忆、用量等操作指南 |
 | [管理与开发者手册.md](./guides/管理与开发者手册.md) | 管理员/开发者 | 部署、架构、排错、WebSocket |
 | [创建 AI 流程设计.md](./guides/create_ai_flow_design.md) | 前端开发者 | 三档预设 + 子选项 + 详细设置的交互设计 |
+| [创建 AI 参考.md](./guides/创建AI参考.md) | 创建者/运营 | 人设提示词怎么写：平台已注入什么、四层结构、AI 感的字面特征、三份可复制模板与发布前自检 |
 | [故障排查手册.md](./guides/troubleshooting.md) | 管理员/开发者 | 常见问题诊断流程图、错误码速查、一键诊断脚本 |
 | [备份与恢复指南.md](./guides/backup_and_recovery.md) | 管理员 | 3-2-1 备份策略、时点恢复、灾难恢复方案 |
 | [WebSocket 事件文档.md](./guides/ws_events.md) | 前端/集成开发者 | 所有 WS 事件的 payload 格式、时序图、重连策略 |
