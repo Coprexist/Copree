@@ -328,10 +328,18 @@ class ChatChainManager:
         self._trees[group_id].insert(ruler_time, node)
 
     def update_ruler_time(self, agent_id: int, group_id: int, new_ruler_time: int) -> bool:
+        """改尺时间：只换「多久算同一条链」，不重置上次回复时间。
+
+        register_ai 会把 last_reply_at 归零（新成员本该从零算起），但那会让当前这条链直接作废、
+        AI 被自己刚做的调整立刻唤醒一次；所以这里把旧值接回去。
+        """
         if agent_id not in self._nodes.get(group_id, {}):
             return False
+        prev = self._last_reply.get(group_id, {}).get(agent_id) or {}
+        last_reply_at = prev.get("last_reply_at", 0.0)
         self._remove_chain(agent_id, group_id)
         self.register_ai(agent_id, group_id, max(10, new_ruler_time))
+        self._last_reply[group_id][agent_id]["last_reply_at"] = last_reply_at
         return True
 
     def _remove_chain(self, agent_id: int, group_id: int):

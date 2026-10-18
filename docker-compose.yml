@@ -55,6 +55,9 @@ services:
       - ${DATA_DIR:-./data}:/app/data
       - ${DATA_DIR:-./data}/uploads:/app/uploads
       - ./backend:/app
+      # 平台文档给 AI 读（read_manual / 创建助手 / 群视界机器人共用 services/docs/library）。
+      # 只读：文档是随代码走的说明文件，AI 只该查，不该改
+      - ./docs:/app/docs:ro
     depends_on:
       postgres:
         condition: service_healthy

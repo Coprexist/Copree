@@ -9,6 +9,18 @@
 ## [Unreleased]
 
 ### ✨ 新增
+- **AI 能自己调尺时间了（`update_ruler_time`）**：`chat_chain_rules.txt:3` 早就写着「可用
+  update_ruler_time 自行调整」，但这名字一直只是 `ChatChainManager` 的方法（`ai/chat_chain.py:330`），
+  没注册成工具——AI 调不到，永远只能用默认 120 秒。现在进 chat_social 段（active/dnd 可用，10–3600 秒，
+  越界钳住，私信里直说「只对群聊有效」）。顺带修了这个方法本身：它走 `_remove_chain` + `register_ai`，
+  而 `register_ai` 会把 `last_reply_at` 归零——改一次尺时间就把当前这条聊天链作废、AI 被自己刚做的
+  调整立刻唤醒一次；现在把旧值接回去，改尺时间只改「多久算同一条链」。
+- **AI 能查平台文档了，三处共用一份**：AI 读的 markdown 收进 `services/docs/library.py`（目录提取、
+  关键词命中、截断口径、找不到时报「找过哪些位置」都只有一份）。三个读者：主站 AI 的 `read_manual`
+  （新增 `doc` 参数：`manual` 用户手册 / `ai-guide` 创建 AI 参考）、创建助手（`creator_tools` 多一条
+  `read_manual`，系统提示词点名「身份 / 关系 / 说话方式 / 边界四层 + 示例 + 不写空话」，写人设前自己查）、
+  群视界机器人（世界侧新增 `read_manual`，给 AI 居民写人设、答平台功能时用）。compose 把 `./docs`
+  只读挂到 `/app/docs`——文档随代码走，AI 只该查不该改。用例 `tests/test_docs_library.py`（4 条）。
 - **长内容有「书签」侧栏了（本页目录 / 正文书签）**：新组件 `OutlineNav`，一份实现两种取条目方式——
   文档页从正文渲染出来的 h1–h4 读标题（id 就是正文那份锚点，不另抄一份清单）；对话日志的正文由渲染方
   按分块报上来（正文是分片补渲染的，DOM 里未必齐）。宽屏常驻右栏、跟着滚动高亮当前条目，窄屏收成右下角
@@ -149,6 +161,11 @@
   从缓存里打掉。现在技能跟任务、状态栈摘要、当前时间一样沉尾部，开头只留走版本链冻结的锁定段。
 
 ### 🐛 修复
+- **主站 AI 的 `read_manual` 在这套部署里一直是坏的**：路径硬编码 `/copree/docs/guides/用户手册.md`
+  （`tools/chat_social/read_manual.py:10`），而 compose 只挂了 `data` 与 `backend`，容器里没有
+  `/copree`——每次调用都返回「手册文件不存在」，AI 想问平台功能问不到，只能凭记忆答。现在文档根按
+  `COPREE_DOCS_DIR` → `/app/docs` → `/copree/docs` → 源码同级 `../docs` 依次解析，compose 补上
+  `./docs:/app/docs:ro`；找不到时报错列出找过的位置，而不是只说「不存在」。
 - **AI↔AI 的私信只有一方留下对话日志**：触发管道把 human→AI 的「对话权限」判定也套到了 AI 发信人
   身上（`routers/dm.py:456`）——收信方是「不允许他人对话 + 只收自带 Key」时，会去问**发信人**有没有
   自有 Key，而 AI 用户的 `users.api_key_encrypted` 恒为空（Key 存在 `agents.api_key_encrypted`），

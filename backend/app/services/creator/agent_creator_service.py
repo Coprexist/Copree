@@ -85,7 +85,7 @@ FIELD_SPEC = {f["name"]: f for f in FIELD_CATALOG}
 
 _KIND_TO_JSON = {"string": "string", "number": "number", "int": "integer", "bool": "boolean", "enum": "string"}
 
-TOOL_LABELS = {"web_search": "网页搜索", "set_agent_form": "填写表单"}
+TOOL_LABELS = {"web_search": "网页搜索", "set_agent_form": "填写表单", "read_manual": "查文档"}
 
 
 # ── 提示词与工具定义 ──
@@ -113,10 +113,13 @@ def build_system_prompt(form: dict, preset: str | None = None, sub: str | None =
         "1. 用户只给了大概想法时，先用一两句话问清最要紧的几点（角色定位、说话风格、用来做什么），别一次问一长串。\n"
         "2. 需要外部资料（真实人物、专业术语、当前事件、开源项目）时用 web_search 联网查，不要凭记忆编。"
         "检索式要面向语料：专名照抄、中英各来一条。\n"
-        "3. 拿定主意后用 set_agent_form 写表单。可以先给 preset（档位）和 sub（子档）定基调，再用 fields 微调。\n"
-        "4. 每写一批就回一句人话说明填了什么、为什么这么填；不要把 JSON 或字段名堆给用户。\n"
-        "5. 没把握的字段留空（用户可以在弹窗里自己填），别瞎填占位。\n"
-        "6. 用户改过的字段以最新快照为准，不要用你的旧判断覆盖回去。\n\n"
+        "3. 写 system_prompt（性格描述）照《创建 AI 参考》的路子：身份 / 关系 / 说话方式 / 边界四层，"
+        "配 2-3 组示例对话和几条错例；不写动作描写，不写「要有温度」「保持人设不崩」这类空话。"
+        "要查细节就用 read_manual(doc='ai-guide', keyword=...)，别自己发明写法。\n"
+        "4. 拿定主意后用 set_agent_form 写表单。可以先给 preset（档位）和 sub（子档）定基调，再用 fields 微调。\n"
+        "5. 每写一批就回一句人话说明填了什么、为什么这么填；不要把 JSON 或字段名堆给用户。\n"
+        "6. 没把握的字段留空（用户可以在弹窗里自己填），别瞎填占位。\n"
+        "7. 用户改过的字段以最新快照为准，不要用你的旧判断覆盖回去。\n\n"
         f"{picked}\n"
         f"当前表单快照：{snapshot}\n\n"
         "可填字段：\n" + field_manual()
@@ -160,9 +163,13 @@ def creator_tools() -> list[dict]:
     """
     from app.tools.file_operations.web_search import WebSearch
 
+    from app.tools.chat_social.read_manual import ReadManual
+
     search = WebSearch.to_definition()
     search.pop("segment", None)
-    return [search, fill_tool()]
+    manual = ReadManual.to_definition()
+    manual.pop("segment", None)
+    return [search, manual, fill_tool()]
 
 
 # ── 表单一侧 ──
@@ -421,6 +428,18 @@ async def _run_tool(db: AsyncSession, draft: AgentCreationDraft, name: str, args
                  for r in results[:8]]
         summary = f"搜索结果 {len(results)} 条"
         return json.dumps(brief, ensure_ascii=False), {"type": "tool_result", "ok": True, "summary": summary}
+
+    if name == "read_manual":
+        from app.services.docs import library
+
+        doc = args.get("doc") if args.get("doc") in ("manual", "ai-guide") else "manual"
+        result = library.read(doc, str(args.get("keyword") or ""))
+        if not result.get("ok"):
+            err = str(result.get("error") or "读不到")
+            return f"查文档失败：{err}", {"type": "tool_result", "ok": False, "summary": err[:80]}
+        title = result.get("title") or "文档"
+        summary = f"《{title}》" + (f"「{result['keyword']}」命中" if result.get("keyword") else "目录已读取")
+        return result.get("result") or "", {"type": "tool_result", "ok": True, "summary": summary}
 
     return f"未知工具 {name}", None
 
