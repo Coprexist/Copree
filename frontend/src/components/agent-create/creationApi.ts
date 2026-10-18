@@ -2,7 +2,7 @@
  * 创建助手的前端客户端：草稿 CRUD + 一轮对话的流式读帧。
  *
  * 一帧 = 一个 JSON（{type: text|reasoning|tool|tool_result|form|notice|done|error}）。
- * 表单 patch 交给调用方应用——表单状态全站仍只有 CreateAgentModal 里那一份 AgentForm。
+ * 表单 patch 交给调用方应用——表单状态全站仍只有 CreateAgentPanel 里那一份 AgentForm。
  *
  * 这里不用 utils/sse.ts 的 streamSse：那条是 GET 重连流，断线重发等于重跑一轮对话。
  */

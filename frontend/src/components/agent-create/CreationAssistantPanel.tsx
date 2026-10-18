@@ -2,7 +2,7 @@
  * 创建助手的对话列 —— 与群视界对话共用零件（ToolBubble / MarkdownContent），
  * 数据源小而不同：一个 POST + 一条 SSE 流，没有会话切换、附件、重连。
  *
- * 表单不在这个组件里：它只把 form 帧交给 CreateAgentModal，
+ * 表单不在这个组件里：它只把 form 帧交给 CreateAgentPanel，
  * 那一份 AgentForm 仍是全站唯一的表单状态。
  */
 import { useEffect, useRef, useState } from 'react'

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useT } from '../i18n/I18nContext'
 import { overrideLangForSetup } from '../i18n/I18nContext'
@@ -11,7 +11,6 @@ import {
   Server, X, Pen, ExternalLink, Star } from 'lucide-react'
 
 import AvatarCropModal from '../components/AvatarCropModal'
-import CreateAgentModal from '../components/CreateAgentModal'
 import { STATUS_COLORS } from '../utils/statusColor.tsx'
 import { getApiKeyUrl } from '../utils/providers.tsx'
 
@@ -42,12 +41,18 @@ export default function SetupPage() {
   const isAdmin = user?.role === 'admin'
   const t = useT()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
 
   // ── 过滤可见步骤 ──
   const visibleSteps = ALL_STEPS.filter(s => !ADMIN_STEPS.has(s.key) || isAdmin)
 
   // ── 步骤状态 ──
-  const [currentIdx, setCurrentIdx] = useState(0)
+  // 从创建页回来时带着 ?step=createAI：停回原来那一步，别让人从头再走一遍
+  const [currentIdx, setCurrentIdx] = useState(() => {
+    const want = searchParams.get('step')
+    const found = want ? visibleSteps.findIndex(s => s.key === want) : -1
+    return found >= 0 ? found : 0
+  })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [completedSteps, setCompletedSteps] = useState<Set<string>>(new Set())
@@ -168,9 +173,6 @@ export default function SetupPage() {
 
   // ── Step 5: 创建 AI ──
   const [aiName, setAiName] = useState('')
-  const [systemPrompt, setSystemPrompt] = useState('')
-  const [configProfile, setConfigProfile] = useState('chat')
-  const [showCreateModal, setShowCreateModal] = useState(false)
   const [aiCreated, setAiCreated] = useState(false)
 
   // ── Step 6 (admin): SMTP ──
@@ -198,6 +200,19 @@ export default function SetupPage() {
       setInstanceDefaultsLoaded(true)
     }).catch(() => {})
   }, [isAdmin, instanceDefaultsLoaded])
+
+  // ── Step 5「已创建」以库为准 ──
+  // 从创建页回来（或者本来就有 AI）都不该再显示一个空的创建按钮：这一步说的是"有没有 AI"，
+  // 不是"刚才有没有点过按钮"。查一次列表，跟着真实状态走。
+  useEffect(() => {
+    api.get('/agents').then((list: any) => {
+      const rows = Array.isArray(list) ? list : []
+      if (rows.length) {
+        setAiCreated(true)
+        setAiName(String(rows[0]?.name || ''))
+      }
+    }).catch(() => {})
+  }, [])
 
   // ── 各步骤是否已修改 ──
   const stepModified: Record<string, boolean> = {
@@ -252,10 +267,6 @@ export default function SetupPage() {
         api_base_url: apiBaseUrl || 'https://api.deepseek.com',
         api_key: apiKey || null,
       })
-    }
-
-    if (step === 'createAI' && aiCreated) {
-      // AI 已由 CreateAgentModal 创建完成，无需重复 POST
     }
 
     if (step === 'smtp' && isAdmin && smtpHost) {
@@ -350,7 +361,8 @@ export default function SetupPage() {
         const isCompleted = completedSteps.has(s.key) || idx < currentIdx
         const Icon = s.icon
         return (
-          <div key={s.key} className="flex items-center">
+          // 顶部对齐：连接线要按**圆点**的中心画，不能按"圆点+标签"这一整列的中心
+          <div key={s.key} className="flex items-start">
             {/* 步骤圆点 */}
             <div className="flex flex-col items-center gap-1 min-w-0">
               <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold shrink-0 transition-all duration-300 ${
@@ -368,11 +380,13 @@ export default function SetupPage() {
                 {t(s.labelKey)}
               </span>
             </div>
-            {/* 连接线 */}
+            {/* 连接线：框高取圆点的高度（h-8），线在框里垂直居中 → 正好落在圆心那一行 */}
             {idx < visibleSteps.length - 1 && (
-              <div className={`w-6 md:w-10 h-0.5 mx-1 rounded transition-colors ${
-                idx < currentIdx ? 'bg-mint-400' : 'bg-border'
-              }`} />
+              <div className="flex h-8 items-center mx-1 shrink-0">
+                <div className={`w-6 md:w-10 h-0.5 rounded transition-colors ${
+                  idx < currentIdx ? 'bg-mint-400' : 'bg-border'
+                }`} />
+              </div>
             )}
           </div>
         )
@@ -681,7 +695,7 @@ export default function SetupPage() {
                 <Check size={24} className="text-mint-400" />
               </div>
               <p className="text-sm font-medium text-textPrimary mb-1">{t('setup:aiCreated')}</p>
-              <p className="text-xs text-textMuted">{t('setup:aiCreatedDesc')}</p>
+              <p className="text-xs text-textMuted">{t('setup:aiCreatedDesc', { name: aiName || 'AI' })}</p>
             </div>
           ) : (
             /* 未创建 → 引导按钮 */
@@ -691,29 +705,16 @@ export default function SetupPage() {
               </div>
               <p className="text-sm text-textSecondary mb-1">{t('setup:aiCreateHint')}</p>
               <p className="text-xs text-textMuted mb-5">{t('setup:aiCreateHintDesc')}</p>
+              {/* 创建走平台那一页整页流程：向导只负责把人送过去，创建完按 returnTo 回这一步 */}
               <button
-                onClick={() => setShowCreateModal(true)}
+                onClick={() => navigate('/agents/create?returnTo=' + encodeURIComponent('/setup?step=createAI'))}
                 className="inline-flex items-center gap-2 px-5 py-2.5 rounded-card bg-primary-500 hover:bg-primary-600 text-white text-sm font-semibold transition-all shadow-lg shadow-primary-500/20"
               >
                 <Sparkles size={16} />
                 {t('setup:aiCreateButton')}
               </button>
-              {!aiName.trim() && (
-                <p className="text-xs text-textMuted italic mt-4">{t('setup:skipAI')}</p>
-              )}
+              <p className="text-xs text-textMuted italic mt-4">{t('setup:skipAI')}</p>
             </div>
-          )}
-
-          {/* CreateAgentModal 弹窗 */}
-          {showCreateModal && (
-            <CreateAgentModal
-              onClose={() => setShowCreateModal(false)}
-              onCreated={(agentName) => {
-                setShowCreateModal(false)
-                setAiCreated(true)
-                setAiName(agentName || 'AI')
-              }}
-            />
           )}
         </div>
       )

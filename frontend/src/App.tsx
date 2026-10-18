@@ -20,8 +20,10 @@ function ProtectedLayout() {
   }
   if (!user) return <Navigate to="/login" replace />
 
-  // 新用户需先完成初始化设置向导
-  if (!user.setup_completed && location.pathname !== '/setup') {
+  // 新用户需先完成初始化设置向导。创建 AI 那一步直接跳平台的整页创建流程，
+  // 它在向导完成之前也得能进——否则点「创建 AI」会被这里弹回向导首页
+  const SETUP_PATHS = ['/setup', '/agents/create']
+  if (!user.setup_completed && !SETUP_PATHS.includes(location.pathname)) {
     return <Navigate to="/setup" replace />
   }
 
