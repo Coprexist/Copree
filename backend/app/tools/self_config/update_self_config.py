@@ -4,6 +4,7 @@ update_self_config 工具 — AI 修改自己的配置参数
 import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.tools.base import ToolPlugin, ToolRegistry
+from app.utils.pure import model_params
 
 logger = logging.getLogger(__name__)
 
@@ -15,10 +16,15 @@ class UpdateSelfConfig(ToolPlugin):
     segment = "self_config"
     parameters = {
         "system_prompt": {"type": "string", "nullable": True, "description": "新的系统提示词（性格描述）"},
-        "temperature": {"type": "number", "nullable": True, "description": "采样温度 0-2"},
-        "top_p": {"type": "number", "nullable": True, "description": "核采样参数 0-1"},
-        "presence_penalty": {"type": "number", "nullable": True, "description": "话题新鲜度惩罚 -2.0 到 2.0"},
-        "frequency_penalty": {"type": "number", "nullable": True, "description": "重复惩罚 -2.0 到 2.0"},
+        # 采样参数：区间与后果取自 model_params（API 允许的范围比该填的范围宽得多）
+        "temperature": {"type": "number", "nullable": True,
+                        "description": f"采样温度。{model_params.describe('temperature')}"},
+        "top_p": {"type": "number", "nullable": True,
+                  "description": f"核采样。{model_params.describe('topP')}"},
+        "presence_penalty": {"type": "number", "nullable": True,
+                             "description": f"话题新鲜度惩罚。{model_params.describe('presencePenalty')}"},
+        "frequency_penalty": {"type": "number", "nullable": True,
+                              "description": f"重复惩罚。{model_params.describe('frequencyPenalty')}"},
         "thinking_enabled": {"type": "boolean", "nullable": True, "description": "是否开启深度推理模式"},
         "config_profile": {
             "type": "string", "nullable": True,
@@ -52,10 +58,23 @@ class UpdateSelfConfig(ToolPlugin):
             "allow_friend_requests", "auto_respond_friend_request",
         ]
 
+        # 采样参数按安全区间收敛：调满（temperature 2 / 惩罚 2）会让输出退化成不成句的字串，
+        # 2026-10-18 有个 AI 就是这么把自己弄"傻"的。越界不拒绝，改成收敛并如实告知改成了什么。
+        snake_to_camel = {v: k for k, v in model_params.SELF_CONFIG_NAMES.items()}
+        converged: list[str] = []
+
         updates = {}
         for field in _self_config_fields:
-            if field in arguments and arguments[field] is not None:
-                updates[field] = arguments[field]
+            if field not in arguments or arguments[field] is None:
+                continue
+            value = arguments[field]
+            camel = snake_to_camel.get(field)
+            if camel and isinstance(value, (int, float)) and not isinstance(value, bool):
+                safe = model_params.clamp(camel, value)
+                if float(safe) != float(value):
+                    converged.append(f"{field} {value}→{safe}")
+                    value = safe
+            updates[field] = value
 
         if not updates:
             return {"error": True, "message": "没有需要更新的配置项"}
@@ -72,7 +91,13 @@ class UpdateSelfConfig(ToolPlugin):
                 from app.services.capability_versioning import agent_prompt_source, mark_self_change
                 mark_self_change(agent_id, agent_prompt_source(agent_id))
                 await shout_change(agent_id, "你刚改的人格提示词已生效（下次 compact / 清空上下文时整体换上）。")
-            return {"success": True, "message": f"已更新，会在之后同步给你（{', '.join(updates.keys())}）"}
+            message = f"已更新，会在之后同步给你（{', '.join(updates.keys())}）"
+            if converged:
+                message += (
+                    "。越界的采样参数已按安全值收敛：" + "、".join(converged)
+                    + "（拉到上限时输出会退化成不成句的字串；理由见《创建 AI 参考》的采样参数一节）"
+                )
+            return {"success": True, "message": message}
         except ValueError as e:
             return {"error": True, "message": str(e)}
 

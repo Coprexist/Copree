@@ -18,6 +18,8 @@ import json
 import logging
 from typing import AsyncIterator
 
+from app.utils.pure import model_params
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -53,10 +55,15 @@ FIELD_CATALOG: tuple[dict, ...] = (
     {"name": "bio", "kind": "string", "desc": "个人简介（≤500 字），展示在资料卡"},
     {"name": "statusText", "kind": "string", "desc": "个性状态（中文≤10 字，英文≤30 字符）"},
     {"name": "aiType", "kind": "enum", "desc": "AI 类型", "values": ("general", "semi_general", "resonance")},
-    {"name": "temperature", "kind": "number", "desc": "随机性，越高越发散", "range": (0.0, 2.0)},
-    {"name": "topP", "kind": "number", "desc": "核采样", "range": (0.0, 1.0)},
-    {"name": "presencePenalty", "kind": "number", "desc": "话题新鲜度，越高越爱换话题", "range": (-2.0, 2.0)},
-    {"name": "frequencyPenalty", "kind": "number", "desc": "重复抑制，越高越少复读", "range": (-2.0, 2.0)},
+    # 采样参数：说明与区间都取 model_params（那里写了"为什么不能拉满"，2026-10-18 踩过）
+    {"name": "temperature", "kind": "number",
+     "desc": model_params.describe("temperature"), "range": model_params.safe_range("temperature")},
+    {"name": "topP", "kind": "number",
+     "desc": model_params.describe("topP"), "range": model_params.safe_range("topP")},
+    {"name": "presencePenalty", "kind": "number",
+     "desc": model_params.describe("presencePenalty"), "range": model_params.safe_range("presencePenalty")},
+    {"name": "frequencyPenalty", "kind": "number",
+     "desc": model_params.describe("frequencyPenalty"), "range": model_params.safe_range("frequencyPenalty")},
     {"name": "thinkingEnabled", "kind": "bool", "desc": "深度思考（推理 token 单独计费）"},
     {"name": "hideAiIdentity", "kind": "bool", "desc": "对用户隐藏 AI 身份"},
     {"name": "maxToolRounds", "kind": "int", "desc": "单次回复最大工具轮次", "range": (1, 20)},
@@ -117,6 +124,8 @@ def build_system_prompt(form: dict, preset: str | None = None, sub: str | None =
         "配 2-3 组示例对话和几条错例；不写动作描写，不写「要有温度」「保持人设不崩」这类空话。"
         "要查细节就用 read_manual(doc='ai-guide', keyword=...)，别自己发明写法。\n"
         "4. 拿定主意后用 set_agent_form 写表单。可以先给 preset（档位）和 sub（子档）定基调，再用 fields 微调。\n"
+        "   采样参数（temperature / topP / presencePenalty / frequencyPenalty）**别拉满**："
+        "在档位默认值附近微调即可，字段说明里写了安全区间和拉到上限的后果——拉满会让它说胡话。\n"
         "5. 每写一批就回一句人话说明填了什么、为什么这么填；不要把 JSON 或字段名堆给用户。\n"
         "6. 没把握的字段留空（用户可以在弹窗里自己填），别瞎填占位。\n"
         "7. 用户改过的字段以最新快照为准，不要用你的旧判断覆盖回去。\n\n"
