@@ -334,6 +334,20 @@ def _same_channel_text(left: Any, right: Any) -> bool:
     return len(cleaned) >= MIRROR_MIN_CHARS and cleaned == stripped(right)
 
 
+async def _serialize_same_text(db: Any, kind: str, origin: str, content: str) -> None:
+    """同一句人话的入站排队过：认亲是"先查后写"，两台机器人并行时谁也看不见谁
+
+    用事务级咨询锁（同一个库，跨进程也算）：正文摘掉令牌后求成一个键，先到的先落库，
+    后到的等它提交再扫——这样"同一句只落一条"才立得住。没有它，两台机器人各扫各的，
+    都查不到对方还没提交的那条，于是同一句话落两遍、同一个人各建一个账号
+    （2026-10-18 真机：群 #77 里两条一模一样的「怎么两个AI自己吵起来了」）。
+    """
+    from sqlalchemy import text as sa_text
+
+    key = f"{kind}:{origin}:{_MENTION_TOKEN_RE.sub('', str(content or '')).strip()[:120]}"
+    await db.execute(sa_text("SELECT pg_advisory_xact_lock(hashtext(:key)::bigint)"), {"key": key})
+
+
 def _is_length_error(exc: Exception) -> bool:
     """平台的"这条太长"就认这一种错：按错误码/文案认，不靠 HTTP 状态猜"""
     text = str(exc)
@@ -1632,11 +1646,17 @@ class QqChannelPlugin(ServicePlugin):
 
         这就是"两侧 AI 都收到了、同时只有这一条"时的捆绑：本地账号从此只有一个，
         这一侧的地址（member_openid）照旧留着——@ 他、回他都要用它。
+
+        两边都已经有账号时留**早的那个**：名字、群成员、说过的话都在它身上。留晚的那个，
+        先落库那一侧顺手建的"空壳"就成了正主，AI 那边看见两个同名的人各说一半
+        （2026-10-18 真机：一个 AN 成了两个账号 92/161，identity 每来一条消息就被两边
+        各写一次，来回跳）。
         """
         from sqlalchemy import select
 
         from app.models.user import User
         from app.services.plugin import pairing
+        from app.services.plugin.channel_user import merge_channel_accounts
 
         openid = self._author_openid(author)
         identity = await pairing.ensure(
@@ -1646,16 +1666,22 @@ class QqChannelPlugin(ServicePlugin):
         union = str(author.get("union_openid") or "").strip()
         if union and identity.union_id != union:
             identity.union_id = union
-        if int(identity.user_id or 0) != int(twin.sender_id):
-            identity.user_id = int(twin.sender_id)
+        canonical = int(twin.sender_id)
+        mine = int(identity.user_id or 0)
+        if mine and mine != canonical:
+            canonical = min(mine, canonical)
+            await merge_channel_accounts(
+                db, from_id=max(mine, int(twin.sender_id)), to_id=canonical
+            )
+        identity.user_id = canonical
         name = (await db.execute(
-            select(User.username).where(User.id == int(twin.sender_id))
+            select(User.username).where(User.id == canonical)
         )).scalar()
         logger.info(
             f"QQ 群 {openid[-6:]} 与已落库的那条是同一句（来自 {twin.channel_origin}）："
-            f"接到账号 #{twin.sender_id}"
+            f"接到账号 #{canonical}"
         )
-        return int(twin.sender_id), str(name or "")
+        return canonical, str(name or "")
 
     async def _sync_group_name(self, db: Any, group_id: int, qq_facts: dict[str, Any] | None) -> None:
         """落点群的名字对齐成 QQ 那边的真名——只在群设置里打开"跟随通道群名"的群上做。
@@ -1699,6 +1725,9 @@ class QqChannelPlugin(ServicePlugin):
         from app.database import async_session
 
         async with async_session() as db:
+            # 两台机器人同时收到同一句：先按这句排队（见 _serialize_same_text），
+            # 否则两边都查不到对方尚未提交的那条，各落一条、各建一个账号
+            await _serialize_same_text(db, self.channel_kind, qq_group, content)
             twin = await self._twin_message(db, group_id, qq_group, author, content)
             if twin is not None:
                 # 另一台机器人已经落下这一条：捆绑身份、不再建第二条（见 _adopt_twin）

@@ -8,6 +8,10 @@
 为什么还要锚点账号（而不是直接用 external_identities.id）：消息、私信会话、群成员
 目前还只能挂 users.id；等它们都改成引用外部身份之后，这个锚点就该消失
 （取舍见 app/models/external.py）。
+
+同一个人在两台机器人下各有一个 openid（QQ 按 appid 分配），于是各有各的锚点账号；
+把它们并到一个账号上的两处就在本文件：ensure_channel_user（认亲之后别再分家）与
+merge_channel_accounts（已经分家的并回来）。
 """
 from __future__ import annotations
 
@@ -60,8 +64,8 @@ async def channel_contacts(
 def _same_nickname(current: Any, desired: str) -> bool:
     """这个名字已经是"想要的昵称"（原样或带唯一化后缀 #N）→ 不必再改。
 
-    为什么单列一条判据：改名原来只比 `row.username != nickname`，而昵称被更早的锚点占着时
-    改名结果必然带 `#N`，于是**每条消息都判定"要改名"**；几台机器人同时改就撞唯一约束
+    为什么单列一条判据：改名原来只比 `row.username != nickname`，而昵称被更早的锚点
+    占着时改名结果必然带 `#N`，于是**每条消息都判定"要改名"**；几台机器人同时改就撞唯一约束
     （2026-10-05 真机：IntegrityError 把整条入站消息带走，那台机器人因此没有被动凭据，
     AI 的回话被跳过）。同一个人在每台机器人下各有一个锚点账号，这种撞车是常态。
     """
@@ -107,16 +111,21 @@ async def ensure_channel_user(
     有它就按它认人——同一个开发者名下多个机器人看到的是同一个人，共用一个锚点账号；
     空则退回"这个地址自己一个账号"的老行为。
 
+    为什么先问身份行、再决定建不建号：external_identities.user_id 是"这个地址 = 哪个本地
+    账号"的唯一记录。认亲（插件的 _adopt_twin、本文件的 merge_channel_accounts）把它接到
+    另一个账号上之后，再按 openid 找回自己那个锚点就等于把绑定覆盖回去——2026-10-18 真机：
+    同一个 AN 在群里成了两个成员，AI 一人一半地跟他说话。所以绑定过就以绑定为准。
+
     commit=True 适合"建号就是这次操作全部"的调用方；投递链路（消息落库前还要 fanout /
     broadcast）必须传 False，把提交留给同一条链路的最后一步。
     """
     from sqlalchemy import select
-
-    from app.models.external import ExternalIdentity
     from sqlalchemy.exc import IntegrityError
 
+    from app.models.external import ExternalIdentity
     from app.models.group import GroupMember
     from app.models.user import User
+    from app.services.plugin import pairing
     from app.utils.auth import hash_password
 
     origin = str(origin or "").strip()
@@ -124,41 +133,55 @@ async def ensure_channel_user(
         return None
     # 通道侧没给昵称时的占位名：前缀取通道类别（qq → QQ用户XXXXXX）。它是"这个人还没起名"
     # 的标记而不是真名 —— 所以用它建号时，之后拿到真昵称才会触发改名分支。
-    # 取类别第一段（qq-napcat → QQ用户XXXXXX）：占位名是"这个人还没起名"的标记，不是真名；
-    # 直接用整个 kind 会拼出「QQ-NAPCAT用户…」这种给人看的垃圾
     label = (kind or "").split("-")[0].upper() or "通道"
     placeholder = f"{label}用户{origin[:6]}"
     raw_name = str(display_name or "").strip()
     nickname = raw_name[:40]
-
     union_id = str(union_id or "").strip()
+
+    identity = await pairing.ensure(
+        db, kind=kind, owner_scope=owner_scope, origin=origin,
+        display_name=raw_name, commit=False,
+    )
     anchor = anchor_email(kind, origin)
-    row = (await db.execute(select(User).where(User.email == anchor))).scalar_one_or_none()
-    if union_id:
-        # 跨机器人认亲：同一个 union 已经在别的实例下露过面就用它那个锚点，并把这些地址都指过去。
-        # 不合并的话，同一个人在"两个机器人都接一个群"的合并会话里就是两个账号、两份记忆。
-        siblings = (await db.execute(
-            select(ExternalIdentity).where(
-                ExternalIdentity.kind == kind,
-                ExternalIdentity.union_id == union_id,
-                ExternalIdentity.origin != origin,
-            ).order_by(ExternalIdentity.id)
-        )).scalars().all()
-        seen = {int(s.user_id) for s in siblings if s.user_id}
-        if row is not None:
-            seen.add(int(row.id))
-        # 取最早的那个账号当正主：谁先来谁的名字与记忆留下，合并方向固定，不看这次是谁先说话
-        canonical = (await db.get(User, min(seen))) if seen else None
-        if canonical is not None:
-            if row is None or int(row.id) != int(canonical.id):
+
+    row = (await db.get(User, int(identity.user_id))) if identity.user_id else None
+    if row is None:
+        # 没绑过：同一个 union 的兄弟 + 这个 openid 以前留下的锚点，谁最早谁是正主
+        siblings = []
+        if union_id:
+            siblings = (await db.execute(
+                select(ExternalIdentity).where(
+                    ExternalIdentity.kind == kind,
+                    ExternalIdentity.union_id == union_id,
+                    ExternalIdentity.origin != origin,
+                ).order_by(ExternalIdentity.id)
+            )).scalars().all()
+        candidates = {int(s.user_id) for s in siblings if s.user_id}
+        old_anchor = (await db.execute(
+            select(User).where(User.email == anchor)
+        )).scalar_one_or_none()
+        if old_anchor is not None:
+            candidates.add(int(old_anchor.id))
+        known = []
+        if candidates:
+            known = (await db.execute(
+                select(User).where(User.id.in_(sorted(candidates)))
+            )).scalars().all()
+        if known:
+            row = min(known, key=lambda u: int(u.id))
+            merged = False
+            for other in known:
+                if int(other.id) != int(row.id):
+                    # 认亲之前建的账号都并进来：留着空壳，群里就多一个同名的人
+                    merged = await merge_channel_accounts(
+                        db, from_id=int(other.id), to_id=int(row.id)
+                    ) or merged
+            if merged:
                 logger.info(
-                    f"外部通道账号合并：{kind} …{origin[-6:]} → {canonical.username}（union 认出是同一个人）"
+                    f"外部通道账号合并：{kind} …{origin[-6:]} → {row.username}"
+                    "（union / 老锚点认出是同一个人）"
                 )
-            row = canonical
-            anchor = str(canonical.email or "")
-            for sibling in siblings:
-                if int(sibling.user_id or 0) != int(canonical.id):
-                    sibling.user_id = int(canonical.id)
     if row is None:
         row = User(
             username=await _unique_username(db, nickname or placeholder, placeholder),
@@ -190,20 +213,17 @@ async def ensure_channel_user(
                 await db.flush()
             logger.info(f"外部通道账号改名：{row.username}（{kind} …{origin[-6:]}）")
         except IntegrityError:
-            row.username = old_name
+            # 保存点回滚会把这一行的 ORM 状态过期；先把状态刷回库里的样子再退出——
+            # 直接在过期对象上赋值，异步下 flush 会去懒加载而被判"意外的 IO"
+            await db.refresh(row)
             logger.warning(f"外部通道账号改名撞车，保留原名 {old_name}（{kind} …{origin[-6:]}）")
 
-    # 外部身份那一行：通道侧昵称优先，拿不到就用本地显示名
-    from app.services.plugin import pairing
-
-    identity = await pairing.ensure(
-        db, kind=kind, owner_scope=owner_scope, origin=origin,
-        display_name=raw_name or str(row.username or ""),
-        commit=False,
-    )
+    # 身份行是这个地址的唯一事实：指回最终定下的那个账号（认亲定了别人就照认亲的来）
+    if not raw_name and not str(identity.display_name or ""):
+        identity.display_name = str(row.username or "")
     if union_id and identity.union_id != union_id:
         identity.union_id = union_id
-    if identity.user_id != int(row.id):
+    if int(identity.user_id or 0) != int(row.id):
         identity.user_id = int(row.id)
 
     if join_group:
@@ -224,3 +244,138 @@ async def ensure_channel_user(
         await db.commit()
     # 名字一并带回去：出站要按它把"回复对象"那个 @ 从正文开头摘掉
     return int(row.id), str(row.username or "")
+
+
+async def merge_channel_accounts(db: Any, *, from_id: int, to_id: int) -> bool:
+    """把两个通道锚点账号并成一个：后来的那个并进早先的那个
+
+    什么时候需要：同一个人在几台机器人下各有一个 openid，认亲之后又说过话，于是两边各建了
+    一个账号（2026-10-18 真机：群 #77 里一句话明明是同一个 AN 说的，AI 看见两个 AN，一人一半）。
+    并的方向由调用方定成**早先那个**：名字、群成员、说过的话都在它身上，后来的只是空壳。
+
+    只动 type='external' 的锚点账号：真人账号一律不并——谁是谁，只有本人能决定，
+    不是一条启发式能拍板的。并完把空壳删掉；身份行、消息、群成员、静音、私信会话都跟着走。
+    """
+    from sqlalchemy import select, update
+
+    from app.chat.dm import generate_dm_session_id
+    from app.models.dm import DMMessage, DMSession
+    from app.models.external import ExternalIdentity
+    from app.models.group import GroupMember, MemberSilence
+    from app.models.message import Message
+    from app.models.user import User
+    from app.models.user_preferences import UserDMPreference, UserGroupPreference
+
+    src, dst = int(from_id), int(to_id)
+    if src == dst:
+        return False
+    drop = await db.get(User, src)
+    keep = await db.get(User, dst)
+    if drop is None or keep is None:
+        return False
+    if str(drop.type or "") != "external":
+        logger.warning(f"拒绝合并账号 #{src} → #{dst}：不是通道锚点（type={drop.type}）")
+        return False
+
+    # 地址的归属：一个地址只属于一个账号，这条记录就是唯一事实
+    await db.execute(
+        update(ExternalIdentity).where(ExternalIdentity.user_id == src).values(user_id=dst)
+    )
+    await db.execute(
+        update(ExternalIdentity).where(ExternalIdentity.bound_user_id == src).values(bound_user_id=dst)
+    )
+
+    # 群消息：说过的话跟着人走，否则 AI 记住的是"另一个 AN"
+    await db.execute(update(Message).where(Message.sender_id == src).values(sender_id=dst))
+    await db.execute(update(DMMessage).where(DMMessage.sender_id == src).values(sender_id=dst))
+
+    # 群成员：同一个群里已经有他 → 删掉重复的那条；没有就改名（唯一的成员记录只该有一份）
+    for member in (await db.execute(
+        select(GroupMember).where(GroupMember.member_id == src)
+    )).scalars().all():
+        twin = (await db.execute(select(GroupMember).where(
+            GroupMember.group_id == member.group_id,
+            GroupMember.member_type == member.member_type,
+            GroupMember.member_id == dst,
+        ))).scalar_one_or_none()
+        if twin is not None:
+            await db.delete(member)
+        else:
+            member.member_id = dst
+
+    # 静音：同 (AI, 群) 只留一条
+    for silence in (await db.execute(
+        select(MemberSilence).where(MemberSilence.target_user_id == src)
+    )).scalars().all():
+        twin = (await db.execute(select(MemberSilence).where(
+            MemberSilence.agent_id == silence.agent_id,
+            MemberSilence.group_id == silence.group_id,
+            MemberSilence.target_user_id == dst,
+        ))).scalar_one_or_none()
+        if twin is not None:
+            await db.delete(silence)
+        else:
+            silence.target_user_id = dst
+
+    # 偏好：主键是 (人, 群)/(人, 会话)，同一条已经有他就算了
+    for pref, field in ((UserGroupPreference, "group_id"), (UserDMPreference, "session_id")):
+        column = getattr(pref, field)
+        for row in (await db.execute(
+            select(pref).where(pref.user_id == src)
+        )).scalars().all():
+            twin = (await db.execute(select(pref).where(
+                pref.user_id == dst, column == getattr(row, field),
+            ))).scalar_one_or_none()
+            if twin is not None:
+                await db.delete(row)
+            else:
+                row.user_id = dst
+
+    # 私信会话：会话 id 由双方 id 拼出来（min_max），并过来之后要按新的一方重算；
+    # 已经有同一个对话对象的会话 → 消息搬过去、删掉这条
+    for session in (await db.execute(select(DMSession).where(
+        (DMSession.user1_id == src) | (DMSession.user2_id == src)
+    ))).scalars().all():
+        peer = int(session.user2_id) if int(session.user1_id) == src else int(session.user1_id)
+        if peer == dst:
+            continue
+        target_id = generate_dm_session_id(dst, peer)
+        existing = (await db.execute(
+            select(DMSession).where(DMSession.session_id == target_id)
+        )).scalar_one_or_none()
+        if existing is None:
+            # 会话 id 由双方 id 拼出来，改了人就得换 id；外键没有 ON UPDATE CASCADE，
+            # 所以照着原来那条建一条新 id 的会话，消息搬过去之后再把旧的删掉
+            keep_dnd = (session.user1_dnd_until if int(session.user1_id) == src
+                        else session.user2_dnd_until)
+            peer_dnd = (session.user2_dnd_until if int(session.user1_id) == src
+                        else session.user1_dnd_until)
+            left, right = sorted((dst, peer))
+            db.add(DMSession(
+                session_id=target_id, user1_id=left, user2_id=right,
+                user1_dnd_until=keep_dnd if left == dst else peer_dnd,
+                user2_dnd_until=keep_dnd if right == dst else peer_dnd,
+                last_message_id=session.last_message_id,
+                last_message_at=session.last_message_at,
+                created_at=session.created_at,
+            ))
+            await db.flush()
+        await db.execute(update(DMMessage).where(
+            DMMessage.session_id == session.session_id
+        ).values(session_id=target_id))
+        await db.delete(session)
+        if existing is not None:
+            # 两条会话并成一条：最后一条消息可能换了，列表顺序靠它
+            last = (await db.execute(
+                select(DMMessage).where(DMMessage.session_id == target_id)
+                .order_by(DMMessage.id.desc()).limit(1)
+            )).scalar_one_or_none()
+            if last is not None:
+                existing.last_message_id = last.id
+                existing.last_message_at = last.created_at
+
+    await db.flush()
+    await db.delete(drop)
+    await db.flush()
+    logger.info(f"通道账号合并：#{src}（{drop.username}）并进 #{dst}（{keep.username}）")
+    return True

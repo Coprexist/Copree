@@ -2226,3 +2226,108 @@ async def test_route_is_remembered_even_when_delivery_fails(migrated_db):
         _cleanup(plugin)
 
 
+async def test_identity_stays_bound_after_the_twin_merge(migrated_db):
+    """认亲定下的账号不能因为下一条消息又分家
+
+    两台机器人各看到一个 openid：同一句先被认亲接到先来的账号上，之后这一侧单独说一句
+    （没有第二台收到，认亲无从触发）也必须还是那个账号——以前的代码在这里按 openid 找回
+    自己的锚点，于是同一个 AN 成了两个账号（2026-10-18 真机：群 #77）。
+    """
+    from app.database import async_session
+
+    await _seed()
+    bot_a = await _make_plugin("bot-a")
+    bot_b = await _make_plugin("bot-b")
+    # 不补拉 union：这条测的是"认亲（同一句话）之后绑定还在"，不是 union 认人
+    bot_a._client.member_union = bot_b._client.member_union = ""
+    try:
+        await bot_a._on_group_message(dict(
+            GROUP_EVENT, id="BIND-A1", content="今天天气不错", mentions=[], group_openid="QQGROUP-A",
+        ))
+        await bot_b._on_group_message(dict(
+            GROUP_EVENT, id="BIND-B1", content="今天天气不错", mentions=[], group_openid="QQGROUP-B",
+            author={"member_openid": "OPENID-B", "username": "小明"},
+        ))
+        # 这一侧单独说一句：认亲不参与
+        await bot_b._on_group_message(dict(
+            GROUP_EVENT, id="BIND-B2", content="只有我这一侧收到的一句", mentions=[],
+            group_openid="QQGROUP-B", author={"member_openid": "OPENID-B", "username": "小明"},
+        ))
+
+        async with async_session() as db:
+            rows = (await db.execute(text(
+                "SELECT sender_id FROM messages WHERE group_id = :g ORDER BY id"
+            ), {"g": GROUP_ID})).scalars().all()
+            anchors = (await db.execute(text(
+                "SELECT id FROM users WHERE email LIKE '%@qq.bridge' ORDER BY id"
+            ))).scalars().all()
+        assert len(rows) == 2, rows
+        assert len(set(rows)) == 1, f"同一句、同一个人的消息该是同一个账号：{rows}"
+        assert len(anchors) == 1, f"只该有一个通道锚点账号：{anchors}"
+    finally:
+        _cleanup(bot_a)
+        _cleanup(bot_b)
+
+
+async def test_twin_adoption_merges_the_later_account_into_the_earlier_one(migrated_db):
+    """两边都建过账号之后认出同一句：并进**早先**那个，不能留后建的空壳当正主
+
+    2026-10-18 真机：AN 先在一台机器人下落了号，另一台机器人第一次见到他时，同一句话先到的
+    那侧顺手建了个 AN#2。认亲只把 identity 改过去、账号本身没并 —— 群里于是多出一个 AN，
+    AI 一人一半地跟他说话。
+    """
+    from app.database import async_session
+
+    await _seed()
+    bot_a = await _make_plugin("bot-a")
+    bot_b = await _make_plugin("bot-b")
+    # 不补拉 union：两边各建一个账号，靠同一句话认亲把它们并起来
+    bot_a._client.member_union = bot_b._client.member_union = ""
+    try:
+        await bot_a._on_group_message(dict(
+            GROUP_EVENT, id="MERGE-A1", content="我这边先说一句", mentions=[], group_openid="QQGROUP-A",
+        ))
+        # 另一台机器人第一次见到这个人：先自己建了一个账号（还没有认亲的机会）
+        await bot_b._on_group_message(dict(
+            GROUP_EVENT, id="MERGE-B1", content="我这一侧第一次说话", mentions=[],
+            group_openid="QQGROUP-B", author={"member_openid": "OPENID-B", "username": "小明"},
+        ))
+        async with async_session() as db:
+            before = (await db.execute(text(
+                "SELECT id FROM users WHERE email LIKE '%@qq.bridge' ORDER BY id"
+            ))).scalars().all()
+        assert len(before) == 2, f"两边各建过一个账号：{before}"
+        earlier = int(before[0])
+
+        # 同一句话两台机器人各收到一次：后到的那侧认亲 → 并进早先那个账号
+        await bot_a._on_group_message(dict(
+            GROUP_EVENT, id="MERGE-A2", content="同一句话", mentions=[], group_openid="QQGROUP-A",
+        ))
+        await bot_b._on_group_message(dict(
+            GROUP_EVENT, id="MERGE-B2", content="同一句话", mentions=[], group_openid="QQGROUP-B",
+            author={"member_openid": "OPENID-B", "username": "小明"},
+        ))
+
+        async with async_session() as db:
+            rows = (await db.execute(text(
+                "SELECT sender_id FROM messages WHERE group_id = :g ORDER BY id"
+            ), {"g": GROUP_ID})).scalars().all()
+            left = (await db.execute(text(
+                "SELECT id FROM users WHERE email LIKE '%@qq.bridge' ORDER BY id"
+            ))).scalars().all()
+            members = (await db.execute(text(
+                "SELECT member_id FROM group_members WHERE group_id = :g AND member_type = 'human'"
+            ), {"g": GROUP_ID})).scalars().all()
+            identities = (await db.execute(text(
+                "SELECT user_id FROM external_identities WHERE kind = 'qq'"
+            ))).scalars().all()
+        assert len(rows) == 3, f"同一句只该落一条：{rows}"
+        assert set(rows) == {earlier}, f"都该并到早先那个账号：{rows} vs {earlier}"
+        assert left == [earlier], f"后建的空壳该被并掉：{left}"
+        assert set(members) - {GROUP_OWNER} == {earlier}, f"群里只该有他一条成员记录：{members}"
+        assert set(identities) == {earlier}, f"两个地址都该指向同一个账号：{identities}"
+    finally:
+        _cleanup(bot_a)
+        _cleanup(bot_b)
+
+

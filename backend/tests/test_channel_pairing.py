@@ -793,4 +793,95 @@ async def test_anchor_nickname_does_not_churn_or_die_on_conflict(migrated_db):
         cu._unique_username = original
     assert renamed[1] == second[1], (renamed, second)     # 撞车 → 保留原名
 
+async def test_bound_address_does_not_reopen_its_own_anchor(migrated_db):
+    """地址绑过账号之后，再按 openid 找回自己的锚点 = 把认亲覆盖回去
+
+    2026-10-18 真机：两台机器人把同一个 AN 认成一个人之后，下一条消息又把 identity 指回
+    各自的锚点账号，群里于是有两个 AN，AI 一人一半地跟他说话。
+    """
+    from app.database import async_session
+    from app.services.plugin import pairing
+    from app.services.plugin.channel_user import ensure_channel_user
+
+    # 同一个进程里前面用例留下的账号还在：这里的地址与昵称都取得跟它们不撞
+    async with async_session() as db:
+        first = await ensure_channel_user(
+            db, kind="qq", owner_scope="bot-a", origin="BIND-ONLY-A", display_name="认亲小明",
+            origin_channel="qq", commit=False,
+        )
+        # 认亲：另一台机器人看到的地址接到先来的那个账号上（插件的 _adopt_twin 干的就是这一步）
+        identity = await pairing.ensure(
+            db, kind="qq", owner_scope="bot-b", origin="BIND-ONLY-B", display_name="认亲小明",
+            commit=False,
+        )
+        identity.user_id = first[0]
+        await db.commit()
+
+    async with async_session() as db:
+        again = await ensure_channel_user(
+            db, kind="qq", owner_scope="bot-b", origin="BIND-ONLY-B", display_name="认亲小明",
+            origin_channel="qq", commit=False,
+        )
+        await db.commit()
+        anchor = (await db.execute(text(
+            "SELECT count(*) FROM users WHERE email = 'BIND-ONLY-B@qq.bridge'"
+        ))).scalar()
+    assert again[0] == first[0], f"绑定过就该一直是那个账号：{again} vs {first}"
+    assert anchor == 0, "绑定过的地址不该再给自己建锚点账号"
+
+async def test_merging_anchor_accounts_moves_history(migrated_db):
+    """把后建的那个锚点并进早先那个：消息、群成员、私信会话、身份行跟着走，空壳删掉
+
+    认亲只改身份行；认亲之前两边各建过的账号得真并一次，否则群里留着一个同名的人
+    （私信会话 id 由双方 id 拼出来，合并时还要换 id——外键没有 ON UPDATE CASCADE）。
+    """
+    from app.chat.dm import generate_dm_session_id
+    from app.database import async_session
+    from app.models.dm import DMMessage, DMSession
+    from app.models.user import User
+    from app.services.plugin.channel_user import ensure_channel_user, merge_channel_accounts
+
+    async with async_session() as db:
+        early = await ensure_channel_user(
+            db, kind="qq", owner_scope="m-a", origin="MERGE-A", display_name="合并小明",
+            origin_channel="qq", commit=False,
+        )
+        late = await ensure_channel_user(
+            db, kind="qq", owner_scope="m-b", origin="MERGE-B", display_name="合并小明",
+            origin_channel="qq", commit=False,
+        )
+        peer = User(username="合并对手", password_hash="x", type="human")
+        db.add(peer)
+        await db.flush()
+        sid = generate_dm_session_id(late[0], peer.id)
+        db.add(DMSession(
+            session_id=sid, user1_id=min(late[0], peer.id), user2_id=max(late[0], peer.id),
+        ))
+        await db.flush()
+        db.add(DMMessage(session_id=sid, sender_id=late[0], content="私信里说过一句"))
+        await db.commit()
+        early_id, late_id, peer_id = early[0], late[0], peer.id
+
+    async with async_session() as db:
+        assert await merge_channel_accounts(db, from_id=late_id, to_id=early_id)
+        await db.commit()
+
+    async with async_session() as db:
+        gone = (await db.execute(text("SELECT count(*) FROM users WHERE id = :i"), {"i": late_id})).scalar()
+        sessions = (await db.execute(text(
+            "SELECT session_id, user1_id, user2_id FROM dm_sessions "
+            "WHERE user1_id = :p OR user2_id = :p"
+        ), {"p": peer_id})).all()
+        said = (await db.execute(text(
+            "SELECT session_id, sender_id FROM dm_messages"
+        ))).all()
+        binds = (await db.execute(text(
+            "SELECT user_id FROM external_identities WHERE origin IN ('MERGE-A', 'MERGE-B')"
+        ))).scalars().all()
+    assert gone == 0, "空壳该被删掉"
+    assert len(sessions) == 1, f"同一个对话对象只该有一条会话：{sessions}"
+    assert sessions[0][0] == generate_dm_session_id(early_id, peer_id), sessions
+    assert said == [(sessions[0][0], early_id)], f"私信该跟着人走：{said}"
+    assert set(binds) == {early_id}, f"两个地址都该指向早先那个账号：{binds}"
+
 
