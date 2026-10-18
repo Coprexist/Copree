@@ -380,11 +380,19 @@ export default function SetupPage() {
                 {t(s.labelKey)}
               </span>
             </div>
-            {/* 连接线：框高取圆点的高度（h-8），线在框里垂直居中 → 正好落在圆心那一行 */}
+            {/* 连接线：框高取圆点的高度（h-8），线在框里垂直居中 → 正好落在圆心那一行；
+                颜色按"走到哪儿了"分四段：已完成的一段纯绿、进当前步那段绿→紫、
+                出当前步那段紫→灰、还没走到的是灰。硬切太生硬，两处衔接都让它渐变过去 */}
             {idx < visibleSteps.length - 1 && (
               <div className="flex h-8 items-center mx-1 shrink-0">
                 <div className={`w-6 md:w-10 h-0.5 rounded transition-colors ${
-                  idx < currentIdx ? 'bg-mint-400' : 'bg-border'
+                  idx < currentIdx - 1
+                    ? 'bg-mint-400'
+                    : idx === currentIdx - 1
+                      ? 'bg-gradient-to-r from-mint-400 to-primary-500'
+                      : idx === currentIdx
+                        ? 'bg-gradient-to-r from-primary-500 to-border'
+                        : 'bg-border'
                 }`} />
               </div>
             )}
@@ -713,7 +721,6 @@ export default function SetupPage() {
                 <Sparkles size={16} />
                 {t('setup:aiCreateButton')}
               </button>
-              <p className="text-xs text-textMuted italic mt-4">{t('setup:skipAI')}</p>
             </div>
           )}
         </div>
