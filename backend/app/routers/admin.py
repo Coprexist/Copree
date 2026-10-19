@@ -738,6 +738,9 @@ class CreatePoolKeyRequest(BaseModel):
     api_key: str = Field(..., min_length=1)
     priority: int = Field(default=0, ge=0)
     concurrent_limit: int | None = Field(default=None, ge=1, description="并发上限，NULL=按模型默认")
+    # 这条 Key 自己能用的模型：不填就按 provider_name / api_base_url 关联的供应商预设
+    models: list[str] | None = Field(default=None, description="待选模型 id 列表")
+    default_model: str | None = Field(default=None, description="通道默认模型、AI 自选不可用时用它")
 
 
 class UpdatePoolKeyRequest(BaseModel):
@@ -748,6 +751,8 @@ class UpdatePoolKeyRequest(BaseModel):
     is_active: bool | None = None
     priority: int | None = None
     concurrent_limit: int | None = Field(default=None, ge=1, description="NULL=不修改，0=清除限制恢复默认")
+    models: list[str] | None = Field(default=None, description="待选模型 id 列表；传空数组=清除、回到供应商预设")
+    default_model: str | None = None
 
 
 @router.get("/api-key-pool")
@@ -770,6 +775,8 @@ async def list_pool_keys(
             "is_active": k.is_active,
             "priority": k.priority,
             "concurrent_limit": k.concurrent_limit,
+            "models": k.models or [],
+            "default_model": k.default_model,
             "created_at": str(k.created_at) if k.created_at else None,
             "updated_at": str(k.updated_at) if k.updated_at else None,
         }
@@ -795,6 +802,8 @@ async def create_pool_key(
         api_key_encrypted=encrypted,
         priority=req.priority,
         concurrent_limit=req.concurrent_limit,
+        models=req.models or None,
+        default_model=req.default_model,
     )
     db.add(key_entry)
 
@@ -812,6 +821,8 @@ async def create_pool_key(
         "is_active": key_entry.is_active,
         "priority": key_entry.priority,
         "concurrent_limit": key_entry.concurrent_limit,
+        "models": key_entry.models or [],
+        "default_model": key_entry.default_model,
     }
 
 
@@ -841,6 +852,10 @@ async def update_pool_key(
         key_entry.priority = req.priority
     if req.concurrent_limit is not None:
         key_entry.concurrent_limit = req.concurrent_limit if req.concurrent_limit > 0 else None
+    if req.models is not None:
+        key_entry.models = [m for m in req.models if m] or None
+    if req.default_model is not None:
+        key_entry.default_model = req.default_model or None
     if req.api_key:
         from app.utils.crypto import encrypt_api_key
         key_entry.api_key_encrypted = encrypt_api_key(req.api_key)
@@ -873,9 +888,17 @@ async def test_pool_key(
     except APIKeyDecryptError as e:
         return {"ok": False, "code": "decrypt_failed", "message": f"解密失败：{e}", "models": []}
     probe = await probe_provider(row.api_base_url or settings.deepseek_base_url, key, allow_private=True)
+    if probe.ok and probe.models:
+        # 测通顺带把它自己的模型清单记下来：这条 Key 认得的模型由供应商说了算，
+        # 记在这里，解析模型时就不必再去供应商预设里猜（猜错名字的代价是一轮 400）
+        row.models = list(probe.models)
+        if not row.default_model:
+            row.default_model = probe.models[0]
+        await db.flush()
     return {
         "ok": probe.ok, "code": probe.kind, "message": probe.message,
         "models": list(probe.models or []),
+        "saved": bool(probe.ok and probe.models),
     }
 
 

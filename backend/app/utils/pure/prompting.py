@@ -2,28 +2,57 @@
 提示词构建纯函数——无 IO，无副作用。
 
 所有函数只做字符串/数据结构变换，不访问 DB、网络、文件系统。
+（唯一例外：模型被通道收敛时打一条 warning——那是排查 400 现场唯一的线索。）
 """
 
+import logging
 from datetime import datetime, timedelta, timezone
+
+logger = logging.getLogger(__name__)
+
+# 同一个（AI, 自选模型, 实际模型）只警告一次：否则每轮都刷一行，日志里反而看不见别的东西
+_MODEL_FALLBACK_WARNED: set[tuple] = set()
 
 
 # ═══════════════════════════════════════════════════════════════
 # 模型解析
 # ═══════════════════════════════════════════════════════════════
 
-def resolve_model(agent, default_model: str = "deepseek-flash", global_default_model: str | None = None) -> str:
+def resolve_model(agent, default_model: str = "deepseek-flash", global_default_model: str | None = None,
+                  provider_info: dict | None = None) -> str:
     """
-    解析 AI 代理实际使用的模型（纯函数）。
-    优先级：agent 自定义模型 > 全局默认模型 > 传入的默认值
+    解析这一轮实际要发的模型（纯函数）。
+
+    优先级：AI 自选（且这条通道认识它）> 通道默认 > 全局默认 > 传入默认。
+
+    provider_info 是凭证解析顺手带回来的「这一轮真正走的通道」（见 channel_provider_info）：
+    池 Key 自己记着能用哪些模型，自带 Key 则来自它 base_url 对应的供应商预设。
+    清单为空 = 不知道这条通道的模型，照旧用 AI 自选（老配置行为不变）。
+    不做这一步，选错的模型名会一路发到别家的地址上，每轮 400 而用户什么都看不到。
     """
-    # 1. 优先使用 agent 自定义模型
-    if hasattr(agent, "chat_model") and agent.chat_model:
-        return agent.chat_model
-    # 2. 其次使用全局默认模型
-    if global_default_model:
-        return global_default_model
-    # 3. 最后使用传入的默认值
-    return default_model
+    info = provider_info or {}
+    allowed = [m for m in (info.get("models") or []) if isinstance(m, str) and m]
+    own = getattr(agent, "chat_model", None)
+    if own and (not allowed or own in allowed):
+        return own
+    for candidate in (info.get("default_model"), global_default_model, default_model):
+        if candidate and (not allowed or candidate in allowed):
+            _warn_model_fallback(agent, own, candidate, allowed)
+            return candidate
+    # 通道没给清单也没给默认：只能用它自己选的，让上游报错比替它换模型更容易排查
+    return own or default_model
+
+
+def _warn_model_fallback(agent, own: str | None, chosen: str, allowed: list[str]) -> None:
+    """AI 选的模型这条通道没有 → 用通道默认。同一组合只记一次。"""
+    key = (getattr(agent, "id", None), own, chosen)
+    if key in _MODEL_FALLBACK_WARNED:
+        return
+    _MODEL_FALLBACK_WARNED.add(key)
+    logger.warning(
+        f"模型不在通道清单里：AI {getattr(agent, 'name', agent)} 选的 {own!r} 不被支持，"
+        f"本轮改用 {chosen!r}（通道可用：{', '.join(allowed[:6])}…）"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════

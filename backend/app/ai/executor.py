@@ -20,6 +20,7 @@ from app.config import settings
 from app.database import async_session
 from app.chat import chat_api
 from app.utils.pure.history import tool_ledger_note
+from app.utils.pure.provider_config import channel_provider_info
 from app.utils.pure.tool_chain import heal_tool_chain
 
 # ── 中断消息注入：AI 忙碌时，新消息不另起 executor，注入当前循环（链路见 docs/dev/conversation_history.md §4.2）──
@@ -328,6 +329,16 @@ async def _send_system_error_notification(db, agent, content: str) -> None:
 # API 配置获取
 # ============================================================
 
+async def _provider_info_for_base(db, api_base: str) -> dict:
+    """自带 Key 的通道信息：按 base_url 找到它对应的供应商预设，带上这条通道认得的模型。
+
+    找不到预设就只带地址（模型清单为空 = 不约束模型名），否则没登记的自建中转会直接不可用。
+    """
+    from app.services.infrastructure.system_settings_service import get_provider_by_base_url
+    provider = await get_provider_by_base_url(db, api_base)
+    return channel_provider_info(provider, api_base)
+
+
 async def _get_api_config(
     db, agent,
     exclude_pool_key_id: int | None = None,
@@ -365,7 +376,18 @@ async def _get_api_config(
     api_base = settings.deepseek_base_url
     credit_source = "none"
     pool_key_id = None
-    provider_info = {"thinking_supported": settings.is_deepseek_api, "base_url": api_base}
+    # 通道信息按地址缓存：每一轮只会真正用到其中一个地址，没必要一进函数就查库
+    _channel_cache: dict[str, dict] = {}
+
+    async def _channel_info(base: str) -> dict:
+        cached = _channel_cache.get(base)
+        if cached is None:
+            cached = await _provider_info_for_base(db, base)
+            _channel_cache[base] = cached
+        return cached
+
+    provider_info = {"thinking_supported": settings.is_deepseek_api, "base_url": api_base,
+                     "models": [], "default_model": None}
 
     if excluded_sources is None:
         excluded_sources = set()
@@ -403,7 +425,7 @@ async def _get_api_config(
             api_key = key
             api_base = agent.api_base_url or settings.deepseek_base_url
             credit_source = "agent_key"
-            provider_info = {"thinking_supported": "deepseek.com" in api_base, "base_url": api_base}
+            provider_info = await _channel_info(api_base)
             return api_key, api_base, credit_source, pool_key_id, provider_info
 
     if user is None:
@@ -419,7 +441,7 @@ async def _get_api_config(
                 api_key = key
                 api_base = user.api_base_url or settings.deepseek_base_url
                 credit_source = "user_key"
-                provider_info = {"thinking_supported": "deepseek.com" in api_base, "base_url": api_base}
+                provider_info = await _channel_info(api_base)
         # force_own_key 场景：解密失败 = 无法调用模型，通知用户重新配置
         if api_key is None and _decrypt_failures:
             asyncio.create_task(_notify_force_own_key_failure(db, agent, user, _decrypt_failures))
@@ -450,11 +472,12 @@ async def _get_api_config(
                 pool_key_id = pool_key.id
                 from app.services.infrastructure.system_settings_service import get_provider_for_pool_key
                 pool_provider = await get_provider_for_pool_key(db, pool_key)
-                provider_info = {
-                    "thinking_supported": pool_provider.get("thinking_supported", "deepseek.com" in api_base),
-                    "base_url": api_base,
-                    "provider_name": pool_provider.get("name", ""),
-                }
+                # 池 Key 自己记的模型清单优先（models/default_model）；没记才用它关联的供应商预设
+                provider_info = channel_provider_info(
+                    pool_provider, api_base,
+                    models=getattr(pool_key, "models", None),
+                    default_model=getattr(pool_key, "default_model", None),
+                )
                 return api_key, api_base, credit_source, pool_key_id, provider_info
 
         elif source_name == "user_key":
@@ -464,14 +487,15 @@ async def _get_api_config(
                     api_key = key
                     api_base = user.api_base_url or settings.deepseek_base_url
                     credit_source = "user_key"
-                    provider_info = {"thinking_supported": "deepseek.com" in api_base, "base_url": api_base}
+                    provider_info = await _channel_info(api_base)
                     return api_key, api_base, credit_source, pool_key_id, provider_info
 
     # 降级完成：如果发生了 Key 解密失败，通知用户（fire-and-forget，不阻塞回复）
     if _decrypt_failures:
         asyncio.create_task(_notify_key_degradation(db, agent, user, _decrypt_failures))
 
-    # 以上都不可用 → 返回空
+    # 以上都不可用 → 返回空（通道信息仍按全局默认地址取一次，模型收敛照旧生效）
+    provider_info = await _channel_info(api_base)
     return api_key, api_base, credit_source, pool_key_id, provider_info
 
 

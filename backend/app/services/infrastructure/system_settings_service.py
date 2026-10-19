@@ -10,7 +10,7 @@ from app.models.system_settings import SystemSettings
 from app.repositories.infra_repo import InfraRepository, SQLAlchemyInfraRepository
 from app.utils.pure.provider_config import (
     normalize_legacy_config, find_default_provider,
-    find_provider_by_name, find_provider_for_pool_key,
+    find_provider_by_name, find_provider_by_base_url, find_provider_for_pool_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,6 +63,12 @@ async def get_provider_by_name(db: AsyncSession, name: str) -> dict | None:
     """按名称查找单个供应商配置"""
     providers = await get_providers(db)
     return find_provider_by_name(providers, name)
+
+
+async def get_provider_by_base_url(db: AsyncSession, base_url: str | None) -> dict | None:
+    """按地址找供应商预设：自带 Key 的通道靠它拿到"这条通道认得的模型"。"""
+    providers = await get_providers(db)
+    return find_provider_by_base_url(providers, base_url or "")
 
 
 async def get_provider_for_pool_key(db: AsyncSession, pool_key) -> dict:

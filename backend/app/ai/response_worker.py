@@ -1063,7 +1063,7 @@ async def _maybe_trigger_ai_reply(
         logger.warning(f"🌐 AI {agent.name} 世界能力注入失败: {e}")
         dup_names = {}
 
-    model = resolve_model(agent, global_default_model=provider_info.get("global_default_chat_model"))
+    model = resolve_model(agent, provider_info=provider_info)
     logger.info(f"🔍 AI {agent.name}: model={model}, tools={len(tools)}")
 
     # 8. 工具调用循环（含思考状态广播）
@@ -1252,7 +1252,7 @@ async def _trigger_dm_ai_reply(
         SQLAlchemyCapabilityRepository(db), agent, SOURCE_PLATFORM, current_tools,
         state=context_ref(session_id=session_id))
     tools = keep_request_tools(effective_defs, allowed_names)
-    model = resolve_model(agent, global_default_model=provider_info.get("global_default_chat_model"))
+    model = resolve_model(agent, provider_info=provider_info)
 
     logger.info(f"🚀 AI {agent_name}: 开始 DM 回复 (session={session_id})")
 

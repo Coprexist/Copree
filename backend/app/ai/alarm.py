@@ -477,7 +477,7 @@ async def _process_alarm_event(db, event: dict):
         },
     ]
 
-    model = resolve_model(agent, global_default_model=provider_info.get("global_default_chat_model"))
+    model = resolve_model(agent, provider_info=provider_info)
 
     logger.info(f"⏰ 闹钟 #{alarm_id}: 唤醒 AI {agent.name}({agent_id})，model={model}，tools={len(tools)}")
 
@@ -546,7 +546,7 @@ async def _standalone_agent_turn(db, agent, *, session_block: str, user_content:
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content},
     ]
-    model = resolve_model(agent, global_default_model=provider_info.get("global_default_chat_model"))
+    model = resolve_model(agent, provider_info=provider_info)
 
     try:
         await _run_serialized(agent, _tool_call_loop(

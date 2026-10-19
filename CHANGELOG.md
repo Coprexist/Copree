@@ -161,6 +161,20 @@
   从缓存里打掉。现在技能跟任务、状态栈摘要、当前时间一样沉尾部，开头只留走版本链冻结的锁定段。
 
 ### 🐛 修复
+- **池 Key 只记地址不记模型，模型名选错就每轮 400，用户那边什么都看不到**：模型名来自 AI 自己的
+  `chat_model`（`utils/pure/prompting.py:14 resolve_model`），地址来自凭证解析的四层优先链
+  （`ai/executor.py` 的 `_get_api_config`），两条路互不相干。用户 164 从创建页的供应商分组里选了
+  预置表里真实存在的 xAI「Grok 4.6」，凭证却落到 DeepSeek 的池 Key 上，于是每轮都是
+  `400 The supported API model names are deepseek-flash, deepseek-v4-pro, but you passed grok-4.6`；
+  这个错误只写进 AI 自己的账本（`_seal_aborted`），会话里一条都看不到——8 条私信全部无输出，
+  用户只能反复发「在吗」。
+  现在 `api_key_pool` 自己记「请求位置 + 待选模型」：新增 `models` / `default_model`（迁移 0089），
+  管理页「测通」顺手把探测到的模型清单落库（供应商说了算，不猜）；凭证解析把它们装进
+  `provider_info`，与自带 Key 按 base_url 匹配到的供应商预设共用同一份组装函数
+  `provider_config.channel_provider_info`；`resolve_model` 在通道给得出清单时把 AI 自选收敛到通道
+  默认并打一条 warning。清单为空 = 不约束模型名（没登记的自建中转照旧能用）。
+  已有池 Key 已探测写入 `['deepseek-flash','deepseek-v4-pro']`、默认 `deepseek-flash`。
+  用例 `tests/test_model_channel.py`（4 条）。
 - **工具轮用满时创建助手还是「失忆」**：轮次用尽那一刻直接 `break`，最后一个工具轮的正文
   没进快照，存档以一条 `tool` 结果结尾——下一轮重放出来又是一串没有回答的提问。草稿 16 实测：
   16:05 那轮查了 6 轮 PRTS 与文档、最后只落了 `已写入 preset、sub`，人设一个字没写，用户也没

@@ -4,6 +4,7 @@ API Key 池模型
 """
 from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, ForeignKey, func
 from app.database import Base
+from app.db_providers import json_column
 
 
 class ApiKeyPool(Base):
@@ -18,6 +19,12 @@ class ApiKeyPool(Base):
     priority = Column(Integer, default=0, comment="越高越优先分配")
     concurrent_limit = Column(Integer, nullable=True, comment="并发上限，NULL=按模型默认(pro=500,flash=2500)")
     provider_name = Column(String(100), nullable=True, comment="关联 provider_config[].name，NULL=使用第一个/默认供应商")
+    # 「地址」和「能用哪些模型」是同一件事的两半：只有地址不知道名字清单，就会把别家的模型名
+    # 发到这家（2026-10-19：grok-4.6 发进 DeepSeek 池，每轮 400，用户那边什么都看不到）
+    models = Column(json_column(), nullable=True,
+                    comment="待选模型 id 列表；NULL=按 provider_name/api_base_url 关联的供应商预设")
+    default_model = Column(String(100), nullable=True,
+                           comment="通道不认 AI 自选模型时用它；NULL=供应商预设的 chat_model")
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 

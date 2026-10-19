@@ -56,6 +56,34 @@ def find_provider_for_pool_key(providers: list[dict], provider_name: str | None,
     return find_default_provider(providers)
 
 
+def channel_provider_info(provider: dict | None, api_base_url: str,
+                          *, models: list | None = None, default_model: str | None = None) -> dict:
+    """组装「这一次真正要用的通道」：地址 + 它能用的模型 + 默认模型 + 思考开关。
+
+    模型清单优先用调用方自己记的那份（池 Key 的 models）；没记才回到它关联的供应商预设。
+    清单为空表示"不知道这条通道有哪些模型"，此时不约束模型名——老配置的行为不变。
+
+    为什么要这一段：模型名来自 AI 配置，地址来自凭证解析，两条路互不相干，
+    于是 xAI 的 grok-4.6 能被发到 DeepSeek 的地址上，每轮 400（2026-10-19）。
+    """
+    provider = provider or {}
+    ids = [m for m in (models or []) if isinstance(m, str) and m]
+    if not ids:
+        ids = [
+            m.get("value") for m in (provider.get("model_options") or [])
+            if isinstance(m, dict) and m.get("value")
+        ]
+    preset_default = provider.get("global_default_chat_model") or provider.get("chat_model") or None
+    return {
+        "base_url": api_base_url,
+        "provider_name": provider.get("name", ""),
+        "thinking_supported": provider.get("thinking_supported", "deepseek.com" in (api_base_url or "")),
+        "models": ids,
+        "default_model": default_model or preset_default,
+        "global_default_chat_model": preset_default,
+    }
+
+
 def collect_all_models(providers: list[dict]) -> list[dict]:
     """
     收集所有供应商的全部模型，每个模型附加 provider_name / provider_key。
