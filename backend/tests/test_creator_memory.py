@@ -47,11 +47,20 @@ def test_visible_messages_keeps_spoken_prose_and_drops_tool_plumbing():
     ]
     replayed = visible_messages(stored)
 
-    assert [m["role"] for m in replayed] == ["user", "assistant", "user"], "同角色相邻并成一条"
+    assert [m["role"] for m in replayed] == ["user", "assistant", "user"], "一轮的两段 assistant 并成一条"
     assert "我先查一下文档。" in replayed[1]["content"] and FINAL_REPLY in replayed[1]["content"]
     assert not any(m["role"] == "tool" for m in replayed), "工具结果是过程，不重放"
     assert all("tool_calls" not in m for m in replayed), "没有 tool 应答的 tool_calls 会破坏请求体"
     assert not any(m["role"] == "system" for m in replayed), "system 每轮按当前快照重算"
+
+    # 用户一句一句打的，不并：并了就分不清轮次（历史日志里连着几条 user 是缺回答的旧账，
+    # 页面上也是几个气泡）
+    back = visible_messages([
+        {"role": "user", "content": "第一句"},
+        {"role": "user", "content": "第二句"},
+        {"role": "assistant", "content": "一句回答"},
+    ])
+    assert [m["content"] for m in back] == ["第一句", "第二句", "一句回答"]
 
 
 async def test_turn_snapshot_keeps_the_final_reply(migrated_db):

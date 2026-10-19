@@ -300,14 +300,15 @@ def visible_messages(messages: list[dict]) -> list[dict]:
 
     带 tool_calls 的 assistant 只留下它说出口的那段正文（tool_calls 字段丢掉）：
     「先回一句人话再调工具」是提示词要求的写法，丢掉它下一轮就接不上刚才说到哪。
-    丢掉 tool_calls 之后可能连着两条同角色消息，并成一条——有的网关不接受同角色相邻。
+    丢掉 tool_calls 之后一轮里会有两段 assistant 正文，并成一条（本来就是同一轮说的话，
+    页面上也是一个气泡）——user 消息不并：那是用户一句一句打的，并了就分不清轮次。
     """
     out: list[dict] = []
     for m in messages:
         role, content = m.get("role"), m.get("content")
         if role not in ("user", "assistant") or not content:
             continue
-        if out and out[-1]["role"] == role:
+        if role == "assistant" and out and out[-1]["role"] == "assistant":
             out[-1] = {"role": role, "content": out[-1]["content"] + "\n\n" + content}
         else:
             out.append({"role": role, "content": content})
