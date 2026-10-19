@@ -293,14 +293,21 @@ async def load_transcript(db: AsyncSession, draft_id: int) -> list[dict]:
 
 
 def visible_messages(messages: list[dict]) -> list[dict]:
-    """只留能进上下文的轮次：system 每轮按当前快照重算，工具轮是过程不重放"""
+    """重放给下一轮看的用户原话与助手原话：system 每轮按当前快照重算，工具结果是过程不重放。
+
+    带 tool_calls 的 assistant 只留下它说出口的那段正文（tool_calls 字段丢掉）：
+    「先回一句人话再调工具」是提示词要求的写法，丢掉它下一轮就接不上刚才说到哪。
+    丢掉 tool_calls 之后可能连着两条同角色消息，并成一条——有的网关不接受同角色相邻。
+    """
     out: list[dict] = []
     for m in messages:
-        role = m.get("role")
-        if role == "user" and m.get("content"):
-            out.append({"role": "user", "content": m["content"]})
-        elif role == "assistant" and m.get("content") and not m.get("tool_calls"):
-            out.append({"role": "assistant", "content": m["content"]})
+        role, content = m.get("role"), m.get("content")
+        if role not in ("user", "assistant") or not content:
+            continue
+        if out and out[-1]["role"] == role:
+            out[-1] = {"role": role, "content": out[-1]["content"] + "\n\n" + content}
+        else:
+            out.append({"role": role, "content": content})
     return out[-HISTORY_KEEP:]
 
 
@@ -525,9 +532,14 @@ async def _run_turn(db: AsyncSession, user_id: int, draft: AgentCreationDraft, m
         async for event in _stream_once(model, api_base, api_key, messages, tools, out):
             yield event
         usage_total = _merge_usage(usage_total, out.get("usage"))
-        text_out += out.get("content") or ""
+        content = out.get("content") or ""
+        text_out += content
         calls = out.get("tool_calls") or []
         if not calls:
+            # 收尾回复必须留在 messages 里：它是下一轮唯一的记忆来源。
+            # 这里漏掉过，存档只剩一串没有回答的 user 消息，助手下一轮就答「我不记得刚说过什么」。
+            if content:
+                messages.append({"role": "assistant", "content": content})
             break
         if round_no == MAX_TOOL_ROUNDS:
             hit_cap = True
