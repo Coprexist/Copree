@@ -36,7 +36,12 @@ CREATOR_CONVERSATION_TYPE = "creator"
 # 2026-10-19 草稿 16 实测 6 轮卡在「已写入 preset、sub」，人设一个字没写。额度外另送一轮收尾
 # （不带工具），所以单轮最多 MAX_TOOL_ROUNDS + 1 次模型调用。
 MAX_TOOL_ROUNDS = 12
+# 重放上限按「组」算：一条 user / 一段 assistant 正文 / 一轮工具各算一组
 HISTORY_KEEP = 20
+# 最近几轮的工具结果一起带回上下文（"刚才查到的东西"就靠它）；更早的只留助手说出口的话
+REPLAY_TOOL_TURNS = 2
+# 单条工具结果截断：文档片段与搜索结果动辄几千字，整段重放每轮都要再付一次 token
+REPLAY_TOOL_MAX_CHARS = 800
 MAX_TOKENS = 4000
 
 # 档位与子档的取值在 frontend/src/components/agent-create/presets.ts（唯一来源）；
@@ -295,24 +300,89 @@ async def load_transcript(db: AsyncSession, draft_id: int) -> list[dict]:
     return visible_messages(row.messages or [])
 
 
-def visible_messages(messages: list[dict]) -> list[dict]:
-    """重放给下一轮看的用户原话与助手原话：system 每轮按当前快照重算，工具结果是过程不重放。
+def _groups(messages: list[dict]) -> list[dict]:
+    """把存档切成能整组进退的单元。
 
-    带 tool_calls 的 assistant 只留下它说出口的那段正文（tool_calls 字段丢掉）：
-    「先回一句人话再调工具」是提示词要求的写法，丢掉它下一轮就接不上刚才说到哪。
-    丢掉 tool_calls 之后一轮里会有两段 assistant 正文，并成一条（本来就是同一轮说的话，
-    页面上也是一个气泡）——user 消息不并：那是用户一句一句打的，并了就分不清轮次。
+    一轮工具 = assistant(tool_calls) + 紧跟的 tool 回复，必须整组：只留 assistant 就是
+    悬空 tool_call_id、只留 tool 更是没有主语，两种都会被 API 直接 400。
     """
-    out: list[dict] = []
-    for m in messages:
+    groups: list[dict] = []
+    i = 0
+    while i < len(messages):
+        m = messages[i]
         role, content = m.get("role"), m.get("content")
-        if role not in ("user", "assistant") or not content:
+        if role == "assistant" and m.get("tool_calls"):
+            replies = []
+            j = i + 1
+            while j < len(messages) and messages[j].get("role") == "tool":
+                replies.append(messages[j])
+                j += 1
+            groups.append({"kind": "tool", "messages": [m, *replies]})
+            i = j
             continue
-        if role == "assistant" and out and out[-1]["role"] == "assistant":
-            out[-1] = {"role": role, "content": out[-1]["content"] + "\n\n" + content}
+        if role in ("user", "assistant") and content:
+            groups.append({"kind": role, "messages": [m]})
+        i += 1
+    return groups
+
+
+def _tool_messages(group: dict) -> list[dict]:
+    """一轮工具进上下文：正文照留，工具结果按人设需要截断；没有回复的调用剔掉。"""
+    head = group["messages"][0]
+    replies = {r.get("tool_call_id"): r for r in group["messages"][1:]}
+    calls = [c for c in (head.get("tool_calls") or []) if c.get("id") in replies]
+    if not calls:
+        return []
+    out = [{
+        "role": "assistant",
+        "content": head.get("content") or "",
+        "tool_calls": [
+            {"id": c["id"], "type": "function",
+             "function": {"name": (c.get("function") or {}).get("name", ""),
+                          "arguments": (c.get("function") or {}).get("arguments") or "{}"}}
+            for c in calls
+        ],
+    }]
+    for c in calls:
+        text = str(replies[c["id"]].get("content") or "")
+        if len(text) > REPLAY_TOOL_MAX_CHARS:
+            text = text[:REPLAY_TOOL_MAX_CHARS] + "…（结果太长，已截断）"
+        out.append({"role": "tool", "tool_call_id": c["id"], "content": text})
+    return out
+
+
+def visible_messages(messages: list[dict]) -> list[dict]:
+    """重放给下一轮看的往来：用户原话、助手原话、最近几轮的工具结果。
+
+    system 每轮按当前快照重算，不重放。工具结果要留——"刚才查到的 PRTS 原设"就是它，
+    丢了就得重查一遍；但不能无限留：只带最近 REPLAY_TOOL_TURNS 轮，且每条截断，
+    更早的轮次只留助手说出口的话（那几句本来就是给用户看的结论）。
+
+    user 消息不并（那是用户一句一句打的，并了分不清轮次）；同一轮里"先说一句再调工具"
+    与收尾回复都是 assistant，并成一条——页面上本来也是一个气泡。
+    """
+    groups = _groups(messages)
+
+    # 最近 REPLAY_TOOL_TURNS 轮（按 user 切）里的工具轮才带结果
+    user_starts = [i for i, g in enumerate(groups) if g["kind"] == "user"]
+    window_start = user_starts[-REPLAY_TOOL_TURNS] if len(user_starts) >= REPLAY_TOOL_TURNS else 0
+    kept = [g for i, g in enumerate(groups)
+            if i >= window_start or g["kind"] != "tool"]
+
+    # 条数上限：从最新往前凑，但当前这一轮（最后一条 user 起）整轮保留——
+    # 把用户刚问的那句切掉，模型就成了盲答
+    last_user = max((i for i, g in enumerate(kept) if g["kind"] == "user"), default=0)
+    kept = kept[min(max(0, len(kept) - HISTORY_KEEP), last_user):]
+
+    out: list[dict] = []
+    for g in kept:
+        if g["kind"] == "tool":
+            out.extend(_tool_messages(g))
+        elif g["kind"] == "assistant" and out and out[-1]["role"] == "assistant":
+            out[-1] = {"role": "assistant", "content": out[-1]["content"] + "\n\n" + g["messages"][0]["content"]}
         else:
-            out.append({"role": role, "content": content})
-    return out[-HISTORY_KEEP:]
+            out.append({"role": g["kind"], "content": g["messages"][0]["content"]})
+    return out
 
 
 # ── 一轮对话 ──
