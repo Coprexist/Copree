@@ -32,7 +32,10 @@ logger = logging.getLogger(__name__)
 
 # ai_conversation_logs.conversation_type 只有 10 字符，这里不能写 "agent_creator"
 CREATOR_CONVERSATION_TYPE = "creator"
-MAX_TOOL_ROUNDS = 6
+# 工具轮预算。6 轮不够：一次人设要 web_search 查原设、read_manual 查写法、再分几批写表单，
+# 2026-10-19 草稿 16 实测 6 轮卡在「已写入 preset、sub」，人设一个字没写。额度外另送一轮收尾
+# （不带工具），所以单轮最多 MAX_TOOL_ROUNDS + 1 次模型调用。
+MAX_TOOL_ROUNDS = 12
 HISTORY_KEEP = 20
 MAX_TOKENS = 4000
 
@@ -341,8 +344,10 @@ async def _stream_once(model: str, api_base: str, api_key: str | None,
         "max_tokens": MAX_TOKENS,
         "stream": True,
         "stream_options": {"include_usage": True},
-        "tools": tools,
     }
+    # 收尾轮不给工具：OpenAI 兼容口径里 tools 是 minItems=1，空数组会被拒，索性整键省掉
+    if tools:
+        payload["tools"] = tools
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -526,28 +531,32 @@ async def _run_turn(db: AsyncSession, user_id: int, draft: AgentCreationDraft, m
     usage_total: dict = {}
     text_out = ""
     hit_cap = False
+    used_rounds = 0
 
-    for round_no in range(1, MAX_TOOL_ROUNDS + 1):
+    while True:
+        # 工具轮用完之后白送一轮、且这一轮不递工具：模型调不动任何东西，只能把话说完。
+        # 少了这一轮，最后一个工具轮的正文只落在 text_out 里，存档就以一条 tool 结果结尾——
+        # 下一轮重放出来是一串没有回答的提问（又是「我不记得刚才说了什么」）。
+        closing = used_rounds >= MAX_TOOL_ROUNDS
         out: dict = {}
-        async for event in _stream_once(model, api_base, api_key, messages, tools, out):
+        async for event in _stream_once(
+            model, api_base, api_key, messages, [] if closing else tools, out
+        ):
             yield event
         usage_total = _merge_usage(usage_total, out.get("usage"))
-        content = out.get("content") or ""
-        text_out += content
+        round_text = out.get("content") or ""
+        text_out += round_text
         calls = out.get("tool_calls") or []
-        if not calls:
+        if not calls or closing:
             # 收尾回复必须留在 messages 里：它是下一轮唯一的记忆来源。
             # 这里漏掉过，存档只剩一串没有回答的 user 消息，助手下一轮就答「我不记得刚说过什么」。
-            if content:
-                messages.append({"role": "assistant", "content": content})
-            break
-        if round_no == MAX_TOOL_ROUNDS:
-            hit_cap = True
+            if round_text:
+                messages.append({"role": "assistant", "content": round_text})
             break
 
         messages.append({
             "role": "assistant",
-            "content": out.get("content") or None,
+            "content": round_text or None,
             "tool_calls": [
                 {"id": c["id"] or f"call_{i}", "type": "function",
                  "function": {"name": c["name"], "arguments": c["arguments"] or "{}"}}
@@ -563,13 +572,16 @@ async def _run_turn(db: AsyncSession, user_id: int, draft: AgentCreationDraft, m
                 args = {}
             yield _sse({"type": "tool", "name": call["name"], "label": TOOL_LABELS.get(call["name"], call["name"]),
                         "args": args})
-            content, extra = await _run_tool(db, draft, call["name"], args)
+            result, extra = await _run_tool(db, draft, call["name"], args)
             if extra:
                 yield _sse(extra)
-            messages.append({"role": "tool", "tool_call_id": call["id"] or f"call_{i}", "content": content})
+            messages.append({"role": "tool", "tool_call_id": call["id"] or f"call_{i}", "content": result})
+        used_rounds += 1
+        if used_rounds >= MAX_TOOL_ROUNDS:
+            hit_cap = True
 
     if hit_cap:
-        yield _sse({"type": "notice", "message": "工具轮次到上限，先停在当前表单"})
+        yield _sse({"type": "notice", "message": "工具轮次到上限，这一轮只能说话、不再改表单"})
 
     try:
         await save_conversation_log(

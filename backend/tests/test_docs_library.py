@@ -78,6 +78,12 @@ def test_docs_read_toc_and_search():
         miss = library.read("ai-guide", "根本不存在的词")
         assert miss["ok"] and "没有「根本不存在的词」" in miss["result"]
 
+        # 多词关键词：整串在文档里不存在，但其中「四层结构」能命中——不能因为整串没出现就判死
+        multi = library.read("ai-guide", "人设 四层结构")
+        assert "四层结构" in multi["result"] and "身份、关系" in multi["result"]
+        # 一个词都不中时顺手给目录，别让模型为了一次目录再花一轮
+        assert "### 5.2 四层结构" in miss["result"]
+
         restore()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

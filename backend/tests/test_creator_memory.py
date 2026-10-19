@@ -113,3 +113,65 @@ async def test_turn_snapshot_keeps_the_final_reply(migrated_db):
         assert history[-1]["role"] == "assistant"
         assert FINAL_REPLY in history[-1]["content"], "下一轮看得到这句回答"
         assert history[0] == {"role": "user", "content": "你创建AI有专业参考文档吗"}
+
+
+CLOSING = "工具轮用满了，先说下现在填到哪一步：人设还在改。"
+
+
+async def test_round_cap_spends_one_free_closing_round(migrated_db):
+    """工具轮用尽后白送一轮（这一轮不递工具）：快照必须以 assistant 收尾，否则下一轮又失忆"""
+    import app.services.agent.llm_credentials as credentials_module
+    import app.services.content.conversation_log_service as log_service
+    import app.services.world.world_chat_service as world_chat
+    from app.database import async_session
+    from app.models.user import User
+    from app.services.creator import agent_creator_service as creator
+
+    async with async_session() as db:
+        db.add(User(id=USER_ID + 1, username="creator-cap", password_hash="x", type="human"))
+        await db.commit()
+        draft = await creator.create_draft(db, USER_ID + 1)
+
+        rounds = [
+            {"content": "", "reasoning": "", "usage": None,
+             "tool_calls": [{"id": f"c{i}", "name": "read_manual", "arguments": "{}"}]}
+            for i in range(creator.MAX_TOOL_ROUNDS)
+        ] + [{"content": CLOSING, "reasoning": "", "usage": None, "tool_calls": []}]
+        tools_seen: list[list] = []
+        saved: list[dict] = []
+
+        async def fake_stream(model, api_base, api_key, messages, tools, out):
+            tools_seen.append(list(tools))
+            out.clear()
+            out.update(rounds.pop(0))
+            if False:
+                yield ""
+
+        async def fake_tool(db_, draft_, name, args):
+            return "文档正文", None
+
+        async def fake_save(repo, agent_id, messages, **kwargs):
+            saved.extend(dict(m) for m in messages)
+            return 1
+
+        async def fake_credentials(db_, user_id):
+            return None, "http://llm.test"
+
+        async def fake_model(db_, api_base, *, owner_id):
+            return "test-model"
+
+        with _Patch() as patch:
+            patch.set(creator, "_stream_once", fake_stream)
+            patch.set(creator, "_run_tool", fake_tool)
+            patch.set(creator, "creator_tools", lambda: [{"type": "function"}])
+            patch.set(log_service, "save_conversation_log", fake_save)
+            patch.set(credentials_module, "resolve_user_credentials", fake_credentials)
+            patch.set(world_chat, "resolve_chat_model", fake_model)
+
+            events = [ev async for ev in creator._run_turn(db, USER_ID + 1, draft, "帮我建一个逻各斯")]
+
+        assert rounds == [], "工具轮用尽后必须还有一次收尾调用"
+        assert tools_seen[:-1] and all(t for t in tools_seen[:-1]), "工具轮照旧带工具"
+        assert tools_seen[-1] == [], "收尾轮不递工具（模型只能把话说完）"
+        assert saved[-1] == {"role": "assistant", "content": CLOSING}, "收尾轮正文要进快照"
+        assert any("工具轮次到上限" in ev for ev in events), "用满轮次要如实告诉用户"

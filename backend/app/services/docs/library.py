@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 # 允许 AI 读的文档：id 是稳定键（工具参数用它，改标题不动 id），path 相对 docs 根
@@ -83,21 +84,51 @@ def _toc(content: str) -> str:
     return text
 
 
-def _search(content: str, keyword: str) -> str:
-    """关键词命中：按行定位，命中行前后各带几行，避免只有半句话。"""
+_SPLIT = re.compile(r"[\s,，、/|]+")
+
+
+def keywords(keyword: str) -> list[str]:
+    """关键词拆词：模型常写「人设 四层结构」，文档里没有这一整串，整串去比必然落空。"""
+    return [t.lower() for t in _SPLIT.split((keyword or "").strip()) if t]
+
+
+def _search(content: str, tokens: list[str]) -> str:
+    """关键词命中：按行定位，命中行前后各带几行，避免只有半句话。
+
+    多词时保留命中词最多的那些行（同分按先后）：要求每个词都落在同一行，等于把
+    「人设 四层结构」这种写法判死——2026-10-19 创建助手连查两次落空，白烧两轮。
+    """
     lines = content.split("\n")
-    need = keyword.lower()
-    hits: list[str] = []
+    sections: list[str] = []
     section = ""
-    for i, line in enumerate(lines):
+    for line in lines:
         if line.startswith("## ") or line.startswith("### "):
             section = line.strip()
-        if need in line.lower():
-            snippet = "\n".join(lines[max(0, i - _SNIPPET_HEAD): i + _SNIPPET_TAIL])
-            hits.append(f"【{section}】\n{snippet}")
-    if not hits:
+        sections.append(section)
+
+    low_lines = [line.lower() for line in lines]
+    # 稀有词优先：多词时「人设」满篇都是、「四层结构」只出现在该出现的几节，
+    # 光按命中词数排，结果会被满篇出现的常用词占满。
+    rarity = {t: 1.0 / max(1, sum(1 for low in low_lines if t in low)) for t in tokens}
+    scored = []
+    for i, low in enumerate(low_lines):
+        matched = [t for t in tokens if t in low]
+        if matched:
+            scored.append((len(matched), sum(rarity[t] for t in matched), i))
+    if not scored:
         return ""
-    text = "\n\n---\n\n".join(hits[:_HITS_MAX])
+    scored.sort(key=lambda s: (-s[0], -s[1], s[2]))
+    # 权重掉到最高那条四分之一以下的不带：那种行只是顺手提了一句关键词，带上去只会把
+    # 真正的答案挤出上下文（实测「人设 四层结构」会多带三条文档头）
+    floor = scored[0][1] * 0.25
+    kept = [s for s in scored if s[1] >= floor]
+    if kept:
+        scored = kept
+    hits = [
+        f"【{sections[i]}】\n" + "\n".join(lines[max(0, i - _SNIPPET_HEAD): i + _SNIPPET_TAIL])
+        for _, _, i in scored[:_HITS_MAX]
+    ]
+    text = "\n\n---\n\n".join(hits)
     if len(text) > _HITS_MAX_CHARS:
         text = text[:_HITS_MAX_CHARS] + "\n\n…（更多结果被截断）"
     return text
@@ -127,10 +158,11 @@ def read(doc_id: str = "manual", keyword: str = "") -> dict:
     if not keyword:
         return {"ok": True, "doc": doc_id, "title": spec["title"], "keyword": None, "result": _toc(content)}
 
-    hits = _search(content, keyword)
+    hits = _search(content, keywords(keyword))
     if not hits:
+        # 没命中就把目录一并带上：让模型为了看一眼目录再花一轮，是白烧一次调用
         return {
             "ok": True, "doc": doc_id, "title": spec["title"], "keyword": keyword,
-            "result": f"《{spec['title']}》里没有「{keyword}」。换个说法，或者不传关键词先看目录。",
+            "result": f"《{spec['title']}》里没有「{keyword}」。下面是目录，挑个更准的词再查：\n\n{_toc(content)}",
         }
     return {"ok": True, "doc": doc_id, "title": spec["title"], "keyword": keyword, "result": hits}
