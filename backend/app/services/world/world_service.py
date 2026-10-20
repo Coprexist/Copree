@@ -308,6 +308,11 @@ async def bind_entity(
         repo.add(WorldBinding(world_id=world_id, entity_type=entity_type, entity_id=entity_id))
         await repo.flush()
         logger.info(f"🔗 世界 #{world_id} 绑定 {entity_type}:{entity_id}")
+        # AI 直接绑定世界：顺手预建一条沉睡世界帧（进世界时激活，不改变他现在在哪）。
+        # 只给 agent：群绑定会影响群里每个居民，预建不该替所有人提前占地儿
+        if entity_type == "agent":
+            from app.services.world.world_frame_service import park_world_frame_for_binding
+            await park_world_frame_for_binding(repo.session, entity_id, world)
     return {"success": True}
 
 

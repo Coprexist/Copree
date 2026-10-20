@@ -296,6 +296,23 @@ def context_frames(stack: list[dict], context_ref: str) -> list[dict]:
     return [f for f in running(stack) if ref and f.get("context_ref") == ref]
 
 
+def world_id_of(frame: dict | None) -> int | None:
+    """世界帧 → 世界号；不是世界帧（或 ref 不合法）返回 None。
+
+    「世界帧」= type=world 且 context_ref=world:{id}（进世界时建的那条）。世界号**只**从
+    ref 解析、不另设字段：世界帧是"一条状态帧"，帧上任何第二处世界号都会和 ref 分叉。
+    """
+    if not isinstance(frame, dict) or frame.get("type") != "world":
+        return None
+    ref = str(frame.get("context_ref") or "")
+    if not ref.startswith("world:"):
+        return None
+    try:
+        return int(ref.split(":", 1)[1])
+    except ValueError:
+        return None
+
+
 def _blank(value) -> bool:
     """这个字段算「没写过」吗（归并时只在空白处补）——空串与空容器都算没写。"""
     return value is None or value == "" or value == {} or value == []

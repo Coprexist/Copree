@@ -147,7 +147,8 @@ compact / clear 时才把锁定副本刷成现值、同事务清脏，这一步�
 - 解锁清单与解锁动作：`app/services/history/context_unlock.py`（`UNLOCK_STEPS` / `unlock_context`；`app/ai/executor.py` 只转发）
 - 文本源与 tools 的解锁：`app/services/capability_versioning.py`（`apply_pending_changes` / `mark_effective_latest` / `get_effective_definitions`）
 - 账本重写：`app/services/history/context_sync.py`（`rewrite_context`）
-- 状态帧：`app/services/agent/state_stack_service.py`（`ensure_active_frame` / `release_active_frame_notes` / `load_trigger_state` / `dispose_context_frames`）
+- 状态帧：`app/services/agent/state_stack_service.py`（`ensure_active_frame` / `release_active_frame_notes` / `load_trigger_state` / `dispose_context_frames` / `park_frame`）
+- 世界帧（进群视界 = 激活世界专属帧；绑定时预建沉睡帧、帧内工具白名单 = 基础集 + 世界侧技能）：`app/services/world/world_frame_service.py`
 - 帧的存储/运行分界、容量闸与同会话归并：`app/utils/pure/state_stack.py`（`running` / `current` / `normalize_order` / `context_frames` / `merge_same_context` / `_overflow` / `retire_overflow` / `drop_overflow` / `drop_retired_overflow`）
 - 后事告知的文案与幂等键：`app/utils/pure/handover.py`；销帧工具：`app/tools/self_management/finish_frame.py`
 - 告知落历史：`app/ai/llm.py`（`_deliver_handover` / `_deliver_focus_notices`，与便签/能力变更通知同一出口）

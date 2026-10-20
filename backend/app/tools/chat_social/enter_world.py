@@ -1,9 +1,10 @@
 """
-enter_world 工具 — AI 进世界游玩（一个世界一个状态）
+enter_world 工具 — AI 进群视界游玩（一个世界一个状态）
 
 把 (世界, 通道群) 记成一条状态帧：type=world、context_ref=world:{id}、group_id=通道群。
 同一个世界再进一次是**复活**原帧（只刷通道群与说法，why/todo/plan 是他自己的东西，留着），
-不叠新的。
+不叠新的。绑定时预建的那条沉睡帧也在这里被激活——查找口径、白名单都在
+services/world/world_frame_service.py（本工具只管"进不进得去"）。
 
 设计：docs/group_world/design/world_agent_capabilities.md
 """
@@ -73,40 +74,12 @@ async def _ensure_member(db, group_id: int, agent_id: int) -> None:
         raise _EntryDenied(f"你不在群 {group_id} 里，进不去它的世界")
 
 
-async def _activate_world_frame(db, agent_id: int, world, target_group: int,
-                                group_name: str, why: str = "") -> tuple[dict, bool]:
-    """一个世界一个状态：已有同世界的帧就复活它，没有才压新的。返回 (帧, 是否复活)。"""
-    from app.services.agent.state_stack_service import get_frames, push_state, restore_frame
-    from app.utils.pure.state_stack import context_frames, make_state_frame
-
-    doing = f"在世界「{world.name}」里游玩（通道：群「{group_name}」）"
-    existing = context_frames(await get_frames(db, agent_id), f"world:{world.id}")
-    if existing:
-        # 同一 ref 至多一帧（老数据的重复帧会在 _save 里合掉），所以 [0] 就是"那帧"
-        frame = await restore_frame(db, agent_id, str(existing[0].get("id") or ""), updates={
-            "group_id": target_group,
-            "label": f"世界「{world.name}」",
-            "doing": doing,
-        })
-        return frame, True
-    frame = make_state_frame(
-        type_="world",
-        context_ref=f"world:{world.id}",
-        group_id=target_group,
-        label=f"世界「{world.name}」",
-        why=why or f"{group_name} 的世界",
-        doing=doing,
-    )
-    await push_state(db, agent_id, frame)
-    return frame, False
-
-
 class EnterWorld(ToolPlugin):
     name = "enter_world"
     description = (
-        "进入一个世界游玩：状态切到这个世界（状态摘要里出现世界名），之后可以用 world_command "
-        "操作它；出来用 pop_state。不带参数＝进入当前群绑定的世界，只有当前群绑了多个世界时"
-        "才需要 world_id。"
+        "进入群视界（一个世界）游玩：状态切到这个世界（状态摘要里出现世界名），工具换成这个世界"
+        "颁布的技能 + 少量基础工具，群里/私信里都是这段身份；出来用 pop_state。"
+        "不带参数＝进入当前群绑定的世界，只有当前群绑了多个世界时才需要 world_id。"
     )
     segment = "chat_social"
     parameters = {
@@ -145,9 +118,14 @@ class EnterWorld(ToolPlugin):
 
         group_row = await db.get(Group, target_group)
         group_name = group_row.name if group_row is not None else f"群{target_group}"
-        _, restored = await _activate_world_frame(
+        from app.services.world.world_frame_service import activate_world_frame, world_frame_tools_for
+
+        _, restored = await activate_world_frame(
             db, agent_id, world, target_group, group_name, str(arguments.get("why") or ""))
         # 不 commit：提交是调用者的事（work_session 出块即提交），与 world_command 一致
+        # 工具集（基础集 + 这个世界颁布的技能）不写进帧里：帧上冻一份会在世界改技能后过期，
+        # 白名单由 world_frame_service 现算，这里只把"现在有什么"报给他
+        tools = await world_frame_tools_for(db, agent, world.id, target_group)
 
         return {
             "success": True,
@@ -156,8 +134,10 @@ class EnterWorld(ToolPlugin):
             "group_id": target_group,
             "group_name": group_name,
             "restored": restored,
-            "message": (f"已进入世界「{world.name}」（#{world.id}），命令从群「{group_name}」出去；"
-                        "用 world_command 操作世界，出来用 pop_state"),
+            "tools": tools,
+            "message": (f"已进入世界「{world.name}」（#{world.id}），命令从群「{group_name}」出去。"
+                        f"在世界里你的工具只有这些：{'、'.join(tools)}；"
+                        "用 world_command 或这个世界颁布的技能操作它，出来用 pop_state"),
         }
 
 

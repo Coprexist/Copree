@@ -1063,6 +1063,14 @@ async def _maybe_trigger_ai_reply(
         logger.warning(f"🌐 AI {agent.name} 世界能力注入失败: {e}")
         dup_names = {}
 
+    # 世界帧：帧激活期间工具只留这个世界给的那套（基础集 + 世界侧 skills），
+    # 平台其余工具不出现——在世界里就该只看得见世界的能力（见 world_frame_service）
+    from app.services.world.world_frame_service import frame_tool_gate
+    gate = await frame_tool_gate(db, agent.id)
+    if gate is not None:
+        tools = [t for t in tools
+                 if ((t.get("function") or {}).get("name") or "") in gate]
+
     model = resolve_model(agent, provider_info=provider_info)
     logger.info(f"🔍 AI {agent.name}: model={model}, tools={len(tools)}")
 
@@ -1252,6 +1260,20 @@ async def _trigger_dm_ai_reply(
         SQLAlchemyCapabilityRepository(db), agent, SOURCE_PLATFORM, current_tools,
         state=context_ref(session_id=session_id))
     tools = keep_request_tools(effective_defs, allowed_names)
+
+    # 世界帧：私信里也按同一条帧走——进了世界就只给世界侧技能 + 基础集，不分群聊私信。
+    # （他没进世界时 active_world_id 为 None，行为与以前完全一致）
+    from app.services.world.world_frame_service import (
+        active_world, frame_tool_gate, world_tools_for_agent,
+    )
+    world_id_now, world_group = await active_world(db, agent.id)
+    if world_id_now is not None:
+        tools = [*tools, *await world_tools_for_agent(db, agent, world_id_now, world_group)]
+    gate = await frame_tool_gate(db, agent.id)
+    if gate is not None:
+        tools = [t for t in tools
+                 if ((t.get("function") or {}).get("name") or "") in gate]
+
     model = resolve_model(agent, provider_info=provider_info)
 
     logger.info(f"🚀 AI {agent_name}: 开始 DM 回复 (session={session_id})")

@@ -41,6 +41,15 @@ AI 调 `world_command("旅人移动到 2,3")` → 以 AI 身份发群消息 → 
 
 **命令落到哪个群**（2026-10-05）：显式 `group_id` → 候选群里第一个绑了世界的（候选按新鲜度，本次回复所在的群在前）→ 世界帧上记的通道群。AI 进世界用 `enter_world` 把 (世界, 通道群) 记成一条状态帧（`type=world`、`context_ref=world:{id}`、`group_id=通道群`），平台和它自己都看得见在哪个世界玩；同一个世界再进是**复活**原帧（一个世界一个状态），一个世界绑多个群时通道群跟着每次进门的群走。规则见 [帧生命周期](../../dev/frame_lifecycle.md)。
 
+**世界帧即沉浸式上下文**（2026-10-20）：把世界绑给 AI 时（`POST /worlds/{id}/bind`、按类型绑定的
+agent 路径）就**预建一条沉睡世界帧**（`status=ended`，只占帧位、不改变他当前在哪）；进门时
+`enter_world` 激活的就是这一条（帧 id 不变、通道群按本次进门的群刷新，不叠第二帧）。
+帧激活期间工具只留 **基础集**（`enter_world` / `world_command` / `pop_state` / `push_state` /
+`list_states` / `update_self_config`）+ **这个世界当前颁布的技能**：白名单由
+`services/world/world_frame_service.py` **现算**、不冻结在帧上（世界后来颁布新技能，下一轮就能用，
+不会出现「能力清单里有、工具列表里调不动」）。群聊与私信两条路径共用同一份闸门；在世界里来群消息
+不会把身份切回群会话（`ensure_active_frame` 不覆盖非会话帧）。要离开世界用 `pop_state`。
+
 ### 选择原则
 
 | 场景 | 用哪个 |

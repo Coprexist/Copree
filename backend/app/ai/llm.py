@@ -749,17 +749,17 @@ async def _build_tools_segment(db, agent, is_dm: bool = False) -> str:
     )
     current_tool_names = {t["function"]["name"] for t in current_tools}
 
-    # 🎭 状态帧工具隔离：栈顶帧指定了 tools/skills 白名单时，再过滤一层
-    from app.services.agent.state_stack_service import get_active_frame_tools
-    frame_tools, frame_skills = await get_active_frame_tools(db, agent.id)
+    # 🎭 状态帧工具隔离：栈顶帧有白名单就再过滤一层。世界帧的白名单是**现算**的
+    # （基础集 + 这个世界当前颁布的技能，见 world_frame_service），这里只认同一份闸门
+    from app.services.world.world_frame_service import active_world, frame_tool_gate
+    gate = await frame_tool_gate(db, agent.id)
     frame_note = ""
-    if frame_tools is not None:
-        allowed = set(frame_tools)
-        current_tool_names &= allowed
-        frame_note = f"（当前状态帧限定工具：{', '.join(sorted(allowed))}）"
-    elif frame_skills is not None:
-        current_tool_names &= set(frame_skills)
-        frame_note = f"（当前状态帧限定技能：{', '.join(sorted(frame_skills))}）"
+    if gate is not None:
+        current_tool_names &= gate
+        world_id_now, _ = await active_world(db, agent.id)
+        frame_note = ("（你在世界里：只显示这个世界给你的能力）"
+                      if world_id_now is not None
+                      else f"（当前状态帧限定工具：{', '.join(sorted(gate))}）")
 
     all_segments = ToolRegistry.get_segments()
 
@@ -1413,7 +1413,9 @@ async def build_messages(
                 "；另有 world_command 可发文本命令（由世界程序解析，如 旅人移动到 2,3 / 我去 2,3 / 身份 签到）"
                 if skill_names else
                 "。可用 world_command 发送文本命令（由世界程序解析，如 旅人移动到 2,3 / 我去 2,3 / 身份 签到）"
-            ) + "；要玩这个世界（包括在私信里）先调 enter_world 进世界，命令才知道从哪个群出去"
+            ) + ("；想玩这个世界（包括在私信里）就调 enter_world——它就是本群的「进入群视界」技能："
+                 "进去后你的工具会换成这个世界颁布的技能（外加切帧/退出这几种基础工具），"
+                 "命令从你进门时所在的群出去；出来用 pop_state")
             messages.append({"role": "system", "content":
                 f"【本群世界】本群绑定世界「{w.name}」（#{w.id}）。"
                 + (f"你已获得世界颁布的技能工具，像调普通工具一样直接 function calling 调用：{'、'.join(skill_names)}" if skill_names else "")

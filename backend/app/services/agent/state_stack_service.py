@@ -25,7 +25,7 @@ from app.utils.pure.state_stack import (
     DEFAULT_FRAME_CAPACITY, ENDED_STATUS,
     by_id, context_frames, current, drop_context_frames, drop_overflow,
     drop_retired_overflow, is_running, merge_same_context, normalize_order, resume_target, retired,
-    retire_context_frames, retire_overflow, running, touch,
+    retire_context_frames, retire_overflow, running, touch, world_id_of,
 )
 from app.utils.pure.emotion import decay_emotion, apply_emotion_update
 
@@ -174,7 +174,8 @@ async def get_frames(db: AsyncSession, agent_id: int) -> list[dict]:
 
 
 async def restore_frame(db: AsyncSession, agent_id: int, frame_id: str,
-                        origin_context_ref: str = "", updates: dict | None = None) -> dict:
+                        origin_context_ref: str = "", updates: dict | None = None,
+                        handoff: bool = False) -> dict:
     """把当前帧换成指定帧（闹钟唤醒用）：帧还在存储里就复活它，从没记过才重建同型帧。
 
     帧不再被 pop/close 删掉，所以"计划排给谁"这个指针长期有效——连已结束的帧都能按 id 复活。
@@ -182,6 +183,8 @@ async def restore_frame(db: AsyncSession, agent_id: int, frame_id: str,
     重建**沿用原 frame_id**，身份不因中间发生什么而换人。
     updates：复活时一并写回的字段——帧的身份没变、内容要跟着这次进来的地方更新
     （同世界换群进：世界帧上的通道群要指向这个群）。
+    handoff：要不要像 push_state 那样带上"从哪来 / 在干嘛"的交接包。闹钟唤醒是"接着自己
+    排好的计划"，不需要；进世界是**从别处切过来**，不带的话他不知道自己刚在哪个会话里说话。
     返回恢复好的帧（没有帧身份可用时返回 {}）。
     """
     db = _ensure_repo(db)
@@ -204,6 +207,16 @@ async def restore_frame(db: AsyncSession, agent_id: int, frame_id: str,
         stack.append(frame)
     if prev is not None and prev is not frame:
         prev["status"] = "suspended"
+        if handoff:
+            # 与 push_state 同一份交接口径：情绪来源 + 原文尾巴（旧交接不重复注入）
+            if not frame.get("source_emotion"):
+                frame["source_emotion"] = {
+                    "type": prev.get("type"),
+                    "emotion": prev.get("emotion") or {},
+                    "emotion_text": prev.get("emotion_text") or "",
+                }
+            if not frame.get("handoff"):
+                frame["handoff"] = _left_conversation(prev)
     if updates:
         frame.update(updates)
     frame["status"] = "active"
@@ -837,14 +850,51 @@ async def get_active_emotion(db: AsyncSession, agent_id: int) -> dict:
     }
 
 
+async def get_current_frame(db: AsyncSession, agent_id: int) -> dict | None:
+    """当前运行的那帧（栈顶，归一化后 stack[-1] 就是它）；没有帧返回 None。"""
+    db = _ensure_repo(db)
+    stack = await _get_stack(db, agent_id)
+    return current(stack) if stack else None
+
+
 async def get_active_frame_tools(db: AsyncSession, agent_id: int) -> tuple[list[str] | None, list[str] | None]:
-    """读栈顶帧的工具/技能白名单（None = 不隔离，保持全局）。"""
+    """读栈顶帧的工具/技能白名单（None = 不隔离，保持全局）。
+
+    世界帧（type=world）不看帧上存的字段，而是**现算**：基础集 + 该世界当前颁布的技能
+    （见 services/world/world_frame_service）。世界后来颁布了新技能，下一轮就能用；
+    帧上冻一份旧清单会让 AI 处于「清单里有、工具列表里调不动」。
+    """
     db = _ensure_repo(db)
     stack = await _get_stack(db, agent_id)
     if not stack:
         return None, None
     top = stack[-1]
+    world_id = world_id_of(top)
+    if world_id is not None:
+        # 按这个 AI 的绑定类型过滤（与群聊注入技能同一口径）：多给一条他调不动的，
+        # 就是"清单里有、工具列表里没有"的那种困惑
+        from app.services.world.world_frame_service import (
+            world_frame_tools, world_frame_tools_for,
+        )
+        agent = (await db.execute(
+            select(Agent.id, Agent.user_id).where(Agent.id == agent_id))).first()
+        if agent is None:
+            return world_frame_tools(world_id), None
+        return await world_frame_tools_for(db, agent, world_id, top.get("group_id")), None
     return top.get("tools"), top.get("skills")
+
+
+async def park_frame(db: AsyncSession, agent_id: int, frame: dict) -> None:
+    """放一条**沉睡帧**进存储：落库后它进历史区，当前帧不动。
+
+    与 push_state 的唯一区别是"要不要成为当前帧"：预建世界帧不该把他从现在所在的地方
+    拽走（那正是他现在在做的事）。容量闸照常走 _save——帧位是全局预算，预建同样占用。
+    """
+    db = _ensure_repo(db)
+    stack = await _get_stack(db, agent_id)
+    frame["status"] = ENDED_STATUS
+    stack.append(frame)
+    await _save(db, agent_id, stack)
 
 
 async def current_context(db: AsyncSession, agent_id: int,
@@ -868,11 +918,9 @@ async def current_context(db: AsyncSession, agent_id: int,
                 continue
             if group not in groups:
                 groups.append(group)
-        elif world_id is None and frame.get("type") == "world" and ref.startswith("world:"):
-            try:
-                world_id = int(ref.split(":", 1)[1])
-            except ValueError:
-                continue
+        elif world_id is None and (wid := world_id_of(frame)) is not None:
+            # 世界号只从 context_ref 解析（pure.world_id_of 是唯一口径）
+            world_id = wid
             raw_group = frame.get("group_id")
             try:
                 channel_group_id = int(raw_group) if raw_group else None

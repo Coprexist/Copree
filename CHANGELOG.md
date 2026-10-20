@@ -9,6 +9,17 @@
 ## [Unreleased]
 
 ### ✨ 新增
+- **进群视界＝换一条世界专属状态帧：工具只剩这个世界给的那套（沉浸式）**：原来“进世界”只是 AI
+  自己调 `enter_world` 压一条帧，帧上不带工具隔离——进去以后「发消息 / 翻记录 / 查群」群聊社交那套
+  照旧在，等于在世界里继续做群聊。现在三段都归一处（`services/world/world_frame_service.py`）：
+  ① 把世界绑给 AI（`POST /worlds/{id}/bind` 或按类型绑定）就**预建一条沉睡世界帧**（`status=ended`，
+  不改变他现在在哪）；② 进门时激活的就是这条帧（帧 id / 通道群跟着本次进门刷新，不叠第二帧）；
+  ③ 帧激活期间工具 = **基础集**（`enter_world` / `world_command` / `pop_state` / `push_state` /
+  `list_states` / `update_self_config`）+ **这个世界当前颁布的技能**，平台其余工具不出现。白名单
+  **现算不冻结**（世界后来颁布新技能，下一轮就能用，不会「清单里有、调不动」）；群聊与私信两条
+  路径共用同一份闸门，在世界里来群消息也不会把身份切回群会话。世界号只从 `context_ref` 解析
+  （`utils/pure/state_stack.world_id_of` 一份口径，`current_context` 同源）。`enter_world` 回报
+  “你现在有哪些工具”。用例 `tests/test_world_frame.py`（6 条）。
 - **创建页的模型下拉只列「这个账号真能调用的模型」**：原来把十四家供应商的模型平铺，用户能选出
   自己根本调不通的组合（2026-10-19 那条 400 就是从这儿来的）。`GET /agents/models` 改由
   `services/agent/model_catalog.py` 按运行期同一套来源算：有额度 → 平台池 Key（它自己记的清单），

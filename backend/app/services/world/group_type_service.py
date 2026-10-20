@@ -226,6 +226,11 @@ async def bind_entry_with_type(
     binding.group_type_slug = type_slug
     await db.flush()
 
+    # AI 直接绑定世界（带类型）：与世界入口绑定同一口径——预建沉睡帧，进门时激活
+    if entity_type == "agent":
+        from app.services.world.world_frame_service import park_world_frame_for_binding
+        await park_world_frame_for_binding(db, entity_id, await db.get(World, world_id))
+
     created = []
     if entity_type == "group":
         # 按模板自动创建群助手（幂等：该群该类型已有助手则不重复建）
