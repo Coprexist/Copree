@@ -400,8 +400,17 @@ async def send_gm_message(
     安全（2026-08-05 产品发现）：非群成员默认禁止发消息——
     任意登录用户不能给任意群灌水；allow_non_member=True 供
     世界 AI 给绑定群发消息（群绑定校验在 world_tools 层已有）。
+
+    sender_id 只认 users.id（人就是 user_id，AI 先用 ai_sender_id 把 agents.id 换过来）：
+    这里同时是"谁在这个群"的唯一判定，报错时把校验用的两个编号记进日志——
+    上一次线上事故「群 AI 发不出世界命令」就是因为只有一句"你不是该群成员"，
+    分不清是没进群、还是编号传错了。
     """
     if not allow_non_member and not await is_group_member(db, group_id, sender_type, sender_id):
+        logger.warning(
+            f"拒绝发消息：group={group_id} sender_type={sender_type} sender_id={sender_id}"
+            f"（不在群成员表；AI 若传了 agents.id 请先 ai_sender_id 换算）"
+        )
         raise ValueError("你不是该群成员，无法发送消息")
     # 入口归一：@名字 → <@!id>。人的手打、QQ 入站、工具调用都经这里，
     # 所以下游（唤醒判定、AI 上下文、通道出口）不必再各写一套名字比对
@@ -465,7 +474,10 @@ async def is_group_admin(db: AsyncSession, group_id: int, user_id: int) -> bool:
 
 
 async def is_group_member(db: AsyncSession, group_id: int, sender_type: str, sender_id: int) -> bool:
-    """发送者是否为群成员（human/ai 两种成员类型）"""
+    """发送者是否为群成员（human/ai 两种成员类型）；sender_id 只认 users.id。
+
+    AI 侧：工具拿到的是 agents.id，发消息前先用 ai_sender_id 换算（见其 docstring）。
+    """
     from app.models.group import GroupMember
     row = (await db.execute(
         select(GroupMember).where(
@@ -651,34 +663,32 @@ async def count_messages_between(db, group_id: int, *, after_id: int, before_id:
 # 成员查询与操作
 # ============================================================
 
+async def ai_sender_id(db: AsyncSession, agent_id: int) -> int:
+    """AI 的发送身份：把 agents.id 换算成 users.id。
+
+    v2.0.0 起 messages.sender_id、group_members.member_id 存的都是 users.id，而工具的
+    execute 拿到的是 agent_id —— 同一个 AI 两个编号，不换算就会被成员校验当成"外人"
+    （2026-10-20 线上：群 AI 的 world_command 在群里报「你不是该群成员」，普通聊天正常）。
+
+    **必须由知道自己是 agents.id 的一侧显式换算，不能在下游"猜"**：两个 id 空间数值重叠
+    （线上 20 条 AI 成员记录的 member_id 恰好也是另一个 agent 的 id），猜错就把消息记到
+    别的 AI 名下。所以成员校验只认 users.id，换算只在工具入口做一次。
+    """
+    agent = await db.get(AgentModel, agent_id)
+    return agent.user_id if agent is not None and agent.user_id else agent_id
+
+
 async def is_member_of_group(
     db: AsyncSession,
     member_id: int,
     member_type: str,
     group_id: int,
 ) -> bool:
-    """检查成员是否在指定群聊中。"""
-    lookup_id = member_id
-    if member_type == "ai":
-        agent_result = await db.execute(
-            select(AgentModel).where(AgentModel.user_id == member_id)
-        )
-        agent = agent_result.scalar_one_or_none()
-        if agent is None:
-            agent = await db.get(AgentModel, member_id)
-        if agent and agent.user_id:
-            lookup_id = agent.user_id
+    """检查成员是否在指定群聊中（参数顺序与 is_group_member 相反的历史签名，转调它）。
 
-    result = await db.execute(
-        select(GroupMember).where(
-            and_(
-                GroupMember.group_id == group_id,
-                GroupMember.member_type == member_type,
-                GroupMember.member_id == lookup_id,
-            )
-        )
-    )
-    return result.scalar_one_or_none() is not None
+    只认 users.id：AI 的调用方先用 ai_sender_id 换算，别在这里猜是哪套编号。
+    """
+    return await is_group_member(db, group_id, member_type, member_id)
 
 
 async def remove_member(

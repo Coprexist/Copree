@@ -27,12 +27,12 @@ class SendGm(ToolPlugin):
 
     async def execute(self, db: AsyncSession, agent_id: int, group_id: int | None,
                       arguments: dict, context: dict) -> dict:
-        from app.chat.gm import send_gm_message, gm_message_to_dict
+        from app.chat.gm import ai_sender_id, send_gm_message, gm_message_to_dict
         from app.models.agent import Agent as AgentModel
 
         # 统一用 user_id 作为 sender_id（v2.0.0 迁移后所有消息 sender_id 均为 users.id）
         a_obj = (await db.execute(select(AgentModel).where(AgentModel.id == agent_id))).scalar_one_or_none()
-        user_id = a_obj.user_id if a_obj and a_obj.user_id else agent_id
+        user_id = await ai_sender_id(db, agent_id)
 
         target_group = arguments.get("group_id", group_id)
         content = arguments["content"]

@@ -169,6 +169,18 @@
   从缓存里打掉。现在技能跟任务、状态栈摘要、当前时间一样沉尾部，开头只留走版本链冻结的锁定段。
 
 ### 🐛 修复
+- **群 AI 发不出世界命令（「你不是该群成员，无法发送消息」）**：群「CoExisten」(#59) 里 AI
+  「浮生（人物志1）」普通聊天一切正常，调 `world_command` 却每次都被成员校验挡回来，它于是
+  以为自己"没被登记进世界成员名单"，连着几条消息让群主去拉人——实际它一直在群里
+  （`group_members` 有记录，世界 #45 也绑着群 59）。根因是同一个 AI 的两个编号：v2.0.0 起
+  消息与成员表存的都是 users.id，而 `world_command` 把工具拿到的 agents.id（25）原样当
+  sender_id 传下去，发送侧的 `is_group_member` 按 25 查不到 41 那条记录（`chat/gm.py:404`）。
+  `send_gm`/`send_file`/`cross_post` 三个工具都自己换算了，只有它没换。现在换算收成一份
+  `chat/gm.py: ai_sender_id`，`world_command` 与 `send_gm` 共用；成员判定只认 users.id，
+  不许下游"猜"是哪套编号（线上 20 条 AI 成员记录的 member_id 恰好也是另一个 agent 的 id，
+  猜错就把消息记到别的 AI 名下）——`is_member_of_group` 里那段猜编号的逻辑一并删掉，转调
+  `is_group_member`。发送被拒时日志补上 group_id / sender_type / sender_id（上一轮排查
+  只有一句"你不是该群成员"，分不清是没进群还是编号传错）。用例 `tests/test_ai_sender_identity.py`（4 条）。
 - **「连不上模型」这件事不再让人摸不着头脑**：设置页的「模型服务地址」原来只有一句
   "需兼容 OpenAI 接口格式"，新手照样会把自己电脑上跑的中转（`http://localhost:8888`）填进去——
   服务器访问不到，AI 一句话都发不出来，界面上什么提示都没有。现在：输入框下一句把"这一栏是什么、

@@ -71,8 +71,11 @@ class WorldCommand(ToolPlugin):
                         "在私信里就先 enter_group(群号) 或 enter_world 进世界，也可以直接带 group_id"}
 
         # 以 AI 身份发群消息 → 群消息钩子（source="user"）→ 世界程序 handle 解析执行
-        from app.chat.gm import send_gm_message
-        await send_gm_message(db, target_group, "ai", agent_id, command, source="user")
+        # 发送身份必须是 users.id：这里拿到的是 agents.id，不换算会被成员校验当成外人
+        # （2026-10-20 线上：群里普通聊天正常，工具调用却回「你不是该群成员，无法发送消息」）
+        from app.chat.gm import ai_sender_id, send_gm_message
+        sender_id = await ai_sender_id(db, agent_id)
+        await send_gm_message(db, target_group, "ai", sender_id, command, source="user")
 
         return {
             "success": True,
