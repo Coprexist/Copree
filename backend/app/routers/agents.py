@@ -64,56 +64,43 @@ async def get_available_models(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """返回可用模型选项列表（所有供应商的全部模型，供前端下拉框分组展示）"""
+    """这个账号创建 AI 时真能用的模型。
+
+    按通道分组，不是把全平台供应商平铺：运行期模型名必须落在这一轮真正走的那条通道上
+    （池 Key / 本人 Key / 全局默认，见 services/agent/model_catalog.py）。
+    """
     from app.config import settings
-    from app.services.infrastructure.system_settings_service import get_providers, get_default_provider
-    from app.utils.pure.provider_config import (
-        collect_all_models, build_provider_summaries,
-        get_default_models, get_thinking_supported,
-    )
+    from app.services.agent.model_catalog import selectable_channels
 
-    providers = await get_providers(db)
+    # 不知道能用哪些模型的通道（自建中转没登记过预设）不进下拉：选不出东西的分组只是噪声
+    channels = [c for c in await selectable_channels(db, current_user["user_id"]) if c["models"]]
+    models = [
+        {**m, "provider_name": c["name"], "provider": c["provider"]}
+        for c in channels for m in c["models"]
+    ]
+    if not models:
+        # 供应商预设也没配（新装环境）：退回环境变量里的模型清单，至少让创建页能用
+        models = settings.get_model_options()
+        channels = [{
+            "name": "默认", "provider": "deepseek", "base_url": settings.deepseek_base_url,
+            "api_key_url": "", "thinking_supported": settings.is_deepseek_api,
+            "is_default": True, "chat_model": settings.default_chat_model,
+            "work_model": settings.default_work_model, "models": models,
+        }]
 
-    if not providers:
-        # provider_config 为空时，使用内置预设作为默认值
-        from app.services.agent.provider_presets import get_all_presets
-        builtin = get_all_presets()
-        provider_list = []
-        for i, p in enumerate(builtin):
-            provider_list.append({
-                "name": p["label"],
-                "provider": p["key"],
-                "base_url": p["base_url"],
-                "api_key_url": p.get("api_key_url", ""),
-                "thinking_supported": p.get("thinking_supported", False),
-                "is_default": i == 0,
-            })
-        all_models = settings.get_model_options()
-        return {
-            "models": all_models,
-            "defaults": {"chat_model": settings.default_chat_model, "work_model": settings.default_work_model},
-            "providers": provider_list,
-            "provider": {"key": "deepseek", "base_url": settings.deepseek_base_url, "thinking_supported": settings.is_deepseek_api, "is_deepseek": settings.is_deepseek_api},
-        }
-
-    all_models = collect_all_models(providers)
-    provider_list = build_provider_summaries(providers)
-    chat_model, work_model = get_default_models(providers)
-    default_provider = await get_default_provider(db)
-    api_base = (default_provider.get("base_url") or settings.deepseek_base_url) if default_provider else settings.deepseek_base_url
-
+    primary = channels[0]
     return {
-        "models": all_models,
+        "models": models,
         "defaults": {
-            "chat_model": chat_model or settings.default_chat_model,
-            "work_model": work_model or settings.default_work_model,
+            "chat_model": primary.get("chat_model") or settings.default_chat_model,
+            "work_model": primary.get("work_model") or settings.default_work_model,
         },
-        "providers": provider_list,
+        "providers": channels,
         "provider": {
-            "key": default_provider.get("provider", "unknown") if default_provider else "unknown",
-            "base_url": api_base,
-            "thinking_supported": get_thinking_supported(providers, api_base),
-            "is_deepseek": "deepseek.com" in api_base,
+            "key": primary.get("provider", "unknown"),
+            "base_url": primary["base_url"],
+            "thinking_supported": primary["thinking_supported"],
+            "is_deepseek": "deepseek.com" in primary["base_url"],
         },
     }
 

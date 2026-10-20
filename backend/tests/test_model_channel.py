@@ -63,3 +63,25 @@ def test_legacy_defaults_still_work():
 
     assert resolve_model(_agent(None), global_default_model="deepseek-v4-pro") == "deepseek-v4-pro"
     assert resolve_model(_agent(None)) == "deepseek-flash"
+
+
+def test_catalog_lists_only_known_models_and_keeps_labels():
+    """创建页的清单按通道给：池 Key 记的 id 排前面，标签能对上预设就用预设的"""
+    from app.services.agent.model_catalog import channel_summary, model_options
+
+    provider = {
+        "name": "DeepSeek", "provider": "deepseek", "base_url": "https://api.deepseek.com",
+        "chat_model": "deepseek-flash",
+        "model_options": [{"value": "deepseek-flash", "label": "Flash"},
+                          {"value": "deepseek-v4-pro", "label": "Pro"}],
+    }
+    assert model_options(provider, ["deepseek-v4-pro"]) == [{"value": "deepseek-v4-pro", "label": "Pro"}]
+    # 池 Key 记了预设里没有的 id（第三方中转自己起的名字）→ 标签退回 id 本身，不丢
+    assert model_options(provider, ["relay-x"]) == [{"value": "relay-x", "label": "relay-x"}]
+    # 没记清单 → 用预设的全部
+    assert [m["value"] for m in model_options(provider, None)] == ["deepseek-flash", "deepseek-v4-pro"]
+
+    summary = channel_summary(provider, "https://api.deepseek.com",
+                              models=["deepseek-flash"], default_model="deepseek-flash", is_default=True)
+    assert summary["models"] == [{"value": "deepseek-flash", "label": "Flash"}]
+    assert summary["chat_model"] == "deepseek-flash" and summary["is_default"] is True

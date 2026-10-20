@@ -9,6 +9,14 @@
 ## [Unreleased]
 
 ### ✨ 新增
+- **创建页的模型下拉只列「这个账号真能调用的模型」**：原来把十四家供应商的模型平铺，用户能选出
+  自己根本调不通的组合（2026-10-19 那条 400 就是从这儿来的）。`GET /agents/models` 改由
+  `services/agent/model_catalog.py` 按运行期同一套来源算：有额度 → 平台池 Key（它自己记的清单），
+  配了本人 Key → 它的 base_url 对应的供应商预设，最后补一条全局默认；同一地址只算一条，没有模型
+  清单的通道（自建中转没登记）不进下拉。前端两个模型下拉共用 `renderModelOptions`，当前值不在
+  清单里时补一条「当前通道不支持，会按默认模型回复」，不再显示成空白。管理页池 Key 编辑框新增
+  「待选模型（逗号分隔）」与「默认模型」，列表里带一行摘要；「测通」探测到的模型清单顺手落库。
+  用例 `tests/test_model_channel.py` 增至 5 条。
 - **AI 能自己调尺时间了（`update_ruler_time`）**：`chat_chain_rules.txt:3` 早就写着「可用
   update_ruler_time 自行调整」，但这名字一直只是 `ChatChainManager` 的方法（`ai/chat_chain.py:330`），
   没注册成工具——AI 调不到，永远只能用默认 120 秒。现在进 chat_social 段（active/dnd 可用，10–3600 秒，

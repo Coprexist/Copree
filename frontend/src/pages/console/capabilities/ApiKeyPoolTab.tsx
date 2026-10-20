@@ -14,6 +14,9 @@ interface PoolKey {
   is_active: boolean
   priority: number
   concurrent_limit: number | null
+  /** 这条 Key 自己能用的模型（NULL/空 = 按关联的供应商预设） */
+  models: string[]
+  default_model: string | null
   created_at: string | null
   updated_at: string | null
 }
@@ -69,7 +72,9 @@ export default function ApiKeyPoolTab() {
       const r = await api.post(`/admin/api-key-pool/${id}/test`, {}) as any
       const lines = [r?.message || (r?.ok ? t('admin:testOk') : t('admin:testFailed'))]
       if (r?.models?.length) lines.push(t('admin:testModels').replace('{n}', String(r.models.length)))
+      if (r?.saved) lines.push(t('admin:testModelsSaved'))
       alert(lines.join('\n'))
+      if (r?.saved) loadKeys()   // 模型清单已落库，列表里那行摘要跟着更新
     } catch (err: any) {
       alert(err?.message || t('admin:testFailed'))
     } finally {
@@ -143,7 +148,16 @@ export default function ApiKeyPoolTab() {
             <tbody className="divide-y divide-border/50">
               {keys.map(k => (
                 <tr key={k.id} className={`hover:bg-elevated/50 transition-colors ${!k.is_active ? 'opacity-50' : ''}`}>
-                  <td className="py-2.5 px-3 font-medium">{k.name}</td>
+                  <td className="py-2.5 px-3 font-medium">
+                    {k.name}
+                    <div className="text-3xs text-textMuted font-normal">
+                      {k.models?.length
+                        ? t('admin:keyModelsSummary')
+                          .replace('{n}', String(k.models.length))
+                          .replace('{model}', k.default_model || k.models[0])
+                        : t('admin:keyModelsUnset')}
+                    </div>
+                  </td>
                   <td className="py-2.5 px-3 text-xs text-textMuted font-mono max-w-[160px] truncate">{k.api_base_url}</td>
                   <td className="py-2.5 px-3 text-xs text-textMuted font-mono">
                     <span title={t('admin:keyEncryptedHint')}>{k.api_key_preview || '—'}</span>
@@ -235,8 +249,13 @@ function AddPoolKeyModal({ onClose, onSaved, editing }: {
   const [apiKey, setApiKey] = useState('')   // 编辑时留空 = 不替换明文
   const [priority, setPriority] = useState(editing?.priority ?? 0)
   const [concurrentLimit, setConcurrentLimit] = useState<number | null>(null)
+  // 待选模型用一行文本编辑：逗号/空格分隔，够用且不必为「动态增删行」写一套组件
+  const [modelsText, setModelsText] = useState((editing?.models || []).join(', '))
+  const [defaultModel, setDefaultModel] = useState(editing?.default_model || '')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+
+  const parsedModels = modelsText.split(/[,，\s]+/).map(m => m.trim()).filter(Boolean)
 
   const handleSave = async () => {
     if (!name.trim() || (!editing && !apiKey.trim())) return
@@ -248,6 +267,8 @@ function AddPoolKeyModal({ onClose, onSaved, editing }: {
         api_base_url: apiBaseUrl.trim() || null,
         priority,
         concurrent_limit: concurrentLimit,
+        models: parsedModels,
+        default_model: defaultModel.trim() || null,
       }
       if (apiKey.trim()) payload.api_key = apiKey.trim()   // 留空表示保留原明文
       if (editing) await api.put(`/admin/api-key-pool/${editing.id}`, payload)
@@ -290,6 +311,25 @@ function AddPoolKeyModal({ onClose, onSaved, editing }: {
               placeholder={t('admin:keyApiUrlPlaceholder')}
               className="w-full px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
             />
+          </div>
+          <div>
+            <label className="block text-xs font-medium mb-1 text-textSecondary">{t('admin:keyModels')}</label>
+            <input
+              type="text" value={modelsText} onChange={(e) => setModelsText(e.target.value)}
+              placeholder={t('admin:keyModelsPlaceholder')}
+              className="w-full px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+            />
+            <p className="text-3xs text-textMuted mt-1">{t('admin:keyModelsHint')}</p>
+          </div>
+          <div>
+            <label className="block text-xs font-medium mb-1 text-textSecondary">{t('admin:keyDefaultModel')}</label>
+            <select
+              value={defaultModel} onChange={(e) => setDefaultModel(e.target.value)}
+              className="w-full px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+            >
+              <option value="">{t('admin:keyDefaultModelAuto')}</option>
+              {parsedModels.map(m => <option key={m} value={m}>{m}</option>)}
+            </select>
           </div>
           <div>
             <label className="block text-xs font-medium mb-1 text-textSecondary flex items-center gap-2">
@@ -336,7 +376,7 @@ function AddPoolKeyModal({ onClose, onSaved, editing }: {
             className="btn btn-md btn-outline flex-1">
             {t('common:cancel')}
           </button>
-          <button onClick={handleSave} disabled={!name.trim() || !apiKey.trim() || loading}
+          <button onClick={handleSave} disabled={!name.trim() || (!editing && !apiKey.trim()) || loading}
             className="btn btn-md btn-primary flex-1">
             {loading ? t('admin:adding') : t('admin:add')}
           </button>

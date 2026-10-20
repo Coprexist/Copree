@@ -173,7 +173,7 @@ export default function DetailSettingsModal({
                 <select value={chatModel} onChange={(e) => setChatModel(e.target.value)}
                   className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50">
                   <option value="">{t('modal:detailSettingsGlobalDefault')}</option>
-                  {renderModelOptions(modelOptions, providers)}
+                  {renderModelOptions(modelOptions, providers, chatModel)}
                 </select>
               </div>
               <div>
@@ -183,7 +183,7 @@ export default function DetailSettingsModal({
                 <select value={workModel} onChange={(e) => setWorkModel(e.target.value)}
                   className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50">
                   <option value="">{t('modal:detailSettingsGlobalDefault')}</option>
-                  {renderModelOptions(modelOptions, providers)}
+                  {renderModelOptions(modelOptions, providers, workModel)}
                 </select>
               </div>
             </div>

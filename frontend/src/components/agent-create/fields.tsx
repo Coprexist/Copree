@@ -44,19 +44,43 @@ export function ApiKeyGetLink({ providers }: { providers: ProviderInfo[] }) {
   )
 }
 
-// ── 模型选项渲染（按供应商分组）──
-export function renderModelOptions(models: ModelOption[], providers: ProviderInfo[]) {
+// ── 模型选项渲染（按通道分组）──
+// 清单只列这个账号真能调用的通道（后端 /agents/models 按运行期同一套来源算），
+// current 不在清单里时补一条：老配置选了本通道不支持的模型，得让它显示出来而不是变成空白——运行期会
+// 收敛到通道默认（可能悄悄换掉模型），这里先告诉用户。
+export function renderModelOptions(models: ModelOption[], providers: ProviderInfo[], current?: string) {
+  const stale = staleModelOption(models, providers, current)
   if (providers.length > 0) {
-    return providers.map(p => (
-      <optgroup key={p.name} label={`${p.name}${p.is_default ? '（默认）' : ''}`}>
-        {p.models.map(m => (
-          <option key={m.value} value={m.value}>{m.label}</option>
+    return (
+      <>
+        {providers.map(p => (
+          <optgroup key={p.name} label={`${p.name}${p.is_default ? '（默认）' : ''}`}>
+            {p.models.map(m => (
+              <option key={m.value} value={m.value}>{m.label}</option>
+            ))}
+          </optgroup>
         ))}
-      </optgroup>
-    ))
+        {stale}
+      </>
+    )
   }
   // 无供应商数据时回退到扁平列表
-  return models.map(m => <option key={m.value} value={m.value}>{m.label}</option>)
+  return (
+    <>
+      {models.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+      {stale}
+    </>
+  )
+}
+
+/** 当前值不在清单里时的那一条（两个弹窗共用一份判断）*/
+function staleModelOption(models: ModelOption[], providers: ProviderInfo[], current?: string) {
+  if (!current) return null
+  const known = providers.length > 0
+    ? providers.some(p => p.models.some(m => m.value === current))
+    : models.some(m => m.value === current)
+  if (known) return null
+  return <option value={current}>{current}（当前通道不支持，会按默认模型回复）</option>
 }
 
 // ── AI 类型三选一（主弹窗与详细设置共用） ──

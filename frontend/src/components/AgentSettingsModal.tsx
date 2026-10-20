@@ -9,6 +9,8 @@ import Toggle from './Toggle'
 import { SliderField } from './ui'
 // 档位预设与创建弹窗共用一份，避免两处各维护一套数字
 import { PRESETS } from './agent-create/presets'
+// 模型下拉也共用一份渲染：清单按通道给（后端 /agents/models），"当前通道不支持"的提示也在那里
+import { renderModelOptions } from './agent-create/fields'
 
 interface AgentData {
   id: number
@@ -112,18 +114,9 @@ function ApiKeyGetLink({ providers }: { providers?: ProviderItem[] }) {
   )
 }
 
-/** 模型选项渲染（按供应商分组）*/
-function renderGroupedModels(models: ModelOption[], providers?: ProviderItem[]) {
-  if (providers && providers.length > 0) {
-    return providers.map(p => (
-      <optgroup key={p.name} label={`${p.name}${p.is_default ? '（默认）' : ''}`}>
-        {p.models.map(m => (
-          <option key={m.value} value={m.value}>{m.label}</option>
-        ))}
-      </optgroup>
-    ))
-  }
-  return models.map(m => <option key={m.value} value={m.value}>{m.label}</option>)
+/** 模型选项渲染：与创建弹窗同一份实现（按通道分组）*/
+function renderGroupedModels(models: ModelOption[], providers?: ProviderItem[], current?: string) {
+  return renderModelOptions(models, providers || [], current)
 }
 
 export default function AgentSettingsModal({
@@ -467,7 +460,7 @@ export default function AgentSettingsModal({
                     <select value={chatModel} onChange={(e) => setChatModel(e.target.value)}
                       className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50">
                       <option value="">{t('modal:detailSettingsGlobalDefault')}</option>
-                      {renderGroupedModels(modelOptions, providers)}
+                      {renderGroupedModels(modelOptions, providers, chatModel)}
                     </select>
                   </div>
                   <div>
@@ -477,7 +470,7 @@ export default function AgentSettingsModal({
                     <select value={workModel} onChange={(e) => setWorkModel(e.target.value)}
                       className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50">
                       <option value="">{t('modal:detailSettingsGlobalDefault')}</option>
-                      {renderGroupedModels(modelOptions, providers)}
+                      {renderGroupedModels(modelOptions, providers, workModel)}
                     </select>
                   </div>
                 </div>
