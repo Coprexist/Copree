@@ -152,6 +152,20 @@ async def _probe_by_chat(
     return _failure(resp, api_key)
 
 
+def _private_hint(base_url: str) -> str:
+    """连不上又恰好是本机/内网地址时，把「为什么」直接说出来。
+
+    新手填了自己电脑上跑的中转（localhost:8888），看到的只有 "All connection attempts failed"——
+    这句话不会让人想到「服务器和我的电脑不是一台机器」。
+    """
+    from app.utils.pure.url_guard import is_private_target
+
+    if not is_private_target(base_url):
+        return ""
+    return ("\n这是本机或局域网地址：服务器访问不到它（localhost/127.0.0.1 指的是你的电脑，"
+            "192.168.x.x 是内网）。请填公网能访问的地址，或者把 Base URL 清空、改走平台通道。")
+
+
 async def probe_provider(
     base_url: str,
     api_key: str | None,
@@ -197,10 +211,11 @@ async def probe_provider(
             return await _probe_by_chat(client, base_url, api_key, model)
         return _failure(resp, api_key)
     except httpx.TimeoutException:
-        return ProbeResult(False, "timeout", "连接超时：检查 Base URL 与服务器出网")
+        return ProbeResult(False, "timeout", "连接超时：检查 Base URL 与服务器出网" + _private_hint(base_url))
     except httpx.HTTPError as e:
         # 含 ConnectError / DNS 失败等；异常文本同样要脱敏（可能带 URL/凭据）
-        return ProbeResult(False, "network", f"无法连接：{redact_secret(str(e), api_key)}")
+        return ProbeResult(False, "network",
+                           f"无法连接：{redact_secret(str(e), api_key)}" + _private_hint(base_url))
     finally:
         if owns_client and client is not None:
             await client.aclose()

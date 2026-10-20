@@ -20,6 +20,7 @@ import { NOTICE_BOX_CLASS, NOTICE_TEXT_CLASS, useNotice } from '../hooks/useNoti
 import { isDesktop } from '../utils/platform'
 import { invoke } from '../utils/tauri'
 import { getApiKeyUrl } from '../utils/providers.tsx'
+import { looksLocalBaseUrl } from '../utils/apiBaseUrl'
 import { Key, Zap, Save, Clock, Palette, Bell, Eye, EyeOff, CheckCircle, XCircle, Loader2, Globe, Layout, Bot, Pencil, X, Ticket, Plus, ChevronDown, ChevronRight, Shield, AlertTriangle, ArrowLeft, Mail, Monitor, HardDrive, Trash2, Cpu, Wrench, Box, ExternalLink, BarChart3, Star } from 'lucide-react'
 import { useNavigate, useBlocker, useLocation, useSearchParams } from 'react-router-dom'
 
@@ -93,6 +94,8 @@ export default function SettingsPage() {
   const [showApiKey, setShowApiKey] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<'success' | 'fail' | null>(null)
+  // 测试结果的原因也要给人看：只给一个红叉，新手不知道是地址错、Key 错还是连不上
+  const [testMessage, setTestMessage] = useState('')
   const [preferOwnKey, setPreferOwnKey] = useState(false)
   const [autoTimeout, setAutoTimeout] = useState(60)
   const [autoDefault, setAutoDefault] = useState(false)
@@ -383,17 +386,23 @@ export default function SettingsPage() {
   const handleTestConnection = async () => {
     setTesting(true)
     setTestResult(null)
+    setTestMessage('')
     try {
       const data = await api.post<{ ok: boolean; message: string }>('/user/test-api-connection', {
         api_base_url: apiBaseUrl || null,
         api_key: apiKey || null,
       })
       setTestResult(data.ok ? 'success' : 'fail')
+      setTestMessage(data.message || '')
     } catch (err: any) {
       setTestResult('fail')
+      setTestMessage(err?.message || '')
     } finally {
       setTesting(false)
-      setTimeout(() => setTestResult(null), 5000)
+      setTimeout(() => {
+        setTestResult(null)
+        setTestMessage('')
+      }, 8000)
     }
   }
 
@@ -634,6 +643,9 @@ export default function SettingsPage() {
               placeholder={t('settings:baseUrlPlaceholder')}
             />
             <p className="text-3xs text-textMuted mt-1">{t('settings:baseUrlDesc')}</p>
+            {looksLocalBaseUrl(apiBaseUrl) && (
+              <p className="text-3xs text-rose-400 mt-1">{t('settings:baseUrlWarnLocal')}</p>
+            )}
           </div>
           <div>
             <label className="block text-xs font-medium mb-1.5 text-textSecondary flex items-center gap-2">
@@ -686,6 +698,11 @@ export default function SettingsPage() {
                 {testing ? t('settings:testing') : testResult === 'success' ? t('settings:testSuccess') : testResult === 'fail' ? t('settings:testFailed') : t('settings:testConnection')}
               </button>
             </div>
+            {testMessage && (
+              <p className={`text-3xs mt-1 ${testResult === 'success' ? 'text-mint-400' : 'text-rose-400'}`}>
+                {testMessage}
+              </p>
+            )}
           </div>
 
           {/* 全局默认模型覆盖 */}
