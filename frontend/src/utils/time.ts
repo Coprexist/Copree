@@ -1,12 +1,20 @@
 import { type Lang, getLangMeta } from '../i18n/languages'
 
+/** 带时刻的裸时间串（"2026-10-20 09:39:15.314381" / "2026-10-20T09:39:15"）；只有日期的不算 */
+const NAIVE_DATETIME = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/
+
 /**
- * 解析后端时间字符串（后端 DateTime 列无 timezone=True，Pydantic 序列化为 naive UTC）。
- * 对无时区标记的字符串追加 'Z'，避免 JavaScript 将其误判为本地时间。
+ * 解析后端时间字符串（后端 DateTime 列无 timezone=True，库的时区是 UTC，出去的裸串就是 UTC）。
+ * 对无时区标记的**带时刻**字符串补 'Z'，避免 JavaScript 把它当本地时间——那是 8 小时偏差，
+ * 而不是"日期差一天"：日志页原先直接 new Date(裸串)，本地 17:39 的一轮显示成 09:39。
+ * 只落到日期（"2026-10-20"）的别补 Z，补了直接 Invalid Date。
  */
 export function parseServerDate(dateStr: string): Date {
   const hasTimezone = /[+\-Zz]\d{2}:\d{2}$/.test(dateStr) || /Z$/i.test(dateStr)
-  return new Date(hasTimezone ? dateStr : dateStr + 'Z')
+  if (!hasTimezone && NAIVE_DATETIME.test(dateStr)) {
+    return new Date(dateStr.replace(' ', 'T') + 'Z')
+  }
+  return new Date(dateStr)
 }
 
 /** 从原始字符串提取 HH:MM（不受时区影响），返回 [小时, 分钟] */
@@ -182,13 +190,18 @@ export function uiLocale(lang: Lang): string {
  * 日期 / 日期时间：页面别再写 `toLocaleDateString('zh-CN')`——en/ja 用户会看到中文格式，
  * 也别按 `document.documentElement.lang` 猜（那个属性没人维护）。
  *
- * 时间点仍按调用点原来的 `new Date(value)` 解释：相对时间那套 parseServerDate 是另一回事，
- * 在这里换语义会让"日期差一天"这种事神不知鬼不觉地发生。
+ * 时间点怎么解释**看入参类型**：字符串一律走后端口径（parseServerDate，裸串按 UTC），
+ * Date / 毫秒数按 JS 原生（本地）。这几页传的全是接口给的 `created_at` / `executed_at`，
+ * 原先 `new Date(裸串)` 把它们当本地时间，整页时间早 8 小时——日期看着"对"，时刻全错。
  */
+function toDisplayDate(value: DateInput): Date {
+  return typeof value === 'string' ? parseServerDate(value) : new Date(value)
+}
+
 export function fmtDate(value: DateInput, lang: Lang = 'zh'): string {
-  return new Date(value).toLocaleDateString(uiLocale(lang))
+  return toDisplayDate(value).toLocaleDateString(uiLocale(lang))
 }
 
 export function fmtDateTime(value: DateInput, lang: Lang = 'zh', opts?: Intl.DateTimeFormatOptions): string {
-  return new Date(value).toLocaleString(uiLocale(lang), opts)
+  return toDisplayDate(value).toLocaleString(uiLocale(lang), opts)
 }

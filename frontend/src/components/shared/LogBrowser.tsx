@@ -57,6 +57,19 @@ function Hunk({ label, removed, messages, names }: {
   )
 }
 
+/**
+ * 账本是一直在长的：AI 在别的会话里又跑了几轮，这段状态就多出新的卡片。
+ * 列表原先只在挂载时拉一次，停在旧快照上就会"明明写过了却看不到"——2026-10-20 浮生↔若梦的私信
+ * 就是这样：浮生的页面 09:38:32 打开的，那一轮 09:38:43 才落库，同一时刻新开的另一页才看得到。
+ * 页面可见时轻拉一次（15s），切回前台补一次；藏在后台标签里不发请求。
+ */
+const POLL_MS = 60_000
+
+/** 轮询回来的列表常常和手上这份一模一样：id 序列没变就沿用旧对象，连重渲染都不发生（列表不抖不闪） */
+function sameLogList(a: LogSummary[], b: LogSummary[]): boolean {
+  return a.length === b.length && a.every((item, index) => item.id === b[index].id)
+}
+
 // limit 只是防呆上限（后端按保留策略返回：最多的那段状态 30 / 其余 5，老状态 10 / 2）——
 // 它**不是**「保留多少条」的旋钮，写死小数会让列表看起来比实际保留的少
 export default function LogBrowser({ agentId, basePath = '/conversation-log', exportLog, limit = 500 }: Props) {
@@ -100,16 +113,39 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
   const stateKey = searchParams.get('state')
   const wantedLogId = Number(searchParams.get('log')) || null
 
+  // 「补一下新的」与「换了个 AI」不一样：前者不该把列表换成转圈（会闪），后者本来就该露加载态
+  const [reloadTick, setReloadTick] = useState(0)
+  const shownKey = useRef('')
+
+  useEffect(() => {
+    const bump = () => setReloadTick(tick => tick + 1)
+    const whenVisible = () => { if (document.visibilityState === 'visible') bump() }
+    document.addEventListener('visibilitychange', whenVisible)
+    window.addEventListener('focus', whenVisible)
+    const timer = window.setInterval(whenVisible, POLL_MS)
+    return () => {
+      document.removeEventListener('visibilitychange', whenVisible)
+      window.removeEventListener('focus', whenVisible)
+      window.clearInterval(timer)
+    }
+  }, [])
+
   useEffect(() => {
     let alive = true
-    setLoading(true)
+    const key = `${basePath}/agents/${agentId}`
+    if (shownKey.current !== key) setLoading(true)
     setFailed(false)
-    api.get(`${basePath}/agents/${agentId}/logs?limit=${limit}`)
-      .then(data => { if (alive) setLogs(data || []) })
-      .catch(() => { if (alive) { setLogs([]); setFailed(true) } })
+    api.get(`${key}/logs?limit=${limit}`)
+      .then(data => {
+        if (!alive) return
+        const next = data || []
+        setLogs(prev => (sameLogList(prev, next) ? prev : next))
+        shownKey.current = key
+      })
+      .catch(() => { if (alive && shownKey.current !== key) { setLogs([]); setFailed(true) } })
       .finally(() => { if (alive) setLoading(false) })
     return () => { alive = false }
-  }, [agentId, basePath, limit])
+  }, [agentId, basePath, limit, reloadTick])
 
   const groups = useMemo(() => groupByState(logs, logStateOf), [logs])
   // 「列表视图」与「无状态组」是两回事：前者 URL 上没有 state 参数（null），后者是空串 key。
