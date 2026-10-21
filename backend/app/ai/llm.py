@@ -524,17 +524,43 @@ async def _deliver_plan_board(db, agent, context_ref: str) -> None:
     await deliver_plans(db, agent, context_ref)
 
 
+async def _bound_world_sources(db, agent, group_id: int | None) -> list[str]:
+    """这个会话可用的世界能力源（`world-{id}`）：群绑定优先，随后 agent 直接绑定，去重。
+
+    与拼【本群世界】那段同一套绑定口径——清单里列出了哪些世界，它们的技能变更就该通知到
+    哪个状态；两处各查一遍必然漂移（第一版就是各自查的，通知那边还查漏了 agent 绑定）。
+    """
+    from app.services.world.world_service import find_worlds_by_entity
+
+    sources: list[str] = []
+    seen: set[int] = set()
+    for entity_type, entity_id in (("group", group_id), ("agent", agent.user_id or 0)):
+        if not entity_id:
+            continue
+        for w in await find_worlds_by_entity(db, entity_type, entity_id):
+            if w.id in seen:
+                continue
+            seen.add(w.id)
+            sources.append(f"world-{w.id}")
+    return sources
+
+
 async def _collect_injection_events(db, agent, context_ref: str, entries: list[dict],
-                                     prompt_source: str) -> list[dict]:
+                                     prompt_source: str,
+                                     world_sources: list[str] = ()) -> list[dict]:
     """历史之后、尾部读数之前的一次性事件：便签投递/撤下 + 能力变更通知。
 
     群聊与私信两条路径曾经各抄一遍这几行；语义要求是「紧跟历史」，所以收成一处——
     下次加事件源时才不会只改了一条路。环境变更由调用方追加（它已在构建前缀时算过）。
+    world_sources：这个世界会话用得上的世界技能源。它们的定义是**按版本快照锁定**的，改动
+    要等解锁才进前缀，所以必须像平台工具一样发通知；而通知只有走这里才落账本、才活过一轮
+    （以前直接在拼【本群世界】那段 append 一条 system 消息，这一轮说完就没了）。
     """
     from app.utils.pure.history import make_entry
 
     events: list[dict] = await _deliver_frame_notes(db, agent, context_ref, entries)
-    cap_notice = await _build_capability_notice(db, agent, context_ref, prompt_source)
+    cap_notice = await _build_capability_notice(
+        db, agent, context_ref, prompt_source, world_sources)
     if cap_notice:
         events.append(make_entry("notice", cap_notice, flags={"drop_on_unlock": True}))
     events += await _deliver_handover(db, agent, entries)
@@ -667,12 +693,15 @@ async def _deliver_frame_notes(db, agent, context_ref: str, entries: list[dict])
         return []
 
 
-async def _build_capability_notice(db, agent, context_ref: str, prompt_source: str) -> str:
-    """能力变更通知：按**本状态**的 known 算增量 changelog（与注入同事务）。无变化返回空串。
+async def _build_capability_notice(db, agent, context_ref: str, prompt_source: str,
+                                   extra_sources: list[str] = ()) -> str:
+    """能力变更通知：按**本状态**的基线算增量 changelog（与注入同事务）。无变化返回空串。
 
     三个源都是"每个状态的前缀里装同一份"的全局内容（作用域=全部），所以每个状态各收一次。
     人格源由调用方传入：它是"本体 / 某个用户的覆盖"两种之一，只有拼前缀的那一层知道这一轮
     用的是哪个——这里再猜一次，猜错就会出现"通知发对了、解锁点去刷另一个源"的分裂。
+    extra_sources：调用方这一轮真正用得上的其他源（世界技能 `world-{id}`）。并进来算，是因为
+"变更通知"只该有一个出口——单独再拼一条既没有账本、也没有 drop_on_unlock。
     """
     try:
         from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
@@ -680,7 +709,7 @@ async def _build_capability_notice(db, agent, context_ref: str, prompt_source: s
         from app.services.capability_versioning import memory_index_source
         notice = await build_change_notice(
             SQLAlchemyCapabilityRepository(db), agent,
-            [SOURCE_PLATFORM, prompt_source, memory_index_source(agent.id)],
+            [SOURCE_PLATFORM, prompt_source, memory_index_source(agent.id), *extra_sources],
             state=context_ref, foci=getattr(agent, "foci", None))
         return notice or ""
     except Exception as e:
@@ -1275,7 +1304,9 @@ async def build_messages(
         # 一次性事件（能力变更通知 / 便签撤下）**落成条目**：它们属于「外界带来了什么」，
         # 必须紧跟历史——落在尾部读数之前，否则下一轮它们会从末尾跑到中间（顺序变 = 断缓存）。
         # 便签投递（逐条条目、幂等）+ 撤下通知：投过没有以账本为准
-        events = await _collect_injection_events(db, agent, group_ref, ledger, personality_source)
+        events = await _collect_injection_events(
+            db, agent, group_ref, ledger, personality_source,
+            world_sources=await _bound_world_sources(db, agent, group_id))
         if _env_entry:
             events.append(_env_entry)
         ledger = ledger + await append_events(db, agent, group_ref, events)
@@ -1422,15 +1453,9 @@ async def build_messages(
                 + dup_note
                 + wc_line
                 + "。命令会以你的名义出现在群里，可见可审计。"})
-            # 世界源能力变更通知（版本化懒加载：增量 changelog，known 更新同轮）
-            from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
-            from app.services.capability_versioning import build_change_notice
-            notice = await build_change_notice(
-                SQLAlchemyCapabilityRepository(db), agent, [f"world-{w.id}"],
-                state=session_ref, foci=getattr(agent, "foci", None))
-            if notice:
-                messages.append({"role": "system", "content": notice})
-                await db.commit()
+            # 世界技能的能力变更通知**不在这里发**：一次性事件必须落账本（见
+            # _collect_injection_events）。直接 append 一条 system 消息只活到本轮结束，
+            # 下一轮 AI 就按旧说法办事了——这正是账本机制要修的那个病。
     except Exception:
         pass
     return messages

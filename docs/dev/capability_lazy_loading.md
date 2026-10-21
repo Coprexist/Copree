@@ -224,8 +224,11 @@ flowchart TD
 传参，白烧一轮才知道参数没了（世界 AI 原话：「不只费 token，我会去找不存在的工具、白烧轮次」）。
 超预算就截断并写明"已截断"/"还有 N 行没列出"——宁可说清截断，也不静默给半截。
 
-**这条源的开发者可以改口径**（`ensure_source_version` 的 `changelog` / `notice`，以及
-`notice_policy` 读世界配置的 `tool_notice`）：自动改变量（缺省）/ 自己写一句文案 / 不通知。三条里
+**这条源的开发者可以改口径**（`ensure_source_version` 的 `changelog` / `notice` / `structural_only`，
+以及 `notice_policy` 读世界配置的 `tool_notice`）：自动改变量（缺省）/ 只报结构变化 / 自己写一句文案 /
+不通知。`structural_only` 复用同一个"筛"而不是新增一条投递路径：结构变化（增删能力、参数增删改、
+必填）照发；一版里只剩措辞 → 摘要留空 → 与 `silent` 同一条「不告知」口径。开发者视角见
+[世界工具插件 §5.6](../plugin-dev/world_tools_plugin.md)。四条里
 "不通知"与"起点版本"共用**同一条存储口径**——**摘要留空 = 不告知**（`build_change_notice` 见到空摘要
 就跳过内容、但仍然把 known 推到最新与它结清）。版本行照写、锁定与解锁照旧，也就是"悄悄换"；
 声明写错一律按 auto 并告警（宁可多通知，不能因一个拼错的字段静默沉默）。开发者面向的说明见

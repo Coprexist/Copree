@@ -30,6 +30,7 @@ import contextvars
 import hashlib
 import json
 import logging
+from typing import NamedTuple
 
 from sqlalchemy import select
 from app.repositories.capability_repo import CapabilityRepository
@@ -128,49 +129,67 @@ def _line_diff(old_text: str, new_text: str, budget: int = _TEXT_DIFF_BUDGET) ->
     return body
 
 
-# 通知策略的三档声明（开发者写在世界配置 / 清单里）：
-#   auto（缺省）= 自动算改变量；custom = 自己写文案；silent = 不通知（版本照写、解锁点照换）
+# 通知策略的四档声明（开发者写在世界配置 / 清单里）：
+#   auto（缺省）= 自动算改变量；structural = 只报结构变化（增删能力 / 参数增删改 / 必填），
+#   纯措辞微调不推；custom = 自己写文案；silent = 不通知（版本照写、解锁点照换）
 NOTICE_AUTO = "auto"
+NOTICE_STRUCTURAL = "structural"
 NOTICE_CUSTOM = "custom"
 NOTICE_SILENT = "silent"
 
 
-def notice_policy(raw) -> tuple[str | None, bool]:
-    """开发者声明的"这条变更怎么告知" → (人写文案 or None, 要不要通知)。
+class NoticePolicy(NamedTuple):
+    """`notice_policy` 的唯一产出形状。
+
+    structural_only 与 silent 的区别是「筛不筛」，不是「发多少」：结构变化（增删能力、参数增删改、
+    必填变化）照发；一版里只剩措辞微调时摘要留空，于是与 silent 走同一条「不告知」存储口径。
+    """
+    text: str | None        # 人写的文案；None = 自动算改变量
+    notify: bool            # 这一版要不要告知
+    structural_only: bool   # 只报结构变化（纯措辞微调不推）
+
+
+def notice_policy(raw) -> NoticePolicy:
+    """开发者声明的「这条变更怎么告知」 → NoticePolicy。
 
     唯一入口：读声明的规矩只在这里写一遍，谁读谁调它（现在只有世界工具源），
-    于是"声明写错时怎么办"也只有一个答案——**按 auto 处理并告警**：
+    于是「声明写错时怎么办」也只有一个答案——**按 auto 处理并告警**：
     宁可多通知，也不能因为一个拼错的字段就静默沉默。
     容错的形状（开发者最省心的写法优先）：
-      None / "" / "auto"                  → 自动改变量
-      False / "silent"                    → 不通知
-      "一句人话"                           → 就用它当文案（custom）
-      {"mode": "custom", "text": "…"}     → 显式写法
-      {"text": "…"}                       → 有 text 即 custom
-      {"mode": "silent"} / {"mode":"auto"}→ 同上
+      None / "" / "auto"                     → 自动改变量
+      False / "silent"                       → 不通知
+      "structural" / {"mode": "structural"}  → 只报结构变化，措辞微调不推
+      "一句人话"                              → 就用它当文案（custom）
+      {"mode": "custom", "text": "…"}        → 显式写法
+      {"text": "…"}                          → 有 text 即 custom
+      {"mode": "silent"} / {"mode": "auto"}  → 同上
     认不出的形状告警后按 auto。
     """
     if raw is None or raw == "" or raw == NOTICE_AUTO:
-        return None, True
+        return NoticePolicy(None, True, False)
     if raw is False or raw == NOTICE_SILENT:
-        return None, False
+        return NoticePolicy(None, False, False)
+    if raw == NOTICE_STRUCTURAL:
+        return NoticePolicy(None, True, True)
     if isinstance(raw, dict):
         text = str(raw.get("text") or "").strip()
         mode = str(raw.get("mode") or (NOTICE_CUSTOM if text else NOTICE_AUTO)).strip()
         if mode == NOTICE_SILENT:
-            return None, False
+            return NoticePolicy(None, False, False)
+        if mode == NOTICE_STRUCTURAL:
+            return NoticePolicy(None, True, True)
         if mode == NOTICE_CUSTOM:
             if not text:
                 logger.warning("通知声明 mode=custom 但没给 text，按 auto 处理")
-                return None, True
-            return text, True
+                return NoticePolicy(None, True, False)
+            return NoticePolicy(text, True, False)
         if mode != NOTICE_AUTO:
             logger.warning(f"认不出的通知声明 mode={mode!r}，按 auto 处理")
-        return None, True
+        return NoticePolicy(None, True, False)
     if isinstance(raw, str):
-        return (raw.strip() or None), True
+        return NoticePolicy((raw.strip() or None), True, False)
     logger.warning(f"认不出的通知声明 {raw!r}，按 auto 处理")
-    return None, True
+    return NoticePolicy(None, True, False)
 
 
 # 工具定义差异的预算：一个能力最多给多少字（多个能力各占一段，整体仍受通知长度约束）
@@ -201,7 +220,7 @@ def _field_change(label: str, old: str, new: str) -> str:
 
 
 def _tool_diff(old_def: dict | None, new_def: dict | None,
-               budget: int = _TOOL_DIFF_BUDGET) -> str:
+               budget: int = _TOOL_DIFF_BUDGET, *, structural_only: bool = False) -> str:
     """一个工具定义的**改变量**：说明给差异，参数给增 / 删 / 改（名字、类型、说明、必填）。
 
     为什么参数要逐个列：模型是按参数名与说明调工具的，而**工具数组要等解锁才换**——
@@ -223,8 +242,11 @@ def _tool_diff(old_def: dict | None, new_def: dict | None,
     elif not fn_new:
         lines.append("这个能力已经没有了，不要再调用它。")
     else:
+        # structural_only：参数增删 / 类型 / 必填才是「结构」，说明文字属于措辞——
+        # 作者声明了 structural 就别拿措辞去占它的上下文（模型按参数名与说明调工具，
+        # 但说明的措辞微调不改变它该怎么调）。
         old_desc, new_desc = fn_old.get("description") or "", fn_new.get("description") or ""
-        if old_desc != new_desc:
+        if old_desc != new_desc and not structural_only:
             lines.append(_field_change("说明", old_desc, new_desc))
         props_old, props_new = _props(fn_old), _props(fn_new)
         for name, spec in props_new.items():
@@ -237,7 +259,7 @@ def _tool_diff(old_def: dict | None, new_def: dict | None,
             if old_spec == spec:
                 continue
             old_text, new_text = old_spec.get("description") or "", spec.get("description") or ""
-            if old_text != new_text:
+            if old_text != new_text and not structural_only:
                 lines.append(_field_change(f"参数 {name} 说明", old_text, new_text))
             if (old_spec.get("type") or "") != (spec.get("type") or ""):
                 lines.append(f"参数 {name} 类型：{old_spec.get('type') or '?'} → {spec.get('type') or '?'}")
@@ -248,6 +270,8 @@ def _tool_diff(old_def: dict | None, new_def: dict | None,
             lines.append("必填项：" + ("、".join(_required(fn_old)) or "无")
                          + " → " + ("、".join(_required(fn_new)) or "无"))
     if not lines:
+        if structural_only:
+            return ""            # 只有措辞在动 → 这一版没有结构性变化，调用方跳过它
         lines = ["定义有调整（未识别出字段级差异）"]
     body = "\n".join(lines)
     if len(body) > budget:
@@ -255,12 +279,20 @@ def _tool_diff(old_def: dict | None, new_def: dict | None,
     return body
 
 
-def _diff_changelog(old_defs: list | None, new_defs: list) -> str:
-    """自动 diff 两版定义 → 变更摘要（工具源列增删改；文本源给行级 diff + 字数变化）"""
+def _diff_changelog(old_defs: list | None, new_defs: list, *,
+                   structural_only: bool = False) -> str:
+    """自动 diff 两版定义 → 变更摘要（工具源列增删改；文本源给行级 diff + 字数变化）
+
+    structural_only（作者声明 structural）= 只报结构变化：纯措辞微调不列，整版只剩措辞时
+    返回空串（→ 摘要留空 → 不告知，与 silent 同一条存储口径）。
+    """
     # 文本源：definitions = [{"type": "text", "content": "..."}]
     def _is_text(defs):
         return bool(defs) and all((d or {}).get("type") == "text" for d in defs)
     if _is_text(old_defs) or _is_text(new_defs):
+        if structural_only:
+            return ""          # 文本源没有「结构」可言：整段都是措辞
+
         old_text = "".join((d or {}).get("content") or "" for d in (old_defs or []))
         new_text = "".join((d or {}).get("content") or "" for d in (new_defs or []))
         if old_text == new_text:
@@ -288,9 +320,12 @@ def _diff_changelog(old_defs: list | None, new_defs: list) -> str:
     for n in sorted(removed):
         lines.append(f"移除能力 {n}：\n" + _tool_diff(_def_by_name(old_defs, n), None))
     for n in sorted(changed):
-        lines.append(f"更新能力 {n}：\n" + _tool_diff(_def_by_name(old_defs, n),
-                                                    _def_by_name(new_defs, n)))
-    return "\n".join(lines) or "内容无变化"
+        body = _tool_diff(_def_by_name(old_defs, n), _def_by_name(new_defs, n),
+                          structural_only=structural_only)
+        if not body:
+            continue                      # 这个能力只动了措辞
+        lines.append(f"更新能力 {n}：\n" + body)
+    return "\n".join(lines) or ("" if structural_only else "内容无变化")
 
 
 # ── 版本写入（启动/变更检测时调用） ──
@@ -298,6 +333,7 @@ def _diff_changelog(old_defs: list | None, new_defs: list) -> str:
 async def ensure_source_version(
     cap_repo: CapabilityRepository, source: str, definitions: list, label: str,
     *, scope: str, changelog: str | None = None, notice: bool = True,
+    structural_only: bool = False,
 ) -> int:
     """对比该源最新版本：内容变了 → 写新版本（默认自动 diff 出"改变量"）；没变 → 返回当前版本号。
 
@@ -327,8 +363,12 @@ async def ensure_source_version(
     # notice=False 也走这一条。判据只有"摘要空不空"这一个，两处各写一个迟早走散。
     summary = ""
     if notice and latest is not None:
-        body = changelog if changelog is not None else _diff_changelog(latest.definitions, definitions)
-        summary = f"[{label} v{new_version}] " + body
+        body = (changelog if changelog is not None else
+                _diff_changelog(latest.definitions, definitions, structural_only=structural_only))
+        # 正文为空（structural 下这一版只剩措辞）→ 连 "[源 vX]" 头都不写：
+        # 「摘要空 = 不告知」的判据只看整串空不空，留个头就等于留了一条空通知。
+        if body:
+            summary = f"[{label} v{new_version}] " + body
     cap_repo.add(CapabilityVersion(
         source=source, version=new_version, content_hash=h,
         changelog=summary, definitions=definitions, scope=scope,
@@ -352,15 +392,15 @@ async def ensure_world_version(cap_repo: CapabilityRepository, world_id: int, sk
                            *, notice=None) -> int:
     """世界 skills 工具版本化（对话时调用）。
 
-    notice 是这条源的开发者声明（世界配置里的 `tool_notice`）：自动改变量 / 自己写文案 /
-    不通知，三选一，读法见 `notice_policy`——**声明怎么读只有一个入口**，这条源和将来别的
-    开发者源都走它。
+    notice 是这条源的开发者声明（世界配置里的 `tool_notice`）：自动改变量 / 只报结构变化 /
+    自己写文案 / 不通知，读法见 `notice_policy`——**声明怎么读只有一个入口**，这条源和将来
+    别的开发者源都走它。
     """
     source = f"world-{world_id}"
-    changelog, do_notice = notice_policy(notice)
+    policy = notice_policy(notice)
     return await ensure_source_version(
         cap_repo, source, skill_tools, f"世界{world_id}", scope=SCOPE_ALL,
-        changelog=changelog, notice=do_notice)
+        changelog=policy.text, notice=policy.notify, structural_only=policy.structural_only)
 
 
 # ── 查询 ──

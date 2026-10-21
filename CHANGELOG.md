@@ -21,7 +21,23 @@
   新绑定的源一律首见结清、不补发历史，也不会再在第一轮收到一条描述它眼前内容的通知。
   用例 `tests/test_capability_scope.py` 由 6 条增至 8 条（含「旧扁平 effective 不许钉住老状态」）。
 
+- **世界技能的能力变更通知以前根本没落账本**：拼【本群世界】那段自己 `build_change_notice` +
+  `messages.append` + `commit`，那条通知只存在于这一轮请求里，下一轮就没了——AI 继续按旧说法办事，
+  正是账本机制当初要修的病（`history/context_sync.py` 的说明写着：以前只 append 进当轮 messages，
+  说完就没了）。现在世界源与平台工具走同一个出口：`_collect_injection_events` 统一算、经 `append_events`
+  落条目（带 `drop_on_unlock`，解锁即弃）；「哪些世界该通知」也收进 `_bound_world_sources`（与拼
+  【本群世界】同一套绑定口径，第一版两边各查一遍还漏了 agent 直接绑定）。用例
+  `tests/test_capability_notice_ledger.py`。
+
 ### ✨ 新增
+- **通知口径多一档 `structural`：插件作者可选「措辞微调不推」**：世界配置里的 `tool_notice` 原来只有
+  自动改变量 / 自己写文案 / 不通知三档，而「自动」会连说明文字的重写一起念——一条通知里常常大半是
+  措辞。现在加一档 `"structural"`（或 `{"mode": "structural"}`）：**新增 / 移除能力、参数增删改、必填
+  变化照发；纯措辞微调不列**；一版里只剩措辞时摘要留空，于是与 `silent` 走同一条「不告知」存储口径
+  （不新增投递路径）。谁最清楚改动是「改说法」还是「改调法」——作者。声明解析仍只有 `notice_policy`
+  一个入口，返回值从二元组改成 `NoticePolicy(text, notify, structural_only)`；顺带修掉「正文为空仍写
+  `[源 vX]` 头」——留个头就等于留了一条空通知，与「摘要空 = 不告知」冲突。作者视角见
+  `docs/plugin-dev/world_tools_plugin.md` §5.6，用例 `tests/test_notice_policy.py` 由 6 条增至 9 条。
 - **进群视界＝换一条世界专属状态帧：工具只剩这个世界给的那套（沉浸式）**：原来“进世界”只是 AI
   自己调 `enter_world` 压一条帧，帧上不带工具隔离——进去以后「发消息 / 翻记录 / 查群」群聊社交那套
   照旧在，等于在世界里继续做群聊。现在三段都归一处（`services/world/world_frame_service.py`）：
