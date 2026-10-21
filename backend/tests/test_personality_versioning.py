@@ -90,10 +90,11 @@ async def test_body_prompt_change_notifies_and_only_unlock_applies_it(migrated_d
         assert "回答前先想两步再开口" in third[0]["content"], "解锁后前缀换成新人格"
         assert "回答前先想一步。" not in third[0]["content"]
         # 通知只发一次：账本里那条会一直躺在历史里（本轮不该再发一条新的）
-        from app.services.capability_versioning import read_progress
+        from app.services.capability_versioning import state_progress
 
-        assert read_progress(await db.get(Agent, 1), "cap_known_versions", "group:59",
-                             "agent-prompt-1") == 2
+        assert state_progress(await db.get(Agent, 1), "cap_known_versions", "group:59",
+                              "agent-prompt-1") == 2, (
+            "解锁把前缀换成了最新 → 这一版也算已告知（known 与 effective 同进同退）")
 
 
 async def test_per_user_override_gets_its_own_source(migrated_db):

@@ -8,6 +8,19 @@
 
 ## [Unreleased]
 
+### 🐛 修复
+- **解锁换完了前缀还要再发一条「变更通知」；老 AI 的工具列表被旧版本钉死**：`compact` 解锁时只推了
+  「生效进度」（`cap_effective_versions`），没推「告知进度」（`cap_known_versions`），于是下一轮必补一条
+  「v59→v60 已生效、系统提示全文会在下次 compact 时刷新」——而全文恰恰这次刚刷完，通知说的正好是反的。
+  两件事现在收进 `mark_prefix_fresh`（`app/services/capability_versioning.py`）：**换新的那一版就算已告知**，
+  解锁点（`history/context_unlock.py`）与世界侧的「会话起点对齐」（`world_chat_service.py`）都只调它，不再
+  各写一半。同一处还收掉了 `read_progress` 的「回落旧 agent 级扁平键」：它本来只该给告知进度当迁移起点，
+  却被生效进度共用，于是老状态的前缀永久停在出土版本（实测浮生的 platform 生效版本停在 v12——v12 只有
+  58 个工具、连 `enter_world` 都没有，而平台已到 v60）。现在进度只属于本状态，通知基线统一由
+  `notice_baseline`（= max(known, effective)：前缀装的那版也算「看过」）给出；新建 AI / 新建会话 /
+  新绑定的源一律首见结清、不补发历史，也不会再在第一轮收到一条描述它眼前内容的通知。
+  用例 `tests/test_capability_scope.py` 由 6 条增至 8 条（含「旧扁平 effective 不许钉住老状态」）。
+
 ### ✨ 新增
 - **进群视界＝换一条世界专属状态帧：工具只剩这个世界给的那套（沉浸式）**：原来“进世界”只是 AI
   自己调 `enter_world` 压一条帧，帧上不带工具隔离——进去以后「发消息 / 翻记录 / 查群」群聊社交那套

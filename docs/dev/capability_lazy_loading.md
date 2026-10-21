@@ -43,13 +43,19 @@
 ### 变更流程
 
 1. 能力源（平台工具 / 世界 skill / 提示词 / 记忆索引）变更 → 生成新版本 + 变更摘要（changelog）+ 作用域
-2. 某状态构建提示词时，与**本状态**的进度对比 `known < latest`：
-   - **首见（本状态还没有这条源的键）→ 不注入任何内容**，只把 known 推到 latest：这个状态的前缀
-     还没拼过，它拿到的本来就是 latest，历史 changelog 描述的全是"已经活在里面"的变更
+2. 某状态构建提示词时，与**本状态的基线**对比 `known < latest`：
+   基线 = `max(known, effective)`（唯一入口 `notice_baseline`）：两条都在说"这版内容它见过了"——
+   effective 是它的前缀按这版拼的，known 是增量通知覆盖到这版。只认 known 会让"前缀刚按 latest
+   拼好、通知还没发"的状态挨一条描述旧变更的通知（每次解锁必现）；只认 effective 会在版本变了但
+   还没解锁时漏掉真正的变更。
+   - **首见（本状态连 known / effective 都没有）→ 不注入任何内容**，只把 known 推到 latest：这个
+     状态的前缀还没拼过，它拿到的本来就是 latest，历史 changelog 描述的全是"已经活在里面"的变更
    - 作用域覆盖本状态的版本 → 注入其 changelog（v_known+1 → v_latest，只含新变化，已注入过的不重复）
    - 作用域不覆盖本状态的版本 → 不注入内容，但**同样将 known 推进到 latest**（与该版本结清，否则每轮重扫）
 3. **注入与 known 推进同事务**（不出现"通知发出、版本未记"的重复注入）
-4. **compact / clear 之后**：该状态上下文重建（缓存本来就断）→ **该状态**的 effective 对齐 latest；其他状态不受影响
+4. **compact / clear 之后**：该状态上下文重建（缓存本来就断）→ **该状态的 effective + known 一起**
+   对齐 latest（`mark_prefix_fresh`）。known 必须一起推：前缀都换成最新了，下一轮再补发一条"变更
+   立即生效、全文下次 compact 才刷新"的通知，说的正好是反的；其他状态不受影响
 
 ### 不变式
 - **锁与状态同构**：effective 表达"这个状态的前缀锁在哪一版"，只能由该状态自己的 compact / clear 推进；任何状态的解锁不得改动其他状态的 effective（否则那些状态的前缀从第 0 字节起 miss）
@@ -113,7 +119,7 @@
 
 - `capability_versions` 表：source（platform / world-{id}）+ version + content_hash + changelog + definitions 快照，旧版本保留
 - `agents.cap_known_versions` / `cap_effective_versions`（JSONB）；世界 AI 用 `worlds.config` 同名字段（holder 泛化：agent 对象或 dict）
-- `app/services/capability_versioning.py`：ensure_source_version（diff 自动 changelog）/ get_effective_definitions（快照回退）/ build_change_notice（增量注入）/ mark_effective_latest
+- `app/services/capability_versioning.py`：ensure_source_version（diff 自动 changelog）/ get_effective_definitions（快照回退）/ build_change_notice（增量注入）/ mark_prefix_fresh（前缀换新：effective + known）
 - 已接：平台源（群 AI/DM 对话 tools + 变更通知 + compact 切换）、世界源（世界 AI 工具集 + 变更通知 + compact_context 切换）
 - 验证：幂等 / 增量注入（known=v2 只注入 v3）/ effective 快照（旧定义请求）/ compact 切最新 / dict holder 全过
 
@@ -348,7 +354,7 @@ flowchart TD
 | 通知 | 按本状态的 known 计算；作用域不覆盖者不注入内容但推进 known |
 | 解锁 | `apply_pending_changes` 只写触发解锁的那一个状态 |
 | 解锁源 | 补入 `memory-index-{id}` |
-| 存量数据 | 无需迁移：旧扁平键作为各状态的起点继承一次，避免向每个状态重放历史全量 changelog |
+| 存量数据 | 无需迁移：旧扁平键**不再被读**（2026-10-21）。它只说得出「某个状态收到过 v 几」，说不出「本状态的前缀装着哪版」——当起点用会把老状态钉在出土版本（浮生 platform effective 停在 v12：58 个工具、连 `enter_world` 都没有），也会让新会话第一轮收到一条描述它眼前内容的通知。通知基线改由 `notice_baseline`（max(known, effective)）给，两个进度都没有 = 首见结清 |
 
 ## 三、`apply_pending_config`
 

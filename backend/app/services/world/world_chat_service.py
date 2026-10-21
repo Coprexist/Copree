@@ -1263,8 +1263,7 @@ async def _prepare_world_chat(
     # 变更 → 写新版本 + 尾部 changelog 告知，不碰前缀；compact / clear 解锁后生效
     from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
     from app.services.capability_versioning import (
-        apply_pending_changes, ensure_text_source_version, get_effective_text, mark_known_latest,
-        SCOPE_ALL,
+        ensure_text_source_version, get_effective_text, mark_prefix_fresh, SCOPE_ALL,
     )
     _cap_repo = SQLAlchemyCapabilityRepository(world_repo.session)
     # ── 会话起点解锁（2026-09-19）───────────────────────────────────────────────
@@ -1276,8 +1275,9 @@ async def _prepare_world_chat(
     if await session_is_fresh(world_repo, world):
         _prefix_cfg = dict(world.config or {})
         _sources = prefix_capability_sources(world_id)
-        await apply_pending_changes(_cap_repo, _prefix_cfg, _sources)
-        await mark_known_latest(_cap_repo, _prefix_cfg, _sources)   # 已在生效前缀里，无需再发变更通知
+        # 换成最新 = 也已告知（effective + known 一起推，唯一入口 mark_prefix_fresh）：
+        # 只推 effective 而不推 known，下一轮就会补发一条"变更已生效、全文下次 compact 才刷新"的通知。
+        await mark_prefix_fresh(_cap_repo, _prefix_cfg, _sources)
         world.config = _prefix_cfg
         await world_repo.commit()
         logger.info(f"🌐 世界 #{world_id} 会话起点：前缀能力快照已对齐最新")

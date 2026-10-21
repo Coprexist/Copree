@@ -96,8 +96,13 @@ async def test_first_sight_settles_silently(migrated_db):
         assert notice is not None and "v3→v4" in notice, "首见之后的新变更照常通知"
 
 
-async def test_legacy_flat_key_is_adopted_once_per_state(migrated_db):
-    """迁移口径：旧的 agent 级键作为每个状态的**起点**继承，不重放历史全量 changelog"""
+async def test_legacy_flat_key_is_not_a_baseline(migrated_db):
+    """旧的 agent 级扁平键不再参与判定：它只说"别人收到过 v几"，说不出这个状态的前缀装着哪版。
+
+    旧口径把它当每个状态的起点继承——后果是**新建的会话**第一轮就收到一条 v44→v60 的合并通知，
+    而那段前缀本来就是按最新拼的；更糟的是 get_effective_* 走同一个回落，老状态的前缀会被永久
+    钉在出土版本上（浮生 platform effective 停在 v12：58 个工具，连 enter_world 都没有）。
+    """
     from app.database import async_session
     from app.services.capability_versioning import (
         build_change_notice, ensure_source_version, SCOPE_ALL,
@@ -107,18 +112,46 @@ async def test_legacy_flat_key_is_adopted_once_per_state(migrated_db):
         repo = await _repo(db)
         await _reset(db, SRC)
         await ensure_source_version(repo, SRC, _defs("t1"), "测试源", scope=SCOPE_ALL)
-        await ensure_source_version(repo, SRC, _defs("t1"), "测试源", scope=SCOPE_ALL)
         await ensure_source_version(repo, SRC, _defs("t2"), "测试源", scope=SCOPE_ALL)  # 到 v2
+        await ensure_source_version(repo, SRC, _defs("t3"), "测试源", scope=SCOPE_ALL)  # v3
 
-        legacy = {"cap_known_versions": {SRC: 2}}
-        assert await build_change_notice(repo, legacy, [SRC], state="group:1") is None, \
-            "旧键已是最新 → 不该补发历史通知"
+        legacy = {"cap_known_versions": {SRC: 1}}
+        assert await build_change_notice(repo, legacy, [SRC], state="group:new") is None,             "本状态没有任何进度 = 前缀还没拼过（首见）→ 结清，不补发扁平键描述过的历史"
+        assert legacy["cap_known_versions"]["group:new|" + SRC] == 3, "首见也要结清，免得每轮重扫"
+
+        await ensure_source_version(repo, SRC, _defs("t4"), "测试源", scope=SCOPE_ALL)  # v4
+        notice = await build_change_notice(repo, legacy, [SRC], state="group:new")
+        assert notice is not None and "v3→v4" in notice, "首见之后的新变更照常送到"
+
+
+async def test_effective_counts_as_a_baseline(migrated_db):
+    """前缀按哪版拼的，就等于"看到过哪版"：effective 也算基线，否则解锁后必挨一条多余的旧通知"""
+    from app.database import async_session
+    from app.services.capability_versioning import (
+        build_change_notice, ensure_source_version, apply_pending_changes, SCOPE_ALL,
+    )
+
+    async with async_session() as db:
+        repo = await _repo(db)
+        await _reset(db, SRC)
+        await ensure_source_version(repo, SRC, _defs("t1"), "测试源", scope=SCOPE_ALL)
+        await ensure_source_version(repo, SRC, _defs("t2"), "测试源", scope=SCOPE_ALL)  # v2
+
+        # 解锁：前缀换成 v2，known/effective 一起推到 2
+        holder = {}
+        await apply_pending_changes(repo, holder, [SRC], state="group:1")
+        assert await build_change_notice(repo, holder, [SRC], state="group:1") is None,             "刚解锁就补发一条「变更已生效」的通知 = 通知说的和前缀正好相反"
 
         await ensure_source_version(repo, SRC, _defs("t3"), "测试源", scope=SCOPE_ALL)  # v3
-        holder = {"cap_known_versions": {SRC: 2}}
-        notice = await build_change_notice(repo, holder, [SRC], state="group:2")
-        assert notice is not None and "v2→v3" in notice, "新变更仍要送到每个状态"
-        assert "v0→" not in notice, "不能把 v1/v2 的历史全量重放一遍"
+        notice = await build_change_notice(repo, holder, [SRC], state="group:1")
+        assert notice is not None and "v2→v3" in notice
+
+        # 丢了 known 的状态（迁移动过键）退回 effective 当前缀基线：从它前缀那版算起，
+        # 既不会把更早的历史全量重放，也不会因为它"忘了"就一条都不给
+        holder["cap_known_versions"] = {}
+        await ensure_source_version(repo, SRC, _defs("t4"), "测试源", scope=SCOPE_ALL)  # v4
+        notice = await build_change_notice(repo, holder, [SRC], state="group:1")
+        assert notice is not None and "v2→v4" in notice and "v0→" not in notice
 
 
 async def test_scope_outside_state_settles_without_content(migrated_db):
@@ -138,9 +171,35 @@ async def test_scope_outside_state_settles_without_content(migrated_db):
         other = {"cap_known_versions": {SRC: 2}}
         assert await build_change_notice(repo, other, [SRC], state="group:1") is None, \
             "v3 只发给 group:9，不该发给 group:1"
-        # 旧键留着当别的状态的起点，本状态自己的键推到最新
+        # 旧扁平键不再被读，本状态自己的键推到最新
         assert other["cap_known_versions"]["group:1|" + SRC] == 3, \
             "已知进度要推到最新，避免每轮重扫同一版本"
+
+
+async def test_legacy_flat_effective_does_not_pin_the_state(migrated_db):
+    """旧 agent 级扁平 effective 不许钉住老状态。
+
+    实测（2026-10-21）：浮生 cap_effective_versions 里只有扁平 platform=12，而平台已到 v60；
+    v12 只有 58 个工具、连 enter_world 都没有——同一个回落让它的工具列表永久停在出土版本。
+    """
+    from app.database import async_session
+    from app.services.capability_versioning import (
+        ensure_source_version, get_effective_definitions, SCOPE_ALL,
+    )
+
+    async with async_session() as db:
+        repo = await _repo(db)
+        await _reset(db, SRC)
+        await ensure_source_version(repo, SRC, _defs("old"), "测试源", scope=SCOPE_ALL)  # v1
+        await ensure_source_version(repo, SRC, _defs("new"), "测试源", scope=SCOPE_ALL)  # v2
+
+        holder = {"cap_effective_versions": {SRC: 1}}    # 迁移期留下的扁平键
+        defs = await get_effective_definitions(repo, holder, SRC, [], state="group:9")
+        assert defs == _defs("new"), "老状态要用最新定义：扁平键说的是别的状态钉在哪版"
+        assert holder["cap_effective_versions"]["group:9|" + SRC] == 2, "并记下本状态的 effective"
+
+        await ensure_source_version(repo, SRC, _defs("third"), "测试源", scope=SCOPE_ALL)  # v3
+        assert await get_effective_definitions(repo, holder, SRC, [], state="group:9") == _defs("new"),             "记下来之后又是锁定态：新的 v3 要等这个状态自己解锁"
 
 
 async def test_effective_is_locked_per_state(migrated_db):

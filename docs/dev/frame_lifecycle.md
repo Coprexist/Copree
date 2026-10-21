@@ -145,7 +145,7 @@ compact / clear 时才把锁定副本刷成现值、同事务清脏，这一步�
 ## 代码坐标
 
 - 解锁清单与解锁动作：`app/services/history/context_unlock.py`（`UNLOCK_STEPS` / `unlock_context`；`app/ai/executor.py` 只转发）
-- 文本源与 tools 的解锁：`app/services/capability_versioning.py`（`apply_pending_changes` / `mark_effective_latest` / `get_effective_definitions`）
+- 文本源与 tools 的解锁：`app/services/capability_versioning.py`（`apply_pending_changes` / `mark_prefix_fresh` / `get_effective_definitions`）
 - 账本重写：`app/services/history/context_sync.py`（`rewrite_context`）
 - 状态帧：`app/services/agent/state_stack_service.py`（`ensure_active_frame` / `release_active_frame_notes` / `load_trigger_state` / `dispose_context_frames` / `park_frame`）
 - 世界帧（进群视界 = 激活世界专属帧；绑定时预建沉睡帧、帧内工具白名单 = 基础集 + 世界侧技能）：`app/services/world/world_frame_service.py`

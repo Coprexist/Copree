@@ -60,7 +60,8 @@ async def unlock_context(db: AsyncSession, agent, *, group_id: int | None, sessi
         await apply_pending_config(db, agent)
 
     async def _apply_pending_changes():
-        # 前缀版本化：compact 解锁，**本状态**的 effective 对齐最新（工具定义 + 提示词 + 记忆索引 + 世界源）
+        # 前缀版本化：compact 解锁，**本状态**换新 = effective + known 一起对齐最新
+        # （apply_pending_changes → mark_prefix_fresh；工具定义 + 提示词 + 记忆索引 + 世界源）
         from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
         from app.services.agent.agent_service import prompt_override_of
         from app.services.capability_versioning import (

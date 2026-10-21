@@ -10,9 +10,10 @@
 别的状态就再也收不到那条变更。作用域决定"这条变更该不该送到我"，进度决定"我收过没有"，两件事分开：
 - 版本的作用域（capability_versions.scope）：空 / "*" = 全部状态（平台、提示词、记忆索引这类内容
   每个状态的前缀都装同一份，所以作用域就是全部）；也可以是某个具体会话，或某个会话焦段。
-- 进度的归属：永远是某个状态（{状态}|{源}）。读不到本状态的键 → 回落旧 agent 级键作为起点
-  （迁移期不清除：每个状态各自继承一次旧值，之后互不影响；否则修这个 bug 会把历史全量 changelog
-  灌给每个窗口一次）。
+- 进度的归属：永远是某个状态（{状态}|{源}），**不回落旧 agent 级扁平键**。扁平键只知道"某个状态
+  曾经收到过 v几"，不知道"眼前这个状态的前缀里装着哪版"——拿它当起点会把老状态钉死在出土版本上
+  （2026-10-21 实测：浮生的 platform effective 停在 v12，而 v12 里连 enter_world 都还没有），
+  也会让新会话第一轮收到一堆"描述它眼前内容"的通知。旧键留在 JSONB 里不删，只是不再被读。
 
 2026-08-12 扩展：前缀内容（用户 system_prompt / 强注入段 / 昵称）也纳入同一机制。
 新增：ensure_text_source_version / get_effective_text / apply_pending_changes（解锁）/ guard_apply_change（防御）。
@@ -431,15 +432,25 @@ def progress_key(state: str | None, source: str) -> str:
     return f"{state}|{source}" if state else source
 
 
-def read_progress(holder, field: str, state: str | None, source: str) -> int | None:
-    """读该状态的进度；没有本状态的键 → 回落旧 agent 级键（迁移起点，不删除）。"""
-    m = _holder_map(holder, field)
-    key = progress_key(state, source)
-    if key in m:
-        return m[key]
-    if state and source in m:
-        return m[source]
-    return None
+def state_progress(holder, field: str, state: str | None, source: str) -> int | None:
+    """读**本状态**自己的进度（不回落旧 agent 级扁平键——理由见模块头）。"""
+    return _holder_map(holder, field).get(progress_key(state, source))
+
+
+def notice_baseline(holder, state: str | None, source: str) -> int | None:
+    """变更通知的基线：这个状态"已经看到哪一版"的唯一口径；None = 首见（见 build_change_notice）。
+
+    取 known 与 effective 的**较大者**，因为两条都在说"这版内容它见过了"：
+    - known：发给它的增量通知覆盖到了这版；
+    - effective：它的前缀就是按这版拼的（前缀随请求发出去，等于看过）。
+    两条都得算：只认 known 时，"前缀刚按 latest 拼好、通知还没发"的状态会挨一条描述旧变更的
+    通知（每次解锁后必现）；只认 effective 时，"版本变了但还没解锁"会漏掉真正的变更。
+    """
+    values = [v for v in (
+        state_progress(holder, "cap_known_versions", state, source),
+        state_progress(holder, "cap_effective_versions", state, source),
+    ) if v is not None]
+    return max(values) if values else None
 
 
 def write_progress(holder, field: str, state: str | None, source: str, version: int) -> None:
@@ -479,12 +490,14 @@ async def get_effective_definitions(
     前缀是按会话拼的字节，所以生效进度只能按状态记：别的会话 compact 不该让这个会话的
     tools 数组换新（那正是"一个会话 compact，其他会话从第 0 字节 miss"的病根）。
     """
-    ver = read_progress(holder, "cap_effective_versions", state, source)
+    ver = state_progress(holder, "cap_effective_versions", state, source)
     if ver is not None:
         row = await get_version(cap_repo, source, ver)
         if row is not None and row.definitions is not None:
             return row.definitions
-    # 新状态 / 新源：直接用当前（latest）定义，并把本状态的 effective 对齐最新
+    # 新状态 / 新源：直接用当前（latest）定义，并把本状态的 effective 对齐最新。
+    # 这里**绝不回退**到旧 agent 级扁平 effective：那会让这个状态的工具列表永久停在出土版本
+    # （浮生实测停在 v12，只有 58 个工具，连 enter_world 都没有）。
     latest = await get_latest_version(cap_repo, source)
     if latest is not None:
         write_progress(holder, "cap_effective_versions", state, source, latest.version)
@@ -546,17 +559,19 @@ async def build_change_notice(
     cap_repo: CapabilityRepository, holder, sources: list[str],
     state: str | None = None, foci=None,
 ) -> str | None:
-    """增量变更通知：对比**本状态**的 known vs latest，落后则拼 changelog，并更新本状态 known。
+    """增量变更通知：对比**本状态的基线** vs latest，落后则拼 changelog，并更新本状态 known。
 
     返回通知文本（追加进 system 尾部）；无变化返回 None。
     注意：调用方需把通知真正放进 messages 后再提交（known 更新与注入同事务）。
 
-    两件事分开（见模块头）：该不该送到我 = 版本 scope 是否覆盖本状态；我收过没有 = 本状态自己的键。
+    两件事分开（见模块头）：该不该送到我 = 版本 scope 是否覆盖本状态；我收过没有 = 本状态自己的
+    known / effective（口径只有 notice_baseline 一处）。
     known 一律推进到 latest（哪怕这段没有可发的内容）——被作用域排除的版本要与本状态"结清"，
     否则每轮都要重扫一遍。
-    首见不冒通知：本状态还没有这条源的 known，说明它的前缀还没拼过（含新建的 AI、
-    新建的会话），它拿到的就是 latest——起点版本（v1）不写 changelog 是同一个道理：
-    "从无到有"不是变更，内容是它眼前前缀里本来就有的东西。首见只把 known 推到 latest 结清。
+    首见不冒通知：本状态这条源连一点进度都没有（known / effective 都没有），说明它的前缀还没拼过
+    （新建的 AI、新建的会话、新绑定的源），它拿到的就是 latest——起点版本（v1）不写 changelog 是
+    同一个道理："从无到有"不是变更，内容是它眼前前缀里本来就有的东西。旧 agent 级扁平键不算进度
+    （见模块头），首见只把 known 推到 latest 结清。
     """
     from app.models.agent import CapabilityVersion
 
@@ -571,7 +586,7 @@ async def build_change_notice(
         )).scalar_one_or_none()
         if latest is None:
             continue
-        known = read_progress(holder, "cap_known_versions", state, source)
+        known = notice_baseline(holder, state, source)
         if known is None:
             # 首见：这条源在本状态还没有任何进度记录——说明这个状态的前缀还没拼过，
             # 它拿到的本来就是 latest，历史 changelog 描述的变更全都在里面了。
@@ -616,30 +631,17 @@ async def build_change_notice(
     return head + "\n\n".join(lines)
 
 
-async def mark_effective_latest(
+async def mark_prefix_fresh(
     cap_repo: CapabilityRepository, holder, sources: list[str], state: str | None = None,
 ) -> None:
-    """compact 后调用：**本状态**的 effective 对齐最新（工具定义直接用最新的）"""
-    from app.models.agent import CapabilityVersion
+    """前缀刚刚换成最新内容（compact / clear 解锁、会话起点）→ 生效与告知一起对齐。
 
-    for source in sources:
-        latest = (await cap_repo.execute(
-            select(CapabilityVersion)
-            .where(CapabilityVersion.source == source)
-            .order_by(CapabilityVersion.version.desc())
-            .limit(1)
-        )).scalar_one_or_none()
-        if latest is not None:
-            write_progress(holder, "cap_effective_versions", state, source, latest.version)
-
-
-async def mark_known_latest(
-    cap_repo: CapabilityRepository, holder, sources: list[str], state: str | None = None,
-) -> None:
-    """把「已知版本」也对齐最新：内容已经进了生效前缀时，不必再发一次变更通知。
-
-    与 mark_effective_latest 配对（会话起点解锁：既生效、也已"告知"，避免下一轮多一条
-    描述"已经生效的内容"的通知）。
+    **唯一**合法的"前缀换新"入口，两件事必须同进同退：
+    - effective：本状态的前缀往后按这一版拼（工具定义直接用最新的）；
+    - known：这一版的内容已经进了前缀，等于已告知，不必再发一条通知。
+    拆开维护一定漂移：主站解锁只推了 effective、known 停在旧版，于是 compact 刚把前缀刷成 v60，
+    下一轮又发一条"v59→v60 已生效、全文下次 compact 才刷新"——通知说的正好是反的。
+    世界侧早把两半配对写了（会话起点对齐），主站漏了后半，这就是那处抄写。两处现在都走这里。
     """
     from app.models.agent import CapabilityVersion
 
@@ -650,8 +652,10 @@ async def mark_known_latest(
             .order_by(CapabilityVersion.version.desc())
             .limit(1)
         )).scalar_one_or_none()
-        if latest is not None:
-            write_progress(holder, "cap_known_versions", state, source, latest.version)
+        if latest is None:
+            continue
+        write_progress(holder, "cap_effective_versions", state, source, latest.version)
+        write_progress(holder, "cap_known_versions", state, source, latest.version)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -693,8 +697,12 @@ async def get_effective_text(
     cap_repo: CapabilityRepository, holder, source: str, fallback_text: str,
     state: str | None = None,
 ) -> str:
-    """锁定态取**本状态**的 effective 快照文本；无记录（新状态/新源）→ 用当前文本并同步本状态。"""
-    ver = read_progress(holder, "cap_effective_versions", state, source)
+    """锁定态取**本状态**的 effective 快照文本；无记录（新状态/新源）→ 用当前文本并同步本状态。
+
+    与 get_effective_definitions 同一口径：不回落旧 agent 级扁平键，否则老状态的提示词会一直
+    停在出土版本（工具与提示词是同一套进程，不能一个换新一个不换）。
+    """
+    ver = state_progress(holder, "cap_effective_versions", state, source)
     if ver is not None:
         row = await get_version(cap_repo, source, ver)
         if row is not None:
@@ -713,16 +721,18 @@ async def get_effective_text(
 async def apply_pending_changes(
     cap_repo: CapabilityRepository, holder, sources: list[str], state: str | None = None,
 ) -> None:
-    """解锁（compact / clear = 新对话）时调用：**本状态**的 effective 对齐最新，变更正式生效。
+    """解锁（compact / clear = 新对话）时调用：**本状态**的 effective + known 一起对齐最新。
 
     这是唯一合法的"应用变更"入口：它先进入解锁上下文再操作。
-    锁定态直接调用 mark_effective_latest / 改 effective → guard_apply_change 拒绝 + 报错。
+    锁定态直接调用 mark_prefix_fresh / 改 effective → guard_apply_change 拒绝 + 报错。
     state 必须是触发解锁的那个状态：别的会话没有解锁，它的前缀不该跟着换字节。
+    为什么 known 也一起推：解锁把前缀换成了最新，这一版就算"已告知"；只推 effective 会让下一轮
+    补发一条描述"刚刚生效的内容"的通知（每次解锁必现，纯烧 token）。
     """
     token = _unlock_ctx.set(True)
     try:
         guard_apply_change(sources)  # 解锁上下文内校验通过（防御：万一 future 代码绕路）
-        await mark_effective_latest(cap_repo, holder, sources, state=state)
+        await mark_prefix_fresh(cap_repo, holder, sources, state=state)
     finally:
         _unlock_ctx.reset(token)
 
