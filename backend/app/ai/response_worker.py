@@ -1266,9 +1266,9 @@ async def _trigger_dm_ai_reply(
     from app.services.world.world_frame_service import (
         active_world, frame_tool_gate, world_tools_for_agent,
     )
-    world_id_now, world_group = await active_world(db, agent.id)
+    world_id_now, world_role = await active_world(db, agent.id)
     if world_id_now is not None:
-        tools = [*tools, *await world_tools_for_agent(db, agent, world_id_now, world_group)]
+        tools = [*tools, *await world_tools_for_agent(db, agent, world_id_now, world_role)]
     gate = await frame_tool_gate(db, agent.id)
     if gate is not None:
         tools = [t for t in tools

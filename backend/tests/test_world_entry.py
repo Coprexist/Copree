@@ -1,8 +1,10 @@
-"""AI 进世界 / 世界命令落到哪个群
+"""AI 进世界 / 世界命令：帧直连世界，不借群聊
 
-一个世界一个状态：`enter_world` 把 (世界, 通道群) 记成 world 帧，同一个世界再进是复活原帧。
-`world_command` 的目标群依次认：显式 group_id → 候选群里第一个绑了世界的 → 世界帧的通道群；
-一个都没有时如实说「你手上没有绑了世界的群」（**不报**「群没绑世界」）。
+一个世界一条帧（type=world、context_ref=world:{id}）：世界绑几个群都是这一条，
+帧上记的是**入场身份**（world_role），不是通道群。
+world_command 也不再"发一条群消息"，而是把事件直接喂给世界程序（world_event_hook.deliver_command），
+非常驻世界同步拿回 handle() 的返回值——这就是世界的回话。
+
 设计见 docs/group_world/design/world_agent_capabilities.md，帧规则见 docs/dev/frame_lifecycle.md。
 """
 import contextlib
@@ -19,7 +21,7 @@ pytestmark = pytest.mark.anyio
 
 WORLD_ID = 2
 GROUP_OK, GROUP_ALSO_OK, GROUP_FREE = 59, 58, 71     # 前两个绑同一个世界，第三个没绑
-AI_ID = 24
+AI_ID, AI_USER_ID = 24, 40
 
 
 async def _seed(db):
@@ -49,14 +51,32 @@ async def _seed(db):
 
 
 @contextlib.asynccontextmanager
+async def _stub_world_delivery(record: list, result=None):
+    """把"喂给世界程序"这一步换成只记账的假的：这里测的是有没有绕道群聊、事件长什么样。"""
+    from app.services.world import world_event_hook
+
+    original = world_event_hook.dispatch_event
+
+    async def fake(db, world, event):
+        record.append({"world_id": world.id, "event": event})
+        return {"mode": "trigger", "success": True, "result": result}
+
+    world_event_hook.dispatch_event = fake
+    try:
+        yield record
+    finally:
+        world_event_hook.dispatch_event = original
+
+
+@contextlib.asynccontextmanager
 async def _stub_send_gm(record: list):
-    """把出口换成一个只记账的假的：这里测的是"命令发到哪个群"，不该真往群里发东西"""
+    """群消息出口换成假的：命令不该再走这条路。"""
     import app.chat.gm as gm
 
     original = gm.send_gm_message
 
     async def fake(db, group_id, sender_type, sender_id, content, **kwargs):
-        record.append({"group_id": group_id, "sender_type": sender_type, "content": content})
+        record.append({"group_id": group_id, "content": content})
         return None
 
     gm.send_gm_message = fake
@@ -66,149 +86,142 @@ async def _stub_send_gm(record: list):
         gm.send_gm_message = original
 
 
-async def _open_group(db, ref: str):
-    from app.services.agent.state_stack_service import ensure_active_frame
-    await ensure_active_frame(db, AI_ID, "group_chat", ref, "甲群", "某人")
-    await db.commit()
-
-
 async def _world_frame(db):
     from app.services.agent.state_stack_service import get_frames
     from app.utils.pure.state_stack import context_frames
     return context_frames(await get_frames(db, AI_ID), f"world:{WORLD_ID}")
 
 
-async def test_command_goes_to_the_group_he_is_in(migrated_db):
-    """群聊里省 group_id：发给本群（它就是绑了世界的那个）"""
+async def test_command_reaches_the_world_program_without_a_group(migrated_db):
+    """在世界里发命令：事件直达世界程序，一件群消息都不发，返回值就是世界的回话。"""
+    from app.database import async_session
+
+    seen: list = []
+    sent: list = []
+    async with _stub_world_delivery(seen, result={"ok": True, "handled": "checkin"}), \
+            _stub_send_gm(sent), async_session() as db:
+        await _seed(db)
+        assert (await EnterWorld().execute(db, AI_ID, GROUP_OK, {}, {})).get("success")
+        await db.commit()
+        out = await WorldCommand().execute(db, AI_ID, None, {"command": "签到"}, {})
+
+    assert out.get("success") and out["world_result"] == {"ok": True, "handled": "checkin"}, out
+    assert sent == [], f"命令不该再借群聊投递：{sent}"
+    assert seen and seen[-1]["world_id"] == WORLD_ID, seen
+    event = seen[-1]["event"]
+    assert event["source"] == "ai" and event["group_id"] is None, event
+    assert event["messages"][0]["content"] == "签到", event
+
+
+async def test_command_outside_the_world_tells_him_to_enter_first(migrated_db):
+    """不在世界里：不猜世界、也不发群消息，直接说先 enter_world。"""
+    from app.database import async_session
+
+    seen: list = []
+    async with _stub_world_delivery(seen), async_session() as db:
+        await _seed(db)
+        out = await WorldCommand().execute(db, AI_ID, GROUP_OK, {"command": "签到"}, {})
+
+    assert out.get("error") and "enter_world" in out["message"], out
+    assert seen == [], seen
+
+
+async def test_enter_world_does_not_need_a_group(migrated_db):
+    """世界直接绑了 AI（agent 绑定）时，手上一个群都没有也能进世界。"""
     from app.database import async_session
 
     async with async_session() as db:
         await _seed(db)
-        sent: list = []
-        async with _stub_send_gm(sent) as record:
-            out = await WorldCommand().execute(db, AI_ID, GROUP_OK, {"command": "签到"}, {})
-        assert out.get("success") and out.get("world_id") == WORLD_ID, out
-        assert [m["group_id"] for m in record] == [GROUP_OK], record
-
-
-async def test_command_from_dm_uses_the_nearest_group_frame(migrated_db):
-    """私信里没 group_id：认状态栈里最近的群会话（他刚 enter_group 进去的那个）"""
-    from app.database import async_session
-
-    async with async_session() as db:
-        await _seed(db)
-        await _open_group(db, f"group:{GROUP_OK}")
-        sent: list = []
-        async with _stub_send_gm(sent) as record:
-            out = await WorldCommand().execute(db, AI_ID, None, {"command": "签到"}, {})
-        assert out.get("success"), out
-        assert [m["group_id"] for m in record] == [GROUP_OK], record
-
-
-async def test_command_falls_back_to_the_world_frame_channel(migrated_db):
-    """群会话都被交接清掉时，认世界帧上记的通道群"""
-    from app.database import async_session
-    from app.services.agent.state_stack_service import push_state
-    from app.utils.pure.state_stack import make_state_frame
-
-    async with async_session() as db:
-        await _seed(db)
-        await push_state(db, AI_ID, make_state_frame(
-            type_="world", context_ref=f"world:{WORLD_ID}", group_id=GROUP_OK, doing="在世界里"))
+        await db.execute(text(
+            "INSERT INTO world_bindings (world_id, entity_type, entity_id, group_type_slug) VALUES "
+            f"({WORLD_ID}, 'agent', {AI_USER_ID}, 'mechanic')"))
         await db.commit()
 
-        sent: list = []
-        async with _stub_send_gm(sent) as record:
-            out = await WorldCommand().execute(db, AI_ID, None, {"command": "签到"}, {})
-        assert out.get("success"), out
-        assert [m["group_id"] for m in record] == [GROUP_OK], record
+        out = await EnterWorld().execute(db, AI_ID, None, {}, {})
+        assert out.get("success") and out.get("role") == "mechanic", out
 
-
-async def test_command_reports_honestly_when_no_group_has_a_world(migrated_db):
-    """一个都没有：如实说"你手上没有绑了世界的群"，且什么都不发"""
-    from app.database import async_session
-
-    async with async_session() as db:
-        await _seed(db)
-        await _open_group(db, f"group:{GROUP_FREE}")
-        sent: list = []
-        async with _stub_send_gm(sent) as record:
-            out = await WorldCommand().execute(db, AI_ID, None, {"command": "签到"}, {})
-        assert out.get("error") and "绑了世界的群" in out["message"], out
-        assert record == [], record
-
-
-async def test_command_with_an_explicit_group_argument(migrated_db):
-    """工具参数里带 group_id（在私信里也能用）：命令就从那个群出去"""
-    from app.database import async_session
-
-    async with async_session() as db:
-        await _seed(db)
-        sent: list = []
-        async with _stub_send_gm(sent) as record:
-            out = await WorldCommand().execute(
-                db, AI_ID, None, {"command": "签到", "group_id": GROUP_OK}, {})
-        assert out.get("success"), out
-        assert [m["group_id"] for m in record] == [GROUP_OK], record
-
-
-async def test_command_on_an_explicit_unbound_group_says_so(migrated_db):
-    """显式指了没绑世界的群：就说这个群没绑（不是"你不知道去哪"）"""
-    from app.database import async_session
-
-    async with async_session() as db:
-        await _seed(db)
-        sent: list = []
-        async with _stub_send_gm(sent) as record:
-            out = await WorldCommand().execute(
-                db, AI_ID, None, {"command": "签到", "group_id": GROUP_FREE}, {})
-        assert out.get("error") and f"群 {GROUP_FREE} 未绑定世界" in out["message"], out
-        assert record == [], record
-
-
-async def test_enter_world_explicit_group_argument_wins(migrated_db):
-    """工具参数里的 group_id 压过"我正在哪个群说话"：通道群按参数走"""
-    from app.database import async_session
-
-    async with async_session() as db:
-        await _seed(db)
-        out = await EnterWorld().execute(db, AI_ID, GROUP_OK, {"group_id": GROUP_ALSO_OK}, {})
-        assert out.get("success") and out["group_id"] == GROUP_ALSO_OK, out
         live = await _world_frame(db)
-        assert len(live) == 1 and live[0]["group_id"] == GROUP_ALSO_OK, live
+        assert len(live) == 1, live
+        assert "group_id" not in live[0], f"帧不该再记通道群：{list(live[0].keys())}"
+        assert live[0]["world_role"] == "mechanic", live[0]
 
 
-async def test_enter_world_records_the_channel_and_reuses_the_frame(migrated_db):
-    """进世界建 world 帧（记通道群）；同一个世界再进是复活原帧，不叠第二帧"""
+async def test_enter_world_from_dm_when_a_group_he_is_in_binds_it(migrated_db):
+    """私信里也进得去：世界绑的是群，只要他在那个群里，就与他此刻在哪个会话无关。"""
+    from app.database import async_session
+
+    async with async_session() as db:
+        await _seed(db)
+        out = await EnterWorld().execute(db, AI_ID, None, {}, {})
+        assert out.get("success") and out["world_id"] == WORLD_ID, out
+        assert len(await _world_frame(db)) == 1
+
+
+async def test_one_world_has_one_frame_no_matter_which_group_he_enters_from(migrated_db):
+    """一个世界绑多个群：从哪个群进都是同一条帧，帧上也没有群可刷。"""
     from app.database import async_session
 
     async with async_session() as db:
         await _seed(db)
         first = await EnterWorld().execute(db, AI_ID, GROUP_OK, {}, {})
-        assert first.get("success") and first["group_id"] == GROUP_OK, first
-        assert first.get("restored") is False
-        live = await _world_frame(db)
-        assert len(live) == 1 and live[0]["group_id"] == GROUP_OK, live
-        frame_id = live[0]["id"]
+        assert first.get("success") and first["restored"] is False, first
+        frame_id = (await _world_frame(db))[0]["id"]
 
-        second = await EnterWorld().execute(db, AI_ID, GROUP_OK, {}, {})
-        assert second.get("restored") is True, second
+        second = await EnterWorld().execute(db, AI_ID, GROUP_ALSO_OK, {}, {})
+        assert second.get("success") and second["restored"] is True, second
+
         live = await _world_frame(db)
         assert len(live) == 1 and live[0]["id"] == frame_id, live
+        assert "group_id" not in live[0], live[0]
 
 
-async def test_enter_world_refreshes_the_channel_group(migrated_db):
-    """一个世界绑多个群：从另一个群进，帧上的通道群跟着变（帧身份不变）"""
+async def test_the_role_is_set_at_the_door_and_kept_afterwards(migrated_db):
+    """身份在进门那一刻定（从哪个群进=落到那个群的居民类型）；换门不把身份抹掉。"""
     from app.database import async_session
 
     async with async_session() as db:
         await _seed(db)
-        await EnterWorld().execute(db, AI_ID, GROUP_OK, {}, {})
-        frame_id = (await _world_frame(db))[0]["id"]
+        await db.execute(text(
+            "UPDATE world_bindings SET group_type_slug='mechanic' "
+            f"WHERE entity_type='group' AND entity_id={GROUP_OK}"))
+        await db.commit()
 
-        out = await EnterWorld().execute(db, AI_ID, GROUP_ALSO_OK, {}, {})
-        assert out.get("success") and out["group_id"] == GROUP_ALSO_OK, out
-        live = await _world_frame(db)
-        assert len(live) == 1 and live[0]["id"] == frame_id, live
-        assert live[0]["group_id"] == GROUP_ALSO_OK, live
-        assert f"群「乙群」" in live[0]["doing"], live[0]["doing"]
+        typed = await EnterWorld().execute(db, AI_ID, GROUP_OK, {}, {})
+        assert typed.get("success") and typed["role"] == "mechanic", typed
+        assert (await _world_frame(db))[0]["world_role"] == "mechanic"
+
+        # 另一个群没标类型：帧上的身份沿用，不因为换了门就变成"无身份"
+        again = await EnterWorld().execute(db, AI_ID, GROUP_ALSO_OK, {}, {})
+        assert again.get("success") and again["role"] is None, again
+        assert (await _world_frame(db))[0]["world_role"] == "mechanic"
+
+
+async def test_enter_world_refuses_a_world_that_is_not_bound_to_him(migrated_db):
+    """明确点了一个既没绑他、也没绑他所在群的世界：如实拒。"""
+    from app.database import async_session
+
+    async with async_session() as db:
+        await _seed(db)
+        await db.execute(text("INSERT INTO worlds (id, name, owner_id) VALUES (3, '别人世界', 1)"))
+        await db.commit()
+
+        out = await EnterWorld().execute(db, AI_ID, GROUP_OK, {"world_id": 3}, {})
+        assert out.get("error") and "既没绑定你" in out["message"], out
+        assert await _world_frame(db) == []
+
+
+async def test_enter_world_asks_which_one_when_several_are_reachable(migrated_db):
+    """手上可进的世界不止一个：不替他挑，让他用 world_id 指定。"""
+    from app.database import async_session
+
+    async with async_session() as db:
+        await _seed(db)
+        await db.execute(text("INSERT INTO worlds (id, name, owner_id) VALUES (3, '另一个世界', 1)"))
+        await db.execute(text(
+            "INSERT INTO world_bindings (world_id, entity_type, entity_id, group_type_slug) VALUES "
+            f"(3, 'group', {GROUP_OK}, NULL)"))
+        await db.commit()
+
+        out = await EnterWorld().execute(db, AI_ID, GROUP_OK, {}, {})
+        assert out.get("error") and "world_id" in out["message"], out
+        assert await _world_frame(db) == []

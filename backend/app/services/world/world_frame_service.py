@@ -1,8 +1,13 @@
 """世界帧 —— 「进入一个世界」= 激活一条该世界专属的状态帧（沉浸式上下文）。
 
-一个世界一条帧（type=world、context_ref=world:{id}、group_id=通道群），同一个世界再进是
-**复活原帧**，不叠新的——「绑定时预建」和「进门时激活」必须指向同一条帧，否则一进就多一条。
+一个世界一条帧（type=world、context_ref=world:{id}），同一个世界再进是**复活原帧**，
+不叠新的——「绑定时预建」和「进门时激活」必须指向同一条帧，否则一进就多一条。
 帧规则见 docs/dev/frame_lifecycle.md，能力边界见 docs/group_world/design/world_agent_capabilities.md。
+
+**帧只认世界，不认群**：世界绑几个群都与这条帧无关，帧上不记「从哪个群出去」——命令
+直达世界程序的 handle()，不需要一条群消息当管道（见 world_event_hook.deliver_command）。
+帧上记的是「他以什么身份在这个世界里」（world_role）：身份是**绑定**上的事实，进门那一刻
+钉在帧上，之后按类型发技能都读它，同一个世界从两个群进来不会再给出两套能力。
 
 世界帧的工具集是它最重要的语义，也是本模块存在的理由：
 - 基础集（切帧 / 退出 / 换世界 / 世界文本命令）+ **该世界当前颁布的世界侧 skills**；
@@ -36,57 +41,109 @@ WORLD_FRAME_BASE_TOOLS: tuple[str, ...] = (
 )
 
 
-async def _type_slugs(db: AsyncSession, agent, world_id: int,
-                     channel_group_id: int | None = None) -> list[str]:
-    """这个 AI 在这个世界里落到的绑定类型（agent 绑定 + 通道群绑定）。
+async def his_group_ids(db: AsyncSession, user_id: int) -> list[int]:
+    """他在哪些群里（成员表存 users.id）——「世界绑了哪个群」按这个认，不是按他此刻在哪个会话。"""
+    from app.models.group import GroupMember
 
-    与群聊注入世界技能同一口径（world_agent_capabilities.md 三·六 的分层注入）：
-    类型决定"哪些技能给他"，白名单不能比实际注入的更宽，否则会出现"清单里有、调不动"。
+    rows = (await db.execute(
+        select(GroupMember.group_id).where(
+            GroupMember.member_type == "ai",
+            GroupMember.member_id == int(user_id),
+        )
+    )).scalars().all()
+    return [int(g) for g in rows]
+
+
+async def reachable_worlds(db: AsyncSession, agent, chat_group_id: int | None = None) -> list:
+    """他能进的世界（按优先级去重）：当前群绑的 → 直接绑他的 → 他所在群绑的。
+
+    第三档是「私信里也进得去」的关键：世界绑的是群，不是"他此刻在哪个会话"，
+    所以只要他在那个群里，私信里一样能进（不用先 enter_group，也不用挑一个群当通道）。
+    """
+    from app.services.world.world_service import find_worlds_by_entity
+
+    worlds = []
+    if chat_group_id:
+        worlds += await find_worlds_by_entity(db, "group", chat_group_id)
+    if agent.user_id:
+        worlds += await find_worlds_by_entity(db, "agent", agent.user_id)
+        for gid in await his_group_ids(db, agent.user_id):
+            worlds += await find_worlds_by_entity(db, "group", gid)
+    seen, unique = set(), []
+    for w in worlds:
+        if w.id not in seen:
+            seen.add(w.id)
+            unique.append(w)
+    return unique
+
+
+async def resolve_world_role(db: AsyncSession, agent, world_id: int,
+                             group_id: int | None = None) -> str | None:
+    """他在这世界里以什么身份玩：AI 自己的绑定 > 进门那个群的绑定 > 无（只拿通用技能）。
+
+    身份是绑定上的事实，不是「从哪个门进来」——所以它只在进门那一刻算一次、钉在帧上。
+    群参数只在这一刻参与判定（群聊进入 = 落到该群绑定的居民类型，见 world_agent_capabilities.md）；
+    之后算工具再也不看群，同一个世界从两个群进不会给出两套能力。
     """
     from app.models.world import WorldBinding
 
-    entity_ids = [int(agent.user_id or 0)] + ([int(channel_group_id)] if channel_group_id else [])
+    user_id = int(agent.user_id or 0)
+    entity_ids = ([user_id] if user_id else []) + ([int(group_id)] if group_id else [])
     rows = (await db.execute(select(WorldBinding).where(
         WorldBinding.world_id == int(world_id),
         WorldBinding.entity_type.in_(("agent", "group")),
         WorldBinding.entity_id.in_(entity_ids),
     ))).scalars().all()
-    return sorted({b.group_type_slug for b in rows if b.group_type_slug})
+    by_entity = {(b.entity_type, int(b.entity_id)): (b.group_type_slug or None) for b in rows}
+    own = by_entity.get(("agent", user_id)) if user_id else None
+    if own:
+        return own
+    if group_id:
+        return by_entity.get(("group", int(group_id)))
+
+    # 私信里没有"门"：按他所在群对这个世界的绑定取，类型唯一时才认（多种类型=没有确定身份）
+    slugs = set()
+    for gid in await his_group_ids(db, user_id) if user_id else []:
+        rows = (await db.execute(select(WorldBinding).where(
+            WorldBinding.world_id == int(world_id),
+            WorldBinding.entity_type == "group",
+            WorldBinding.entity_id == int(gid),
+        ))).scalars().all()
+        slugs.update(b.group_type_slug for b in rows if b.group_type_slug)
+    return slugs.pop() if len(slugs) == 1 else None
 
 
-def _skill_tools(world_id: int, type_slugs: list[str]) -> list[dict]:
-    """这个世界按绑定类型发给他的技能工具定义（多类型取并集，同名只留一个）。"""
+def _skill_tools(world_id: int, role: str | None) -> list[dict]:
+    """这个世界按他的入场身份发给他的技能工具定义（同类型下同名只留一个）。"""
     from app.services.world.world_skill_runtime import build_world_tools_for_type
 
     defs: list[dict] = []
     seen: set[str] = set()
-    for slug in (type_slugs or [None]):
-        for tool in build_world_tools_for_type(int(world_id), slug):
-            name = str(((tool or {}).get("function") or {}).get("name") or "")
-            if name and name not in seen:
-                seen.add(name)
-                defs.append(tool)
+    for tool in build_world_tools_for_type(int(world_id), role):
+        name = str(((tool or {}).get("function") or {}).get("name") or "")
+        if name and name not in seen:
+            seen.add(name)
+            defs.append(tool)
     return defs
 
 
 def world_frame_tools(world_id: int) -> list[str]:
-    """世界帧工具名（不区分 AI 类型）：基础集 + 这个世界**通用**的技能。"""
-    names = {((t.get("function") or {}).get("name") or "") for t in _skill_tools(world_id, [])}
+    """世界帧工具名（不区分身份）：基础集 + 这个世界**通用**的技能。"""
+    names = {((t.get("function") or {}).get("name") or "") for t in _skill_tools(world_id, None)}
     return sorted({*WORLD_FRAME_BASE_TOOLS, *(n for n in names if n)})
 
 
 async def world_frame_tools_for(db: AsyncSession, agent, world_id: int,
-                                channel_group_id: int | None = None) -> list[str]:
-    """按这个 AI 的绑定类型算白名单：基础集 + 它能用的世界侧技能。"""
-    types = await _type_slugs(db, agent, world_id, channel_group_id)
-    names = {((t.get("function") or {}).get("name") or "") for t in _skill_tools(world_id, types)}
+                                world_role: str | None = None) -> list[str]:
+    """按这个 AI 的入场身份算白名单：基础集 + 它那个身份能用的世界侧技能。"""
+    names = {((t.get("function") or {}).get("name") or "") for t in _skill_tools(world_id, world_role)}
     return sorted({*WORLD_FRAME_BASE_TOOLS, *(n for n in names if n)})
 
 
 async def world_tools_for_agent(db: AsyncSession, agent, world_id: int,
-                                channel_group_id: int | None = None) -> list[dict]:
+                                world_role: str | None = None) -> list[dict]:
     """这个世界对这个 AI 可用的技能工具定义（私信路径注入用；群聊路径已有同一套过滤）。"""
-    return _skill_tools(world_id, await _type_slugs(db, agent, world_id, channel_group_id))
+    return _skill_tools(world_id, world_role)
 
 
 async def frame_tool_gate(db: AsyncSession, agent_id: int) -> set[str] | None:
@@ -104,10 +161,10 @@ async def frame_tool_gate(db: AsyncSession, agent_id: int) -> set[str] | None:
     return None
 
 
-async def active_world(db: AsyncSession, agent_id: int) -> tuple[int | None, int | None]:
-    """他现在正在哪个世界里 → (世界号, 通道群)；不在世界里返回 (None, None)。
+async def active_world(db: AsyncSession, agent_id: int) -> tuple[int | None, str | None]:
+    """他现在正在哪个世界里 → (世界号, 入场身份)；不在世界里返回 (None, None)。
 
-    通道群要一起给：按类型过滤技能时要知道"从哪个群进来的"（群类型决定他落到的类型）。
+    身份一起给：按类型过滤技能要用它，而它记在帧上（不是从群反查）。
     """
     from app.services.agent.state_stack_service import get_current_frame
 
@@ -115,11 +172,7 @@ async def active_world(db: AsyncSession, agent_id: int) -> tuple[int | None, int
     world_id = world_id_of(frame)
     if world_id is None:
         return None, None
-    raw_group = frame.get("group_id")
-    try:
-        return world_id, (int(raw_group) if raw_group else None)
-    except (TypeError, ValueError):
-        return world_id, None
+    return world_id, (frame.get("world_role") or None)
 
 
 def _dormant_world_frame(world) -> dict:
@@ -178,35 +231,35 @@ async def park_world_frame_for_binding(db: AsyncSession, entity_id: int, world) 
         return False
 
 
-async def activate_world_frame(db: AsyncSession, agent_id: int, world, target_group: int,
-                               group_name: str, why: str = "") -> tuple[dict, bool]:
+async def activate_world_frame(db: AsyncSession, agent_id: int, world,
+                               world_role: str | None = None, why: str = "") -> tuple[dict, bool]:
     """进世界：把这条世界帧设为当前帧（已有就复活，没有才建）。返回 (帧, 是否复活)。
 
-    通道群（group_id）每次进门都刷新：一个世界可能绑好几个群，命令要落到这次进来的那个群，
-    但帧身份（id、context_ref）不变。
+    身份（world_role）在这一刻定稿：给了就刷新，没给就沿用帧上原来那个——「从群里进来的
+    是那个群的居民，从私信进来还是他自己那个身份」，不因为换了个门就把身份抹掉。
     """
     from app.services.agent.state_stack_service import push_state, restore_frame
 
-    doing = f"在世界「{world.name}」里游玩（通道：群「{group_name}」）"
+    doing = f"在世界「{world.name}」里游玩"
     label = f"世界「{world.name}」"
     existing = await _frames_of_world(db, agent_id, world.id)
     if existing:
         # 归一化后的存储里历史区在前、运行区在后，取末位就是"这条世界帧"（有活在跑的优先）
         # handoff=True：进世界是从别处切过来，要带上"刚在哪个会话说话"的交接包
-        frame = await restore_frame(db, agent_id, str(existing[-1].get("id") or ""), updates={
-            "group_id": target_group,
-            "label": label,
-            "doing": doing,
-        }, handoff=True)
+        updates: dict = {"label": label, "doing": doing}
+        if world_role:
+            updates["world_role"] = world_role
+        frame = await restore_frame(db, agent_id, str(existing[-1].get("id") or ""),
+                                    updates=updates, handoff=True)
         return frame, True
 
     frame = make_state_frame(
         type_="world",
         context_ref=f"world:{world.id}",
-        group_id=target_group,
         label=label,
-        why=why or f"{group_name} 的世界",
+        why=why or f"进入世界「{world.name}」",
         doing=doing,
+        world_role=world_role or None,
     )
     await push_state(db, agent_id, frame)
     return frame, False

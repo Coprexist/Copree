@@ -182,7 +182,7 @@ async def restore_frame(db: AsyncSession, agent_id: int, frame_id: str,
     重建只发生在**这个 id 从来没存在过**时（老数据、或帧被代销/交接删了之后）；
     重建**沿用原 frame_id**，身份不因中间发生什么而换人。
     updates：复活时一并写回的字段——帧的身份没变、内容要跟着这次进来的地方更新
-    （同世界换群进：世界帧上的通道群要指向这个群）。
+    （同世界再进：世界帧上的入场身份按这一刻的绑定刷新，帧上不记群）。
     handoff：要不要像 push_state 那样带上"从哪来 / 在干嘛"的交接包。闹钟唤醒是"接着自己
     排好的计划"，不需要；进世界是**从别处切过来**，不带的话他不知道自己刚在哪个会话里说话。
     返回恢复好的帧（没有帧身份可用时返回 {}）。
@@ -880,7 +880,7 @@ async def get_active_frame_tools(db: AsyncSession, agent_id: int) -> tuple[list[
             select(Agent.id, Agent.user_id).where(Agent.id == agent_id))).first()
         if agent is None:
             return world_frame_tools(world_id), None
-        return await world_frame_tools_for(db, agent, world_id, top.get("group_id")), None
+        return await world_frame_tools_for(db, agent, world_id, top.get("world_role")), None
     return top.get("tools"), top.get("skills")
 
 
@@ -899,34 +899,23 @@ async def park_frame(db: AsyncSession, agent_id: int, frame: dict) -> None:
 
 async def current_context(db: AsyncSession, agent_id: int,
                           fallback_group_id: int | None = None) -> dict:
-    """AI 现在在哪：本次回复所在的群 + 状态栈里最近的群/世界（一次扫描）
+    """AI 现在在哪（群）：本次回复所在的群 + 状态栈里最近的群会话，按新鲜度去重。
 
-    世界命令与进世界都要「平台自己记着的事实」（帧就是平台记的），各写一份扫描迟早会分叉。
-    返回：
-    - group_ids：候选群，按新鲜度排——本次回复所在的群排第一，然后是栈里最近的群会话（去重）；
-    - world_id / channel_group_id：栈里最近那条世界帧的世界号与通道群（没进过世界就是 None）。
+    只回答"他手上有哪些群"。世界在哪儿不在这里：世界帧自己回答（world_frame_service.active_world），
+    命令也不再需要群——两处各扫一遍栈正是「通道群」那层耦合的来源，已经收掉了。
     """
     groups: list[int] = [int(fallback_group_id)] if fallback_group_id is not None else []
-    world_id: int | None = None
-    channel_group_id: int | None = None
     for frame in reversed(running(await _get_stack(db, agent_id))):
         ref = str(frame.get("context_ref") or "")
-        if ref.startswith("group:"):
-            try:
-                group = int(ref.split(":", 1)[1])
-            except ValueError:
-                continue
-            if group not in groups:
-                groups.append(group)
-        elif world_id is None and (wid := world_id_of(frame)) is not None:
-            # 世界号只从 context_ref 解析（pure.world_id_of 是唯一口径）
-            world_id = wid
-            raw_group = frame.get("group_id")
-            try:
-                channel_group_id = int(raw_group) if raw_group else None
-            except (TypeError, ValueError):
-                channel_group_id = None
-    return {"group_ids": groups, "world_id": world_id, "channel_group_id": channel_group_id}
+        if not ref.startswith("group:"):
+            continue
+        try:
+            group = int(ref.split(":", 1)[1])
+        except ValueError:
+            continue
+        if group not in groups:
+            groups.append(group)
+    return {"group_ids": groups}
 
 
 async def persist_last_task_as_state(

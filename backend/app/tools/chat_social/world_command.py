@@ -1,12 +1,14 @@
 """
-world_command 工具 — 群 AI 操作绑定世界（命令统一交给世界程序解析）
+world_command 工具 — 群 AI 操作绑定世界（命令直接交给世界程序）
 
-执行 = 以 AI 身份发群消息（source="user" 触发群消息钩子）→ 世界程序 handle() → SSE 生效，
-群里可见可审计，与用户共用同一套语法；工具定义与具体世界无关，命令清单走尾部动态块。
+执行 = 把一条事件喂给世界程序的 handle(event)（**不经过群聊**，见
+services/world/world_event_hook.deliver_command）：
+- 非常驻世界同步拿回 handle() 的返回值，那就是世界的回话；
+- 常驻世界是流式的（进程内队列），只能确认送达，结果由世界自己发布。
 
-目标群依次认：显式 group_id → 候选群里第一个绑了世界的（候选按新鲜度，本次回复所在的群在前，
-世界帧的通道群兜底）→ 都没有就不猜，如实说「你手上没有绑了世界的群」——**不报**「群没绑世界」：
-那会把"你在私信里"说成群的问题（线上误导过一次）。
+目标世界 = 他现在所在的世界（世界帧）。不在世界里就不猜：让他先 enter_world——
+"命令该发到哪个群"曾经是这个工具最麻烦的一档逻辑（显式群 → 最近的群 → 帧上的通道群），
+那种麻烦是因为命令被实现成了"以 AI 名义发一条群消息"；帧直连世界之后它整体消失了。
 
 设计：docs/group_world/design/world_agent_capabilities.md（路径 B）
 """
@@ -19,8 +21,8 @@ class WorldCommand(ToolPlugin):
     name = "world_command"
     description = (
         "向世界发送命令（操作世界：移动角色/触发事件/查询状态等，语法由世界程序定义）。"
-        "命令以你的名义发到群里——在世界里玩（先 enter_world）时省略 group_id，它就知道发去哪；"
-        "在私信里还没进世界时，要带上目标群的 group_id。具体命令清单见系统提示末尾的【本群世界】。"
+        "命令直接交给世界程序、不经过群聊，世界程序的返回值就是它的回话。"
+        "先 enter_world 进世界，再发命令。具体命令清单见系统提示末尾的【本群世界】。"
     )
     segment = "chat_social"
     parameters = {
@@ -28,16 +30,11 @@ class WorldCommand(ToolPlugin):
             "type": "string",
             "description": "发送给世界程序的命令文本，如「旅人移动到 2,3」/「我去 2,3」/「身份 签到」",
         },
-        "group_id": {
-            "type": "integer",
-            "nullable": True,
-            "description": "命令发到哪个群（进世界后不用填；群聊里省略 = 当前群）",
-        },
     }
     required = ["command"]
     states = ["active", "dnd", "inactive"]
-    admin_description = "群 AI 通过命令操作本群绑定的世界（与用户共用世界程序语法）"
-    trigger_condition = "本群绑定了世界，且需要操作世界时"
+    admin_description = "群 AI 通过命令操作世界（与用户共用世界程序语法）"
+    trigger_condition = "AI 在世界里，且需要操作世界时"
 
     async def execute(self, db: AsyncSession, agent_id: int, group_id: int | None,
                       arguments: dict, context: dict) -> dict:
@@ -45,40 +42,33 @@ class WorldCommand(ToolPlugin):
         if not command:
             return {"error": True, "message": "command 不能为空"}
 
-        from app.services.agent.state_stack_service import current_context
-        from app.services.world.world_service import find_worlds_by_entity, first_world_bound_group
+        from app.services.world.world_frame_service import active_world
 
-        explicit = arguments.get("group_id")
-        if explicit is not None:
-            try:
-                target_group = int(explicit)
-            except (TypeError, ValueError):
-                return {"error": True, "message": "group_id 必须是群编号（整数）"}
-            worlds = await find_worlds_by_entity(db, "group", target_group)
-            if not worlds:
-                return {"error": True, "message": f"群 {target_group} 未绑定世界（可在世界列表给群配置世界后使用）"}
-        else:
-            ctx = await current_context(db, agent_id, group_id)
-            # 候选群按优先级排：状态栈里的群会话（本次回复所在的群在前，按新鲜度）→ 世界帧的通道群。
-            # 通道群排最后：它记的是"他进世界时约定从哪个群出去"，群会话都被交接清掉时才轮到它
-            candidates = list(ctx["group_ids"])
-            if ctx["channel_group_id"]:
-                candidates.append(int(ctx["channel_group_id"]))
-            target_group, worlds = await first_world_bound_group(db, candidates)
-            if not worlds:
-                return {"error": True, "message":
-                        "不知道这条命令该发到哪个群：你手上没有绑了世界的群——"
-                        "在私信里就先 enter_group(群号) 或 enter_world 进世界，也可以直接带 group_id"}
+        world_id, _role = await active_world(db, agent_id)
+        if world_id is None:
+            return {"error": True, "message":
+                    "你不在世界里：先 enter_world 进世界，再发命令（可进的世界不止一个时用 world_id 指定）"}
 
-        # 以 AI 身份发群消息 → 群消息钩子（source="user"）→ 世界程序 handle 解析执行
-        # 发送身份必须是 users.id：这里拿到的是 agents.id，不换算会被成员校验当成外人
-        # （2026-10-20 线上：群里普通聊天正常，工具调用却回「你不是该群成员，无法发送消息」）
-        from app.chat.gm import ai_sender_id, send_gm_message
-        sender_id = await ai_sender_id(db, agent_id)
-        await send_gm_message(db, target_group, "ai", sender_id, command, source="user")
+        from app.services.world.world_event_hook import deliver_command
 
+        outcome = await deliver_command(world_id, agent_id, command)
+        if not outcome.get("success"):
+            return {"error": True, "message":
+                    f"世界程序没接住这条命令：{outcome.get('error') or '未知原因'}"}
+        if outcome.get("mode") == "resident":
+            return {
+                "success": True,
+                "world_id": world_id,
+                "command": command,
+                "resident": True,
+                "message": "命令已送达（这个世界的程序常驻在跑，结果是它自己发布的，不会回到这里）",
+            }
+        result = outcome.get("result")
         return {
             "success": True,
-            "message": f"命令已交给世界程序处理（你以群里可见的方式发布了：{command}）",
-            "world_id": worlds[0].id,
+            "world_id": world_id,
+            "command": command,
+            "world_result": result,
+            "message": ("世界程序执行完毕，world_result 是它的返回值；空值表示它没有回话"
+                        if result else "世界程序执行完毕，但它没有返回内容"),
         }

@@ -54,7 +54,7 @@
 | `backend/tests/test_agent_resolution.py` | 集成（真库） | 2 | 群成员 `member_id` 解析优先级 |
 | `backend/tests/test_work_session.py` | 集成（真库 + 探针表） | 4 | `work_session` 四态：出块提交 / 抛错回滚 / 内层回滚不影响外层 / 内层提交不被外层回滚带走（**不是 savepoint**） |
 | `backend/tests/test_frame_lifecycle.py` | 集成（真库） | 11 | 帧的存储与运行两层、容量闸与后事、同会话归并规则、稳定帧 id 复活 |
-| `backend/tests/test_world_entry.py` | 集成（真库） | 9 | `enter_world` 记通道群/复活原帧/换群刷新、`world_command` 目标群四档与如实报错 |
+| `backend/tests/test_world_entry.py` | 集成（真库） | 7 | `enter_world` 不需要群/一个世界一条帧/入场身份取绑定、`world_command` 直达世界程序（不发群消息）与如实报错 |
 
 合计 **700 条**（`run_without_pytest.py` 全量 **46s**，2026-10-05 实测；2026-09-25 提速前是 108s，见 §1.5）。
 下表只列了部分文件，条数一律以运行器输出为准。

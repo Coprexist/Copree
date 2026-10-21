@@ -154,7 +154,8 @@ async def test_enter_world_wakes_the_parked_frame(migrated_db):
 
         frames = await _world_frames(db)
         assert len(frames) == 1 and frames[0]["id"] == parked_id, frames
-        assert frames[0]["status"] == "active" and frames[0]["group_id"] == GROUP_OK, frames[0]
+        assert frames[0]["status"] == "active", frames[0]
+        assert "group_id" not in frames[0], f"帧只认世界，不再记通道群：{list(frames[0].keys())}"
         handoff = frames[0].get("handoff") or {}
         assert handoff.get("from_context_ref") == "41_999", handoff
         assert "若梦" in (handoff.get("from_label") or ""), handoff
@@ -182,7 +183,7 @@ async def test_inside_the_world_only_world_tools_are_allowed(migrated_db):
         assert set(WORLD_FRAME_BASE_TOOLS) <= set(allowed)
         assert SKILL in allowed
         assert "send_message" not in allowed
-        assert await active_world(db, AI_ID) == (WORLD_ID, GROUP_OK)
+        assert await active_world(db, AI_ID) == (WORLD_ID, None)
 
 
 async def test_a_typed_skill_is_only_allowed_for_that_type(migrated_db):
@@ -195,16 +196,49 @@ async def test_a_typed_skill_is_only_allowed_for_that_type(migrated_db):
     async with async_session() as db:
         await _seed(db)
         agent = await db.get(Agent, AI_ID)
-        # 不区分类型时只算通用技能
+        # 不带身份时只算通用技能
         assert "strike" not in world_frame_tools(WORLD_ID)
         assert "strike" not in await world_frame_tools_for(db, agent, WORLD_ID)
-        # 群里绑了 mechanic 类型：从这个群进世界（通道群=59）才拿到它
+        # 身份是帧上的入场身份（不是从哪个群查出来的）
+        assert "strike" in await world_frame_tools_for(db, agent, WORLD_ID, "mechanic")
+        assert "strike" not in await world_frame_tools_for(db, agent, WORLD_ID, "expedition")
+
+
+async def test_the_role_reads_the_ai_binding_first_then_the_group_he_came_through(migrated_db):
+    """身份来源有优先级：AI 自己的绑定 > 进门那个群的绑定 > 无 —— 且只在进门那一刻算。"""
+    from app.database import async_session
+    from app.models.agent import Agent
+    from app.services.world.world_frame_service import resolve_world_role
+
+    async with async_session() as db:
+        await _seed(db)
+        agent = await db.get(Agent, AI_ID)
         await db.execute(text(
-            "UPDATE world_bindings SET group_type_slug='mechanic' "
+            "UPDATE world_bindings SET group_type_slug='expedition' "
             "WHERE entity_type='group' AND entity_id=59"))
         await db.commit()
-        assert "strike" in await world_frame_tools_for(db, agent, WORLD_ID, GROUP_OK)
-        assert "strike" not in await world_frame_tools_for(db, agent, WORLD_ID)
+        assert await resolve_world_role(db, agent, WORLD_ID, GROUP_OK) == "expedition"
+        # 私信里没有"门"：按他所在群对这个世界的绑定取，类型唯一时才认（这里只有 59 标了类型）
+        assert await resolve_world_role(db, agent, WORLD_ID) == "expedition"
+        # 他同时在另一个群、那个群标了不同类型 → 没有确定身份（不替他从两个里挑一个）
+        await db.execute(text(
+            "INSERT INTO groups (id, name, owner_type, owner_id, avatar_mode, include_ai_in_avatar, "
+            "searchable, auto_approve_join, approve_invites) VALUES "
+            "(58, '乙群', 'human', 1, 'default', true, true, true, true)"))
+        await db.execute(text(
+            "INSERT INTO group_members (group_id, member_type, member_id, role) VALUES (58, 'ai', 40, 'member')"))
+        await db.execute(text(
+            "INSERT INTO world_bindings (world_id, entity_type, entity_id, group_type_slug) VALUES "
+            f"({WORLD_ID}, 'group', 58, 'mechanic')"))
+        await db.commit()
+        assert await resolve_world_role(db, agent, WORLD_ID) is None
+
+        # AI 自己绑了世界（带类型）之后，自己的身份压过"从哪个群进来"
+        await db.execute(text(
+            "INSERT INTO world_bindings (world_id, entity_type, entity_id, group_type_slug) VALUES "
+            f"({WORLD_ID}, 'agent', {AI_USER_ID}, 'mechanic')"))
+        await db.commit()
+        assert await resolve_world_role(db, agent, WORLD_ID, GROUP_OK) == "mechanic"
 
 
 async def test_the_group_talk_does_not_drag_him_out_of_the_world(migrated_db):

@@ -9,6 +9,8 @@
   合并成一条 event.messages 再触发一次，避免群消息爆发把沙箱跑死。
 - 防死循环：世界程序自己发的消息（send_gm_message source="world"）不触发。
 - 触发不影响世界 status：沉睡世界也能感知；唤醒仍保持手动（AUTO_MANAGE=False）。
+- **AI 的命令不走这条路**（也不发群消息）：deliver_command 直接把一条事件喂给 handle(event)，
+  非常驻世界同步拿返回值——群只是"人在群里说话"的入口，不是 AI 操作世界的管道。
 
 event 结构（世界代码在 handle(event) 里收到）：
 {
@@ -24,6 +26,7 @@ event 结构（世界代码在 handle(event) 里收到）：
 import asyncio
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from app.repositories.world_repo import SQLAlchemyWorldRepository
 from app.utils.display_name import display_names
@@ -163,6 +166,68 @@ async def _window(p: _Pending, interval: float) -> None:
         _fire(p)
 
 
+async def dispatch_event(db, world, event: dict) -> dict:
+    """把一个事件交给世界程序 —— 群消息与 AI 命令的唯一投递入口。
+
+    常驻世界走进程内队列（流式，只能确认送达）；非常驻世界临时触发 handle(event)，
+    同步拿到返回值。返回 {mode, success, result, error}：
+    - mode="resident"：result 为 None，结果由世界自己发布
+    - mode="trigger"：result 就是 handle() 的返回值
+    """
+    from app.services.world.world_resident import manager
+    if manager.is_resident(world) and await manager.dispatch(world.id, event):
+        return {"mode": "resident", "success": True, "result": None}
+    from app.services.world.world_sandbox import run_world_trigger
+    # 确保沙箱 env 注入 WORLD_API_TOKEN / WORLD_API_BASE（懒生成）
+    from app.routers.world_proxy import ensure_world_api_token
+    await ensure_world_api_token(db, world)
+    await db.commit()
+    result = await run_world_trigger(world, event=event, background=True)
+    if not result.get("success"):
+        return {"mode": "trigger", "success": False, "result": None,
+                "error": result.get("reason") or result.get("error") or "世界程序执行失败"}
+    return {"mode": "trigger", "success": True, "result": result.get("result")}
+
+
+async def deliver_command(world_id: int, agent_id: int, command: str) -> dict:
+    """AI 的命令直达世界程序 —— 不经过群聊，也不在群里替他说一遍。
+
+    事件形状与群消息**同一份**（type=group_message + messages 数组），只把 source 换成 "ai"、
+    group_id 留空：世界的命令解析器认的是 sender_type/sender_id，不必为 AI 再写一套语法。
+    发件人编号用 users.id（与群消息里 AI 的写法一致），世界才认得出这是「ai:<编号>」。
+
+    返回 dispatch_event 的结果——非常驻世界拿到的 result 就是世界的回话。
+    """
+    from app.database import async_session
+
+    async with async_session() as db:
+        from app.models.agent import Agent
+        from app.models.world import World
+        world = await db.get(World, world_id)
+        agent = await db.get(Agent, agent_id)
+        if world is None or agent is None:
+            return {"mode": None, "success": False, "result": None,
+                    "error": "世界或 AI 不存在（可能已被删除）"}
+        from app.chat.gm import ai_sender_id
+        from app.utils.display_name import display_names
+        sender_id = await ai_sender_id(db, agent_id)
+        names = await display_names(db, {sender_id}) if sender_id else {}
+        event = {
+            "type": "group_message",
+            "source": "ai",
+            "group_id": None,
+            "messages": [{
+                "message_id": None,
+                "sender_id": sender_id,
+                "sender_name": names.get(sender_id) or agent.name,
+                "sender_type": "ai",
+                "content": command,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }],
+        }
+        return await dispatch_event(db, world, event)
+
+
 async def _deliver(world_id: int, group_id: int, msgs: list) -> None:
     """投递一批消息给世界程序：查发件人名字 → 常驻进程或临时触发 handle(event)"""
     from app.database import async_session
@@ -185,17 +250,8 @@ async def _deliver(world_id: int, group_id: int, msgs: list) -> None:
                 "group_type": await _group_type_for_event(db, world_id, group_id),
                 "messages": msgs,
             }
-            # 2.5：常驻世界 → 投递常驻进程（进程内队列）；非常驻/未在跑 → 临时触发
-            from app.services.world.world_resident import manager
-            if manager.is_resident(world) and await manager.dispatch(world.id, event):
-                return
-            from app.services.world.world_sandbox import run_world_trigger
-            # 确保沙箱 env 注入 WORLD_API_TOKEN / WORLD_API_BASE（懒生成）
-            from app.routers.world_proxy import ensure_world_api_token
-            await ensure_world_api_token(db, world)
-            await db.commit()
-            result = await run_world_trigger(world, event=event, background=True)
-            if not result.get("success"):
-                logger.info(f"🌐 世界 #{world_id} 群消息感知：程序未处理（{result.get('reason', '')[:80]}）")
+            outcome = await dispatch_event(db, world, event)
+            if not outcome["success"]:
+                logger.info(f"🌐 世界 #{world_id} 群消息感知：程序未处理（{str(outcome.get('error') or '')[:80]}）")
     except Exception as e:
         logger.warning(f"🌐 世界 #{world_id} 群消息钩子执行异常: {e}")

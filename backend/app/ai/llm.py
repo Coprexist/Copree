@@ -1439,14 +1439,14 @@ async def build_messages(
             if dup_hint:
                 parts = [f"{nm}（世界 {'/'.join(map(str, wids))} 都有，调用时可用 world_id 参数指定目标世界）" for nm, wids in dup_hint.items()]
                 dup_note = f"；注意：{'；'.join(parts)}"
-            # enter_world 那句必须说：命令要落到一个具体的群，AI 不先进世界就不知道从哪出去
+            # enter_world 那句必须说：不先进世界，他就不知道自己正在操作哪个世界
             wc_line = (
-                "；另有 world_command 可发文本命令（由世界程序解析，如 旅人移动到 2,3 / 我去 2,3 / 身份 签到）"
+                "；另有 world_command 可发文本命令（直接交给世界程序，如 旅人移动到 2,3 / 我去 2,3 / 身份 签到）"
                 if skill_names else
-                "。可用 world_command 发送文本命令（由世界程序解析，如 旅人移动到 2,3 / 我去 2,3 / 身份 签到）"
+                "。可用 world_command 发送文本命令（直接交给世界程序，如 旅人移动到 2,3 / 我去 2,3 / 身份 签到）"
             ) + ("；想玩这个世界（包括在私信里）就调 enter_world——它就是本群的「进入群视界」技能："
                  "进去后你的工具会换成这个世界颁布的技能（外加切帧/退出这几种基础工具），"
-                 "命令从你进门时所在的群出去；出来用 pop_state")
+                 "命令直达世界程序、不经过群聊；出来用 pop_state")
             messages.append({"role": "system", "content":
                 f"【本群世界】本群绑定世界「{w.name}」（#{w.id}）。"
                 + (f"你已获得世界颁布的技能工具，像调普通工具一样直接 function calling 调用：{'、'.join(skill_names)}" if skill_names else "")

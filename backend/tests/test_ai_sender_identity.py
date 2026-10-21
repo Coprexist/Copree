@@ -16,6 +16,7 @@ import contextlib
 import pytest
 from sqlalchemy import text
 
+from app.tools.chat_social.enter_world import EnterWorld
 from app.tools.chat_social.world_command import WorldCommand
 
 pytestmark = pytest.mark.anyio
@@ -114,30 +115,41 @@ async def test_send_gm_message_rejects_stranger_and_accepts_member(migrated_db):
     assert [r["sender_id"] for r in record] == [AI_USER_ID]
 
 
-async def test_world_command_sends_as_ai_user_id(migrated_db):
-    """回归用例：群 AI 调 world_command 必须真的发得出去（2026-10-20 线上事故）。
+async def test_world_command_hands_the_world_the_ai_user_id(migrated_db):
+    """回归用例：群 AI 的命令带着 users.id 进世界程序（2026-10-20 线上事故的同一条契约）。
 
-    发出去的消息还要带 source="user" —— 群消息钩子只接这一路，世界程序才感知得到。
+    命令不再以群消息投递（那条路已经撤掉），但"AI 的编号必须是 users.id"没有变——
+    世界按 sender_type 认人，拿 agents.id 过去会被当成另一个人，甚至另一个 AI。
     """
     from app.database import async_session
+    from app.services.world import world_event_hook
 
-    record: list = []
-    async with _stub_dispatch(record), async_session() as db:
-        await _seed(db)
-        await db.execute(text("INSERT INTO worlds (id, name, owner_id) VALUES (45, 'CoExisten', 1)"))
-        await db.execute(text(
-            "INSERT INTO world_bindings (world_id, entity_type, entity_id, group_type_slug) VALUES "
-            f"(45, 'group', {GROUP}, 'expedition')"))
-        await db.commit()
+    seen: list = []
+    original = world_event_hook.dispatch_event
 
-        result = await WorldCommand().execute(db, AGENT_ID, GROUP, {"command": "签到"}, {})
-        await db.commit()
+    async def fake(db, world, event):
+        seen.append(event)
+        return {"mode": "trigger", "success": True, "result": {"ok": True}}
 
-        assert result.get("success") is True, result
-        row = (await db.execute(text(
-            "SELECT sender_type, sender_id, content FROM messages ORDER BY id DESC LIMIT 1"
-        ))).mappings().first()
-        assert (row["sender_type"], row["sender_id"], row["content"]) == ("ai", AI_USER_ID, "签到")
+    world_event_hook.dispatch_event = fake
+    try:
+        async with async_session() as db:
+            await _seed(db)
+            await db.execute(text("INSERT INTO worlds (id, name, owner_id) VALUES (45, 'CoExisten', 1)"))
+            await db.execute(text(
+                "INSERT INTO world_bindings (world_id, entity_type, entity_id, group_type_slug) VALUES "
+                f"(45, 'group', {GROUP}, 'expedition')"))
+            await db.commit()
 
-    assert record[-1] == {"group_id": GROUP, "source": "user",
-                          "sender_type": "ai", "sender_id": AI_USER_ID}
+            assert (await EnterWorld().execute(db, AGENT_ID, GROUP, {}, {})).get("success")
+            await db.commit()
+            result = await WorldCommand().execute(db, AGENT_ID, GROUP, {"command": "签到"}, {})
+            await db.commit()
+    finally:
+        world_event_hook.dispatch_event = original
+
+    assert result.get("success") is True and result["world_result"] == {"ok": True}, result
+    message = seen[-1]["messages"][0]
+    assert (message["sender_type"], message["sender_id"], message["content"]) == \
+        ("ai", AI_USER_ID, "签到"), message
+    assert seen[-1]["source"] == "ai", seen[-1]

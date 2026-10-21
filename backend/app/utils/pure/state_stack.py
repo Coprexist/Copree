@@ -62,9 +62,10 @@ _FRAME_FIELDS = (
     "id", "type", "context_ref", "label", "why", "doing", "todo", "plan", "journal",
     "created_at", "status", "emotion", "emotion_text", "source_emotion",
     "tools", "skills", "call_count", "handoff", "completed_handoff",
-    # group_id：世界帧（type=world）的通道群——命令要落到一个具体的群，世界本身不记这个。
-    # 一个世界可能绑好几个群（世界 36 → 群 24/48/49/50/51），所以群必须跟着帧走。
-    "group_id",
+    # world_role：世界帧（type=world）的入场身份（绑定类型 slug；None = 只拿通用技能）。
+    # 帧不记群：一个世界绑几个群都只有这一条帧，命令直达世界程序——群不是世界的属性，
+    # 更不是投递管道（见 services/world/world_frame_service.py 的模块说明）。
+    "world_role",
     # last_active_at：帧最后一次被**调用**的时刻（LLM 调用与决策调用都算）。容量超限时据此挑
     # 「最久没被调用」的帧，不按创建时间——长期在用的会话帧不该因为建得早就被挂起
     "last_active_at",
