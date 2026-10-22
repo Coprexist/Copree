@@ -218,10 +218,13 @@ def _check_module(module: str, path: str) -> None:
 
 
 # ── 执行入口（沙箱化：skill_sandbox 子进程 + Landlock/seccomp + 协议转发）──
-async def execute_skill(db, world, name: str, arguments: str, scope: str | None = None) -> dict | None:
+async def execute_skill(db, world, name: str, arguments: str, scope: str | None = None,
+                      caller: dict | None = None) -> dict | None:
     """执行文件式 skill（隔离沙箱子进程）；名字不匹配（或不在 scope 内）返回 None（由调用方走未知工具兜底）
 
     scope：'ai' = 只执行设计侧（世界 AI 用）；'world' = 只执行世界侧（群 AI 用）；None = 两者（默认）
+    caller：调用者身份（{sender_type, sender_id, agent_id, name, group_id}）→ skill 里的 ctx.caller；
+            群 AI 的 tools 分发会带上，设计侧 AI 的调用不带（它不是在群里替谁发言）
     """
     skill = None
     if scope in (None, 'ai'):
@@ -250,7 +253,7 @@ async def execute_skill(db, world, name: str, arguments: str, scope: str | None 
 
     from app.services.world.skill_sandbox import run_skill_in_sandbox
     try:
-        return await run_skill_in_sandbox(db, world, skill, args)
+        return await run_skill_in_sandbox(db, world, skill, args, caller=caller)
     except Exception as e:  # noqa: BLE001 —— 沙箱故障兜底
         logger.warning(f"🌐 skill {name} 沙箱执行异常: {e!r}")
         return {"success": False, "error": f"skill 执行出错: {e}"}

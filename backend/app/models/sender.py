@@ -11,6 +11,8 @@ from enum import Enum
 class SenderType(str, Enum):
     HUMAN = "human"
     AI = "ai"
+    # 群助手（世界在群里的代言）：独立实体、无账号，sender_id 是 group_assistants.id
+    ASSISTANT = "assistant"
     SYSTEM = "system"
 
 
@@ -54,6 +56,9 @@ class Sender:
 
     def is_ai(self) -> bool:
         return self.sender_type == SenderType.AI
+
+    def is_assistant(self) -> bool:
+        return self.sender_type == SenderType.ASSISTANT
 
     def is_system(self) -> bool:
         return self.sender_type == SenderType.SYSTEM

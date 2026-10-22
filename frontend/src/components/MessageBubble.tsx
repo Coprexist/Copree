@@ -215,8 +215,8 @@ const MessageBubble = memo(function MessageBubble({
         )}
         {hasAvatar ? (
           <div
-            onClick={() => { if (onAvatarClick && senderType && senderId && senderType !== 'system') onAvatarClick(senderType, senderId, senderName, state) }}
-            className={`relative ${avatarSize} rounded-full overflow-hidden ${senderType !== 'system' ? 'cursor-pointer hover:scale-105 transition-transform' : ''} shadow ${avatarGradientShadow}`}
+            onClick={() => { if (onAvatarClick && senderType && senderId && senderType !== 'system' && senderType !== 'assistant') onAvatarClick(senderType, senderId, senderName, state) }}
+            className={`relative ${avatarSize} rounded-full overflow-hidden ${senderType !== 'system' && senderType !== 'assistant' ? 'cursor-pointer hover:scale-105 transition-transform' : ''} shadow ${avatarGradientShadow}`}
             title={t('chat:viewProfile').replace('{name}', senderName)}
           >
             <div className={`absolute inset-px rounded-full ${avatarGradient(senderType, isMine, true)}`} />
@@ -224,8 +224,8 @@ const MessageBubble = memo(function MessageBubble({
           </div>
         ) : (
           <div
-            onClick={() => { if (onAvatarClick && senderType && senderId && senderType !== 'system') onAvatarClick(senderType, senderId, senderName, state) }}
-            className={`relative ${avatarSize} rounded-full flex items-center justify-center ${avatarTextSize} font-bold ${avatarGradient(senderType, isMine, false)} ${senderType !== 'system' ? 'cursor-pointer hover:scale-105 transition-transform' : ''} shadow ${avatarGradientShadow} overflow-hidden`}
+            onClick={() => { if (onAvatarClick && senderType && senderId && senderType !== 'system' && senderType !== 'assistant') onAvatarClick(senderType, senderId, senderName, state) }}
+            className={`relative ${avatarSize} rounded-full flex items-center justify-center ${avatarTextSize} font-bold ${avatarGradient(senderType, isMine, false)} ${senderType !== 'system' && senderType !== 'assistant' ? 'cursor-pointer hover:scale-105 transition-transform' : ''} shadow ${avatarGradientShadow} overflow-hidden`}
             title={senderType === 'system' ? '系统通知' : thinking ? t('chat:thinking') : isTyping ? t('chat:typing') : t('chat:viewProfile').replace('{name}', senderName)}
           >
             {senderType === 'system' ? <ShieldAlert size={16} className="text-white" />

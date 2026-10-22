@@ -2,7 +2,7 @@
 skill 子进程入口 — 在隔离沙箱中执行 skill 的 code.py（2026-08-07 沙箱加固）
 
 协议（stdin/stdout JSON 行，宿主 = skill_sandbox.run_skill_in_sandbox）：
-1. 首行 = 元数据：{"world_dir", "skill_dir", "args", "permissions",
+1. 首行 = 元数据：{"world_dir", "skill_dir", "args", "permissions", "caller",
    "safe_imports", "forbidden_imports", "forbidden_builtins"}
 2. 执行中 ctx 请求：子进程 → 宿主 {"type":"call","id":N,"op":...,...}
    宿主 → 子进程 {"id":N,"ok":true,"data":...} 或 {"id":N,"ok":false,"error":"..."}
@@ -194,9 +194,18 @@ class _CtxProxy:
         self._call("log", text=" ".join(str(x) for x in a))
 
 
-def _build_ctx(permissions: list[str]) -> SimpleNamespace:
+def _build_ctx(permissions: list[str], caller: dict | None = None) -> SimpleNamespace:
     ctx: dict = {"log": _CtxProxy(permissions).log}
     proxy = _CtxProxy(permissions)
+    # 调用者身份：只读、不经权限校验（它是"谁在调用"，不是世界数据）
+    c = caller or {}
+    ctx["caller"] = SimpleNamespace(
+        sender_type=str(c.get("sender_type") or ""),
+        sender_id=int(c.get("sender_id") or 0),
+        agent_id=int(c.get("agent_id") or 0),
+        group_id=c.get("group_id"),
+        name=str(c.get("name") or ""),
+    )
     p = set(permissions)
     if p & {"file:read", "file:write", "file:list", "file:delete"}:
         ctx["file"] = SimpleNamespace(
@@ -221,7 +230,7 @@ def _main() -> None:
         _apply_isolate(meta)
         run_fn = _load_code(meta)
         args = meta.get("args") or {}
-        ctx = _build_ctx(meta.get("permissions") or [])
+        ctx = _build_ctx(meta.get("permissions") or [], meta.get("caller") or {})
 
         result = asyncio.run(run_fn(args, ctx))
         if not isinstance(result, dict):

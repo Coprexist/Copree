@@ -335,13 +335,19 @@ async def send_group_reply(db, group_id: int, sender_id: int, content: str,
                           *, sender_type: str = "ai", allow_non_member: bool = False) -> None:
     """代发一条决策技能回复：标 source="world"（不回灌世界程序；AI 唤醒链只看人类消息，
     也追不到这里），并广播给在线成员。两条链路共用，避免各写一份发送+广播。"""
-    from app.chat.gm import send_gm_message
+    from app.chat.gm import gm_message_to_dict, send_gm_message
     from app.routers.ws import manager
+    from app.utils.display_name import sender_names
+
     msg = await send_gm_message(db, group_id, sender_type, sender_id, content,
                                 source="world", allow_non_member=allow_non_member)
     await db.flush()
+    # 广播完整视图：只推 id+正文时，在线的人收到的是一条没有发送者类型的消息
+    #（前端按 sender_type/sender_name 渲染，缺了就显示成 "undefined:undefined"）
+    name = (await sender_names(db, {(sender_type, sender_id)})).get((sender_type, sender_id))
     try:
-        await manager.broadcast_to_group(group_id, {"type": "message", "data": {"id": msg.id, "content": content}})
+        await manager.broadcast_to_group(
+            group_id, {"type": "message", "data": gm_message_to_dict(msg, sender_name=name)})
     except Exception:  # noqa: BLE001 —— 广播失败不影响消息已落库
         pass
 

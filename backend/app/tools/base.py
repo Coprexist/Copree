@@ -301,6 +301,15 @@ class ToolRegistry:
             try:
                 from app.models.agent import Agent
                 agent = context.get("_agent") or await db.get(Agent, agent_id)
+                # 调用者身份（skill 里的 ctx.caller）：世界侧认的 AI 编号就是它的 user_id，
+                # 与群消息 / world_event_hook.deliver_command 给世界程序的那套口径一致
+                caller = {
+                    "sender_type": "ai",
+                    "sender_id": agent.user_id if agent else 0,
+                    "agent_id": agent.id if agent else agent_id,
+                    "name": (agent.name if agent else "") or context.get("agent_name") or "",
+                    "group_id": group_id,
+                }
                 from app.services.world.world_skill_runtime import execute_skill
                 from app.services.world.world_service import find_worlds_by_entity
                 # 绑定世界集合：当前群绑定优先（同名 skill 默认执行当前群的世界版本），agent 直接绑定其次
@@ -326,13 +335,15 @@ class ToolRegistry:
                     if w is None:
                         return _build_tool_error(ToolErrorCode.INVALID_ARGS, f"world_id={target_world_id} 不在你绑定的世界范围内")
                     clean_args = {k: v for k, v in arguments.items() if k != "world_id"}
-                    result = await execute_skill(db, w, tool_name, json.dumps(clean_args, ensure_ascii=False), scope='world')
+                    result = await execute_skill(db, w, tool_name, json.dumps(clean_args, ensure_ascii=False),
+                                                 scope='world', caller=caller)
                     if result is not None:
                         return result
                     return _build_tool_error(ToolErrorCode.UNKNOWN_TOOL, f"世界 #{target_world_id} 没有技能「{tool_name}」")
                 for w in bound:
                     clean_args = {k: v for k, v in arguments.items() if k != "world_id"}
-                    result = await execute_skill(db, w, tool_name, json.dumps(clean_args, ensure_ascii=False), scope='world')
+                    result = await execute_skill(db, w, tool_name, json.dumps(clean_args, ensure_ascii=False),
+                                                 scope='world', caller=caller)
                     if result is not None:
                         return result
             except Exception as e:

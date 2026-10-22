@@ -52,9 +52,10 @@ ctx 只包含 `manifest.permissions` **声明过**的能力——没声明的根
 | 权限 | ctx 能力 | 说明 |
 |---|---|---|
 | `file:list` / `file:read` / `file:write` / `file:delete` | `ctx.file.*` | 只限本世界文件夹（隔离目录+扩展名白名单，复用 world_file_service） |
-| `data:read` / `data:write` | `ctx.data.*` | **世界数据（world_data 表）**：`await ctx.data.get(key)` / `set(key, value)` / `delete(key)`——结构化/操作数据只经 API/skill 读写 |
+| `data:read` / `data:write` | `ctx.data.*` | **世界数据（world_data 表）**：`ctx.data.get(key)` / `set(key, value)` / `delete(key)`（同步返回，ctx 是宿主协议代理，别加 await）——结构化/操作数据只经 API/skill 读写 |
 | `world:read` / `world:update` | `ctx.world.*` | 世界信息读取/更新（以世界主人身份） |
 | `group:send` | `ctx.group.send()` | 发消息到绑定群（以本群群助手的身份——世界在群里的代言，不借群主或成员身份） |
+| （无） | `ctx.caller` | 调用者身份 `{sender_type, sender_id, agent_id, name, group_id}`——"替谁办事"的技能（如花名册登记）直接用它，别猜、也别再让 AI 从群里发一遍 |
 | （无） | `ctx.log()` | 平台日志（无需声明） |
 
 ## 三·六、Skill 分层注入（按 AI 类型分发）

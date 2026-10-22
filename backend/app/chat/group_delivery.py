@@ -36,25 +36,30 @@ async def message_view(db: AsyncSession, message, sender_name: str | None = None
     """群消息 → 通道统一视图（发送者名字与头像以库为准，WS 上报值可能过期）"""
     from app.models.user import User as UserModel
 
-    from app.utils.display_name import display_name
+    from app.utils.display_name import sender_names
 
     name = sender_name
     avatar = None
     state = None
+    key = (message.sender_type, message.sender_id)
     try:
-        row = (await db.execute(
-            select(UserModel).where(UserModel.id == message.sender_id)
-        )).scalar_one_or_none()
-        if row:
-            name = await display_name(db, message.sender_id)
-            avatar = row.avatar_url
-            if row.type == "ai":
-                agent = (await db.execute(
-                    select(AgentModel).where(AgentModel.user_id == message.sender_id)
-                )).scalar_one_or_none()
-                if agent:
-                    avatar = agent.avatar_url or avatar
-                    state = agent.state
+        if message.sender_type == "assistant":
+            # 群助手不在 users 表里：名字取自 group_assistants，没有头像与在线状态
+            name = (await sender_names(db, {key})).get(key) or name
+        else:
+            row = (await db.execute(
+                select(UserModel).where(UserModel.id == message.sender_id)
+            )).scalar_one_or_none()
+            if row:
+                name = (await sender_names(db, {key})).get(key) or name
+                avatar = row.avatar_url
+                if row.type == "ai":
+                    agent = (await db.execute(
+                        select(AgentModel).where(AgentModel.user_id == message.sender_id)
+                    )).scalar_one_or_none()
+                    if agent:
+                        avatar = agent.avatar_url or avatar
+                        state = agent.state
     except Exception as e:
         logger.error(f"获取发送者信息失败: {e}", exc_info=True)
 

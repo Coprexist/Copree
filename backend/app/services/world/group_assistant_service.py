@@ -1,8 +1,9 @@
 """群助手服务 — 世界在群里的发言身份
 
 一个群助手 = group_assistants 表里一行：无账号、不入群成员表（与群视界 AI 同形态）。
-它在消息里的身份用负值表示（sender_type="ai"、sender_id=-ga.id），这是全站唯一的
-"非人、也非某个 agent" 的发言身份——消息路由与显示名都按这个约定还原成助手名。
+它在消息里的身份是 (sender_type="assistant", sender_id=group_assistants.id)——sender_type
+就是"这个 id 属于哪张表"，和 human/ai 指向 users 是同一套读法；群助手的 id 与 users.id
+不共用号段，所以消息发送者一律带类型认人（display_name.sender_names）。
 
 世界程序、世界 AI、世界 skill 在绑定群里说话，一律走 say_in_group：发言者就是该群的
 群助手，不再借群主或普通成员的身份。借真人身份的代价不只是"看着像群主在说"：
@@ -96,15 +97,15 @@ async def say_in_group(db, world, group_id: int, content: str, *, reply_to: int 
     source="world"：不回流给世界程序（防死循环）；
     allow_non_member：助手不是群成员表里的人，成员校验对它不适用（群绑定校验在调用方）。
 
-    广播推完整消息视图而不是 id+正文：前端按 sender_id 反查发送者，而 -ga.id 在
-    用户表里查不到，只推 id 会让这条消息在群里显示成「ai:-3」。
+    广播推完整消息视图而不是 id+正文：前端按 sender_id 反查发送者，而群助手的 id
+    不在用户表里，只推 id 会让这条消息显示成一个没有名字的人。
     """
     from app.chat.gm import gm_message_to_dict, send_gm_message
     from app.chat.group_delivery import broadcast_group_message
 
     ga = await ensure_group_assistant(db, world, group_id)
     msg = await send_gm_message(
-        db, int(group_id), "ai", -int(ga.id), content,
+        db, int(group_id), "assistant", int(ga.id), content,
         reply_to=reply_to, source="world", allow_non_member=True,
     )
     await db.flush()

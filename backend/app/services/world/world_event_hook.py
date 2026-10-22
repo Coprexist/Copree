@@ -238,11 +238,14 @@ async def _deliver(world_id: int, group_id: int, msgs: list) -> None:
             world = await db.get(World, world_id)
             if world is None:
                 return
-            # 批量查发件人名字
-            sender_ids = {m["sender_id"] for m in msgs}
-            name_map = await display_names(db, sender_ids) if sender_ids else {}
+            from app.utils.display_name import sender_names
+
+            # 批量查发件人名字（键带类型：群助手与 users 是两套号段）
+            keys = {(m.get("sender_type") or "human", m["sender_id"]) for m in msgs}
+            name_map = await sender_names(db, keys) if keys else {}
             for m in msgs:
-                m["sender_name"] = name_map.get(m["sender_id"], f"#{m['sender_id']}")
+                key = (m.get("sender_type") or "human", m["sender_id"])
+                m["sender_name"] = name_map.get(key, f"#{m['sender_id']}")
             event = {
                 "type": "group_message",
                 "group_id": group_id,

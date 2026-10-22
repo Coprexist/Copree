@@ -15,7 +15,8 @@ class Message(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     group_id = Column(Integer, ForeignKey("groups.id", ondelete="CASCADE"), nullable=False)
-    sender_type = Column(String(10), nullable=False)  # 'human' | 'ai'
+    # 'human'（users.id）| 'ai'（agents 的 users 行 id）| 'assistant'（group_assistants.id）
+    sender_type = Column(String(10), nullable=False)
     sender_id = Column(Integer, nullable=False)
     sender_name = Column(String(100), nullable=True)  # 联邦消息的发送者名称（本地消息为 NULL，由关联查询获取）
     content = Column(Text, nullable=False)
@@ -42,7 +43,7 @@ class Message(Base):
         # 只有主键的话每条这样的查询都是全表扫
         Index("ix_messages_group_created", "group_id", "created_at"),
         CheckConstraint(
-            "sender_type IN ('human', 'ai')",
+            "sender_type IN ('human', 'ai', 'assistant')",
             name="ck_message_sender_type",
         ),
     )

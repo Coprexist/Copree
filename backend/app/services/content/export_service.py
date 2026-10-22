@@ -48,32 +48,14 @@ async def query_all_messages(
     if not messages:
         return []
 
-    # 收集所有需要 resolve 的 sender ID
-    human_ids = set()
-    ai_ids = set()
-    reply_to_ids = set()
+    # 收集所有需要 resolve 的发送者身份（群助手在 group_assistants 号段，键必须带类型）
+    sender_keys = {(m.sender_type, m.sender_id) for m in messages}
+    reply_to_ids = {m.reply_to for m in messages if m.reply_to}
 
-    for msg in messages:
-        if msg.sender_type == "human":
-            human_ids.add(msg.sender_id)
-        elif msg.sender_type == "ai":
-            ai_ids.add(msg.sender_id)
-        if msg.reply_to:
-            reply_to_ids.add(msg.reply_to)
+    # 批量查 sender 名称（人 / AI / 群助手同一入口）
+    from app.utils.display_name import sender_names
 
-    # 批量查 sender 名称
-    human_names: dict[int, str] = {}
-    ai_names: dict[int, str] = {}
-
-    if human_ids:
-        r = await export_repo.execute(select(User.id, User.username).where(User.id.in_(human_ids)))
-        for uid, uname in r.all():
-            human_names[uid] = uname
-
-    if ai_ids:
-        r = await export_repo.execute(select(Agent.id, Agent.name).where(Agent.id.in_(ai_ids)))
-        for aid, aname in r.all():
-            ai_names[aid] = aname
+    sender_name_map = await sender_names(export_repo, sender_keys)
 
     # 批量查 reply_to 原文（先留着：下面要把 <@!id> 换成名字再截断预览）
     reply_raw: dict[int, str] = {}
@@ -99,11 +81,7 @@ async def query_all_messages(
     # 组装结果
     result_list = []
     for msg in messages:
-        sender_name = (
-            human_names.get(msg.sender_id, f"用户#{msg.sender_id}")
-            if msg.sender_type == "human"
-            else ai_names.get(msg.sender_id, f"AI#{msg.sender_id}")
-        )
+        sender_name = sender_name_map.get((msg.sender_type, msg.sender_id)) or f"用户#{msg.sender_id}"
         result_list.append({
             "id": msg.id,
             "sender_name": sender_name,

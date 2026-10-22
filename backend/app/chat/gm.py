@@ -168,18 +168,11 @@ async def list_user_groups(db: AsyncSession, user_id: int) -> list[dict]:
 
     # 预览要的两样：正文里的 @ 令牌换成名字、"谁说的"换成名字。各自一条查询
     names = await mention_names(db, [m.content for m in last_msgs.values()]) if last_msgs else {}
-    ai_sender_ids = {m.sender_id for m in last_msgs.values() if m.sender_type == "ai"}
-    human_sender_ids = {m.sender_id for m in last_msgs.values() if m.sender_type not in ("ai", "system")}
-    ai_names = {
-        r[0]: r[1] for r in (await db.execute(
-            select(AgentModel.user_id, AgentModel.name).where(AgentModel.user_id.in_(ai_sender_ids))
-        )).all()
-    } if ai_sender_ids else {}
-    human_names = {
-        r[0]: r[1] for r in (await db.execute(
-            select(User.id, User.username).where(User.id.in_(human_sender_ids))
-        )).all()
-    } if human_sender_ids else {}
+    from app.utils.display_name import sender_names
+
+    last_sender_names = await sender_names(
+        db, {(m.sender_type, m.sender_id) for m in last_msgs.values()}
+    ) if last_msgs else {}
 
     # 成员头像：网格/默认模式每群最多 4 个，members 模式要全部（与原先一致）。
     # 先一次把这批成员取回来，再各一条查询换头像——原先是一个成员一条
@@ -273,12 +266,11 @@ async def list_user_groups(db: AsyncSession, user_id: int) -> list[dict]:
             preview = make_preview(
                 render_mention_names(last_msg.content or "", names), last_msg.attachments, max_len=50
             )
-            if last_msg.sender_type == "ai":
-                sender = ai_names.get(last_msg.sender_id) or "AI"
-            elif last_msg.sender_type == "system":
+            if last_msg.sender_type == "system":
                 sender = "系统"
             else:
-                sender = human_names.get(last_msg.sender_id) or "用户"
+                # 人 / AI / 群助手：名字都来自 sender_names，别再手抄一套 if
+                sender = last_sender_names.get((last_msg.sender_type, last_msg.sender_id)) or "用户"
             last_message_preview = f"{sender}: {preview}"
 
         groups.append({
@@ -401,8 +393,10 @@ async def send_gm_message(
     任意登录用户不能给任意群灌水；allow_non_member=True 供
     世界 AI 给绑定群发消息（群绑定校验在 world_tools 层已有）。
 
-    sender_id 只认 users.id（人就是 user_id，AI 先用 ai_sender_id 把 agents.id 换过来）：
-    这里同时是"谁在这个群"的唯一判定，报错时把校验用的两个编号记进日志——
+    (sender_type, sender_id) 是同一个身份的两半：
+    human/ai → users.id（AI 先用 ai_sender_id 把 agents.id 换过来）；
+    assistant → group_assistants.id（群助手无账号，靠 allow_non_member 跳过成员校验）。
+    成员校验同时是"谁在这个群"的唯一判定，报错时把两个编号记进日志——
     上一次线上事故「群 AI 发不出世界命令」就是因为只有一句"你不是该群成员"，
     分不清是没进群、还是编号传错了。
     """
@@ -563,17 +557,18 @@ async def resolve_speaker_names(db, messages) -> dict[tuple[str, int], str]:
     本地消息的 sender_name 列是空的（网页端靠 sender_id 自己查名字），可 AI 的上下文
     必须有人名：空名字会被 format_message 原样渲染成字面 "None"，模型真的会把 None
     当成一个可 @ 的人（用户 2026-09-25 在 QQ 群里看到 AI 回 "@None"）。
-    联邦消息自带 sender_name，优先用它；AI 的 sender_id 也是它的用户行 id，所以一张表查得到。
+    联邦消息自带 sender_name，优先用它；本地消息按 (sender_type, sender_id) 查——
+    群助手的 id 在 group_assistants 号段，只按 id 查会认成同号的人。
     外部通道来的人带通道标记（如「书爱[QQ]」）：这条是**给 AI 看**的名字，它得知道对方不在这侧。
     """
-    from app.utils.display_name import display_names
+    from app.utils.display_name import sender_names
 
     # 只为没有 sender_name 的消息查库（本地消息才是这样），一次查完
     need = {
-        m.sender_id for m in messages
+        (m.sender_type, m.sender_id) for m in messages
         if not (getattr(m, "sender_name", None) or "").strip()
     }
-    resolved = await display_names(db, need, with_channel=True) if need else {}
+    resolved = await sender_names(db, need, with_channel=True) if need else {}
 
     names: dict[tuple[str, int], str] = {}
     for m in messages:
@@ -582,7 +577,7 @@ async def resolve_speaker_names(db, messages) -> dict[tuple[str, int], str]:
             continue
         names[key] = (
             (getattr(m, "sender_name", None) or "").strip()
-            or resolved.get(m.sender_id)
+            or resolved.get(key)
             or f"用户{m.sender_id}"
         )
     return names

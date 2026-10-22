@@ -155,8 +155,12 @@ async def _handle_call(db, world, permissions: set[str], req: dict) -> dict:
         return {"ok": False, "error": f"{op} 失败: {e}"}
 
 
-async def run_skill_in_sandbox(db, world, skill, args: dict) -> dict:
-    """在隔离沙箱中执行 skill（返回 execute_skill 兼容的 dict）"""
+async def run_skill_in_sandbox(db, world, skill, args: dict, caller: dict | None = None) -> dict:
+    """在隔离沙箱中执行 skill（返回 execute_skill 兼容的 dict）
+
+    caller：调用者身份（群 AI 的 users.id / agent.id / 群号）——skill 里以 ctx.caller 只读暴露，
+    让"替谁办事"的技能（如花名册登记）不必猜、也不必再走群消息。
+    """
     world_folder = str(world_dir(world.id)) if world is not None else None
     skill_dir = str(skill.code_path.parent)
     permissions = list(skill.permissions or [])
@@ -167,6 +171,7 @@ async def run_skill_in_sandbox(db, world, skill, args: dict) -> dict:
         "skill_dir": skill_dir,
         "args": args,
         "permissions": permissions,
+        "caller": caller or {},
     }
     # 宿主侧白名单/禁列表（与 world_skill_runtime 同源），runner 内联校验用
     from app.services.world import world_skill_runtime as wsr

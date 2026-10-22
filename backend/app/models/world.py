@@ -63,7 +63,8 @@ class GroupAssistant(Base):
 
     与群视界 AI 同形态：无账号、无好友、不入群成员表、不占 agent 体系；
     绑定群视界群时按群类型模板自动创建，每群每助手一行。
-    身份 = group-assistant-{id}，随绑定存在而存在。
+    身份 = group-assistant-{id}，随绑定存在而存在；在群消息里表现为
+    (sender_type="assistant", sender_id=本表 id)，与 users 号段分开认。
     """
     __tablename__ = "group_assistants"
 

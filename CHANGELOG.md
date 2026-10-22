@@ -9,21 +9,34 @@
 ## [Unreleased]
 
 ### 🐛 修复
+- **群助手在消息里靠"负号"表示身份**：群助手是 `group_assistants` 独立表，消息里却写成
+  `sender_type="ai"、sender_id=-ga.id`——负号只是为了在同一个整数列里躲开 users 号段，读的人
+  （以及后来写代码的人）都得记住这条隐规则；更糟的是它与 users.id 同号时「群助手 3」和「用户 3」
+  分不开。现在改成 `sender_type="assistant"、sender_id=ga.id`：sender_type 就是"这个 id 属于哪张表"，
+  与 human/ai 指向 users 是同一套读法；DB 约束同步放宽（`legacy/migration._migrate_message_sender_types`，
+  幂等，历史库的两种约束名都清掉重建）。"谁在说话"收进 `display_name.sender_names`（键 =
+  `(sender_type, sender_id)`）：群消息列表、会话列表最后一条、导出、世界事件投递、AI 读历史
+  （`resolve_speaker_names`）全走它，不再各写一份"按 id 查 users / AI"的取名逻辑；
+  `group_delivery.message_view` 对群助手只取名字（它没有头像与在线状态）。发送侧只改
+  `group_assistant_service.say_in_group` 一处；群助手的发言也不唤醒 AI 成员（那是世界对群的回话，
+  不是有人来找他们，顺带防来回触发）。前端消息气泡对 assistant 头像不弹资料卡（它不在用户/AI 表里）。
+  用例 `test_world_group_voice::test_sender_names_reads_assistants_by_type`（群助手 id 与用户同号也认不错），
+  其余用例改为断言 assistant 身份。
 - **世界在群里说话借的是群主的身份**：`send_group_message`（世界程序与世界 AI 共用的那条路）
   把世界的话记成 `sender_type="human"、sender_id=世界主人`——群里看着像群主在说，更要命的是
   群历史里它就是群主说的话：读这段历史的 AI、导出、记忆检索全都会当成那个人在说，等于世界假扮了他。
   世界 skill 的 `ctx.group.send` 更糟一层：`send_gm_message(db, gid, owner_id, content, sender_type=…,`
   `sender_id=…)` 与位置参数重复、`WorldBinding.group_id` 这个列根本不存在，一调就抛异常。
-  现在世界在群里的发言身份统一是**本群群助手**（`group_assistants` 一行，消息里按既有约定写成
-  `sender_type="ai"、sender_id=-ga.id`）：`services/world/group_assistant_service.say_in_group` 负责
+  现在世界在群里的发言身份统一是**本群群助手**（`group_assistants` 一行，消息里写
+  `sender_type="assistant"、sender_id=ga.id`，见上一条）：`services/world/group_assistant_service.say_in_group` 负责
   落库 + 广播，世界工具、受控 API（`POST /world/{id}/api/group/messages`）与世界 skill 三处都只调它。
   类型化绑定的群用它绑定时建的助手（如「残响记录员」）；没有类型的历史绑定在第一次发言时按世界的名字
   补建（幂等，一世界一群一个身份，A 群的话不会记到 B 群的助手头上）。同一批把两处同源查询收成一份：
   `world_service.bound_group_ids`（工具 / 受控 API / skill 都从这里取绑定群，「默认群」不再各排各的）；
-  `display_name` 认负 id（此前 `-ga.id` 会渲染成「用户-3」，AI 读群历史与导出看到的就是一串编号），
+  `display_name.sender_names` 负责把助手 id 认成助手名（此前会渲染成一串编号），
   `routers/gm.py` 的取名也改为调它，不再手抄一份 users/agents 的取名规则。用例
-  `tests/test_world_group_voice.py`（5 条）：世界发消息记在助手名下、历史绑定补建且幂等、两个群各用
-  各的助手、负 id 取名、skill 的 ctx.group.send 同身份。
+  `tests/test_world_group_voice.py`：世界发消息记在助手名下、历史绑定补建且幂等、两个群各用
+  各的助手、按类型认人、skill 的 ctx.group.send 同身份。
 
 - **世界帧跟群聊焊死：进世界得先挑一个群，命令也只能借群消息投递**：`enter_world` 曾把
   (世界, 通道群) 记进帧，`world_command` 的实现是「以 AI 名义往群里发一条消息」——于是三件事
@@ -59,6 +72,12 @@
   `tests/test_capability_notice_ledger.py`。
 
 ### ✨ 新增
+- **世界 skill 拿不到"替谁办事"**：沙箱子进程里只有世界目录与 ctx 能力，调用者是谁却没有传进去——
+  登记类技能只能从 args 里猜名字，或者绕道群消息（那会刷屏、也依赖群成员表）。现在 `ctx.caller`
+  （`{sender_type, sender_id, agent_id, name, group_id}`，只读、无需声明权限）由 `tools.dispatch` 注入，
+  编号口径与群消息 / `world_event_hook.deliver_command` 给世界程序的完全一致（群 AI 的 sender_id 就是它
+  的 users.id），沙箱元数据与 `docs/group_world/design/world_skill_design.md` 同步；同一份文档里
+  `ctx.data.get()` 的示例误写成了 `await`（ctx 是同步协议代理），一并改正。
 - **通知口径多一档 `structural`：插件作者可选「措辞微调不推」**：世界配置里的 `tool_notice` 原来只有
   自动改变量 / 自己写文案 / 不通知三档，而「自动」会连说明文字的重写一起念——一条通知里常常大半是
   措辞。现在加一档 `"structural"`（或 `{"mode": "structural"}`）：**新增 / 移除能力、参数增删改、必填

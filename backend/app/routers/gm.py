@@ -38,19 +38,20 @@ async def get_gm_message_list(
 
     messages = await get_gm_messages(db, group_id, limit, before_id=before_id, after_id=after_id)
 
-    # 统一查所有 sender（可能是 users.id 或 agent.id，迁移后数据混合）
-    all_ids = {m.sender_id for m in messages}
-    name_map: dict[int, str] = {}
+    # 发送者身份 = (sender_type, sender_id)：群助手在 group_assistants 号段，只按 id 查会认错人
+    all_keys = {(m.sender_type, m.sender_id) for m in messages}
+    person_ids = {sid for stype, sid in all_keys if stype != "assistant"}
+    name_map: dict[tuple[str, int], str] = {}
     avatar_map: dict[int, str] = {}
     state_map: dict[int, str] = {}
 
-    if all_ids:
-        # 名字统一问 display_name（AI 取 agents.name、群助手取 group_assistants.name、其余取用户名）；
+    if all_keys:
+        # 名字统一问 sender_names（AI 取 agents.name、群助手取 group_assistants.name、其余取用户名）；
         # 这里只补界面要的头像与在线状态，别再手抄一份取名规则
-        from app.utils.display_name import display_names
+        from app.utils.display_name import sender_names
 
-        name_map = await display_names(db, all_ids)
-        u_result = await db.execute(select(User.id, User.avatar_url, User.type).where(User.id.in_(all_ids)))
+        name_map = await sender_names(db, all_keys)
+        u_result = await db.execute(select(User.id, User.avatar_url, User.type).where(User.id.in_(person_ids)))
         for uid, uavatar, utype in u_result.all():
             avatar_map[uid] = uavatar or ''
             if utype == "ai":
@@ -60,7 +61,7 @@ async def get_gm_message_list(
                     state_map[uid] = a[1]
 
     return [
-        gm_message_to_dict(m, sender_name=name_map.get(m.sender_id), sender_avatar_url=avatar_map.get(m.sender_id), sender_state=state_map.get(m.sender_id))
+        gm_message_to_dict(m, sender_name=name_map.get((m.sender_type, m.sender_id)), sender_avatar_url=avatar_map.get(m.sender_id), sender_state=state_map.get(m.sender_id))
         for m in messages
     ]
 

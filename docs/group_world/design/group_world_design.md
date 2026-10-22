@@ -566,8 +566,8 @@ HTTP 三种入参（`items` / `messages` / `message`）只在**路由层归一�
 
 **群助手 ≠ agent**：新表 `group_assistants`（group_id/world_id/group_type_slug/name/system_prompt/model/api_key 加密/config），每群每助手一行；绑定群时按类型模板直接建实体，**不再 create_agent / 入群成员表 / WorldAgent 登记**——与群视界 AI 同形态：无账号、无好友。
 
-- 触发：`response_worker` 查 group_assistants → 独立 LLM 路径（system_prompt + 群历史 → chat_completion → 发群消息 source=world 防循环 → 用量记账 agent_id=-2 虚拟聚合，记账人 = 世界主人）；sender_id 用 `-ga.id` 负值避免与 user_id 冲突；群助手自己的消息不触发（防自触发循环）
-- 群消息列表：sender_id<0 → 查 group_assistants 显示助手名
+- 触发：`response_worker` 查 group_assistants → 独立 LLM 路径（system_prompt + 群历史 → chat_completion → 发群消息 source=world 防循环 → 用量记账 agent_id=-2 虚拟聚合，记账人 = 世界主人）；消息身份 = `(sender_type="assistant", sender_id=ga.id)`——sender_type 就是"这个 id 属于哪张表"，与 human/ai 指向 users 同一套读法，不靠正负号；群助手自己的消息不触发（防自触发循环）
+- 群消息列表：按 `(sender_type, sender_id)` 认人（`display_name.sender_names`），assistant → 查 group_assistants 显示助手名
 - 历史迁移：旧 agent 41「冒险团团长」→ group_assistant 1（消息/好友/成员/agents/users 清理，备份 backend/backup/）
 - **群助手也可以是纯后端程序**：世界程序 main.py handle 直接接群消息处理（不依赖 LLM）——页面静默通道 + 世界程序回复能力已具备
 

@@ -423,16 +423,18 @@ async def _process_group_event(db, event: dict):
     # 确定需要触发的 AI 列表
     target_ai_ids: set[int] = set()
 
-    # sender_id 统一为 user_id，与 group_members.member_id 直接对齐
+    # sender_id 统一为 user_id，与 group_members.member_id 直接对齐；
+    # 群助手的 sender_id 是 group_assistants 号段，拿来比会误伤同号成员，所以单独一条
     exclude_user_id = sender_id if sender_type == "ai" else None
 
     if sender_type == "human":
         target_ai_ids = {m.member_id for m in ai_members}
+    elif sender_type == "ai":
+        target_ai_ids = {m.member_id for m in ai_members} - {exclude_user_id}
     else:
-        target_ai_ids = {
-            m.member_id for m in ai_members
-            if m.member_id != (exclude_user_id if exclude_user_id else sender_id)
-        }
+        # 群助手（世界）的发言是对群的回话，不当作"有人来找 AI"：不唤醒 AI 成员，也防来回触发
+        logger.info(f"🔕 群 {group_id} 收到群助手消息，不触发 AI 成员回复")
+        return
 
     if not target_ai_ids:
         return
@@ -503,10 +505,11 @@ async def _process_group_event(db, event: dict):
         if sender_id is None:
             return "群成员"
         if sender_id not in _busy_names:
-            from app.utils.display_name import display_names
+            from app.utils.display_name import sender_names
+            key = (sender_type, sender_id)
             _busy_names[sender_id] = (
-                await display_names(db, {sender_id})
-            ).get(sender_id) or f"用户{sender_id}"
+                await sender_names(db, {key})
+            ).get(key) or f"用户{sender_id}"
         return _busy_names[sender_id]
 
     for ai_id in candidates:
@@ -569,7 +572,7 @@ async def _process_group_event(db, event: dict):
     }))
 
     # 群助手触发（独立实体，存 group_assistants 表）；它自己的消息不触发，防自触发。
-    if not (sender_type == "ai" and (sender_id or 0) < 0):
+    if sender_type != "assistant":
         try:
             from app.models.world import GroupAssistant
             ga_rows = (await db.execute(
@@ -624,9 +627,10 @@ async def _trigger_group_assistant(
                 from app.services.world.decision_skill import run_decision_engine, build_group_message_ctx
                 sender_name = "群成员"
                 if sender_id is not None:
-                    from app.models.user import User as _U
-                    _sr = (await db.execute(select(_U.username).where(_U.id == sender_id))).first()
-                    sender_name = _sr[0] if _sr else f"用户{sender_id}"
+                    # 发送者可能是人、AI 或群助手（群助手在 group_assistants 号段，只看 id 会认错人）
+                    from app.utils.display_name import sender_names
+                    _key = (sender_type, sender_id)
+                    sender_name = (await sender_names(db, {_key})).get(_key) or f"用户{sender_id}"
                 dec = await run_decision_engine(
                     db, "group_assistant", ga.id, world, "group_message",
                     build_group_message_ctx(
@@ -637,7 +641,8 @@ async def _trigger_group_assistant(
                 if dec.get("hit") and dec.get("handled"):
                     if dec.get("reply"):
                         from app.services.world.decision_skill import send_group_reply
-                        await send_group_reply(db, group_id, -ga.id, dec["reply"], allow_non_member=True)
+                        await send_group_reply(db, group_id, ga.id, dec["reply"],
+                                               sender_type="assistant", allow_non_member=True)
                     logger.info(f"🎲 群助手「{ga.name}」决策技能命中，程序化处理（不唤醒 LLM）")
                     return
             except Exception as e:
@@ -656,7 +661,7 @@ async def _trigger_group_assistant(
                     continue
                 if m.sender_type == "human":
                     messages.append({"role": "user", "content": m.content})
-                elif m.sender_type == "ai":
+                elif m.sender_type in ("ai", "assistant"):
                     messages.append({"role": "assistant", "content": m.content})
             messages.append({"role": "user", "content": content})
 
@@ -710,13 +715,16 @@ async def _trigger_group_assistant(
                 logger.info(f"群助手「{ga.name}」仅工具调用（决策技能配置），不回复")
                 return
 
-            # 发群消息（sender_id 用负值避免与 user_id 冲突；source=world 防触发世界程序循环）
-            from app.chat.gm import send_gm_message
+            # 发群消息：身份 = 本群群助手（sender_type="assistant"、sender_id=ga.id）；
+            # source=world 防触发世界程序循环
+            from app.chat.gm import gm_message_to_dict, send_gm_message
             from app.routers.ws import manager
-            msg = await send_gm_message(db, group_id, "ai", -ga.id, reply, source="world", allow_non_member=True)
+            msg = await send_gm_message(db, group_id, "assistant", ga.id, reply,
+                                        source="world", allow_non_member=True)
             await db.flush()
             try:
-                await manager.broadcast_to_group(group_id, {"type": "message", "data": {"id": msg.id, "content": reply}})
+                await manager.broadcast_to_group(
+                    group_id, {"type": "message", "data": gm_message_to_dict(msg, sender_name=ga.name)})
             except Exception:
                 pass
 
