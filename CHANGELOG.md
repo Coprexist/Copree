@@ -72,6 +72,14 @@
   `tests/test_capability_notice_ledger.py`。
 
 ### ✨ 新增
+- **AI 知识库：看得见、配得动**：AI 以前只能靠对话里零散说的信息，想让它熟悉某个平台/
+  项目就得反复灌提示词。现在每个 AI 有自己的知识库（`agent_knowledge` + 文件空间
+  `data/agents/{id}/knowledge/`）：AI 详情页新增「知识库」页签，能新增/编辑/预览/删除文档、
+  逐条开关（标题 + 一句话摘要 + 正文贴进来，上限 2MB）。索引与「记忆索引」同段注入
+  （`ai/llm.py::_build_memory_index`，一起走能力版本链冻结），AI 需要细节时用 `file_read`
+  自己打开——标题/摘要进上下文，正文不占；关掉开关只是不进索引、正文还在。用例
+  `tests/test_agent_knowledge.py`（3 条：清单与同名不覆盖、开关只影响索引、删除连文件一起删）。
+
 - **世界 skill 拿不到"替谁办事"**：沙箱子进程里只有世界目录与 ctx 能力，调用者是谁却没有传进去——
   登记类技能只能从 args 里猜名字，或者绕道群消息（那会刷屏、也依赖群成员表）。现在 `ctx.caller`
   （`{sender_type, sender_id, agent_id, name, group_id}`，只读、无需声明权限）由 `tools.dispatch` 注入，

@@ -2,6 +2,7 @@
 AI 代理管理路由
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
+from pydantic import BaseModel
 from fastapi.responses import Response
 import json
 from sqlalchemy import func
@@ -885,6 +886,116 @@ async def get_agent_structured_records(
             "subs": subs,
         })
     return {"categories": tree}
+
+
+# ---------- 知识库 ----------
+
+class KnowledgeCreateRequest(BaseModel):
+    title: str
+    summary: str | None = None
+    filename: str | None = None
+    content: str
+
+
+class KnowledgeUpdateRequest(BaseModel):
+    title: str | None = None
+    summary: str | None = None
+    enabled: bool | None = None
+    content: str | None = None
+
+
+@router.get("/{agent_id}/knowledge")
+async def list_agent_knowledge(
+    agent_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """AI 知识库清单（含未启用条目，界面要显示开关）"""
+    await _require_agent_access(agent_id, current_user, db)
+    from app.services.agent.knowledge_service import list_entries
+
+    return {"items": await list_entries(db, agent_id)}
+
+
+@router.post("/{agent_id}/knowledge")
+async def add_agent_knowledge(
+    agent_id: int,
+    req: KnowledgeCreateRequest,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """新增一份知识库文档（正文落它的文件空间，元数据落库）"""
+    await _require_agent_access(agent_id, current_user, db)
+    from app.services.agent.knowledge_service import add_entry
+
+    try:
+        entry = await add_entry(
+            db, agent_id, title=req.title, summary=req.summary or "",
+            filename=req.filename, content=req.content,
+        )
+        await db.commit()
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    return entry
+
+
+@router.get("/{agent_id}/knowledge/{knowledge_id}")
+async def get_agent_knowledge(
+    agent_id: int,
+    knowledge_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """读一份知识库文档（界面预览用）"""
+    await _require_agent_access(agent_id, current_user, db)
+    from app.services.agent.knowledge_service import read_entry
+
+    try:
+        return await read_entry(db, agent_id, knowledge_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+@router.patch("/{agent_id}/knowledge/{knowledge_id}")
+async def update_agent_knowledge(
+    agent_id: int,
+    knowledge_id: int,
+    req: KnowledgeUpdateRequest,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """改标题/摘要/开关，或重写正文"""
+    await _require_agent_access(agent_id, current_user, db)
+    from app.services.agent.knowledge_service import update_entry
+
+    try:
+        entry = await update_entry(
+            db, agent_id, knowledge_id, title=req.title, summary=req.summary,
+            enabled=req.enabled, content=req.content,
+        )
+        await db.commit()
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    return entry
+
+
+@router.delete("/{agent_id}/knowledge/{knowledge_id}")
+async def delete_agent_knowledge(
+    agent_id: int,
+    knowledge_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """删一份知识库文档（元数据 + 文件）"""
+    await _require_agent_access(agent_id, current_user, db)
+    from app.services.agent.knowledge_service import delete_entry
+
+    try:
+        await delete_entry(db, agent_id, knowledge_id)
+        await db.commit()
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    return {"ok": True}
 
 
 # ---------- OpenCLI 工具调用 ----------

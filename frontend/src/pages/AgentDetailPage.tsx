@@ -19,6 +19,7 @@ import { ContentColumn, Dialog, EmptyState, UnderlineTabs } from '../components/
 import FilePreviewModal from '../components/FilePreviewModal'
 import ChannelCard from '../components/channels/ChannelCard'
 import LogBrowser from '../components/shared/LogBrowser'
+import KnowledgePanel from '../components/KnowledgePanel'
 
 /** 扩展名→MIME 类型映射（后端未返回 mime_type 时 fallback） */
 const EXT_MIME_MAP: Record<string, string> = {
@@ -260,7 +261,7 @@ function StructuredMemoryView({ agentId }: { agentId: number }) {
   )
 }
 
-const TABS = ['info', 'channels', 'memories', 'storage', 'workspace', 'logs', 'collaborators'] as const
+const TABS = ['info', 'channels', 'memories', 'knowledge', 'storage', 'workspace', 'logs', 'collaborators'] as const
 type Tab = (typeof TABS)[number]
 
 export default function AgentDetailPage() {
@@ -292,6 +293,7 @@ export default function AgentDetailPage() {
     info: t('agentDetail:tabInfo'),
     channels: t('agentDetail:tabChannels'),
     memories: t('agentDetail:tabMemories'),
+    knowledge: t('agentDetail:tabKnowledge'),
     storage: t('agentDetail:tabStorage'),
     workspace: t('agentDetail:tabWorkspace'),
     logs: t('agentDetail:tabLogs'),
@@ -705,7 +707,7 @@ export default function AgentDetailPage() {
         {/* Tabs */}
         <UnderlineTabs
           className="mb-4"
-          items={(['info', 'channels', 'memories', 'storage', 'workspace', 'logs', 'collaborators'] as const).map((tab) => ({
+          items={(['info', 'channels', 'memories', 'knowledge', 'storage', 'workspace', 'logs', 'collaborators'] as const).map((tab) => ({
             key: tab,
             label: tabLabels[tab],
           }))}
@@ -1071,6 +1073,12 @@ export default function AgentDetailPage() {
         {/* 通道：这个 AI 对外的接线（QQ 等）。这里直接铺开，不用再开弹窗 */}
         {activeTab === 'channels' && (
           <ChannelCard agentId={agent.id} />
+        )}
+
+        {activeTab === 'knowledge' && (
+          <div className="space-y-4">
+            <KnowledgePanel agentId={agentId} />
+          </div>
         )}
 
         {activeTab === 'storage' && (

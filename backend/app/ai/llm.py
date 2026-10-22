@@ -934,7 +934,12 @@ async def _build_memory_index(db, agent, state: str | None = None) -> str:
         )
         from app.services.memory.structured_memory_service import format_db_records_for_prompt
 
+        from app.services.agent.knowledge_service import knowledge_index_text
+
         cur = await format_db_records_for_prompt(db, agent.id)
+        # 知识库索引与记忆索引同段注入、同一条版本链冻结：标题/摘要变了才换版本
+        knowledge = await knowledge_index_text(db, agent.id)
+        cur = "\n\n".join(x for x in (cur, knowledge) if x)
         if not cur:
             return ""
         repo = SQLAlchemyCapabilityRepository(db)
