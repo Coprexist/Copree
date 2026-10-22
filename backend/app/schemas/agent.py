@@ -85,6 +85,11 @@ class AgentUpdateConfigRequest(BaseModel):
     thinking_enabled: bool | None = None
     hide_ai_identity: bool | None = None
     emotion_vectorized: bool | None = None
+    ai_type: str | None = Field(default=None, description="AI 类型: general|semi_general|resonance")
+    is_ai_editable: bool | None = None
+    discoverable: bool | None = None
+    api_credit_cost: int | None = Field(default=None, ge=0, le=100000)
+    is_paused: bool | None = None
     config_profile: str | None = None
     delay_reply_enabled: bool | None = None
     max_tool_rounds: int | None = Field(default=None, ge=1, le=20, description="工具调用轮次上限")

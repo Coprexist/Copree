@@ -9,6 +9,12 @@
 ## [Unreleased]
 
 ### 🐛 修复
+- **设置面板里几项开关“保存了但没生效”**：`PUT /agents/{id}/config` 的请求 schema 少了
+  `ai_type`、`is_ai_editable`、`discoverable`、`api_credit_cost`、`is_paused`——Pydantic 默认丢弃
+  未知字段，于是 AI 类型（记忆隔离粒度 / 能否加群）、可自改、可发现这些在界面上改了、库里没变；
+  `update_agent_config` 也没有 `ai_type` 分支。现在字段进了 schema，类型只接受
+  `general|semi_general|resonance`（拼错直接 400），另外三个一起落库。用例
+  `tests/test_agent_config_update.py`（2 条：一个 PUT 全落地、非法类型被拒）。
 - **切换预设档位一点就崩**：`apply_config_profile` 依赖的 `_PRESET_ORDER` / `_STRONG_*` /
   `_INDEPENDENT_PARAMS` 早已搬进 `utils/pure/presets.py`，函数里却没跟着导入——升级到
   「数字生命档」（以及任何预览）都会 NameError，界面上这个开关等于不可用；`_INDEPENDENT_PARAMS`

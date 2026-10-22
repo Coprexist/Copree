@@ -768,9 +768,22 @@ async def update_agent_config(
     if "disallow_mode" in updates and updates["disallow_mode"] is not None:
         agent.disallow_mode = updates["disallow_mode"]
 
+    # AI 类型：决定记忆隔离粒度与能否加群（general 不能加群）；换类型只影响之后写入的记忆
+    if "ai_type" in updates and updates["ai_type"] is not None:
+        new_type = str(updates["ai_type"]).strip()
+        if new_type not in ("general", "semi_general", "resonance"):
+            raise ValueError(f"无效的 AI 类型: {new_type}")
+        agent.ai_type = new_type
+
     # is_ai_editable 允许 AI 自修改
-    if "is_ai_editable" in updates:
+    if "is_ai_editable" in updates and updates["is_ai_editable"] is not None:
         agent.is_ai_editable = updates["is_ai_editable"]
+
+    # 每条回复的额度成本 / 暂停开关（设置面板会一起提交）
+    if "api_credit_cost" in updates and updates["api_credit_cost"] is not None:
+        agent.api_credit_cost = int(updates["api_credit_cost"])
+    if "is_paused" in updates and updates["is_paused"] is not None:
+        agent.is_paused = bool(updates["is_paused"])
 
     # 2026-08-09: AI↔AI 私信限额配置（0=不启用维度；规范化后写入）
     if "dm_quota_config" in updates and updates["dm_quota_config"] is not None:
