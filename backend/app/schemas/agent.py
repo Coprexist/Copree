@@ -130,6 +130,22 @@ class AgentUpdateConfigRequest(BaseModel):
         return validate_status_text(v)
 
 
+class KnowledgeCreateRequest(BaseModel):
+    """新增知识库文档：正文落 AI 文件空间，元数据落 agent_knowledge"""
+    title: str = Field(..., min_length=1, max_length=120)
+    summary: str | None = None
+    filename: str | None = None
+    content: str
+
+
+class KnowledgeUpdateRequest(BaseModel):
+    """改标题/摘要/开关，或重写正文"""
+    title: str | None = Field(default=None, max_length=120)
+    summary: str | None = None
+    enabled: bool | None = None
+    content: str | None = None
+
+
 class AgentStateRequest(BaseModel):
     """切换状态请求"""
     target_state: str = Field(..., description="active|dnd|inactive|blocked")

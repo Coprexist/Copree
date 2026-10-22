@@ -21,7 +21,7 @@ STRONG_STRING_PARAMS = [
 ]
 # 与档位无关的参数：切换档位时原样保留，预览里单独列出来给人看
 INDEPENDENT_PARAMS = [
-    "delay_reply_enabled", "hide_ai_identity", "reminder_grace", "system_prompt",
+    "delay_reply_enabled", "hide_ai_identity", "reminder_grace",
 ]
 
 

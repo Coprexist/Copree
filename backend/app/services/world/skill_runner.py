@@ -195,8 +195,8 @@ class _CtxProxy:
 
 
 def _build_ctx(permissions: list[str], caller: dict | None = None) -> SimpleNamespace:
-    ctx: dict = {"log": _CtxProxy(permissions).log}
     proxy = _CtxProxy(permissions)
+    ctx: dict = {"log": proxy.log}
     # 调用者身份：只读、不经权限校验（它是"谁在调用"，不是世界数据）
     c = caller or {}
     ctx["caller"] = SimpleNamespace(

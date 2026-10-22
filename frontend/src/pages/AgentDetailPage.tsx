@@ -707,7 +707,7 @@ export default function AgentDetailPage() {
         {/* Tabs */}
         <UnderlineTabs
           className="mb-4"
-          items={(['info', 'channels', 'memories', 'knowledge', 'storage', 'workspace', 'logs', 'collaborators'] as const).map((tab) => ({
+          items={TABS.map((tab) => ({
             key: tab,
             label: tabLabels[tab],
           }))}

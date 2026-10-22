@@ -9,6 +9,11 @@
 ## [Unreleased]
 
 ### 🐛 修复
+- **知识库改完，AI 被告知“你自己刚改的”**：`knowledge_service` 把界面上的改动也打了 `mark_self_change`
+  标记，于是下一次能力变更通知会把“知识库索引更新”说成它自己改的——它其实没动过。现在去掉这个标记，
+  版本链照常发正式变更通知。同一批收掉几处重复：`AI_TYPES` 成为创建与更新的唯一类型清单（创建路径
+  此前不校验，拼错的类型能直接进库）、知识库请求模型归位 `schemas/agent.py`、前端页签由 `TABS.map`
+  生成（不再手抄两遍）、skill 的 ctx 只建一个协议代理、删掉两处改动后留下的未用导入。
 - **设置面板里几项开关“保存了但没生效”**：`PUT /agents/{id}/config` 的请求 schema 少了
   `ai_type`、`is_ai_editable`、`discoverable`、`api_credit_cost`、`is_paused`——Pydantic 默认丢弃
   未知字段，于是 AI 类型（记忆隔离粒度 / 能否加群）、可自改、可发现这些在界面上改了、库里没变；

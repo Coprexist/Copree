@@ -34,6 +34,9 @@ def _ensure_repo(db_or_repo):
     return db_or_repo
 
 
+# AI 类型（记忆隔离粒度 + 群聊权限）：general 不能加群；resonance 跨用户共享记忆
+AI_TYPES = ("general", "semi_general", "resonance")
+
 # 三档 AI 配置预设值
 CONFIG_PROFILES = {
     "chat": {
@@ -263,6 +266,8 @@ async def create_agent(
 
     通用 AI（general）自动设置 hide_ai_identity=True。
     """
+    if ai_type not in AI_TYPES:
+        raise ValueError(f"无效的 AI 类型: {ai_type}（可选 {', '.join(AI_TYPES)}）")
     db = _ensure_repo(db)
     # 查询用户（额度检查和日志都需要）
     result = await db.execute(select(User).where(User.id == owner_id))
@@ -771,8 +776,8 @@ async def update_agent_config(
     # AI 类型：决定记忆隔离粒度与能否加群（general 不能加群）；换类型只影响之后写入的记忆
     if "ai_type" in updates and updates["ai_type"] is not None:
         new_type = str(updates["ai_type"]).strip()
-        if new_type not in ("general", "semi_general", "resonance"):
-            raise ValueError(f"无效的 AI 类型: {new_type}")
+        if new_type not in AI_TYPES:
+            raise ValueError(f"无效的 AI 类型: {new_type}（可选 {', '.join(AI_TYPES)}）")
         agent.ai_type = new_type
 
     # is_ai_editable 允许 AI 自修改

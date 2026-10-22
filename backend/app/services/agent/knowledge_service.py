@@ -70,16 +70,6 @@ def _row(entry: AgentKnowledge) -> dict:
     }
 
 
-def _notify_index_changed(agent_id: int) -> None:
-    """索引换了新版本：让这个 AI 下一次刷新上下文时知道（和它自己 store_memory 同一条通道）"""
-    try:
-        from app.services.capability_versioning import mark_self_change, memory_index_source
-
-        mark_self_change(agent_id, memory_index_source(agent_id))
-    except Exception as e:  # noqa: BLE001 —— 通知失败不影响文档已落盘
-        logger.debug("知识库索引变更标记失败（非致命）: %s", e)
-
-
 async def list_entries(db, agent_id: int) -> list[dict]:
     """这个 AI 的知识库清单（含未启用的条目——界面要显示开关）"""
     rows = (await db.execute(
@@ -136,7 +126,6 @@ async def add_entry(db, agent_id: int, *, title: str, summary: str = "",
     await db.flush()
     # 时间戳由 server_default 生成，flush 后是"过期"状态；这里刷一次，返回给界面的行才完整
     await db.refresh(entry)
-    _notify_index_changed(agent_id)
     logger.info("📚 AI %s 知识库新增《%s》(%s，%s 字节)", agent_id, entry.title, rel, len(raw))
     return _row(entry)
 
@@ -163,7 +152,6 @@ async def update_entry(db, agent_id: int, knowledge_id: int, *,
         entry.size = len(raw)
     await db.flush()
     await db.refresh(entry)
-    _notify_index_changed(agent_id)
     return _row(entry)
 
 
@@ -177,7 +165,6 @@ async def delete_entry(db, agent_id: int, knowledge_id: int) -> None:
         logger.warning("删除知识库文件失败 %s: %s", entry.path, e)
     await db.delete(entry)
     await db.flush()
-    _notify_index_changed(agent_id)
 
 
 async def read_entry(db, agent_id: int, knowledge_id: int) -> dict:

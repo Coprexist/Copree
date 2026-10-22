@@ -65,3 +65,16 @@ async def test_unknown_ai_type_is_rejected(migrated_db):
         except ValueError:
             raised = True
         assert raised
+async def test_create_agent_rejects_unknown_ai_type(migrated_db):
+    """创建与更新共用同一份 AI 类型清单：拼错的类型不能靠创建路径混进库。"""
+    from app.database import async_session
+    from app.services.agent.agent_service import create_agent
+
+    async with async_session() as db:
+        await _seed(db)
+        raised = False
+        try:
+            await create_agent(db, owner_id=OWNER, name="拼错的类型", is_admin=True, ai_type="shared")
+        except ValueError:
+            raised = True
+        assert raised

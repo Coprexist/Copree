@@ -2,7 +2,6 @@
 AI 代理管理路由
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
-from pydantic import BaseModel
 from fastapi.responses import Response
 import json
 from sqlalchemy import func
@@ -17,6 +16,8 @@ from app.schemas.agent import (
     AgentResponse,
     AgentConfigHistoryResponse,
     ApplyPresetRequest,
+    KnowledgeCreateRequest,
+    KnowledgeUpdateRequest,
     WorkspaceFileUpdate,
     WorkspaceResponse,
 )
@@ -889,20 +890,6 @@ async def get_agent_structured_records(
 
 
 # ---------- 知识库 ----------
-
-class KnowledgeCreateRequest(BaseModel):
-    title: str
-    summary: str | None = None
-    filename: str | None = None
-    content: str
-
-
-class KnowledgeUpdateRequest(BaseModel):
-    title: str | None = None
-    summary: str | None = None
-    enabled: bool | None = None
-    content: str | None = None
-
 
 @router.get("/{agent_id}/knowledge")
 async def list_agent_knowledge(

@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from app.models.message import Message
 from app.models.user import User
-from app.models.agent import Agent
 from app.repositories.export_repo import ExportRepository
 from app.utils.display_name import display_names
 
