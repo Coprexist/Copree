@@ -9,6 +9,12 @@
 ## [Unreleased]
 
 ### 🐛 修复
+- **切换预设档位一点就崩**：`apply_config_profile` 依赖的 `_PRESET_ORDER` / `_STRONG_*` /
+  `_INDEPENDENT_PARAMS` 早已搬进 `utils/pure/presets.py`，函数里却没跟着导入——升级到
+  「数字生命档」（以及任何预览）都会 NameError，界面上这个开关等于不可用；`_INDEPENDENT_PARAMS`
+  本身还根本不存在。现在参数表在 `presets.py` 用公开名导出并补上 `INDEPENDENT_PARAMS`，
+  方向判断收进 `preset_direction(old, new)`，`agent_service` 只调它们。用例
+  `tests/test_agent_presets.py`（2 条：整档升级、预览只读）。
 - **群助手在消息里靠"负号"表示身份**：群助手是 `group_assistants` 独立表，消息里却写成
   `sender_type="ai"、sender_id=-ga.id`——负号只是为了在同一个整数列里躲开 users 号段，读的人
   （以及后来写代码的人）都得记住这条隐规则；更糟的是它与 users.id 同号时「群助手 3」和「用户 3」

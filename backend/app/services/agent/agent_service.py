@@ -12,7 +12,13 @@ from app.models.memory import RoughMemory, DetailMemory
 from app.config import settings
 from app.utils.result import Result
 from app.utils.text import extract_mentions, mentions_user
-from app.utils.pure.presets import merge_preset_values
+from app.utils.pure.presets import (
+    INDEPENDENT_PARAMS,
+    STRONG_BOOL_PARAMS,
+    STRONG_NUMERIC_PARAMS,
+    merge_preset_values,
+    preset_direction,
+)
 from app.utils.pure.willingness import (
     WillingnessResult, calc_alarm_willingness, calc_reply_willingness, calc_proactive_willingness,
 )
@@ -167,12 +173,12 @@ async def apply_config_profile(
                 "new": merged[key],
             }
         return {
-            "direction": "upgrade" if _PRESET_ORDER.get(profile, 0) > _PRESET_ORDER.get(old_profile, 0) else "downgrade",
+            "direction": preset_direction(old_profile, profile),
             "old_profile": old_profile,
             "new_profile": profile,
             "changed_fields": changes_detail,
-            "unchanged_strong": [k for k in _STRONG_NUMERIC_PARAMS + _STRONG_BOOL_PARAMS if k in preset and k not in changed],
-            "independent_untouched": [k for k in _INDEPENDENT_PARAMS if hasattr(agent, k)],
+            "unchanged_strong": [k for k in STRONG_NUMERIC_PARAMS + STRONG_BOOL_PARAMS if k in preset and k not in changed],
+            "independent_untouched": [k for k in INDEPENDENT_PARAMS if hasattr(agent, k)],
         }
 
     # 实际写入
@@ -200,7 +206,7 @@ async def apply_config_profile(
     await db.flush()
     logger.info(
         f"🎚️ AI({agent_id}) 切换预设: {old_profile} → {profile}"
-        f"（{'升级' if _PRESET_ORDER.get(profile,0) > _PRESET_ORDER.get(old_profile,0) else '降级'}），"
+        f"（{'升级' if preset_direction(old_profile, profile) == 'upgrade' else '降级'}），"
         f"变更 {len(changed)} 项: {changed}"
     )
     return agent

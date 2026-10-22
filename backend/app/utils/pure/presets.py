@@ -6,19 +6,28 @@ AI 配置预设合并逻辑（纯函数）— 无 IO，无副作用。
 _PRESET_ORDER = {"chat": 0, "immersive": 1, "digital_life": 2}
 
 # 强相关参数：切换预设时按升降级规则合并
-_STRONG_NUMERIC_PARAMS = [
+STRONG_NUMERIC_PARAMS = [
     "temperature", "top_p", "presence_penalty", "frequency_penalty",
     "max_tool_rounds", "alarm_max_tool_rounds", "max_alarms",
     "memory_recent_count",
 ]
-_STRONG_BOOL_PARAMS = [
+STRONG_BOOL_PARAMS = [
     "thinking_enabled", "force_alarm_on_end", "plan_injection_enabled", "is_ai_editable",
     "retire_handover_self",
 ]
 # 字符串枚举参数：切换预设时直接覆盖（不合并）
-_STRONG_STRING_PARAMS = [
+STRONG_STRING_PARAMS = [
     "memory_load_mode", "memory_shared_scope",
 ]
+# 与档位无关的参数：切换档位时原样保留，预览里单独列出来给人看
+INDEPENDENT_PARAMS = [
+    "delay_reply_enabled", "hide_ai_identity", "reminder_grace", "system_prompt",
+]
+
+
+def preset_direction(old_profile: str, new_profile: str) -> str:
+    """档位切换方向：upgrade / downgrade（同一档按 downgrade 处理，与调用方原来的判断一致）"""
+    return "upgrade" if _PRESET_ORDER.get(new_profile, 0) > _PRESET_ORDER.get(old_profile, 0) else "downgrade"
 
 
 def merge_preset_values(
@@ -45,7 +54,7 @@ def merge_preset_values(
     merged = {}
     changed: list[str] = []
 
-    for key in _STRONG_NUMERIC_PARAMS:
+    for key in STRONG_NUMERIC_PARAMS:
         if key not in preset_values:
             continue
         cur = current_values.get(key)
@@ -62,7 +71,7 @@ def merge_preset_values(
             if merged[key] != cur:
                 changed.append(key)
 
-    for key in _STRONG_BOOL_PARAMS:
+    for key in STRONG_BOOL_PARAMS:
         if key not in preset_values:
             continue
         cur = current_values.get(key)
@@ -79,7 +88,7 @@ def merge_preset_values(
             if merged[key] != cur:
                 changed.append(key)
 
-    for key in _STRONG_STRING_PARAMS:
+    for key in STRONG_STRING_PARAMS:
         if key not in preset_values:
             continue
         cur = current_values.get(key)
