@@ -43,7 +43,7 @@ router = APIRouter(prefix="/world", tags=["群视界入口"])
 #     GET    /world/{id}/api/groups     绑定群列表
 #     GET    /world/{id}/api/group/messages   读群消息（仅绑定群）
 #     GET    /world/{id}/api/group/members    群成员列表（仅绑定群）
-#   写（身份=世界自身；作用域=仅本世界绑定群；独立写限流）：
+#   写（发言身份=本群群助手；作用域=仅本世界绑定群；独立写限流）：
 #     POST   /world/{id}/api/group/messages   发群消息
 #     POST   /world/{id}/api/group/roles      改成员角色（群主/管理员）
 #     POST   /world/{id}/api/group/kick       移出成员（群主/管理员）
@@ -557,20 +557,14 @@ async def world_events(
     )
 
 
-# ── 2.4 群聊写 API：身份 = 世界自身（与 AI 工具同身份，底层借世界主人权限并做群角色检查）；
+# ── 2.4 群聊写 API：发言身份 = 本群群助手（与 AI 工具同一条入口，底层做群角色检查）；
 #    作用域 = 仅本世界绑定群；限流 = 写操作独立配额 ──
 
 async def _check_bound_group(db: AsyncSession, world, group_id: int | None) -> int:
     """群作用域校验：返回群 id（缺省取绑定第一个群；显式传的必须属于本世界绑定）"""
-    from app.models.world import WorldBinding
+    from app.services.world.world_service import bound_group_ids
 
-    rows = (await db.execute(
-        select(WorldBinding).where(
-            WorldBinding.world_id == world.id,
-            WorldBinding.entity_type == "group",
-        ).order_by(WorldBinding.id)
-    )).scalars().all()
-    bound = [r.entity_id for r in rows]
+    bound = await bound_group_ids(db, world.id)
     if not bound:
         raise HTTPException(status_code=403, detail="本世界未绑定任何群聊")
     if group_id is None:
@@ -644,7 +638,7 @@ async def world_api_group_send(
     db: AsyncSession = Depends(get_db),
     world_repo: WorldRepository = Depends(get_world_repo),
 ):
-    """受控 API：发群消息（世界自身身份；仅绑定群；写限流）"""
+    """受控 API：发群消息（本群群助手身份；仅绑定群；写限流）"""
     world = await _authorize_world_api(db, world_id, request, write=True)
     try:
         gid = await _check_bound_group(db, world, body.get("group_id"))

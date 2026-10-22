@@ -1,9 +1,13 @@
-"""显示名的唯一入口：AI 取 agents.name，其余取 users.username。
+"""显示名的唯一入口：AI 取 agents.name，群助手取 group_assistants.name，其余取 users.username。
 
 AI 建号时会在 users 里另开一行，username 抄一份当时的名字（重名还要加后缀），
 而改名只写 agents.name——两份名字从此各自漂移。任何"把 id 渲染成人或 AI 看的
 名字"的地方若直接读 users.username，同一个 AI 就会在会话列表里是旧名、在消息
 气泡里是新名。所以显示名一律从这里取。
+
+群助手的 id 是负值（-group_assistant.id，见 services/world/group_assistant_service）：
+它不是 users 行，不单独处理就会退化成「用户-3」——世界在群里说的话，AI 读群历史时
+看见的就是一个叫「用户-3」的人在说。
 """
 from sqlalchemy import select
 
@@ -30,25 +34,39 @@ async def display_names(db, user_ids, *, with_channel: bool = False) -> dict[int
     if not ids:
         return {}
 
-    rows = (await db.execute(
-        select(User.id, User.username, User.type, User.origin_channel, Agent.name)
-        .outerjoin(Agent, Agent.user_id == User.id)
-        .where(User.id.in_(ids))
-    )).all()
+    # 负 id 是群助手（独立实体，不在 users 表里），和"人 / AI"分开查
+    assistant_ids = {uid for uid in ids if uid < 0}
+    person_ids = ids - assistant_ids
 
     marks: dict[str, str] = {}        # 通道标识 → 展示名：一批里按 kind 只查一次 manifest
     names: dict[int, str] = {}
-    for uid, username, user_type, origin_channel, agent_name in rows:
-        # agent.name 只对 AI 有意义；人类用户没有 agent 行，取 username
-        name = (agent_name or "").strip() if user_type == "ai" else ""
-        name = name or (username or "").strip() or _fallback(int(uid))
-        if with_channel and origin_channel:
-            if origin_channel not in marks:
-                from app.services.plugin.catalog import channel_label
+    if person_ids:
+        rows = (await db.execute(
+            select(User.id, User.username, User.type, User.origin_channel, Agent.name)
+            .outerjoin(Agent, Agent.user_id == User.id)
+            .where(User.id.in_(person_ids))
+        )).all()
+        for uid, username, user_type, origin_channel, agent_name in rows:
+            # agent.name 只对 AI 有意义；人类用户没有 agent 行，取 username
+            name = (agent_name or "").strip() if user_type == "ai" else ""
+            name = name or (username or "").strip() or _fallback(int(uid))
+            if with_channel and origin_channel:
+                if origin_channel not in marks:
+                    from app.services.plugin.catalog import channel_label
 
-                marks[origin_channel] = channel_label(str(origin_channel))
-            name = f"{name}[{marks[origin_channel]}]"
-        names[int(uid)] = name
+                    marks[origin_channel] = channel_label(str(origin_channel))
+                name = f"{name}[{marks[origin_channel]}]"
+            names[int(uid)] = name
+
+    if assistant_ids:
+        from app.models.world import GroupAssistant
+
+        rows = (await db.execute(
+            select(GroupAssistant.id, GroupAssistant.name)
+            .where(GroupAssistant.id.in_({-uid for uid in assistant_ids}))
+        )).all()
+        for ga_id, ga_name in rows:
+            names[-int(ga_id)] = (ga_name or "").strip() or _fallback(-int(ga_id))
 
     for uid in ids - names.keys():
         names[uid] = _fallback(uid)

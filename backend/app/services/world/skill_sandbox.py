@@ -134,21 +134,18 @@ async def _handle_call(db, world, permissions: set[str], req: dict) -> dict:
         if op == "group.send":
             if "group:send" not in permissions:
                 raise PermissionError("未声明权限 group:send")
-            from app.chat.gm import send_gm_message, get_group
-            from app.models.world import WorldBinding
-            from sqlalchemy import select
-            rows = (await db.execute(
-                select(WorldBinding.group_id).where(WorldBinding.world_id == world.id)
-            )).scalars().all()
-            if not rows:
+            from app.services.world.group_assistant_service import say_in_group
+            from app.services.world.world_service import bound_group_ids
+
+            gids = await bound_group_ids(db, world.id)
+            if not gids:
                 return {"ok": False, "error": "本世界未绑定任何群聊"}
-            gid = rows[0]
-            group = await get_group(db.session, gid)
-            if not group:
-                return {"ok": False, "error": "绑定群不存在"}
-            msg = await send_gm_message(db.session, gid, world.owner_id, str(req.get("content", "")),
-                                       sender_type="user", sender_id=str(world.owner_id))
-            return {"ok": True, "data": {"success": True, "message_id": getattr(msg, "id", None)}}
+            content = str(req.get("content", ""))
+            if not content.strip():
+                return {"ok": False, "error": "消息内容不能为空"}
+            # 与 send_group_message 工具同一个发言入口：身份是绑定群的群助手
+            msg = await say_in_group(db.session, world, gids[0], content)
+            return {"ok": True, "data": {"success": True, "message_id": msg.id}}
 
         return {"ok": False, "error": f"未知协议操作: {op}"}
     except PermissionError as e:

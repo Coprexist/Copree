@@ -846,6 +846,7 @@ async def _handle_typing_indicator(...): ...
 | `world_turn.py` | 对话轮次 worker + `TurnBroadcast` 直播通道 |
 | `realtime_connection_manager.py` | 世界实时通道（WS 状态广播） |
 | `group_type_service.py` | 群类型模板与助手配置 |
+| `group_assistant_service.py` | 群助手（世界在群里的发言身份）：建行唯一入口、世界代言人解析、`say_in_group` 发消息 + 广播 |
 
 #### 5.7.5 基础设施 (services/infrastructure/)
 

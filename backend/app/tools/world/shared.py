@@ -11,10 +11,6 @@ import logging
 import re
 import uuid
 
-from sqlalchemy import select
-
-from app.models.world import WorldBinding
-
 logger = logging.getLogger(__name__)
 
 DOWNLOAD_DIR = "downloads"                      # 下载固定落点
@@ -93,14 +89,10 @@ def from_site_result(result: dict) -> dict:
 
 
 async def bound_group_ids(ctx) -> list[int]:
-    """世界绑定的群 id 列表"""
-    rows = (await ctx.world_repo.execute(
-        select(WorldBinding).where(
-            WorldBinding.world_id == ctx.world.id,
-            WorldBinding.entity_type == "group",
-        )
-    )).scalars().all()
-    return [r.entity_id for r in rows]
+    """世界绑定的群 id 列表（查询在 world_service.bound_group_ids，唯一的来源）"""
+    from app.services.world.world_service import bound_group_ids as _bound_group_ids
+
+    return await _bound_group_ids(ctx.world_repo, ctx.world.id)
 
 
 async def resolve_group_ids(ctx, args: dict) -> list[int]:

@@ -9,6 +9,22 @@
 ## [Unreleased]
 
 ### 🐛 修复
+- **世界在群里说话借的是群主的身份**：`send_group_message`（世界程序与世界 AI 共用的那条路）
+  把世界的话记成 `sender_type="human"、sender_id=世界主人`——群里看着像群主在说，更要命的是
+  群历史里它就是群主说的话：读这段历史的 AI、导出、记忆检索全都会当成那个人在说，等于世界假扮了他。
+  世界 skill 的 `ctx.group.send` 更糟一层：`send_gm_message(db, gid, owner_id, content, sender_type=…,`
+  `sender_id=…)` 与位置参数重复、`WorldBinding.group_id` 这个列根本不存在，一调就抛异常。
+  现在世界在群里的发言身份统一是**本群群助手**（`group_assistants` 一行，消息里按既有约定写成
+  `sender_type="ai"、sender_id=-ga.id`）：`services/world/group_assistant_service.say_in_group` 负责
+  落库 + 广播，世界工具、受控 API（`POST /world/{id}/api/group/messages`）与世界 skill 三处都只调它。
+  类型化绑定的群用它绑定时建的助手（如「残响记录员」）；没有类型的历史绑定在第一次发言时按世界的名字
+  补建（幂等，一世界一群一个身份，A 群的话不会记到 B 群的助手头上）。同一批把两处同源查询收成一份：
+  `world_service.bound_group_ids`（工具 / 受控 API / skill 都从这里取绑定群，「默认群」不再各排各的）；
+  `display_name` 认负 id（此前 `-ga.id` 会渲染成「用户-3」，AI 读群历史与导出看到的就是一串编号），
+  `routers/gm.py` 的取名也改为调它，不再手抄一份 users/agents 的取名规则。用例
+  `tests/test_world_group_voice.py`（5 条）：世界发消息记在助手名下、历史绑定补建且幂等、两个群各用
+  各的助手、负 id 取名、skill 的 ctx.group.send 同身份。
+
 - **世界帧跟群聊焊死：进世界得先挑一个群，命令也只能借群消息投递**：`enter_world` 曾把
   (世界, 通道群) 记进帧，`world_command` 的实现是「以 AI 名义往群里发一条消息」——于是三件事
   同时出错：①手上没有群就进不去世界（哪怕世界直接绑了这个 AI）；②同一个 AI 从 A 群进、从 B 群进

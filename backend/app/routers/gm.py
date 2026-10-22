@@ -45,27 +45,19 @@ async def get_gm_message_list(
     state_map: dict[int, str] = {}
 
     if all_ids:
-        # 先查 users 表
-        u_result = await db.execute(select(User.id, User.username, User.type, User.avatar_url).where(User.id.in_(all_ids)))
-        for row in u_result.all():
-            uid, uname, utype, uavatar = row[0], row[1], row[2], row[3]
-            name_map[uid] = uname
+        # 名字统一问 display_name（AI 取 agents.name、群助手取 group_assistants.name、其余取用户名）；
+        # 这里只补界面要的头像与在线状态，别再手抄一份取名规则
+        from app.utils.display_name import display_names
+
+        name_map = await display_names(db, all_ids)
+        u_result = await db.execute(select(User.id, User.avatar_url, User.type).where(User.id.in_(all_ids)))
+        for uid, uavatar, utype in u_result.all():
             avatar_map[uid] = uavatar or ''
             if utype == "ai":
-                a = (await db.execute(select(Agent.name, Agent.avatar_url, Agent.state).where(Agent.user_id == uid))).first()
+                a = (await db.execute(select(Agent.avatar_url, Agent.state).where(Agent.user_id == uid))).first()
                 if a:
-                    name_map[uid] = a[0]
-                    avatar_map[uid] = a[1] or uavatar or ''
-                    state_map[uid] = a[2]
-
-        # 群助手（独立实体，sender_id 为负值 = -group_assistant.id）
-        ga_ids = {-sid for sid in all_ids if sid < 0}
-        if ga_ids:
-            from app.models.world import GroupAssistant
-            ga_result = await db.execute(select(GroupAssistant.id, GroupAssistant.name).where(GroupAssistant.id.in_(ga_ids)))
-            for gid, gname in ga_result.all():
-                name_map[-gid] = gname
-                avatar_map[-gid] = ''
+                    avatar_map[uid] = a[0] or uavatar or ''
+                    state_map[uid] = a[1]
 
     return [
         gm_message_to_dict(m, sender_name=name_map.get(m.sender_id), sender_avatar_url=avatar_map.get(m.sender_id), sender_state=state_map.get(m.sender_id))

@@ -274,26 +274,18 @@ async def _create_group_assistant(
     spec: dict, index: int,
 ) -> int | None:
     db = _ensure_repo(db)
-    """创建单个群助手：直接建 group_assistants 实体（不 create_agent、不入群成员、
-    不建 WorldAgent——与群视界 AI 同形态：无账号、无好友）。"""
+    """按类型模板创建单个群助手（建行本身走 group_assistant_service.create_assistant，
+    与世界的代言助手同一个入口：不 create_agent、不入群成员、不建 WorldAgent）。
+
+    模板只管"建几个、叫什么"，多个助手按 index 编号；失败只跳过这个助手，
+    不拖累整次绑定（begin_nested 把错误关在这一行里）。"""
+    from app.services.world.group_assistant_service import create_assistant
+
     try:
         async with db.begin_nested():
             base_name = str(spec.get("default_name") or "群助手").strip()[:30]
             name = f"{base_name}{index + 1}" if int(spec.get("count") or 1) > 1 else base_name
-            ga = GroupAssistant(
-                group_id=group_id,
-                world_id=world.id,
-                group_type_slug=type_slug,
-                name=name,
-                system_prompt=(
-                    f"你是群「{group_id}」的助手，由世界「{world.name}」统一调度管理。\n\n"
-                    f"类型：{type_slug}"
-                ),
-                config={},
-            )
-            db.add(ga)
-            await db.flush()
-            logger.info(f"🤖 群 {group_id} 创建群助手「{name}」(group_assistant {ga.id})")
+            ga = await create_assistant(db, world, group_id, name=name, group_type_slug=type_slug)
             return ga.id
     except Exception as e:
         logger.warning(f"创建群助手失败（group {group_id}）: {e}")

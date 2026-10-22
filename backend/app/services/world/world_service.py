@@ -278,6 +278,24 @@ async def delete_world(repo: WorldRepository, world_id: int, owner_id: int) -> N
 # 入口绑定
 # ═══════════════════════════════════════════════════════════════
 
+async def bound_group_ids(db_or_repo, world_id: int) -> list[int]:
+    """世界绑定的群 id 列表（按绑定顺序，首个即"默认群"）。
+
+    群聊相关的工具与受控 API 都从这一份取：多绑一个群就是列表里多一项。
+    每个入口各写一遍 WorldBinding 查询的后果不是多几行代码，而是"默认群"会飘——
+    有的按 id 排、有的不排，同一个世界在两个工具里认的不是同一个群。
+    """
+    from app.models.world import WorldBinding
+
+    rows = (await db_or_repo.execute(
+        select(WorldBinding).where(
+            WorldBinding.world_id == int(world_id),
+            WorldBinding.entity_type == "group",
+        ).order_by(WorldBinding.id)
+    )).scalars().all()
+    return [int(r.entity_id) for r in rows]
+
+
 async def bind_entity(
     repo: WorldRepository,
     world_id: int,

@@ -54,7 +54,7 @@ ctx 只包含 `manifest.permissions` **声明过**的能力——没声明的根
 | `file:list` / `file:read` / `file:write` / `file:delete` | `ctx.file.*` | 只限本世界文件夹（隔离目录+扩展名白名单，复用 world_file_service） |
 | `data:read` / `data:write` | `ctx.data.*` | **世界数据（world_data 表）**：`await ctx.data.get(key)` / `set(key, value)` / `delete(key)`——结构化/操作数据只经 API/skill 读写 |
 | `world:read` / `world:update` | `ctx.world.*` | 世界信息读取/更新（以世界主人身份） |
-| `group:send` | `ctx.group.send()` | 发消息到绑定群（以世界创建者身份） |
+| `group:send` | `ctx.group.send()` | 发消息到绑定群（以本群群助手的身份——世界在群里的代言，不借群主或成员身份） |
 | （无） | `ctx.log()` | 平台日志（无需声明） |
 
 ## 三·六、Skill 分层注入（按 AI 类型分发）
