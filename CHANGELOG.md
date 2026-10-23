@@ -9,6 +9,12 @@
 ## [Unreleased]
 
 ### 🐛 修复
+- **配置保存后「热更新没生效」**：`app_config_service._refresh_settings` 以前是「新造一份
+  `Settings()` 再替换 `app.config.settings`」——全仓几十处 `from app.config import settings`
+  拿到的是旧对象的引用，DB 覆盖写进去了、界面显示已保存，正在跑的进程里这些模块读的还是旧值，
+  只有重启才生效。现在改为按新快照**就地**刷字段，引用不变、值全更新。全量测试里
+  `test_avatar_cleanup` 的偶发失败就是它的症状：前一个用例存过配置组，清理接口读到旧的
+  `avatars_dir`，扫了默认目录所以「一个都没清」。
 - **知识库改完，AI 被告知“你自己刚改的”**：`knowledge_service` 把界面上的改动也打了 `mark_self_change`
   标记，于是下一次能力变更通知会把“知识库索引更新”说成它自己改的——它其实没动过。现在去掉这个标记，
   版本链照常发正式变更通知。同一批收掉几处重复：`AI_TYPES` 成为创建与更新的唯一类型清单（创建路径

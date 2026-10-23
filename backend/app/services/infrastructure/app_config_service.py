@@ -36,15 +36,21 @@ def _ensure_repo(db_or_repo):
 
 
 def _refresh_settings() -> None:
-    """重建全局 settings 实例（DB 覆盖热更新生效）。
+    """让 DB 覆盖热生效：按新快照把字段**就地**写回既有 settings 实例。
 
-    pydantic-settings 实例在创建时固定 source 快照，运行时改缓存后
-    必须重建 Settings() 并替换模块级引用，现有 settings.xxx 读取才生效。
+    pydantic-settings 实例创建时固定了 source 快照，所以仍要新造一份 Settings() 取值；
+    但**不能替换模块级引用**（以前是 config_module.settings = Settings()）：全仓几十处
+    「from app.config import settings」拿到的是同一个对象的引用，换掉对象后它们继续读旧
+    快照——配置「保存成功、热更新没生效」，只在"进程没重启"的情况下复现。就地刷新后
+    引用不变、值全部更新。
     """
     import app.config as config_module
-    new_settings = config_module.Settings()
-    config_module.settings = new_settings
-    logger.info("🔄 settings 已重建（DB 配置覆盖生效）")
+
+    fresh = config_module.Settings()
+    target = config_module.settings
+    for name in type(fresh).model_fields:
+        setattr(target, name, getattr(fresh, name))
+    logger.info("🔄 settings 已按 DB 覆盖刷新（就地更新，引用不变）")
 
 
 # ═══════════════════════════════════════════════════════════════
