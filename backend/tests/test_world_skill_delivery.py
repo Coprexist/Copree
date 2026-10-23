@@ -23,8 +23,10 @@ def test_world_skill_doc_readable():
     """《世界 AI 技能参考》在文档库里，且目录里能看到原则与协议两节"""
     doc = library.read("world-skill")
     assert doc["ok"] is True, doc.get("error")
-    assert "## 1 五条原则" in doc["result"] and "### 1.1 能力对等" in doc["result"]
-    hit = library.read("world-skill", "能力对等")
+    toc = doc["result"]
+    for section in ("## 1 设计原则", "## 3 ctx 能力与权限", "## 7 颁布后自检"):
+        assert section in toc, section
+    hit = library.read("world-skill", "能力对等 权限")
     assert hit["ok"] is True and "能力对等" in hit["result"]
 
 
