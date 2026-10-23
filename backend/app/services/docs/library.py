@@ -26,6 +26,11 @@ DOC_DEFS: dict[str, dict] = {
         "path": "guides/创建AI参考.md",
         "desc": "AI 人设怎么写：四层结构、长度预算、去 AI 感清单、可复制模板、发布前自检",
     },
+    "world-skill": {
+        "title": "世界 AI 技能参考",
+        "path": "guides/世界AI技能参考.md",
+        "desc": "给 AI 居民颁布世界侧技能：五条原则、manifest/ctx 协议、沙箱边界、骨架示例、自检清单",
+    },
 }
 
 # 目录概览与关键词检索的截断：AI 读到的内容进上下文，宁短勿长

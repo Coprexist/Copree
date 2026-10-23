@@ -19,14 +19,16 @@ class ReadManualTool(WorldToolPlugin):
         '联邦、群权限；用户问「这平台怎么用」时先查它。\n'
         'doc=ai-guide《创建 AI 参考》：AI 人设怎么写——四层结构（身份 / 关系 / 说话方式 / 边界）、'
         '长度预算、去 AI 感的字面清单、可复制模板、发布前自检；给 AI 居民写人设、调某个 AI 的说话方式时查它。\n'
+        'doc=world-skill《世界 AI 技能参考》：给 AI 居民颁布世界侧技能怎么写——'
+        '「玩家能玩的，居民也要能玩」的五条原则、manifest/permissions/ctx 协议、沙箱边界、骨架示例、颁布前自检。\n'
         '传关键词拿命中片段，不传给目录。'
     )
 
     parameters = {
         'doc': {
             'type': 'string',
-            'enum': ['manual', 'ai-guide'],
-            'description': 'manual=用户手册（默认），ai-guide=创建 AI 参考',
+            'enum': ['manual', 'ai-guide', 'world-skill'],
+            'description': 'manual=用户手册（默认），ai-guide=创建 AI 参考，world-skill=世界 AI 技能参考（写居民技能前查）',
         },
         'keyword': {'type': 'string', 'description': '关键词（可选）；不传返回目录'},
     }
