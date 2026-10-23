@@ -5,19 +5,12 @@ import { isDesktop } from '../utils/platform'
 import { invoke } from '../utils/tauri'
 import { Cpu, RefreshCw, Play, Square, Star, Loader2, ArrowLeft, Circle } from 'lucide-react'
 import { PageHeader } from '../components/ui'
+import { formatFileSize } from '../utils/format'
 
 interface OllamaModel {
   name: string
   modified_at: string
   size: number
-}
-
-/** 格式化模型大小 */
-function formatSize(bytes: number): string {
-  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`
-  if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(0)} MB`
-  if (bytes >= 1e3) return `${(bytes / 1e3).toFixed(0)} KB`
-  return `${bytes} B`
 }
 
 /** 格式化日期 */
@@ -230,7 +223,7 @@ export default function LocalModelPage() {
                         )}
                       </div>
                       <p className="text-3xs text-textMuted mt-0.5">
-                        {formatSize(model.size)} · {formatDate(model.modified_at)}
+                        {formatFileSize(model.size)} · {formatDate(model.modified_at)}
                       </p>
                     </div>
                     {model.name !== defaultModel && (

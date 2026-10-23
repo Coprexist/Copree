@@ -6,6 +6,7 @@ import { useT } from '../../../i18n/I18nContext'
 import { useAuth } from '../../../context/AuthContext'
 import { Button, Dialog, EmptyState, Input, confirmAsync } from '../../../components/ui'
 import { CATEGORY_ICON, CATEGORY_LABEL_KEY } from '../../../utils/pluginCategories'
+import { formatFileSize } from '../../../utils/format'
 
 /**
  * 总商城 · 插件商城分区（一期：本地安装包）
@@ -40,9 +41,6 @@ interface StorePackage {
   builtin_conflict?: boolean
   updatable?: boolean
 }
-
-const fmtSize = (n: number) =>
-  n >= 1024 * 1024 ? (n / 1024 / 1024).toFixed(1) + 'MB' : Math.max(1, Math.round(n / 1024)) + 'KB'
 
 const STATUS_CLASS: Record<string, string> = {
   mint: 'text-mint-400',
@@ -219,7 +217,7 @@ export default function PluginMarketSection() {
                 <div className="text-3xs flex items-center gap-2 flex-wrap">
                   <span className={STATUS_CLASS[status.tone]}>{status.text}</span>
                   <span className="text-textMuted">
-                    {pkg.file_count != null ? t('tool:store.fileCount', { n: pkg.file_count }) : fmtSize(pkg.size || 0)}
+                    {pkg.file_count != null ? t('tool:store.fileCount', { n: pkg.file_count }) : formatFileSize(pkg.size || 0)}
                   </span>
                 </div>
 
@@ -280,7 +278,7 @@ export default function PluginMarketSection() {
                     <dd className="text-textPrimary">{t(CATEGORY_LABEL_KEY[detail.manifest?.category || 'other'] || CATEGORY_LABEL_KEY.other)}</dd>
                     <dt className="text-textMuted">{t('tool:store.fieldEntry')}</dt><dd className="text-textPrimary break-all">{detail.manifest?.entry || '—'}</dd>
                     <dt className="text-textMuted">{t('tool:store.fieldSize')}</dt>
-                    <dd className="text-textPrimary">{fmtSize(detail.uncompressed_bytes || 0)} · {t('tool:store.fileCount', { n: detail.file_count || 0 })}</dd>
+                    <dd className="text-textPrimary">{formatFileSize(detail.uncompressed_bytes || 0)} · {t('tool:store.fileCount', { n: detail.file_count || 0 })}</dd>
                     <dt className="text-textMuted">{t('tool:store.fieldSha')}</dt>
                     <dd className="text-textMuted break-all font-mono">{detail.sha256}</dd>
                   </dl>

@@ -20,9 +20,11 @@ export function cacheHitRatePct(promptTokens: number, cachedTokens: number): num
   return Math.round(((cachedTokens || 0) / promptTokens) * 1000) / 10
 }
 
-/** 文件大小格式化（纯函数） */
+/** 文件大小格式化（全站唯一一份：附件、存储、商城、备份、知识库都走这里，别再各写各的档位） */
 export function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes}B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`
+  const n = Number(bytes) || 0
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  if (n < 1024 ** 3) return `${(n / 1024 / 1024).toFixed(1)} MB`
+  return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`
 }

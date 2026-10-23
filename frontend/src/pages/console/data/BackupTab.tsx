@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { api } from '../../../api/client'
 import { Database, AlertTriangle } from 'lucide-react'
 import { useT } from '../../../i18n/I18nContext'
+import { formatFileSize } from '../../../utils/format'
 
 export default function BackupTab() {
   const t = useT()
@@ -52,12 +53,6 @@ export default function BackupTab() {
   }, [])
 
   useEffect(() => { loadBackupInfo(); loadLocalBackups() }, [loadBackupInfo, loadLocalBackups])
-
-  const formatBytes = (n: number) => {
-    if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
-    if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`
-    return `${n} B`
-  }
 
   const handleRestoreLocal = async (filename: string) => {
     if (!confirm(t('admin:restoreWarning'))) return
@@ -255,7 +250,7 @@ export default function BackupTab() {
                 <Database size={16} className="text-textSecondary shrink-0" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm text-textPrimary truncate">{b.name}</div>
-                  <div className="text-xs text-textMuted">{formatBytes(b.size_bytes)} · {new Date(b.mtime).toLocaleString()}</div>
+                  <div className="text-xs text-textMuted">{formatFileSize(b.size_bytes)} · {new Date(b.mtime).toLocaleString()}</div>
                 </div>
                 <button
                   onClick={() => handleRestoreLocal(b.name)}

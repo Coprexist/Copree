@@ -6,6 +6,7 @@ import { STATE_BADGE_COLORS } from '../constants'
 import Toggle from '../components/Toggle'
 import { useT, useLang } from '../i18n/I18nContext'
 import { fmtDate, fmtDateTime } from '../utils/time'
+import { formatFileSize } from '../utils/format'
 import { getStatusTextStyle } from '../utils/statusColor.tsx'
 import StatusColorPicker from '../components/shared/StatusColorPicker'
 import {
@@ -645,12 +646,6 @@ export default function AgentDetailPage() {
     }
   }
 
-  const formatSize = (bytes: number) => {
-    if (bytes < 1024) return `${bytes} B`
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-    return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-  }
-
   if (loading) {
     return (
       <div className="h-full flex items-center justify-center bg-canvas">
@@ -1093,7 +1088,7 @@ export default function AgentDetailPage() {
                 <div className="mb-4">
                   <div className="flex justify-between text-xs mb-1.5">
                     <span className="text-textSecondary">
-                      {t('agentDetail:storageUsed')} {formatSize(storage.total_size)} / {storage.quota_mb}MB
+                      {t('agentDetail:storageUsed')} {formatFileSize(storage.total_size)} / {storage.quota_mb}MB
                     </span>
                     <span className={`font-medium ${
                       storage.usage_percent > 90 ? 'text-rose-400' :
@@ -1126,7 +1121,7 @@ export default function AgentDetailPage() {
                   </div>
                   <div className="flex-1 px-3 py-2 rounded-control bg-canvas border border-border text-center">
                     <div className="text-textMuted text-xs">{t('agentDetail:totalSize')}</div>
-                    <div className="text-textPrimary font-semibold">{formatSize(storage.total_size)}</div>
+                    <div className="text-textPrimary font-semibold">{formatFileSize(storage.total_size)}</div>
                   </div>
                   <div className="flex-1 px-3 py-2 rounded-control bg-canvas border border-border text-center">
                     <div className="text-textMuted text-xs">{t('agentDetail:quotaLabel')}</div>
@@ -1145,7 +1140,7 @@ export default function AgentDetailPage() {
                         >
                           {f.name}
                         </button>
-                        <span className="text-textMuted shrink-0 mr-2">{formatSize(f.size)}</span>
+                        <span className="text-textMuted shrink-0 mr-2">{formatFileSize(f.size)}</span>
                         <button
                           onClick={() => handleOpenDeleteConfirm(f)}
                           className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-rose-500/10 text-textMuted hover:text-rose-400 transition-all"

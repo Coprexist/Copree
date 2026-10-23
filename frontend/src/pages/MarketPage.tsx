@@ -17,6 +17,7 @@ import { api } from '../api/client'
 import { useT } from '../i18n/I18nContext'
 import { Dialog, PageHeader } from '../components/ui'
 import MarketGithubTab from '../components/MarketGithubTab'
+import { formatFileSize } from '../utils/format'
 
 interface MarketItem {
   id: number
@@ -54,7 +55,6 @@ interface GithubItem {
 
 type Tab = 'local' | 'github'
 
-const fmtSize = (n: number) => n > 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1024))}KB`
 const fmtDate = (s: string | null | undefined) => s ? s.slice(0, 16).replace('T', ' ') : '—'
 
 export default function MarketPage() {
@@ -363,7 +363,7 @@ export default function MarketPage() {
               )}
               <div className="rounded-control bg-elevated px-3 py-2">
                 <div className="text-textMuted">包大小</div>
-                <div className="text-textPrimary mt-0.5">{fmtSize(it.package_size)}</div>
+                <div className="text-textPrimary mt-0.5">{formatFileSize(it.package_size)}</div>
               </div>
               <div className="rounded-control bg-elevated px-3 py-2">
                 <div className="text-textMuted">来源</div>

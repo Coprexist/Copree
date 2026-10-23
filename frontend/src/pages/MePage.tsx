@@ -6,7 +6,7 @@ import { api } from '../api/client'
 import { Dialog, PageShell } from '../components/ui'
 import ExternalLinkSafe from '../components/ExternalLinkSafe'
 import { AI_TYPE_LABEL } from '../constants'
-import { fmtTokenNum, cacheHitRatePct } from '../utils/format'
+import { fmtTokenNum, cacheHitRatePct, formatFileSize } from '../utils/format'
 import { NOTICE_TEXT_CLASS, useNotice } from '../hooks/useNotice'
 import { getStatusTextStyle, BG_SURFACE_LIGHT, BG_SURFACE_DARK } from '../utils/statusColor'
 import StatusColorPicker from '../components/shared/StatusColorPicker'
@@ -51,12 +51,6 @@ function StatCard({ icon, value, label, onClick, bg }: {
       <div className="text-3xs text-textMuted mt-0.5">{label}</div>
     </button>
   )
-}
-
-function formatSize(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
 export default function MePage() {
@@ -420,7 +414,7 @@ export default function MePage() {
           />
           <StatCard
             icon={<HardDrive size={18} className="text-accent-400" />}
-            value={stats ? formatSize(stats.storage_used) : '...'}
+            value={stats ? formatFileSize(stats.storage_used) : '...'}
             label={t('me:storageUsedCard')}
             bg="bg-accent-500/5"
             onClick={() => navigate('/me/storage')}

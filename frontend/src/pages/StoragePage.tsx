@@ -8,6 +8,7 @@ import { HardDrive, FileText, Loader2, ArrowLeft, Forward, Eye } from 'lucide-re
 import { api } from '../api/client'
 import { useT } from '../i18n/I18nContext'
 import FilePreviewModal from '../components/FilePreviewModal'
+import { formatFileSize } from '../utils/format'
 
 interface FileItem {
   id: number
@@ -18,12 +19,6 @@ interface FileItem {
   is_forwarded?: boolean
   owner_type?: string
   owner_id?: number
-}
-
-function formatSize(bytes: number): string {
-  if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(1)} MB`
-  if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`
-  return `${bytes} B`
 }
 
 export default function StoragePage() {
@@ -98,7 +93,7 @@ export default function StoragePage() {
             <span className="text-sm font-medium text-textPrimary">用量</span>
           </div>
           <div className="flex items-center justify-between text-xs text-textMuted mb-2">
-            <span>{t('me:used')} {formatSize(storage.total_used)}</span>
+            <span>{t('me:used')} {formatFileSize(storage.total_used)}</span>
             <span className={storage.usage_percent > 90 ? 'text-rose-400 font-medium' : ''}>
               {storage.usage_percent}%
             </span>
@@ -149,7 +144,7 @@ export default function StoragePage() {
                     {name}
                     {f.is_forwarded && <span className="text-3xs text-accent-400 ml-1.5">转发</span>}
                   </span>
-                  <span className="text-3xs text-textMuted shrink-0">{formatSize(f.size)}</span>
+                  <span className="text-3xs text-textMuted shrink-0">{formatFileSize(f.size)}</span>
                   <button
                     onClick={(e) => { e.stopPropagation(); openForward(f); }}
                     className="p-1 rounded hover:bg-primary-500/10 text-textMuted hover:text-primary-400 transition-colors opacity-0 group-hover:opacity-100"

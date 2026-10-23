@@ -9,6 +9,10 @@
 ## [Unreleased]
 
 ### 🐛 修复
+- **知识库面板的输入框一片白底**：面板用了并不存在的 `.input` 类，而全站表单控件的唯一来源是
+  `.field`（多行 `textarea.field`），于是标题/说明/正文三个框都是浏览器原生样式。顺手把面板的三个
+  弹窗统一换成 `Modal`（标题栏、ESC、点遮罩关闭都由它提供，不再手写遮罩+卡片），并把 9 处手抄的
+  文件大小格式化收敛到 `utils/format.formatFileSize`（补上 GB 档）。
 - **配置保存后「热更新没生效」**：`app_config_service._refresh_settings` 以前是「新造一份
   `Settings()` 再替换 `app.config.settings`」——全仓几十处 `from app.config import settings`
   拿到的是旧对象的引用，DB 覆盖写进去了、界面显示已保存，正在跑的进程里这些模块读的还是旧值，
