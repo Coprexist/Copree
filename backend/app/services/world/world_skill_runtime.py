@@ -63,6 +63,74 @@ FORBIDDEN_BUILTINS = {
     "memoryview", "exit", "quit", "copyright", "credits", "license",
 }
 
+# ── 能力清单（唯一一份：manifest 校验、文档、错误提示都从这里取）──
+PERMISSIONS = frozenset({
+    "file:list", "file:read", "file:write", "file:delete",
+    "world:read", "world:update",
+    "data:read", "data:write",
+    "group:send",
+})
+
+
+def validate_manifest(m) -> tuple[bool, str]:
+    """manifest 结构校验 —— 写入与加载共用这一份判定，返回 (ok, error)。
+
+    为什么单列：写入时能拦下的错误（名字含连字符、权限拼错），加载时只会让技能"消失"；
+    两边各写一套判定，必然一边松一边紧，而失败又是静默的。
+    """
+    if not isinstance(m, dict):
+        return False, "manifest 必须是 JSON 对象"
+    name = str(m.get("name") or "").strip()
+    if not name:
+        if isinstance(m.get("skills"), list):
+            return False, "旧格式：一个 manifest 里写了一列技能；应每个技能一个目录（skills/<name>/manifest.json + code.py）"
+        return False, "缺 name"
+    if not name.replace("_", "").isalnum():
+        return False, f"name 非法：{name}（只能字母、数字、下划线）"
+    if not str(m.get("description") or "").strip():
+        return False, "缺 description（模型靠它决定何时调用）"
+    args = m.get("arguments")
+    if args is not None:
+        if not isinstance(args, dict):
+            return False, "arguments 必须是 JSON Schema 对象"
+        if args.get("type") not in (None, "object"):
+            return False, "arguments.type 只能是 object"
+        if args.get("properties") is not None and not isinstance(args.get("properties"), dict):
+            return False, "arguments.properties 必须是对象"
+    perms = m.get("permissions") or []
+    if not isinstance(perms, list):
+        return False, "permissions 必须是数组"
+    unknown = [str(p) for p in perms if str(p) not in PERMISSIONS]
+    if unknown:
+        return False, "未知权限：" + "、".join(unknown) + "（可选：" + "、".join(sorted(PERMISSIONS)) + "）"
+    types = m.get("types")
+    if types is not None and not isinstance(types, list):
+        return False, 'types 必须是数组（省略或 ["*"] = 所有类型通用）'
+    return True, ""
+
+
+def validate_skill_code(code: str) -> tuple[bool, str]:
+    """skill 代码校验：语法 + import 白名单 + 必须 async def run(args, ctx)。
+
+    与执行期同一套规则（_check_imports / skill_runner），差别只是提前到写入时——
+    否则居民那边只会收到「沙箱里炸了」，看不出是 import 越界。
+    """
+    try:
+        tree = ast.parse(code or "")
+    except SyntaxError as e:
+        return False, f"语法错误：{e}"
+    try:
+        _check_imports(code or "", "code.py")
+    except SkillSecurityError as e:
+        return False, str(e)
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "run":
+            return False, "run 必须写成 async def run(args, ctx)"
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "run":
+            if len(node.args.args) < 2:
+                return False, "run 需要两个参数：run(args, ctx)"
+            return True, ""
+    return False, "缺 async def run(args, ctx)"
 
 @dataclass
 class SkillDef:
@@ -93,29 +161,41 @@ def _parse_types(raw) -> list[str] | None:
     return types
 
 
-def _load_manifest(dir_path: Path, scope: str) -> SkillDef | None:
+def _load_manifest_ex(dir_path: Path, scope: str) -> tuple[SkillDef | None, str]:
+    """读一个技能目录 → (SkillDef, "") 或 (None, 跳过原因)。
+
+    加载与 list_world_skills_detail 共用：以前跳过时只有一行日志，造物主自己看不到
+    「我颁布了什么、哪条没加载」，44 世界十套技能全灭就是这样被忽略的。
+    """
     manifest_path = dir_path / "manifest.json"
     code_path = dir_path / "code.py"
-    if not (manifest_path.exists() and code_path.exists()):
-        return None
+    if not manifest_path.exists():
+        return None, "缺 manifest.json"
+    if not code_path.exists():
+        return None, "缺 code.py"
     try:
         m = json.loads(manifest_path.read_text(encoding="utf-8"))
-        name = str(m.get("name") or "").strip()
-        if not name or not name.replace("_", "").isalnum():
-            logger.warning(f"📦 skill manifest 非法名字: {manifest_path}")
-            return None
-        return SkillDef(
-            name=name,
-            description=str(m.get("description") or "").strip(),
-            arguments=m.get("arguments") or {"type": "object", "properties": {}},
-            permissions=[str(p) for p in (m.get("permissions") or [])],
-            code_path=code_path,
-            scope=scope,
-            types=_parse_types(m.get("types")),
-        )
     except (json.JSONDecodeError, OSError) as e:
-        logger.warning(f"📦 skill manifest 解析失败 {manifest_path}: {e}")
-        return None
+        return None, f"manifest 解析失败：{e}"
+    ok, err = validate_manifest(m)
+    if not ok:
+        return None, err
+    return SkillDef(
+        name=str(m["name"]).strip(),
+        description=str(m.get("description") or "").strip(),
+        arguments=m.get("arguments") or {"type": "object", "properties": {}},
+        permissions=[str(p) for p in (m.get("permissions") or [])],
+        code_path=code_path,
+        scope=scope,
+        types=_parse_types(m.get("types")),
+    ), ""
+
+
+def _load_manifest(dir_path: Path, scope: str) -> SkillDef | None:
+    skill, err = _load_manifest_ex(dir_path, scope)
+    if skill is None:
+        logger.warning(f"📦 skill 跳过 {dir_path}: {err}")
+    return skill
 
 
 def list_ai_skills() -> list[SkillDef]:
@@ -137,6 +217,83 @@ def list_world_skills(world_id: int) -> list[SkillDef]:
         s for d in sorted(skills_dir.iterdir())
         if d.is_dir() and (s := _load_manifest(d, "world")) is not None
     ]
+
+def list_world_skills_detail(world_id: int) -> dict:
+    """造物主视角的技能清单：已加载的 + 被跳过的目录与原因。
+
+    与 list_world_skills 同一份加载判定（_load_manifest_ex），区别只在把失败原因带出来——
+    "居民为什么没有这个工具"要能当场回答，不能只剩一行后端日志。
+    """
+    skills_dir = world_dir(world_id) / "skills"
+    loaded: list[dict] = []
+    skipped: list[dict] = []
+    if skills_dir.is_dir():
+        for d in sorted(skills_dir.iterdir()):
+            if d.is_file() and d.name in ("manifest.json", "code.py"):
+                # 旧世界常见错法：两个文件直接放在 skills/ 根下，加载器只认子目录
+                skipped.append({"dir": f"skills/{d.name}", "reason": "技能要放进 skills/<name>/ 子目录"})
+                continue
+            if not d.is_dir() or d.name.startswith("__"):
+                continue
+            skill, err = _load_manifest_ex(d, "world")
+            if skill is None:
+                skipped.append({"dir": f"skills/{d.name}", "reason": err})
+                continue
+            loaded.append({
+                "name": skill.name,
+                "description": skill.description,
+                "parameters": list(((skill.arguments or {}).get("properties") or {})),
+                "permissions": skill.permissions,
+                "types": skill.types or ["*"],
+            })
+    return {"success": True, "skills": loaded, "skipped": skipped}
+
+
+def write_world_skill(world_id: int, *, name: str, description: str, code: str,
+                      arguments: dict | None = None, permissions: list | None = None,
+                      types: list | None = None) -> dict:
+    """颁布/更新一个世界侧技能：一次调用写 manifest + code，写完立即按加载器规则回读。
+
+    写入走 world_file_service（与世界文件同一套路径/扩展名/大小校验），所以颁布者不必知道
+    data/worlds/<id> 在哪；校验与加载同源（validate_manifest / validate_skill_code），
+    写进去的东西一定加载得出来，不会出现「写了但居民看不见」。
+    """
+    from app.services.world import world_file_service as fs
+
+    spec = {
+        "name": str(name or "").strip(),
+        "description": str(description or "").strip(),
+        "arguments": arguments if arguments is not None else {"type": "object", "properties": {}},
+        "permissions": [str(p) for p in (permissions or [])],
+        "types": [str(t) for t in (types or []) if str(t).strip()] or ["*"],
+    }
+    ok, err = validate_manifest(spec)
+    if not ok:
+        return {"success": False, "error": err}
+    ok, err = validate_skill_code(code or "")
+    if not ok:
+        return {"success": False, "error": err}
+
+    rel_dir = f"skills/{spec['name']}"
+    try:
+        fs.write_file(world_id, f"{rel_dir}/manifest.json",
+                      json.dumps(spec, ensure_ascii=False, indent=2) + "\n")
+        fs.write_file(world_id, f"{rel_dir}/code.py", (code or "").rstrip("\n") + "\n")
+    except ValueError as e:  # 越界路径 / 扩展名 / 大小：原样回给颁布者
+        return {"success": False, "error": str(e)}
+
+    skill, load_err = _load_manifest_ex(world_dir(world_id) / "skills" / spec["name"], "world")
+    if skill is None:  # 写进去却读不回来：平台自身问题，如实报，别假装成功
+        return {"success": False, "error": f"已写入但加载失败：{load_err}", "path": rel_dir}
+    return {
+        "success": True,
+        "result": f"已颁布 skills/{skill.name}/（居民可直接工具调用）",
+        "path": rel_dir,
+        "name": skill.name,
+        "permissions": skill.permissions,
+        "types": skill.types or ["*"],
+        "next": f"用 run_world_skill 传 name={skill.name} 试跑一次",
+    }
 
 
 def _to_tools(skills: list[SkillDef], world_id: int | None = None) -> list[dict]:

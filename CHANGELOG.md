@@ -112,6 +112,12 @@
   世界侧技能，这是它唯一的验证手段，提示词里把「先试跑再颁布」列为收工条件。用例
   `tests/test_world_skill_delivery.py`（4 条：文档枚举与 DOC_DEFS 同源、参考文档可读、试跑失败
   自解释、折叠行文案）。
+- **颁布技能不必手写两个文件**：`write_world_skill` 一次调用写全 `manifest.json` + `code.py`，
+  写入前用与加载器同一份判定（`validate_manifest` / `validate_skill_code`：名字、权限、
+  JSON Schema、import 白名单、`async def run`），写完回读，回「已注册」或缺什么；
+  `list_world_skills` 给造物主一份「我到底颁布了什么」，被跳过的目录带原因（旧布局、旧格式、
+  缺 `code.py`、名字非法）。`_load_manifest` 拆成带原因的 `_load_manifest_ex`，加载、写入、
+  清单三处共用同一判定——44 世界十套技能全灭这种静默失败，现在一眼可查。
 - **AI 知识库：看得见、配得动**：AI 以前只能靠对话里零散说的信息，想让它熟悉某个平台/
   项目就得反复灌提示词。现在每个 AI 有自己的知识库（`agent_knowledge` + 文件空间
   `data/agents/{id}/knowledge/`）：AI 详情页新增「知识库」页签，能新增/编辑/预览/删除文档、

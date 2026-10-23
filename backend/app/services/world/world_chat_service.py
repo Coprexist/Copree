@@ -81,7 +81,7 @@ FORCED_PROMPT_SEGMENTS = [
     "③ 同一份状态：skill、世界程序、页面读写同一批世界数据 key——各存一份就是两个世界，AI 与玩家永远对不上。\n"
     "④ 规则在服务端：回合、合法性、结算都在世界侧（skill 或 main.py）判定，前端只展示；校验放前端等于让居民自己给自己发牌。\n"
     "⑤ 按身份分层：用 manifest.types 给不同角色/类型不同的能力，别给全体一份万能技能；AI 从群聊进来落到该群绑定的类型，直接绑定世界落到自己的类型。\n"
-    "颁布前必须试跑：写完用 run_world_skill 实跑关键 skill（你自己不持有世界侧技能，这是唯一验证手段），跑不起来的技能比没有更糟。写法与示例查 read_manual doc=world-skill；skill 放 data/worlds/{id}/skills/<name>/（manifest.json + code.py）。",
+    "颁布与验证：用 write_world_skill 一次写全 manifest+code（写入即校验，回「已注册」或缺什么，别手写两个文件）；再用 run_world_skill 实跑关键技能——你自己不持有世界侧技能，这是唯一验证手段。居民拿不到工具时用 list_world_skills 看哪个目录被跳过；写法与示例查 read_manual doc=world-skill。",
     # 不同场景进入世界的 index 响应
     "\n【入口场景响应】依据进入场景，为同一个世界做不同的 index 响应：从群聊进入 / 从私信进入 / AI 直接进入，前端首页可以不同（如从私信进入 = 直接打开世界中与 AI 的对话的前端响应，而不是完整世界主页）。入口场景由平台注入变量（WORLD_ID / GROUP_ID / 入口类型），世界代码据此分发。",
     # 侧边栏约定

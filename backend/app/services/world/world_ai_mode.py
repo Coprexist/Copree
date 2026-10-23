@@ -39,7 +39,7 @@ ACTION_TOOLS: dict[str, frozenset[str]] = {
     "delete": frozenset({"file_delete"}),
     "modify": frozenset({
         "file_write", "file_edit", "file_move", "file_copy",
-        "apply_world_block", "run_world_code",
+        "apply_world_block", "run_world_code", "write_world_skill",
         "update_group_types", "update_trigger_mode", "update_world_info",
         "set_group_member_role", "kick_group_member",
     }),
@@ -55,7 +55,7 @@ ACTION_ASKS = {
 
 # 只读 / 无副作用工具：明列，其余未登记的一律按「改动机制」（保守默认，安全优先）
 SAFE_TOOLS = frozenset({
-    "view_api_doc", "view_world_block", "list_world_blocks",
+    "view_api_doc", "view_world_block", "list_world_blocks", "list_world_skills",
     "file_list", "file_read", "file_grep",
     "get_bound_groups", "get_group_messages", "get_group_types",
     "list_group_members", "send_group_message", "suggest_questions",
