@@ -146,6 +146,11 @@ class KnowledgeUpdateRequest(BaseModel):
     content: str | None = None
 
 
+class KnowledgeMoveRequest(BaseModel):
+    """把文档移到别处 / 改名：相对 knowledge/ 的路径，只给目录则保留原文件名"""
+    path: str = Field(..., min_length=1, max_length=200)
+
+
 class AgentStateRequest(BaseModel):
     """切换状态请求"""
     target_state: str = Field(..., description="active|dnd|inactive|blocked")

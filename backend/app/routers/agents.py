@@ -17,16 +17,15 @@ from app.schemas.agent import (
     AgentConfigHistoryResponse,
     ApplyPresetRequest,
     KnowledgeCreateRequest,
+    KnowledgeMoveRequest,
     KnowledgeUpdateRequest,
     WorkspaceFileUpdate,
     WorkspaceResponse,
 )
-from app.schemas.opencli import OpenCLIExecuteRequest, OpenCLIExecuteResponse
+from app.schemas.opencli import OpenCLIExecuteRequest
 from app.services.content.opencli_service import execute_opencli
-from app.chat.delivery import (
-    check_unread,
-    get_pending_messages,
-)
+from app.services.agent import knowledge_service as kb
+from app.chat.delivery import check_unread
 from app.ai.group_logic import (
     pause_notifications,
     resume_and_fetch,
@@ -899,9 +898,8 @@ async def list_agent_knowledge(
 ):
     """AI 知识库清单（含未启用条目，界面要显示开关）"""
     await _require_agent_access(agent_id, current_user, db)
-    from app.services.agent.knowledge_service import list_entries
 
-    return {"items": await list_entries(db, agent_id)}
+    return {"items": await kb.list_entries(db, agent_id)}
 
 
 @router.post("/{agent_id}/knowledge")
@@ -913,12 +911,37 @@ async def add_agent_knowledge(
 ):
     """新增一份知识库文档（正文落它的文件空间，元数据落库）"""
     await _require_agent_access(agent_id, current_user, db)
-    from app.services.agent.knowledge_service import add_entry
 
     try:
-        entry = await add_entry(
+        entry = await kb.add_entry(
             db, agent_id, title=req.title, summary=req.summary or "",
             filename=req.filename, content=req.content,
+        )
+        await db.commit()
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    return entry
+
+
+@router.post("/{agent_id}/knowledge/upload")
+async def upload_agent_knowledge(
+    agent_id: int,
+    file: UploadFile = File(...),
+    title: str | None = Query(None),
+    summary: str = Query(""),
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """上传一份文本文件（标题缺省取文件名）——与「新增」共用同一条入库路径。
+
+    路由必须排在 /knowledge/{knowledge_id} 之前：否则后者的 int 校验会先接住 "upload"。
+    """
+    await _require_agent_access(agent_id, current_user, db)
+
+    try:
+        entry = await kb.add_entry_from_upload(
+            db, agent_id, filename=file.filename or "", data=await file.read(),
+            title=title, summary=summary,
         )
         await db.commit()
     except ValueError as e:
@@ -935,10 +958,9 @@ async def get_agent_knowledge(
 ):
     """读一份知识库文档（界面预览用）"""
     await _require_agent_access(agent_id, current_user, db)
-    from app.services.agent.knowledge_service import read_entry
 
     try:
-        return await read_entry(db, agent_id, knowledge_id)
+        return await kb.read_entry(db, agent_id, knowledge_id)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
@@ -953,13 +975,31 @@ async def update_agent_knowledge(
 ):
     """改标题/摘要/开关，或重写正文"""
     await _require_agent_access(agent_id, current_user, db)
-    from app.services.agent.knowledge_service import update_entry
 
     try:
-        entry = await update_entry(
+        entry = await kb.update_entry(
             db, agent_id, knowledge_id, title=req.title, summary=req.summary,
             enabled=req.enabled, content=req.content,
         )
+        await db.commit()
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    return entry
+
+
+@router.post("/{agent_id}/knowledge/{knowledge_id}/move")
+async def move_agent_knowledge(
+    agent_id: int,
+    knowledge_id: int,
+    req: KnowledgeMoveRequest,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """把文档移到别处或改名（正文文件跟着挪，同名不覆盖）"""
+    await _require_agent_access(agent_id, current_user, db)
+
+    try:
+        entry = await kb.move_entry(db, agent_id, knowledge_id, req.path)
         await db.commit()
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -975,10 +1015,9 @@ async def delete_agent_knowledge(
 ):
     """删一份知识库文档（元数据 + 文件）"""
     await _require_agent_access(agent_id, current_user, db)
-    from app.services.agent.knowledge_service import delete_entry
 
     try:
-        await delete_entry(db, agent_id, knowledge_id)
+        await kb.delete_entry(db, agent_id, knowledge_id)
         await db.commit()
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))

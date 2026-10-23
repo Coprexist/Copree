@@ -987,6 +987,29 @@ async def ai_write_file(db: AsyncSession, agent_id: int, file_path: str,
     return metadata
 
 
+async def ai_move_file(db: AsyncSession, agent_id: int, old_path: str, new_path: str) -> None:
+    db = _ensure_repo(db)
+    """AI 文件换位置 / 改名（同一文件空间内）。
+
+    files 表的登记行是文件列表与存储占用的唯一来源：只在磁盘上 rename，
+    文件会从 file_list 与存储页里"消失"，所以文件与登记行必须一起挪。
+    """
+    old_stored = ai_stored_path(agent_id, old_path)
+    new_stored = ai_stored_path(agent_id, new_path)
+    old_physical = _get_physical_path(old_stored)
+    new_physical = _get_physical_path(new_stored)
+    os.makedirs(os.path.dirname(new_physical), exist_ok=True)
+    if os.path.exists(old_physical):
+        os.rename(old_physical, new_physical)
+
+    result = await db.execute(select(FileMetadata).where(FileMetadata.path == old_stored))
+    metadata = result.scalar_one_or_none()
+    if metadata is not None:
+        metadata.path = new_stored
+        await db.flush()
+        await notify_file_changed(db, metadata.id, "modified", "ai", agent_id)
+
+
 async def ai_list_files(db: AsyncSession, agent_id: int, path: str = "/") -> list[dict]:
     """AI 列出目录（回显 AI 视角的路径，不带 agents/{id}/ 前缀）"""
     files = await list_files(db, ai_stored_path(agent_id, path) + "/", "ai", agent_id)

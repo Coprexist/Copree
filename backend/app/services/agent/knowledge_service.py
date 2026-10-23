@@ -17,6 +17,9 @@ from sqlalchemy import select
 
 from app.models.agent_knowledge import AgentKnowledge
 from app.paths import agent_dir
+from app.services.content.file_service import (
+    ai_delete_file, ai_move_file, ai_stored_path, ai_view_path, ai_write_file,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,17 +46,20 @@ def _slug(name: str) -> str:
 
 
 def _safe_rel(agent_id: int, rel: str) -> str:
-    """相对路径校验：只能落在本 AI 的 knowledge/ 内，且是文本后缀"""
-    rel = (rel or "").strip().lstrip("/")
-    if not rel or ".." in rel.split("/") or rel.startswith("."):
+    """相对路径校验：只能落在本 AI 的 knowledge/ 内，且是文本后缀
+
+    路径换算不自己写：file_service.ai_stored_path 是 AI 文件空间的唯一入口，
+    它已处理「开头的 / 按文件空间根理解」与「爬出自己空间当场拒绝」。
+    这里只补两条它不管的规矩：必须仍在 knowledge/ 下、必须是文本后缀。
+    """
+    view = ai_view_path(agent_id, ai_stored_path(agent_id, f"{KNOWLEDGE_DIR}/{rel}"))
+    prefix = f"{KNOWLEDGE_DIR}/"
+    inner = view[len(prefix):] if view.startswith(prefix) else ""
+    if not inner:
         raise ValueError("非法路径")
-    root = knowledge_root(agent_id).resolve()
-    target = (root / rel).resolve()
-    if target != root and root not in target.parents:
-        raise ValueError("非法路径")
-    if target.suffix.lower() not in TEXT_SUFFIXES:
+    if Path(inner).suffix.lower() not in TEXT_SUFFIXES:
         raise ValueError("知识库只收文本文件（md / txt / json / csv / yaml / html / 代码）")
-    return str(target.relative_to(root))
+    return inner
 
 
 def _row(entry: AgentKnowledge) -> dict:
@@ -89,30 +95,42 @@ async def get_entry(db, agent_id: int, knowledge_id: int) -> AgentKnowledge | No
     )).scalar_one_or_none()
 
 
-async def add_entry(db, agent_id: int, *, title: str, summary: str = "",
-                    filename: str | None = None, content: str) -> dict:
-    """新增一份文档：写文件 + 落元数据。同名自动加 -2/-3，不覆盖已有文档。"""
-    content = content or ""
-    raw = content.encode("utf-8")
+def _unique_rel(agent_id: int, rel: str) -> str:
+    """同名不覆盖：目标已存在就试 a-2.md、a-3.md…（新增与移动共用这一条规矩）"""
+    root = knowledge_root(agent_id)
+    candidate = rel
+    i = 2
+    p = Path(rel)
+    while (root / candidate).exists():
+        # 保留父目录：带子目录的路径不能塌回根目录（with_name 而不是裸拼文件名）
+        candidate = str(p.with_name(f"{p.stem}-{i}{p.suffix}"))
+        i += 1
+    return candidate
+
+
+def _text_bytes(content: str) -> bytes:
+    """正文校验（新增与改正文共用）：非空、不超上限，返回 UTF-8 字节数"""
+    raw = (content or "").encode("utf-8")
     if not raw.strip():
         raise ValueError("文档内容不能为空")
     if len(raw) > MAX_BYTES:
         raise ValueError("文档太大（上限 2MB）")
+    return raw
+
+
+async def add_entry(db, agent_id: int, *, title: str, summary: str = "",
+                    filename: str | None = None, content: str) -> dict:
+    """新增一份文档：写文件 + 落元数据。同名自动加 -2/-3，不覆盖已有文档。"""
+    content = content or ""
+    raw = _text_bytes(content)
 
     name = _slug(filename or title)
     if not Path(name).suffix:
         name += ".md"
-    root = knowledge_root(agent_id)
-    rel = name
-    i = 2
-    while (root / rel).exists():
-        p = Path(name)
-        rel = f"{p.stem}-{i}{p.suffix}"
-        i += 1
+    rel = _unique_rel(agent_id, _safe_rel(agent_id, name))
 
-    target = root / _safe_rel(agent_id, rel)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(content, encoding="utf-8")
+    # 正文交给文件服务写：它同时登记 files 行，AI 的 file_list 与存储页才看得见这份文档
+    await ai_write_file(db, agent_id, f"{KNOWLEDGE_DIR}/{rel}", content)
 
     entry = AgentKnowledge(
         agent_id=int(agent_id),
@@ -130,6 +148,36 @@ async def add_entry(db, agent_id: int, *, title: str, summary: str = "",
     return _row(entry)
 
 
+# 上传的文本按这两种编码解：UTF-8（含 BOM）是主流，GB18030 兜住 Windows 中文环境存出来的文件
+UPLOAD_ENCODINGS = ("utf-8-sig", "gb18030")
+
+
+def _decode(raw: bytes, filename: str) -> str:
+    for enc in UPLOAD_ENCODINGS:
+        try:
+            return raw.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    raise ValueError(f"《{filename}》不是文本文件（只收 UTF-8 / GB18030 文本）")
+
+
+async def add_entry_from_upload(db, agent_id: int, *, filename: str, data: bytes,
+                                title: str | None = None, summary: str = "") -> dict:
+    """上传一份文本文件：解码后走 add_entry——落文件与落元数据的规矩只在 add_entry 里有一份"""
+    if not data:
+        raise ValueError("上传的文件是空的")
+    if len(data) > MAX_BYTES:
+        raise ValueError("文档太大（上限 2MB）")
+    content = _decode(data, filename or "上传的文档")
+    return await add_entry(
+        db, agent_id,
+        title=(title or "").strip(),
+        summary=summary or "",
+        filename=filename,
+        content=content,
+    )
+
+
 async def update_entry(db, agent_id: int, knowledge_id: int, *,
                        title: str | None = None, summary: str | None = None,
                        enabled: bool | None = None, content: str | None = None) -> dict:
@@ -143,13 +191,32 @@ async def update_entry(db, agent_id: int, knowledge_id: int, *,
     if enabled is not None:
         entry.enabled = bool(enabled)
     if content is not None:
-        raw = content.encode("utf-8")
-        if not raw.strip():
-            raise ValueError("文档内容不能为空")
-        if len(raw) > MAX_BYTES:
-            raise ValueError("文档太大（上限 2MB）")
-        (knowledge_root(agent_id) / entry.path).write_text(content, encoding="utf-8")
+        raw = _text_bytes(content)
+        await ai_write_file(db, agent_id, f"{KNOWLEDGE_DIR}/{entry.path}", content)
         entry.size = len(raw)
+    await db.flush()
+    await db.refresh(entry)
+    return _row(entry)
+
+
+async def move_entry(db, agent_id: int, knowledge_id: int, new_path: str) -> dict:
+    """换位置 / 改名：正文文件挪过去，元数据跟着改。
+
+    新位置只写目录（如 "平台"）时保留原文件名；同名不覆盖（自动 -2），
+    路径校验与新增同一套（_safe_rel），所以爬不出 knowledge/。
+    """
+    entry = await get_entry(db, agent_id, knowledge_id)
+    if entry is None:
+        raise ValueError("文档不存在")
+    raw = str(new_path or "").strip().lstrip("/").rstrip("/")
+    if not Path(raw).suffix:
+        # 只给了目录：文件名沿用原来的
+        raw = f"{raw}/{Path(entry.path).name}" if raw else Path(entry.path).name
+    rel = _safe_rel(agent_id, raw)
+    if rel != entry.path:
+        rel = _unique_rel(agent_id, rel)
+        await ai_move_file(db, agent_id, f"{KNOWLEDGE_DIR}/{entry.path}", f"{KNOWLEDGE_DIR}/{rel}")
+        entry.path = rel
     await db.flush()
     await db.refresh(entry)
     return _row(entry)
@@ -160,9 +227,13 @@ async def delete_entry(db, agent_id: int, knowledge_id: int) -> None:
     if entry is None:
         raise ValueError("文档不存在")
     try:
-        (knowledge_root(agent_id) / entry.path).unlink(missing_ok=True)
-    except OSError as e:
-        logger.warning("删除知识库文件失败 %s: %s", entry.path, e)
+        await ai_delete_file(db, agent_id, f"{KNOWLEDGE_DIR}/{entry.path}")
+    except ValueError:
+        # 早于"文件服务写入"的文档没有 files 登记行，直接删文件
+        try:
+            (knowledge_root(agent_id) / _safe_rel(agent_id, entry.path)).unlink(missing_ok=True)
+        except (OSError, ValueError) as e:
+            logger.warning("删除知识库文件失败 %s: %s", entry.path, e)
     await db.delete(entry)
     await db.flush()
 

@@ -68,6 +68,90 @@ async def test_index_lists_only_enabled_documents(migrated_db):
     assert full["content"] == "世界的入口是群"
 
 
+async def test_upload_decodes_text_and_names_itself(migrated_db):
+    """上传走的是同一条入库路径：GB18030 的中文文件也解得开，标题缺省取文件名。"""
+    from app.database import async_session
+    from app.paths import agent_dir
+    from app.services.agent.knowledge_service import add_entry_from_upload, read_entry
+
+    async with async_session() as db:
+        await _seed(db)
+        content = "# 平台说明" + chr(10) + "群视界怎么玩"
+        entry = await add_entry_from_upload(
+            db, AGENT_ID, filename="平台说明.md", data=content.encode("gb18030"),
+        )
+        full = await read_entry(db, AGENT_ID, entry["id"])
+
+    assert entry["title"] == "平台说明" and entry["path"] == "平台说明.md"
+    assert (agent_dir(AGENT_ID) / "knowledge" / "平台说明.md").exists()
+    assert full["content"].startswith("# 平台说明") and "群视界怎么玩" in full["content"]
+
+
+async def test_upload_rejects_binary_and_oversize(migrated_db):
+    """只收文本：二进制（PDF 头）与超 2MB 的文件当场拒绝，不留半个文件。"""
+    from app.database import async_session
+    from app.services.agent.knowledge_service import add_entry_from_upload, MAX_BYTES
+
+    async with async_session() as db:
+        await _seed(db)
+        for name, data in (
+            ("手册.pdf", b"%PDF-1.7" + bytes([0, 1, 2])),
+            ("大文件.md", b"a" * (MAX_BYTES + 1)),
+        ):
+            raised = False
+            try:
+                await add_entry_from_upload(db, AGENT_ID, filename=name, data=data)
+            except ValueError:
+                raised = True
+            assert raised, name
+
+
+async def test_documents_are_registered_files(migrated_db):
+    """正文是"登记在册"的普通文件：AI 的 file_list 看得到，删文档时登记行一起消失。"""
+    from app.database import async_session
+    from app.services.agent.knowledge_service import add_entry, delete_entry
+    from app.services.content.file_service import ai_list_files
+
+    async with async_session() as db:
+        await _seed(db)
+        entry = await add_entry(db, AGENT_ID, title="手册", filename="manual.md", content="正文")
+        listed = [f["path"] for f in await ai_list_files(db, AGENT_ID, "knowledge")]
+        await delete_entry(db, AGENT_ID, entry["id"])
+        after = [f["path"] for f in await ai_list_files(db, AGENT_ID, "knowledge")]
+
+    assert "knowledge/manual.md" in listed
+    assert after == []
+
+
+async def test_move_relocates_file_record_and_guards(migrated_db):
+    """移动/改名：文件与记录一起走；只给目录保留原文件名；同名不覆盖；爬不出 knowledge/。"""
+    from app.database import async_session
+    from app.paths import agent_dir
+    from app.services.agent.knowledge_service import add_entry, move_entry
+
+    async with async_session() as db:
+        await _seed(db)
+        doc_a = await add_entry(db, AGENT_ID, title="甲", filename="a.md", content="甲的正文")
+        doc_b = await add_entry(db, AGENT_ID, title="乙", filename="b.md", content="乙的正文")
+        moved = await move_entry(db, AGENT_ID, doc_b["id"], "平台/B.md")
+        by_dir = await move_entry(db, AGENT_ID, doc_b["id"], "归档")
+        clash = await move_entry(db, AGENT_ID, doc_a["id"], "归档/B.md")
+        escaped = None
+        try:
+            await move_entry(db, AGENT_ID, doc_a["id"], "../escape.md")
+        except ValueError as e:
+            escaped = str(e)
+
+    root = agent_dir(AGENT_ID) / "knowledge"
+    assert moved["path"] == "平台/B.md"
+    assert by_dir["path"] == "归档/B.md"
+    assert clash["path"] == "归档/B-2.md"          # 同名不覆盖，自动 -2
+    assert escaped                                  # 越界路径被拒
+    assert not (root / "a.md").exists() and not (root / "b.md").exists()
+    assert (root / "归档" / "B.md").read_text(encoding="utf-8") == "乙的正文"
+    assert (root / "归档" / "B-2.md").read_text(encoding="utf-8") == "甲的正文"
+
+
 async def test_delete_removes_the_file_too(migrated_db):
     """删文档 = 删元数据 + 删文件；留下孤儿文件比少一条记录更糟。"""
     from app.database import async_session

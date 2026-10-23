@@ -871,7 +871,7 @@ async def _handle_typing_indicator(...): ...
 | 目录 | 说明 |
 |------|------|
 | `services/agent/` | AI 代理服务（意愿计算、状态切换、工作区、状态栈） |
-| `services/agent/knowledge_service.py` | AI 知识库：正文落 `data/agents/{id}/knowledge/`，元数据落 `agent_knowledge`；索引与记忆索引同段注入 |
+| `services/agent/knowledge_service.py` | AI 知识库：正文经 `file_service` 写进 `data/agents/{id}/knowledge/`（登记 `files`，`file_list`/存储页可见），元数据落 `agent_knowledge`；索引与记忆索引同段注入；上传 / 移动 / 手写共用 `add_entry` / `move_entry` |
 | `services/content/` | 内容服务（文件/浏览器/对话日志/导出） |
 | `services/social/` | 社交服务（好友/搜索/DM 额度） |
 | `services/federation/` | 联邦通信（实例管理、心跳、重连、资料同步） |
