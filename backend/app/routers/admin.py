@@ -2039,6 +2039,21 @@ async def cleanup_files(
                 if url and '/download-avatar/' in url:
                     active_avatars.add(url.rsplit('/', 1)[-1])
 
+        # 安全阀：库里一张头像引用都没有、磁盘上却躺着头像——这不是「无人引用」，
+        # 是这次清理根本没看见引用（连到了测试库/空库/坏库）。照常搬会把真头像整批清空，
+        # 2026-10-23 真发生过一次：37 张头像被搬进回收站，全站头像变碎图。
+        on_disk = [f for f in os.listdir(avatar_dir)
+                   if os.path.isfile(os.path.join(avatar_dir, f))]
+        if on_disk and not active_avatars:
+            logger.warning("头像清理已拒绝：引用集为空，磁盘上却有 %d 个头像文件", len(on_disk))
+            return {
+                "cleaned_files": 0, "cleaned_refs": 0, "orphan_cleaned": 0, "trash_purged": 0,
+                "refused": True,
+                "reason": (f"库里没有任何头像引用，磁盘上却有 {len(on_disk)} 个头像文件——"
+                           "像是连到了测试库/空库，已拒绝清理（否则真实头像会被整批搬走）"),
+                "run_at": datetime.now(timezone.utc).isoformat(),
+            }
+
         now = time.time()
         for f in os.listdir(avatar_dir):
             filepath = os.path.join(avatar_dir, f)

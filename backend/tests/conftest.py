@@ -44,6 +44,10 @@ os.environ["JWT_SECRET_KEY"] = "test-secret"
 # 直接 PermissionError），而附件、脚本沙箱、插件与世界目录都从它派生。必须设在任何 app 模块
 # 导入之前 —— app.paths 在 import 时就把整套布局定下来了。
 os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="copree-test-data-")
+# 头像目录也必须隔离：它默认硬编码 /app/uploads/avatars（不在 DATA_DIR 之下），
+# 任何用例只要碰到上传或清理（哪怕忘了自己 patch）就会动到真实头像——
+# 2026-10-23 就被「清理无引用头像」整批搬走过一次，全站头像变成碎图。
+os.environ["AVATARS_DIR"] = os.path.join(os.environ["DATA_DIR"], "avatars")
 
 
 def _tune_test_db() -> None:

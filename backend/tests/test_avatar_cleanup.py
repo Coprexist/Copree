@@ -60,6 +60,18 @@ async def test_unreferenced_avatar_goes_to_trash_instead_of_being_deleted(migrat
     fresh_file = d / "user_902_fresh.png"
     fresh_file.write_bytes(b"fresh-avatar")
 
+    # 清理只认「库里还有没有引用」：先给 user 902 挂一张还在用的头像，
+    # 否则会撞上「引用集为空即拒绝」的安全阀（那是另一条用例）
+    keep_file = d / "user_902_keep.png"
+    keep_file.write_bytes(b"keep-avatar")
+    os.utime(keep_file, (old_time, old_time))
+    from app.database import async_session
+    async with async_session() as db:
+        await db.execute(text(
+            "UPDATE users SET avatar_url = :u WHERE id = 902"),
+            {"u": "/api/fs/download-avatar/user_902_keep.png"})
+        await db.commit()
+
     async with _client("198.18.0.31") as client:
         resp = await client.post("/admin/cleanup/files", headers=_token())
     assert resp.status_code == 200, resp.text
@@ -71,3 +83,31 @@ async def test_unreferenced_avatar_goes_to_trash_instead_of_being_deleted(migrat
     trash = Path(str(d) + "_trash")
     names = os.listdir(trash) if trash.is_dir() else []
     assert any(name.endswith("user_902_old.png") for name in names), f"搬走的文件要能在回收站里找回：{names}"
+    assert keep_file.exists(), "库里还挂着的头像不能动"
+
+
+async def test_refuses_when_no_avatar_is_referenced(migrated_db):
+    """引用集为空 = 这次清理看错了库（测试库/空库），不是「大家都没头像」：
+    这时一张都不能搬——2026-10-23 就是这样把 37 张真实头像整批搬进回收站的。"""
+    d = _avatar_dir()
+    await _seed_admin()
+
+    from app.database import async_session
+    async with async_session() as db:
+        await db.execute(text("UPDATE users SET avatar_url = NULL"))
+        await db.execute(text("UPDATE agents SET avatar_url = NULL"))
+        await db.execute(text("UPDATE groups SET avatar_url = NULL"))
+        await db.commit()
+
+    stale_file = d / "user_902_orphan.png"
+    stale_file.write_bytes(b"orphan")
+    old_time = time.time() - STALE_DAYS * 86400
+    os.utime(stale_file, (old_time, old_time))
+
+    async with _client("198.18.0.32") as client:
+        resp = await client.post("/admin/cleanup/files", headers=_token())
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body.get("refused") is True, body
+    assert body["cleaned_files"] == 0, body
+    assert stale_file.exists(), "引用集为空时一个都不能搬，宁可这次不清理"
