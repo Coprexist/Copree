@@ -337,14 +337,13 @@ async def save_group_types(
 @router.get("/{world_id}/group-types")
 async def list_group_types(
     world_id: int,
-    entity_type: str = Query("group", pattern="^(group|agent)$"),
+    entity_type: str | None = Query(None, pattern="^(group|agent)$"),
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """类型列表（定义+已绑定数/上限；entity_type=group 看群绑定数，agent 看 AI 绑定数）"""
+    """类型列表（定义 + 群/AI 各自的已绑定数；entity_type 不传 = 全部，给管理页看两类）"""
     from app.services.world.group_type_service import list_group_types as _list
-    types = await _list(db, world_id, entity_type=entity_type)
-    return {"types": types}
+    return {"types": await _list(db, world_id, entity_type=entity_type)}
 
 
 @router.delete("/{world_id}/group-types/{type_slug}")

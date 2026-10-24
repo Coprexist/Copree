@@ -1,8 +1,9 @@
 /**
- * 群类型与群助手管理（世界设计页 "…" 菜单）
+ * 入口类型与群助手管理（世界设计页 "…" 菜单）
  *
- * Tab A 群类型：世界作者定义预设类型（规则/绑定上限/助手模板），
- *              群绑定到类型时按模板自动创建群助手（每群可多个）
+ * Tab A 入口类型：世界作者定义入口类型（规则/绑定上限/助手模板），applies_to 决定给谁用——
+ *              群聊类型 = 群以什么场景进入；AI 角色 = AI 以什么身份入驻（玩家/NPC/裁判…由世界自己定）
+ *              群绑定到类型时按模板自动创建群助手（每群可多个）；AI 角色不带助手模板
  * Tab B 群助手：列出世界所有群助手，群主可填自定义 API / 一键应用全局 API / 清除
  *              （need_api=false 的类型助手不显示填 API 按钮——纯后端操控）
  */
@@ -16,11 +17,17 @@ interface GroupType {
   slug: string
   name: string
   description: string
+  /** group=群聊类型（群以什么场景进入）/ ai=AI 角色（AI 以什么身份入驻）/ both=两者 */
+  applies_to?: 'group' | 'ai' | 'both'
   rules: string
   bind_limit: number
   assistant_spec: { count?: number; need_api?: boolean; default_name?: string }
-  bound_count: number
+  /** 两个入口各自的已绑定数（接口总是都给） */
+  bound_groups?: number
+  bound_ais?: number
 }
+
+const APPLIES_LABEL: Record<string, string> = { group: '群聊类型', ai: 'AI 角色', both: '两者' }
 
 interface Assistant {
   id: number
@@ -45,7 +52,7 @@ export default function GroupManagerModal({ worldId, isOwner, onClose }: Props) 
   const [loading, setLoading] = useState(false)
 
   // ── 新建类型表单 ──
-  const [newType, setNewType] = useState({ name: '', description: '', rules: '', bind_limit: 3, count: 1, need_api: true, default_name: '群助手' })
+  const [newType, setNewType] = useState({ name: '', applies_to: 'group', rules: '', bind_limit: 3, count: 1, need_api: true, default_name: '群助手' })
 
   const [apiInput, setApiInput] = useState<{ agentId: number; key: string; base: string } | null>(null)
   const [applying, setApplying] = useState(false)
@@ -54,6 +61,7 @@ export default function GroupManagerModal({ worldId, isOwner, onClose }: Props) 
     setLoading(true)
     try {
       const [t, a] = await Promise.all([
+        // 不带 entity_type：管理页同时管理群聊类型与 AI 角色（不按入口过滤）
         api.get<{ types: GroupType[] }>(`/worlds/${worldId}/group-types`),
         api.get<{ assistants: Assistant[] }>(`/worlds/${worldId}/assistants`),
       ])
@@ -72,21 +80,21 @@ export default function GroupManagerModal({ worldId, isOwner, onClose }: Props) 
   const createType = async () => {
     setApplying(true); setMsg('')
     try {
-      const current = types.map(({ bound_count: _b, ...t }) => t)
+      const current = types.map(({ bound_groups: _bg, bound_ais: _ba, ...t }) => t)
       await api.post(`/worlds/${worldId}/group-types`, {
         types: [...current, {
-          name: newType.name, description: newType.description, rules: newType.rules,
+          name: newType.name, applies_to: newType.applies_to, rules: newType.rules,
           bind_limit: newType.bind_limit === -1 ? -1 : (Number(newType.bind_limit) || 3),
           assistant_spec: { count: Number(newType.count) || 1, need_api: newType.need_api, default_name: newType.default_name },
         }],
       })
-      setNewType({ name: '', description: '', rules: '', bind_limit: 3, count: 1, need_api: true, default_name: '群助手' })
+      setNewType({ name: '', applies_to: 'group', rules: '', bind_limit: 3, count: 1, need_api: true, default_name: '群助手' })
       load()
     } catch (e: any) { setMsg(`创建失败: ${e?.message || e}`) } finally { setApplying(false) }
   }
 
   const deleteType = async (t: GroupType) => {
-    if (!confirm(`删除群类型「${t.name}」？（已绑定群将解除类型，群助手保留）`)) return
+    if (!confirm(`删除入口类型「${t.name}」？（已绑定的群/AI 将解除类型，群助手保留）`)) return
     try { await api.delete(`/worlds/${worldId}/group-types/${t.slug}`); load() }
     catch (e: any) { setMsg(`删除失败: ${e?.message || e}`) }
   }
@@ -115,6 +123,9 @@ export default function GroupManagerModal({ worldId, isOwner, onClose }: Props) 
     catch (e: any) { setMsg(`清除失败: ${e?.message || e}`) }
   }
 
+  /** 这种类型在它那一侧的已绑定数（AI 角色看 AI，其余看群） */
+  const bound = (t: GroupType) => (t.applies_to === 'ai' ? (t.bound_ais ?? 0) : (t.bound_groups ?? 0))
+
   const needApi = (a: Assistant) => {
     const t = types.find(x => x.slug === a.group_type_slug)
     return t ? (t.assistant_spec?.need_api !== false) : true
@@ -129,8 +140,8 @@ export default function GroupManagerModal({ worldId, isOwner, onClose }: Props) 
         <div className="flex items-center justify-between p-4 pb-2 shrink-0">
           <div className="flex items-center gap-2">
             <BookOpen size={16} className="text-primary-400" />
-            <span className="text-sm font-semibold text-textPrimary">群类型与群助手</span>
-            <span className="text-3xs text-textMuted">世界按类型分发，规则挂在类型上</span>
+            <span className="text-sm font-semibold text-textPrimary">入口类型与群助手</span>
+            <span className="text-3xs text-textMuted">群按类型接入，AI 按角色入驻，规则挂在类型上</span>
           </div>
           <button onClick={onClose} className="p-1 text-textMuted hover:text-textPrimary"><X size={16} /></button>
         </div>
@@ -138,7 +149,7 @@ export default function GroupManagerModal({ worldId, isOwner, onClose }: Props) 
         <div className="px-4 shrink-0">
           <div className="flex items-center gap-1 bg-elevated rounded-control p-0.5 w-fit">
             <button onClick={() => setTab('types')} className={`inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded-control ${tab === 'types' ? 'bg-primary-500/15 text-primary-400' : 'text-textSecondary'}`}>
-              <Users size={12} /> 群类型 ({types.length})
+              <Users size={12} /> 入口类型 ({types.length})
             </button>
             <button onClick={() => setTab('assistants')} className={`inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded-control ${tab === 'assistants' ? 'bg-primary-500/15 text-primary-400' : 'text-textSecondary'}`}>
               <Key size={12} /> 群助手 ({assistants.length})
@@ -156,10 +167,14 @@ export default function GroupManagerModal({ worldId, isOwner, onClose }: Props) 
                 <div key={t.slug} className="rounded-card bg-elevated/50 border border-border p-3 space-y-1.5">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-semibold text-textPrimary">{t.name}</span>
-                    <span className={`text-3xs px-1.5 py-0.5 rounded ${t.bind_limit !== -1 && t.bound_count >= t.bind_limit ? 'bg-accent-500/15 text-accent-400' : 'bg-elevated text-textMuted'}`}>
-                      绑定 {t.bound_count}/{t.bind_limit === -1 ? '∞' : t.bind_limit}
+                    <span className="text-3xs px-1.5 py-0.5 rounded bg-elevated text-textMuted">{APPLIES_LABEL[t.applies_to || 'group']}</span>
+                    <span className={`text-3xs px-1.5 py-0.5 rounded ${t.bind_limit !== -1 && bound(t) >= t.bind_limit ? 'bg-accent-500/15 text-accent-400' : 'bg-elevated text-textMuted'}`}>
+                      绑定 {bound(t)}/{t.bind_limit === -1 ? '∞' : t.bind_limit}
+                      {t.applies_to === 'both' ? `（群 ${t.bound_groups ?? 0} · AI ${t.bound_ais ?? 0}）` : ''}
                     </span>
-                    <span className="text-3xs text-textMuted">助手 {t.assistant_spec?.count ?? 1} 个{t.assistant_spec?.need_api === false ? '（无需API）' : ''}</span>
+                    {t.applies_to !== 'ai' && (
+                      <span className="text-3xs text-textMuted">助手 {t.assistant_spec?.count ?? 1} 个{t.assistant_spec?.need_api === false ? '（无需API）' : ''}</span>
+                    )}
                     <div className="flex-1" />
                     {isOwner && (
                       <button onClick={() => deleteType(t)} className="p-1 text-textMuted hover:text-rose-400" title="删除类型"><Trash2 size={13} /></button>
@@ -176,7 +191,7 @@ export default function GroupManagerModal({ worldId, isOwner, onClose }: Props) 
                   </div>
                 </div>
               ))}
-              {types.length === 0 && <div className="text-center text-textMuted text-xs py-6">还没有群类型。创建第一个，让群按类型接入你的世界。</div>}
+              {types.length === 0 && <div className="text-center text-textMuted text-xs py-6">还没有入口类型。群要接入你的世界，先给它一个群聊类型；AI 要入驻，先给它一个角色。</div>}
 
               {bindOpen && (
         <BindGroupModal
@@ -190,20 +205,27 @@ export default function GroupManagerModal({ worldId, isOwner, onClose }: Props) 
       {/* 新建类型（世界作者） */}
               {isOwner && (
                 <div className="rounded-card border border-border p-3 space-y-2">
-                  <div className="text-xs font-semibold text-textPrimary flex items-center gap-1"><Plus size={12} /> 新建群类型</div>
+                  <div className="text-xs font-semibold text-textPrimary flex items-center gap-1"><Plus size={12} /> 新建入口类型</div>
                   <div className="grid grid-cols-2 gap-2">
-                    <input value={newType.name} onChange={e => setNewType({ ...newType, name: e.target.value })} placeholder="类型名（如 冒险团/商会）" className="bg-elevated text-xs px-2 py-1.5 rounded border border-border text-textPrimary" />
+                    <select value={newType.applies_to} onChange={e => setNewType({ ...newType, applies_to: e.target.value })} className="bg-elevated text-xs px-2 py-1.5 rounded border border-border text-textPrimary">
+                      <option value="group">群聊类型（群以什么场景进入）</option>
+                      <option value="ai">AI 角色（AI 以什么身份入驻）</option>
+                      <option value="both">两者</option>
+                    </select>
                     <input value={newType.bind_limit} onChange={e => setNewType({ ...newType, bind_limit: Number(e.target.value) })} type="number" min={-1} placeholder="绑定上限（-1=无限）" className="bg-elevated text-xs px-2 py-1.5 rounded border border-border text-textPrimary" />
                   </div>
-                  <textarea value={newType.rules} onChange={e => setNewType({ ...newType, rules: e.target.value })} rows={2} placeholder="世界规则（群主可见；群助手行为继承）" className="w-full bg-elevated text-xs px-2 py-1.5 rounded border border-border resize-none text-textPrimary" />
-                  <div className="grid grid-cols-3 gap-2">
-                    <input value={newType.count} onChange={e => setNewType({ ...newType, count: Number(e.target.value) })} type="number" min={1} placeholder="助手数量" className="bg-elevated text-xs px-2 py-1.5 rounded border border-border text-textPrimary" />
-                    <input value={newType.default_name} onChange={e => setNewType({ ...newType, default_name: e.target.value })} placeholder="助手默认名" className="bg-elevated text-xs px-2 py-1.5 rounded border border-border text-textPrimary" />
-                    <label className="flex items-center gap-1.5 text-3xs text-textSecondary">
-                      <input type="checkbox" checked={newType.need_api} onChange={e => setNewType({ ...newType, need_api: e.target.checked })} className="accent-primary-500" />
-                      助手需要 API
-                    </label>
-                  </div>
+                  <input value={newType.name} onChange={e => setNewType({ ...newType, name: e.target.value })} placeholder={newType.applies_to === 'ai' ? '角色名（如 玩家/NPC/裁判/店员）' : '类型名（如 冒险团/商会/决斗公会）'} className="w-full bg-elevated text-xs px-2 py-1.5 rounded border border-border text-textPrimary" />
+                  <textarea value={newType.rules} onChange={e => setNewType({ ...newType, rules: e.target.value })} rows={2} placeholder={newType.applies_to === 'ai' ? '角色规则（这个身份的行为与权限边界）' : '世界规则（群主可见；群助手行为继承）'} className="w-full bg-elevated text-xs px-2 py-1.5 rounded border border-border resize-none text-textPrimary" />
+                  {newType.applies_to !== 'ai' && (
+                    <div className="grid grid-cols-3 gap-2">
+                      <input value={newType.count} onChange={e => setNewType({ ...newType, count: Number(e.target.value) })} type="number" min={1} placeholder="助手数量" className="bg-elevated text-xs px-2 py-1.5 rounded border border-border text-textPrimary" />
+                      <input value={newType.default_name} onChange={e => setNewType({ ...newType, default_name: e.target.value })} placeholder="助手默认名" className="bg-elevated text-xs px-2 py-1.5 rounded border border-border text-textPrimary" />
+                      <label className="flex items-center gap-1.5 text-3xs text-textSecondary">
+                        <input type="checkbox" checked={newType.need_api} onChange={e => setNewType({ ...newType, need_api: e.target.checked })} className="accent-primary-500" />
+                        助手需要 API
+                      </label>
+                    </div>
+                  )}
                   <button onClick={createType} disabled={!newType.name || applying} className="btn btn-xs btn-primary w-full">
                     {applying ? '创建中…' : '创建类型'}
                   </button>

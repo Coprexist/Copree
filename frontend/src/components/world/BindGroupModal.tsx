@@ -1,8 +1,8 @@
 /**
- * 绑定群弹窗（世界设计页 / 世界列表页共用）
+ * 绑定入口弹窗（世界设计页 / 世界列表页共用）
  *
- * 流程（对齐需求）：先选群类型 → 勾选群聊（只显示「我是群主」的群，可改绑）→ 批量绑定
- * 自动创建群助手（按类型模板），绑定结果逐群反馈。
+ * 流程（对齐需求）：先选类型 → 勾选入口（只显示「我是群主」的群 /「我创建的」AI，可改绑）→ 批量绑定
+ * 群聊按类型模板自动创建群助手；AI 类型 = 它在这世界里的角色，绑定结果逐条反馈。
  */
 import { useEffect, useMemo, useState } from 'react'
 import { X, Link2, Users, CheckSquare, Loader2, AlertCircle, Bot } from 'lucide-react'
@@ -15,7 +15,9 @@ interface GroupType {
   name: string
   description: string
   bind_limit: number
-  bound_count?: number
+  /** 两个入口各自的占用，接口总是都给（当前 tab 用哪个由 tab 决定） */
+  bound_groups?: number
+  bound_ais?: number
 }
 
 interface GroupItem {
@@ -62,6 +64,7 @@ export default function BindGroupModal({ worldId, initialTypeSlug, initialTab = 
     ;(async () => {
       try {
         const [t, g, w, a] = await Promise.all([
+          // 类型按入口过滤：群聊只列群聊类型，AI 只列 AI 角色（后端同一份定义，applies_to 决定给谁）
           api.get<{ types: GroupType[] }>(`/worlds/${worldId}/group-types?entity_type=${tab}`),
           api.get<GroupItem[]>('/groups'),
           api.get<{ bindings: { entity_type: string; entity_id: number }[] }>(`/worlds/${worldId}`),
@@ -97,7 +100,6 @@ export default function BindGroupModal({ worldId, initialTypeSlug, initialTab = 
   // 当前 tab 的已绑集合 + 候选列表
   const boundIds = tab === 'group' ? boundGroupIds : boundAgentIds
   const candidates = tab === 'group' ? ownedGroups : ownedAgents
-  const currentType = types.find((t) => t.slug === typeSlug)
 
   const toggle = (gid: number) => {
     setSelected((prev) => {
@@ -120,7 +122,7 @@ export default function BindGroupModal({ worldId, initialTypeSlug, initialTab = 
       const r = await api.post<{ bound: number; failed: number; results: { entity_id: number; success: boolean; error?: string }[] }>(
         `/worlds/${worldId}/bind-entries`, { entity_type: tab, type_slug: typeSlug, entity_ids: idsToSubmit },
       )
-      // 绑定成功的群从勾选移除 + 标记已绑
+      // 绑定成功的入口从勾选移除 + 标记已绑
       const done = new Set((r.results || []).filter((x) => x.success).map((x) => x.entity_id))
       if (tab === 'group') {
         setBoundGroupIds((prev) => { const n = new Set(prev); done.forEach((g) => n.add(g)); return n })
@@ -168,7 +170,7 @@ export default function BindGroupModal({ worldId, initialTypeSlug, initialTab = 
         </div>
 
         <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
-          {/* 1. 选类型 */}
+          {/* 1. 选类型（群聊类型 / AI 角色，同一个定义、按入口过滤） */}
           <div>
             <div className="text-3xs text-textSecondary uppercase tracking-wide font-medium mb-1.5 flex items-center gap-1"><Users size={11} className="text-primary-400" /> {tab === 'group' ? t('tool:world.bind.step1Group') : t('tool:world.bind.step1Agent')}</div>
             {types.length === 0 ? (
@@ -183,7 +185,7 @@ export default function BindGroupModal({ worldId, initialTypeSlug, initialTab = 
                   >
                     <div className="flex items-center justify-between">
                       <span className="text-sm text-textPrimary">{ty.name}</span>
-                      <span className="text-3xs text-textMuted">{ty.bound_count ?? '?'}/{ty.bind_limit === -1 ? '∞' : ty.bind_limit} {tab === 'group' ? t('tool:world.bind.unitGroup') : t('tool:world.bind.unitAgent')}</span>
+                      <span className="text-3xs text-textMuted">{(tab === 'group' ? ty.bound_groups : ty.bound_ais) ?? 0}/{ty.bind_limit === -1 ? '∞' : ty.bind_limit} {tab === 'group' ? t('tool:world.bind.unitGroup') : t('tool:world.bind.unitAgent')}</span>
                     </div>
                     {ty.description && <div className="text-xs text-textSecondary line-clamp-1 mt-0.5">{ty.description}</div>}
                   </button>
@@ -192,7 +194,7 @@ export default function BindGroupModal({ worldId, initialTypeSlug, initialTab = 
             )}
           </div>
 
-          {/* 2. 勾选群 */}
+          {/* 2. 勾选入口 */}
           {typeSlug && (
             <div>
               <div className="text-3xs text-textSecondary uppercase tracking-wide font-medium mb-1.5 flex items-center gap-1"><CheckSquare size={11} className="text-primary-400" /> {tab === 'group' ? t('tool:world.bind.step2Group') : t('tool:world.bind.step2Agent')}</div>

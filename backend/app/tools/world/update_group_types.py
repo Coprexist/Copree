@@ -1,6 +1,7 @@
-"""update_group_types — 改群类型
+"""update_group_types — 改入口类型
 
-设置本世界的群类型配置（有多少种类型的群、每种的上限和规则、群助手模板）。传完整的 types 数组（先 get_group_types 看现状再改，只改要改的字段）。
+设置本世界的入口类型：群聊类型（群以什么场景进入）与 AI 角色（AI 以什么身份入驻，世界自己定）。
+传完整的 types 数组（先 get_group_types 看现状再改，全量替换，别丢没改的类型）。
 """
 
 from app.tools.world.base import WorldToolPlugin, WorldToolContext
@@ -12,12 +13,19 @@ class UpdateGroupTypesTool(WorldToolPlugin):
     segment = 'group'
 
     description = (
-        '设置本世界的群类型配置（有多少种类型的群、每种的上限和规则、群助手模板）。传完整的 types 数组（先 get_group_types 看现状再改，只改要改的字段）。\n每个类型字段：name=类型名（如 '
-        '冒险团/商会，也可以是剧本角色名/职位名如 族长/骑士团长）、rules=世界规则（群主可见，群助手行为继承）、bind_limit=可绑定群数上限（-1 = 无限）、assistant_spec={count: '
-        '每群助手数量, need_api: 是否需API, default_name: 助手默认名}。\n例：把冒险团上限改成 5 → types 里该类型 bind_limit=5；改成无限 → bind_limit=-1。'
+        '设置本世界的入口类型（群聊类型 = 群以什么场景进入；AI 角色 = AI 以什么身份入驻）。'
+        '传完整的 types 数组（先 get_group_types 看现状再改；全量替换，没改的类型也要带上）。\n'
+        '每个类型字段：name=类型名、applies_to=适用对象（group=群聊类型 / ai=AI 角色 / both=两者，省略按群聊类型）、'
+        'rules=世界规则（群主可见，群助手行为继承）、bind_limit=可绑定上限（-1 = 无限）、'
+        'assistant_spec={count: 每群助手数量, need_api: 是否需API, default_name: 助手默认名}（只有群聊类型用得上）。\n'
+        '命名：群聊类型是场所/组织（冒险团/商会/决斗公会）；AI 角色是它在世界里「是什么」，由你按剧本定——'
+        '玩家、NPC、裁判、店员、陪练都可以，但要能对应一组能力（skill.types 与角色 slug 对齐）。'
+        '头衔、关系、剧情绰号不是角色（「宿敌」「挚友」是关系，「首席」是头衔）。\n'
+        '例：把冒险团上限改成 5 → types 里该类型 bind_limit=5；改成无限 → bind_limit=-1。'
     )
 
-    parameters = {'types': {'type': 'array', 'items': {'type': 'object'}, 'description': '完整群类型列表（全量替换，保留不想改的）'}}
+    parameters = {'types': {'type': 'array', 'items': {'type': 'object'},
+                            'description': '完整入口类型列表（全量替换，保留不想改的；每项含 name/applies_to/rules/bind_limit/assistant_spec）'}}
 
     required = ['types']
 
@@ -37,5 +45,5 @@ class UpdateGroupTypesTool(WorldToolPlugin):
     def summary(self, result: dict) -> str:
         ok = bool(result.get("success"))
         if ok:
-            return f"群类型配置已更新（{len(result.get('types') or [])} 个类型）"
-        return f"更新群类型失败：{result.get('error', '未知错误')}"
+            return f"入口类型已更新（{len(result.get('types') or [])} 个类型）"
+        return f"更新入口类型失败：{result.get('error', '未知错误')}"

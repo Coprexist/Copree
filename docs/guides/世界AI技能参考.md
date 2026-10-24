@@ -29,7 +29,7 @@
 | `description` | 说明何时调用、返回什么 | 模型在正确时机不会调用 |
 | `arguments` | JSON Schema：`{"type":"object","properties":{...},"required":[...]}` | 模型无字段可填 |
 | `permissions` | 能力清单，取值见 3 节 | 运行时 PermissionError |
-| `types` | 类型 slug 列表；省略或 `["*"]` 为通用 | 类型名不符，该类型居民拿不到该技能 |
+| `types` | 类型 slug 列表（通常写 AI 角色，如 `world-spirit`/`resident`/`referee`）；省略或 `["*"]` 为通用 | 类型名不符，该类型居民拿不到该技能 |
 
 示例：
 

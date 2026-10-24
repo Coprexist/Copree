@@ -92,6 +92,10 @@ agent 路径）就**预建一条沉睡世界帧**（`status=ended`，只占帧�
 skill manifest 可声明 `types`（适用类型列表，省略或 `["*"]` = 所有类型通用），
 注入时只给匹配类型的居民发对应 skill（详见 world_skill_design.md 三·六）。
 
+"绑定类型"对 AI 而言就是他在这世界里的**角色**（`group_types.json` 里 `applies_to` 为 `ai`/`both` 的类型）：
+玩家、NPC、裁判、店员这类结构身份各对应一组 skill，具体有什么角色由世界自己定；
+头衔与关系（宿敌/挚友/首席）不是角色，不参与分层。
+
 ```
 群 AI 工具集 = 默认平台工具 + 世界侧 skills（effective 快照）∩ 该 AI 绑定类型的 skills
 ```

@@ -45,9 +45,28 @@ DEFAULT_ASSISTANT_SPEC = {"count": 1, "need_api": True, "default_name": "群助�
 # slug=稳定 id（绑定存 slug，改名只改 name 不影响存量绑定）
 # bind_limit=-1 = 无限
 DEFAULT_GROUP_TYPES = [
-    {"slug": "default", "name": "默认类型", "description": "未配置群类型时的兜底类型",
+    {"slug": "default", "name": "默认类型", "description": "未配置群类型时的兜底类型", "applies_to": "both",
      "rules": "", "bind_limit": -1, "assistant_spec": {"count": 1, "need_api": False, "default_name": "群助手"}},
 ]
+
+# 适用对象：group=群聊类型（群以什么场景进入世界）/ ai=AI 角色（AI 以什么身份入驻，由世界自己定：
+# 玩家、NPC、裁判、店员、对手都可以）/ both=两者。
+# 一份清单、一个 slug 命名空间（skill.types 按 slug 分层注入），但入口列表必须按适用对象过滤，
+# 否则群类型的词会被当成 AI 角色挑（线上就有世界把关系词「宿敌」写成了类型）。
+APPLIES_TO = ("group", "ai", "both")
+ENTITY_APPLIES = {"group": "group", "agent": "ai"}
+APPLIES_LABEL = {"group": "群聊类型", "ai": "AI 角色", "both": "两者"}
+
+
+def applies_to_of(type_def: dict) -> str:
+    """类型的适用对象。旧数据没有该字段 → 按群聊类型处理（历史上它就只有这一个含义）。"""
+    value = str(type_def.get("applies_to") or "group").strip().lower()
+    return value if value in APPLIES_TO else "group"
+
+
+def serves(type_def: dict, entity_type: str) -> bool:
+    """该类型是否适用于这种入口（entity_type: group=群聊 / agent=AI）。"""
+    return applies_to_of(type_def) in ("both", ENTITY_APPLIES.get(entity_type, entity_type))
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -107,6 +126,7 @@ def _normalize_type(t: dict) -> dict:
         "slug": slug,
         "name": name,
         "description": str(t.get("description") or ""),
+        "applies_to": applies_to_of(t),
         "rules": str(t.get("rules") or ""),
         "bind_limit": limit,
         "assistant_spec": {
@@ -136,21 +156,33 @@ async def _require_world_owner(db: AsyncSession, world_id: int, owner_id: int) -
     return world
 
 
-async def list_group_types(db: AsyncSession, world_id: int, entity_type: str = "group") -> list[dict]:
+async def _bound_counts(db: AsyncSession, world_id: int, entity_type: str) -> dict[str, int]:
+    """{类型 slug: 已绑定数}——一次聚合查询按类型分组，不按类型逐个 count。"""
+    rows = (await db.execute(
+        select(WorldBinding.group_type_slug, func.count()).where(
+            WorldBinding.world_id == world_id,
+            WorldBinding.entity_type == entity_type,
+            WorldBinding.group_type_slug.is_not(None),
+        ).group_by(WorldBinding.group_type_slug)
+    )).all()
+    return {str(slug): int(n) for slug, n in rows}
+
+
+async def list_group_types(db: AsyncSession, world_id: int, entity_type: str | None = None) -> list[dict]:
     db = _ensure_repo(db)
-    """类型定义 + 每类型已绑定数（bound_count 按 entity_type 区分：group=群 / agent=AI）。"""
+    """类型定义 + 两个入口各自的占用（返回形状恒定：永远给 bound_groups / bound_ais）。
+
+    entity_type=group / agent 时按 applies_to 过滤（群聊类型只进群聊列表，AI 角色只进 AI 列表，
+    both 两边都在）——过滤的是「能不能用于这种入口」，不是「已经绑了几个」；不传 = 全部，
+    给管理页与群视界机器人看全貌。
+    """
     types = load_group_types(world_id)
-    result = []
-    for t in types:
-        bound = (await db.execute(
-            select(func.count()).select_from(WorldBinding).where(
-                WorldBinding.world_id == world_id,
-                WorldBinding.entity_type == entity_type,
-                WorldBinding.group_type_slug == t["slug"],
-            )
-        )).scalar() or 0
-        result.append({**t, "bound_count": bound})
-    return result
+    if entity_type:
+        types = [t for t in types if serves(t, entity_type)]
+    counts = {et: await _bound_counts(db, world_id, et) for et in ("group", "agent")}
+    return [{**t, "applies_to": applies_to_of(t),
+             "bound_groups": counts["group"].get(t["slug"], 0),
+             "bound_ais": counts["agent"].get(t["slug"], 0)} for t in types]
 
 
 async def save_group_types_config(
@@ -180,7 +212,7 @@ async def bind_entry_with_type(
     """把入口（群聊 group / AI agent）绑定到某类型（slug）：校验定义/上限 → 更新绑定。
 
     - group：按模板自动创建群助手（幂等）
-    - agent：AI 直接绑定世界（个人专属能力），只绑定 + 类型标记，不建助手
+    - agent：AI 直接绑定世界（不建助手），类型 = 它在这世界里的角色
     - ⚠️ AI 一律按 user_id 存（全平台 AI 对外标识统一 user_id，
       杜绝 agent.id 与另一 agent 的 user_id 撞车）——传入 agent.id 自动转 user_id
     """
@@ -199,7 +231,12 @@ async def bind_entry_with_type(
     await _require_world_owner(db, world_id, owner_id)
     type_def = next((t for t in load_group_types(world_id) if t["slug"] == type_slug), None)
     if type_def is None:
-        raise ValueError(f"群类型不存在（{type_slug}）")
+        raise ValueError(f"类型不存在（{type_slug}）")
+    if not serves(type_def, entity_type):
+        raise ValueError(
+            f"「{type_def['name']}」是{APPLIES_LABEL[applies_to_of(type_def)]}，"
+            f"不能用来绑定{'AI' if entity_type == 'agent' else '群'}入口"
+        )
 
     bound = (await db.execute(
         select(func.count()).select_from(WorldBinding).where(
