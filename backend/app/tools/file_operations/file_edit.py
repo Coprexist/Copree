@@ -36,7 +36,12 @@ class FileEdit(ToolPlugin):
         },
         "old_string": {
             "type": "string",
-            "description": "（str_replace 必填）要被替换的精确原文。必须完全匹配文件中某一段且唯一，否则拒绝执行。",
+            "description": "（str_replace 必填）要被替换的精确原文。必须完全匹配文件中某一段；默认要求唯一，"
+                           "多处匹配时用 occurrence 指定（报错里会给出每处行号）。",
+        },
+        "occurrence": {
+            "type": "integer",
+            "description": "（str_replace 可选）多处匹配时替换第几处（1 起）；0 = 全部替换。默认要求唯一。",
         },
         "new_string": {
             "type": "string",

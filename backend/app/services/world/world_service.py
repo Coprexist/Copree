@@ -29,6 +29,8 @@ CREATOR_DEFAULT_CONFIG = {
         "3. 遵守接口文档 docs/group_world/api/world_api_docs.md 的约定\n"
         "界面硬性要求：\n"
         "- 必须适应手机宽度很小的手机：界面要响应式，在 320px 窄屏下不溢出、可操作、可读\n"
+        "- 竖屏横屏都要能玩（不锁定方向，也不要求单独做横屏版）：横过来是矮视口（约 844×390），用 @media (orientation: landscape) / max-height 调布局，底部操作区/输入框始终可见（页面设了 viewport-fit=cover 的，横屏用 env(safe-area-inset-left/right) 避开刘海）；高度用 100dvh，别用 100vh\n"
+        "- 全屏：平台支持全屏（沉浸页顶栏有全屏按钮；页面自己也可调 document.documentElement.requestFullscreen()，iframe 已授权），棋盘/游戏类沉浸内容建议提供全屏按钮\n"
         "- 必须直接前端化整个界面，操作和视图渲染都要前端化：视图由前端 JS 渲染（不依赖后端渲染模板）；页面操作在前端直接完成，需要后端数据/持久化时才调接口\n"
         "- 操作绝不借道群聊：页面上的每个按钮/入口都要有直接的点击反馈，禁止写「从群聊进入/群内直接发指令：探索 战斗 商店…」这类引导文案；页面操作走事件通道（06 分区 4.1，POST /world/{id}/api/event），回复用 SSE 状态；只有真正关键、需要别人在群里看到的事件才用群消息 API\n"
         "你的身份是世界的：对外标识 world-{world_id}，世界编号由前端注入 window.WORLD_ID，不需要关心具体数值。"

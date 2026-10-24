@@ -53,6 +53,7 @@
 - \`prefix\` 只看某个子目录/前缀（如 \`js/\`、\`js/game/\`）；文件多时先看目录再钻进去，别一次列全部。
 - 默认**不列产物**（\`__pycache__/node_modules/.git/dist/*.pyc\` 等）；确实要看传 \`include_artifacts: true\`。
 - 文件超过 50 个：\`files\` 为空，改为给 \`dirs\`（各目录文件数）+ \`note\` 提示；目录名可直接当下一次 \`prefix\` 用。
+- **根目录文件永远列名字**（\`root_files\`）：\`index.html\` / \`main.py\` 这类最该看的文件不会被塞进 \`dirs\` 的一个计数里。
 
 ### 3.2 file_grep
 
@@ -67,7 +68,9 @@
 - \`path\` 支持**文件、目录（递归搜索）与数组**（多文件/多目录混合），传 \`"."\` 搜整个世界——找「哪些文件用了某段代码」用它，不用自己写沙箱脚本扫目录。
 - 目录递归**跳过产物目录与超过 2MB 的大文件**；每条命中带 \`path\` + \`line\`；**单文件**时返回形状与旧版一致（命中只有 \`line\`/\`content\`）。
 - 命中默认最多 30 条（\`max_hits\`，上限 100），到上限在 \`note\` 里提示——缩小 \`path\` 或改用更精确的 \`pattern\`。
-- 正则非法时按普通子串匹配（大小写不敏感）。
+- \`pattern\` 按 Python 正则解释：emoji 直接写字符，码点转义用 \`\\uXXXX\` / \`\\U0001F300\`；JS 风格的
+  \`\\x{1F300}\` 会自动换算成同样的码点。确实编译不成正则时按普通子串匹配（大小写不敏感），
+  并在结果里带 \`pattern_note\` 说明——**0 命中又带 pattern_note 时是「搜法退化了」，不是「文件里没有」**。
 - \`context: 1~5\` 直接带命中行的前后各 N 行（带行号、按行合并去重）——**多半就不用再 \`file_read\` 看上下文**；
   被邻近命中完全覆盖的命中其 \`context\` 为空数组（信息没丢，只是挂在别处）；\`context=0\`（默认）返回形状与旧版一致。
 
@@ -82,7 +85,9 @@
 - **落盘前语法自检**：\`.py\` 走 \`ast\`（真解析器），\`.js\`/\`.css\` 走结构扫描
   （括号配平、字符串/注释/模板串闭合、\`}\` 后紧跟 \`{\`、JS 里出现 \`None\`、样式值里出现 \`12pxNone\`）。
   不通过会**拒写**并给行号与该行原文（文件不会落盘）；确认是误报再传 \`skip_lint: true\` 强制写入。只拦确定的语法损坏，拿不准一律放行。
-- **返回改动摘要**：\`lines_added / lines_removed / first_change_line / excerpt\`（首处改动及上下文）——多数情况不用再回读全文确认。
+- **返回改动摘要**：\`lines_added / lines_removed / first_change_line / diff\`（\`diff\` 是带行号的 \`-12|旧\` / \`+12|新\`）——多数情况不用再回读全文确认。
+- **跨文件引用提示**：写 \`.js\` 时会核对世界里 \`window.UI = {...}\` 这类命名空间的键表与各处 \`UI.x\` 调用，
+  对不上就回 \`warnings\`（**提示不拦写入**；判不准的情况——展开、计算键、\`Object.assign\`——一律不下结论）。
 - **温和去重**：若新内容与现有内容完全一致，返回 \`unchanged: true\` + 提示，不重复写入（不是错误，别重试）。
 
 ### 3.4 file_read
@@ -106,14 +111,17 @@
 
 | operation | 必填参数 | 行为 |
 |-----------|----------|------|
-| \`str_replace\` | \`old_string\` + \`new_string\` | 精确替换；\`old_string\` 必须**唯一**，否则报错 |
+| \`str_replace\` | \`old_string\` + \`new_string\` | 精确替换；\`old_string\` 必须**唯一**，否则报错（可选 \`occurrence\`） |
 | \`insert\` | \`line\` + \`new_string\` | 在 \`line\` 行之后插入（1 开头，\`0\` = 文件开头） |
 | \`delete_lines\` | \`start_line\` + \`end_line\` | 删除 \`start_line..end_line\`（**含两端**） |
 
+- **多处匹配**（如只差两个空格缩进的两行）：报错里会给出每处所在行号，传 \`occurrence: N\` 指定第几处，
+  \`occurrence: 0\` 全部替换——不用再往上贴更多上下文。
 - **多次插入时从最大行号开始往小插**（行号会随插入变化，从大往小插不会错位）。
 - 编辑核心与主站共用同一份实现（\`apply_file_edit\`），语义一致。
 - 与 \`file_write\` 同一套落盘前**语法自检**（\`skip_lint: true\` 可强制）与**改动摘要**
-  （\`lines_added / lines_removed / first_change_line / excerpt\`）——改完不用回读全文确认。
+  （\`lines_added / lines_removed / first_change_line / diff\`）——改完不用回读全文确认。
+- 同样会带跨文件引用提示（\`warnings\`）：改了导出表就会去核对调用方，\`UI.emptyBox\` 这类对不上当场报。
 - 二进制文件不可编辑。
 
 ### 3.6 file_delete

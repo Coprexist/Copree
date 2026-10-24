@@ -4,8 +4,9 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Maximize2, Minimize2 } from 'lucide-react'
 import { isEmbedded } from '../embed/bridge'
+import { fullscreenSupported, isFullscreen, onFullscreenChange, toggleFullscreen } from '../utils/fullscreen'
 
 export default function WorldViewPage() {
   const { worldId } = useParams()
@@ -16,6 +17,11 @@ export default function WorldViewPage() {
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const [title, setTitle] = useState('沉浸界面')
   const [notFound, setNotFound] = useState(false)
+  // 全屏按钮：手机横屏+无地址栏才是完整游戏画面；嵌入式 iframe 未授权时 canFullscreen=false，不渲染
+  const [canFullscreen] = useState(fullscreenSupported)
+  const [fullscreen, setFullscreen] = useState(isFullscreen)
+
+  useEffect(() => onFullscreenChange(setFullscreen), [])
 
   const wid = Number(worldId)
 
@@ -71,7 +77,7 @@ export default function WorldViewPage() {
   }, [wid, groupId])
 
   return (
-    <div className="h-screen flex flex-col bg-black">
+    <div className="h-dvh flex flex-col bg-black">
       {/* 顶栏（沉浸界面最小化干扰） */}
       <div className="flex items-center gap-3 px-4 py-1.5 bg-gray-900/95 text-gray-300 text-sm border-b border-gray-800">
         <button onClick={handleBack} className="inline-flex items-center gap-1 text-gray-400 hover:text-white">
@@ -80,7 +86,17 @@ export default function WorldViewPage() {
         </button>
         <span className="font-medium truncate">{title}</span>
         <div className="flex-1" />
-        <span className="text-3xs text-gray-600">WORLD_ID={wid}{groupId ? ` · GROUP_ID=${groupId}` : ''}</span>
+        <span className="text-3xs text-gray-600 hidden sm:inline">WORLD_ID={wid}{groupId ? ` · GROUP_ID=${groupId}` : ''}</span>
+        {canFullscreen && (
+          <button
+            onClick={() => { void toggleFullscreen() }}
+            className="inline-flex items-center justify-center w-7 h-7 rounded text-gray-400 hover:text-white hover:bg-white/10 transition-colors"
+            title={fullscreen ? '退出全屏' : '全屏'}
+            aria-label={fullscreen ? '退出全屏' : '全屏'}
+          >
+            {fullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+          </button>
+        )}
       </div>
 
       {/* 世界渲染区 */}
@@ -93,11 +109,14 @@ export default function WorldViewPage() {
             </button>
           </div>
         ) : (
+          /* allow=fullscreen：授权世界页面自己调 requestFullscreen——游戏/棋盘类世界的「全屏」按钮靠这条才有效 */
           <iframe
             ref={iframeRef}
             src={`${worldBase}/world/${wid}/preview${groupId ? `?group_id=${groupId}` : entryFrom ? `?from=${entryFrom}` : ''}`}
             className="w-full h-full bg-white"
             title="世界"
+            allow="fullscreen"
+            allowFullScreen
             onLoad={(e) => {
               const doc = (e.target as HTMLIFrameElement).contentDocument
               if (doc) setTitle(doc.title || '沉浸界面')

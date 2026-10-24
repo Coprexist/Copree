@@ -18,7 +18,7 @@ import ast
 import os
 import re
 
-__all__ = ["lint_code", "is_lintable"]
+__all__ = ["lint_code", "is_lintable", "blank_code"]
 
 _PY_EXT = {".py"}
 _JS_EXT = {".js", ".mjs", ".cjs"}
@@ -60,6 +60,16 @@ def lint_code(path: str, content: str) -> dict | None:
 def is_lintable(path: str) -> bool:
     """本模块会做语法自检的扩展名（沙箱跑完后扫描被改动的文件也用它筛）"""
     return os.path.splitext(path)[1].lower() in (_PY_EXT | _JS_EXT | _CSS_EXT)
+
+
+def blank_code(text: str) -> str | None:
+    """把 .js 的注释/字符串/正则/模板串抹成等长空白（行号 1:1）；扫描出确定问题（未闭合）返回 None。
+
+    给「只关心代码骨架」的检查用（如引用自检）：抹白后 `UI.emptyBox` 这种成员调用还在，
+    而字符串里出现的同名字样不会被误当成调用。
+    """
+    stripped, err = _strip(text, js=True)
+    return None if err else stripped
 
 
 # ═══════════════════════════════════════════════════════════════

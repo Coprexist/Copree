@@ -13,10 +13,16 @@ MAX_DIR_GROUPS = 12
 
 
 def _dir_breakdown(paths: list[str]) -> dict:
-    """按所在目录统计：文件多时给一张地图，目录名可直接当下一次 prefix 用，比几十条路径省 token"""
+    """按所在目录统计：文件多时给一张地图，目录名可直接当下一次 prefix 用，比几十条路径省 token
+
+    只数子目录：根目录文件（index.html / main.py）单独用 root_files 列名字——
+    汇总里给个 "(根目录)": 3 等于把最该看的三行藏起来（世界 AI 2026-10 反馈：只能靠 grep 反推）。
+    """
     counts: dict[str, int] = {}
     for p in paths:
-        parent = p.rsplit("/", 1)[0] + "/" if "/" in p else "(根目录)"
+        if "/" not in p:
+            continue
+        parent = p.rsplit("/", 1)[0] + "/"
         counts[parent] = counts.get(parent, 0) + 1
     return dict(sorted(counts.items(), key=lambda kv: -kv[1])[:MAX_DIR_GROUPS])
 
@@ -74,6 +80,9 @@ class FileListTool(WorldToolPlugin):
                 result["excluded"] = excluded
             if result["truncated"]:
                 result["dirs"] = _dir_breakdown(paths)
+                root_files = [p for p in paths if "/" not in p]
+                if root_files:
+                    result["root_files"] = root_files
             note = _note(prefix, result["total"], result["truncated"], excluded)
             if note:
                 result["note"] = note
@@ -90,7 +99,8 @@ class FileListTool(WorldToolPlugin):
             return result.get("note") or "世界文件夹是空的"
         if result.get("truncated"):
             groups = "、".join(f"{k} {v}" for k, v in (result.get("dirs") or {}).items())
-            return f"世界文件（{total} 个，按目录汇总）：{groups}"
+            root = "、".join(result.get("root_files") or [])
+            return f"世界文件（{total} 个，按目录汇总）：" + (f"根目录：{root}；" if root else "") + groups
         shown = "、".join(files[:10]) + (f" 等{total}个" if total > 10 else "")
         return f"世界文件（{total} 个）：{shown}"
 

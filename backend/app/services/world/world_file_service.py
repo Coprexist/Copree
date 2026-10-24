@@ -5,6 +5,7 @@
 路径安全：拒绝 ../ 越界，所有操作限定在世界目录内。
 """
 import logging
+import re
 import shutil
 import json
 from pathlib import Path
@@ -184,6 +185,31 @@ def read_file(world_id: int, rel_path: str, offset: int | None = None, limit: in
     return {"path": rel_path, "content": text, "binary": False, "size": len(data), "total_lines": len(text.split("\n"))}
 
 
+# JS/PHP 风格的码点转义 \x{1F300}：Python re 不认（会编译失败并**静默**退回普通子串，
+# 于是搜 emoji 得到 0 命中，模型差点得出「本来就没有 emoji」的错误结论——世界 AI 2026-10 踩到）。
+# 归一成 \uXXXX / \U0001F300 再编译；归一后仍非法才退子串，且把理由一路带回工具结果。
+_BRACE_CODEPOINT_RE = re.compile(r"\\x\{([0-9A-Fa-f]{1,6})\}")
+
+
+def _codepoint_escape(cp: int) -> str:
+    return f"\\u{cp:04x}" if cp <= 0xFFFF else f"\\U{cp:08x}"
+
+
+def compile_pattern(pattern: str) -> tuple[re.Pattern, str | None]:
+    """pattern → 编译好的匹配器；返回 (rx, 退回子串的理由)。
+
+    **唯一入口**：file_grep 与沙箱侧共用这一份口径。非法正则一律退回普通子串（大小写不敏感），
+    但必须把理由带回去——静默退回会让模型误判成「文件里没有」。
+    """
+    normalized = _BRACE_CODEPOINT_RE.sub(lambda m: _codepoint_escape(int(m.group(1), 16)), pattern)
+    try:
+        return re.compile(normalized), None
+    except re.error as e:
+        return re.compile(re.escape(pattern), re.IGNORECASE), (
+            f"pattern 不是合法正则（{e.msg}），已按普通子串匹配；"
+            "emoji 等 Unicode 码点直接写字符，或用 \\uXXXX / \\U0001F300")
+
+
 def _attach_context(lines: list[str], hits: list[dict], context: int) -> None:
     """给命中原地补 ±context 行上下文（带行号）。
 
@@ -200,13 +226,17 @@ def _attach_context(lines: list[str], hits: list[dict], context: int) -> None:
         emitted.update(fresh)
 
 
-def grep_file(world_id: int, rel_path: str, pattern: str, max_hits: int = 30, context: int = 0) -> dict:
+def grep_file(world_id: int, rel_path: str, pattern: str, max_hits: int = 30, context: int = 0,
+              rx: "re.Pattern | None" = None) -> dict:
     """按关键词/正则搜文件内容，返回命中行 + 行号（轻量定位，2026-08-13 新增）。
 
     对齐 OpenClaw 的 grep 用法：先定位再按需读，不用整文件全读。
     context>0 时每个命中附 ±context 行（带行号，命中行不重复）；context=0 的返回形状与旧版完全一致。
+    rx 已编译好时直接复用（批量搜只编译一次，口径见 compile_pattern）。
     """
-    import re as _re
+    note = None
+    if rx is None:
+        rx, note = compile_pattern(pattern)
     target = _safe_path(world_id, rel_path)
     if not target.is_file():
         raise FileNotFoundError(f"文件不存在: {rel_path}")
@@ -214,11 +244,6 @@ def grep_file(world_id: int, rel_path: str, pattern: str, max_hits: int = 30, co
         text = target.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         return {"path": rel_path, "binary": True, "hits": [], "total_hits": 0}
-    try:
-        rx = _re.compile(pattern)
-    except _re.error:
-        # 非正则 → 当普通子串（大小写不敏感）
-        rx = _re.compile(_re.escape(pattern), _re.IGNORECASE)
     lines = text.split("\n")
     hits = []
     for i, line in enumerate(lines, start=1):
@@ -228,7 +253,10 @@ def grep_file(world_id: int, rel_path: str, pattern: str, max_hits: int = 30, co
                 break
     if context > 0:
         _attach_context(lines, hits, context)
-    return {"path": rel_path, "hits": hits, "total_hits": len(hits), "max_hits": max_hits}
+    out = {"path": rel_path, "hits": hits, "total_hits": len(hits), "max_hits": max_hits}
+    if note:
+        out["pattern_note"] = note
+    return out
 
 
 def path_kind(world_id: int, rel_path: str) -> str:
@@ -273,6 +301,7 @@ def grep_paths(world_id: int, paths: list[str], pattern: str, max_hits: int = 30
     scan_truncated = False
     single_file = len(paths) == 1
     binary = False
+    rx, pattern_note = compile_pattern(pattern)   # 只编译一次，所有文件共用
     for rel_path in paths:
         kind = path_kind(world_id, rel_path)
         if kind == "missing":
@@ -288,7 +317,7 @@ def grep_paths(world_id: int, paths: list[str], pattern: str, max_hits: int = 30
                 scan_truncated = True
                 break
             scanned += 1
-            one = grep_file(world_id, rel, pattern, max_hits=max_hits - len(hits), context=context)
+            one = grep_file(world_id, rel, pattern, max_hits=max_hits - len(hits), context=context, rx=rx)
             if one.get("binary"):
                 binary = binary or single_file        # 单文件：沿用旧的 binary 返回
                 continue
@@ -298,7 +327,7 @@ def grep_paths(world_id: int, paths: list[str], pattern: str, max_hits: int = 30
                 break
         if len(hits) >= max_hits or scan_truncated:
             break
-    return {
+    out = {
         "hits": hits,
         "files_scanned": scanned,
         "skipped_large": skipped_large,
@@ -307,6 +336,9 @@ def grep_paths(world_id: int, paths: list[str], pattern: str, max_hits: int = 30
         "truncated": len(hits) >= max_hits,
         "scan_truncated": scan_truncated,
     }
+    if pattern_note:
+        out["pattern_note"] = pattern_note
+    return out
 
 
 def write_file(world_id: int, rel_path: str, content: str) -> dict:

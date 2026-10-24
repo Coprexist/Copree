@@ -39,15 +39,29 @@ def _single_hit(hit: dict) -> dict:
     return out
 
 
+def _degraded(result: dict) -> str:
+    """正则退化成普通子串时的说明——**有命中也要带**：否则 0 命中会被当成「文件里本来没有」。"""
+    return str(result.get("pattern_note") or "")
+
+
+def _mark_degraded(out: dict, result: dict) -> dict:
+    """把退化标记带进工具结果：说明进 note（模型读），另给一个布尔位供 summary 用"""
+    if _degraded(result):
+        out["pattern_fallback"] = True
+    return out
+
+
 def _single_result(path: str, pattern: str, result: dict) -> dict:
     """单文件：返回形状与旧版一致（命中只有 line/content，不带文件路径）"""
     if result.get("binary"):
         return {"success": True, "path": path, "binary": True, "note": "二进制文件，无法搜索"}
     hits = [_single_hit(h) for h in result.get("hits") or []]
-    if not hits:
-        return {"success": True, "path": path, "pattern": pattern, "hits": [], "total_hits": 0,
-                "note": f"未找到匹配「{pattern}」"}
-    return {"success": True, "path": path, "pattern": pattern, "hits": hits, "total_hits": len(hits)}
+    out = _mark_degraded(
+        {"success": True, "path": path, "pattern": pattern, "hits": hits, "total_hits": len(hits)}, result)
+    notes = [f"未找到匹配「{pattern}」" if not hits else "", _degraded(result)]
+    if note := "；".join(n for n in notes if n):
+        out["note"] = note
+    return out
 
 
 def _multi_result(paths: list[str], pattern: str, max_hits: int, result: dict) -> dict:
@@ -65,7 +79,10 @@ def _multi_result(paths: list[str], pattern: str, max_hits: int, result: dict) -
         "files_scanned": result.get("files_scanned", 0),
         "truncated": bool(result.get("truncated")),
     }
+    _mark_degraded(out, result)
     notes = []
+    if _degraded(result):
+        notes.append(_degraded(result))
     if not hits:
         notes.append(f"在 {scope} 未找到匹配「{pattern}」")
     if result.get("truncated"):
@@ -91,6 +108,9 @@ class FileGrepTool(WorldToolPlugin):
         '命中带文件路径与行号，找到后配合 file_read(offset,limit) 读对应段落。'
         f'只想看命中行就不用传 context；想顺手看上下文传 context（前后各 N 行，0-{MAX_CONTEXT}，默认 {DEFAULT_CONTEXT}），'
         '能省一次 file_read。'
+        'pattern 按 Python 正则解释：emoji 直接写字符，码点转义用 \\uXXXX / \\U0001F300'
+        '（\\x{1F300} 这种 JS 写法会自动换算）；确实编译不成正则时按普通子串搜，结果里会带 pattern_note 说明——'
+        '0 命中又带 pattern_note 时，是「搜法退化了」不是「文件里没有」。'
     )
 
     parameters = {'path': {'type': ['string', 'array'], 'items': {'type': 'string'},
@@ -143,10 +163,11 @@ class FileGrepTool(WorldToolPlugin):
         if result.get("binary"):
             return f"{result.get('path')}（二进制文件，无法搜索）"
         scope = result.get("path") or "、".join(result.get("paths") or []) or "整个世界"
+        fallback = "（pattern 非合法正则，已按普通子串匹配）" if result.get("pattern_fallback") else ""
         if not hits:
-            return f"在 {scope} 未找到「{result.get('pattern')}」"
+            return f"在 {scope} 未找到「{result.get('pattern')}」{fallback}"
         first = hits[0]
         where = f"{first['path']}:" if first.get("path") else ""
         head = f"{where}{first.get('line')}:{(first.get('content') or '')[:40]}"
         return (f"在 {scope} 找到 {result.get('total_hits')} 处「{result.get('pattern')}」：{head}"
-                + ("…" if result.get("truncated") else ""))
+                + ("…" if result.get("truncated") else "") + fallback)

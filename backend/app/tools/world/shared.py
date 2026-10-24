@@ -74,6 +74,24 @@ def lint_error(path: str, problem: dict) -> dict:
     }
 
 
+def attach_ref_warnings(out: dict, world_id: int, path: str, content: str) -> dict:
+    """落盘后挂上跨文件引用提示（code_refs：导出名与调用名对不上）。
+
+    有才挂，没有就不占字段；自检自身失败由 code_refs 兜住，绝不影响写入结果。
+    """
+    from app.services.world.code_refs import ref_warnings
+
+    if warnings := ref_warnings(world_id, path, content):
+        out["warnings"] = warnings
+    return out
+
+
+def ref_warning_hint(result: dict) -> str:
+    """工具卡片里的那句提示（与 attach_ref_warnings 同一份字段，措辞只写一遍）"""
+    n = len(result.get("warnings") or [])
+    return f"；⚠ {n} 条引用存疑（见 warnings）" if n else ""
+
+
 def from_site_result(result: dict) -> dict:
     """主站工具结果 → 世界工具结果（**唯一适配点**）。
 

@@ -15,7 +15,7 @@ class ViewApiDocTool(WorldToolPlugin):
     description = (
         '查看「群视界 API 文档」指定分区的详细接口内容（文档按区分区，此处只列区名与区介绍，需要细节时按需打开对应分区）：\n01 世界编号变量：window 注入的 `WORLD_ID / GROUP_ID '
         '/ USER_ID / WORLD_AI_ID` 等变量与打包原则。**写任何世界页面代码前必读**，杜绝硬编码编号。\n02 世界UI桥 WorldUI：控制宿主外壳：侧边栏/悬浮图标的显隐。'
-        '实现了自己的导航时用 `hideFloatingIcon` 避免两套 UI 重复。\n03 文件操作：`file_list / file_write / file_read / file_edit '
+        '实现了自己的导航时用 `hideFloatingIcon` 避免两套 UI 重复；全屏直接用浏览器 Fullscreen API（iframe 已授权）。\n03 文件操作：`file_list / file_write / file_read / file_edit '
         '/ file_delete` 全部参数与返回、类型白名单、越界防护、读取截断规则。**建/改世界网页代码前必读**。\n04 世界块体系（积木）：`list_world_blocks / view_world_block '
         '/ apply_world_block` 用法、现有积木（平台侧边栏、群聊对话窗）、**DIY 定制**与**更新机制**、侧边栏约定。\n05 群聊 API（世界 AI 的群工具）：读消息/发消息/成员列表/角色管理/踢人工具：'
         '参数、返回、身份与权限约定（默认作用于本世界绑定群）。\n06 页面与资源：沉浸界面预览入口、静态资源路由 `/world/{id}/files/`、相对路径规则、资源类型。\n07 懒通知与世界时间：'

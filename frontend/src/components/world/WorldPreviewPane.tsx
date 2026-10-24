@@ -33,7 +33,10 @@ export function WorldPreviewActions({ wid, onRefresh }: { wid: number; onRefresh
   )
 }
 
-/** 画布：铺满父容器（父容器负责 flex-1 / min-h-0，这里只负责白底与自适应） */
+/**
+ * 画布：铺满父容器（父容器负责 flex-1 / min-h-0，这里只负责白底与自适应）。
+ * allow=fullscreen：预览里也要能试世界的全屏按钮，否则设计页看到的和真机不一致。
+ */
 export default function WorldPreviewFrame({ wid, previewKey }: { wid: number; previewKey: number }) {
   const t = useT()
   return (
@@ -42,6 +45,7 @@ export default function WorldPreviewFrame({ wid, previewKey }: { wid: number; pr
       src={`/world/${wid}/preview`}
       className="w-full h-full bg-white dark:bg-gray-900"
       title={t('tool:world.pane.preview')}
+      allow="fullscreen"
     />
   )
 }

@@ -1,5 +1,5 @@
 # 02 世界UI桥 WorldUI
-> 控制宿主外壳：侧边栏/悬浮图标的显隐。实现了自己的导航时用 `hideFloatingIcon` 避免两套 UI 重复。
+> 控制宿主外壳：侧边栏/悬浮图标的显隐。实现了自己的导航时用 `hideFloatingIcon` 避免两套 UI 重复；全屏不走桥，直接调浏览器 Fullscreen API（见第 6 节）。
 
 ## 1. 是什么
 
@@ -34,3 +34,14 @@ if (window.WorldUI && window.WorldUI.hideFloatingIcon) {
 
 - 桥对象不存在时（非沉浸环境预览），调用前先判空，避免抛错。
 - 侧边栏约定是**硬性要求**：平台基础菜单（首页/聊天/世界列表/设置）可以折叠成「平台」项，但**绝不能缺失**——否则用户无法回到主应用。
+
+## 6. 全屏
+
+全屏不经过 WorldUI 桥，世界页面里直接调浏览器的 Fullscreen API：
+
+```js
+document.documentElement.requestFullscreen();  // 进全屏
+document.exitFullscreen();                     // 退全屏
+```
+
+平台 iframe 已授权 `fullscreen`，按钮点击本身就是用户手势，浏览器不会拦。沉浸页顶栏另有一个平台的全屏按钮，用户自己也能点。棋盘/卡牌/地图/游戏这类沉浸内容建议提供全屏按钮——手机全屏后横过来才是完整画面（横屏适配见 01 分区「界面硬性要求」）。

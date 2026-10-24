@@ -4,7 +4,7 @@
 """
 
 from app.tools.world.base import WorldToolPlugin, WorldToolContext
-from app.tools.world.shared import arg_error, lint_error
+from app.tools.world.shared import arg_error, lint_error, attach_ref_warnings, ref_warning_hint
 from app.utils.pure.file_edit import apply_file_edit, infer_operation  # 与主站共用同一份编辑核心（纯函数，无 IO，模块级导入即可）
 
 
@@ -15,7 +15,9 @@ class FileEditTool(WorldToolPlugin):
 
     description = ('增量编辑世界文件（查找替换/行后插入/删除行），比全量重写省 token。编辑前建议先 file_read 确认内容。'
                    '落盘前对 .py/.js/.css 做语法自检（不通过会拒写并给行号；确认误报可加 skip_lint 强制写入）；'
-                   '成功返回行数增减与首处改动摘要，多数情况不用再回读确认。多次插入时从最大行号开始往小插。')
+                   '成功返回行数增减与带行号的改动行（-旧/+新），多数情况不用再回读确认。'
+                   '原文有多处匹配（如只差缩进的两行）时，报错会给出行号，用 occurrence 指定第几处即可，不用往上贴更多上下文。'
+                   '多次插入时从最大行号开始往小插。')
 
     parameters = {'path': {'type': 'string', 'description': '相对路径'},
      'operation': {'type': 'string',
@@ -24,6 +26,9 @@ class FileEditTool(WorldToolPlugin):
                                   'str_replace=精确替换（old_string 必须唯一）；insert=在 line '
                                   '行之后插入；delete_lines=删除 start_line..end_line（含两端）'},
      'old_string': {'type': 'string', 'description': 'str_replace 必填：被替换的精确原文'},
+     'occurrence': {'type': 'integer',
+                    'description': 'str_replace 可选：多处匹配时替换第几处（1 起，见报错里的行号）；0 = 全部替换。'
+                                   '默认要求唯一'},
      'new_string': {'type': 'string', 'description': '替换后的新内容 / 要插入的内容'},
      'line': {'type': 'integer', 'description': 'insert 必填：在此行号之后插入（1 开头，0=文件开头）'},
      'start_line': {'type': 'integer', 'description': 'delete_lines 必填：起始行（1 开头）'},
@@ -60,8 +65,10 @@ class FileEditTool(WorldToolPlugin):
                     return lint_error(path, problem)
             write_file(ctx.world.id, path, new_content)
             # 落盘即回改动摘要：省掉模型回读全文确认的那一次调用
-            return {"success": True, "path": path, "operation": operation,
-                    **summarize_change(old_content, new_content)}
+            return attach_ref_warnings(
+                {"success": True, "path": path, "operation": operation,
+                 **summarize_change(old_content, new_content)},
+                ctx.world.id, path, new_content)
         except (ValueError, FileNotFoundError) as e:
             return {"success": False, "error": str(e)}
 
@@ -70,5 +77,6 @@ class FileEditTool(WorldToolPlugin):
         if ok:
             op = {"str_replace": "替换", "insert": "插入", "delete_lines": "删除行"}.get(result.get("operation", ""), "编辑")
             return (f"已{op} {result.get('path')}"
-                    f"（+{result.get('lines_added', 0)}/−{result.get('lines_removed', 0)} 行）")
+                    f"（+{result.get('lines_added', 0)}/−{result.get('lines_removed', 0)} 行）"
+                    + ref_warning_hint(result))
         return f"编辑失败：{result.get('error', '未知错误')}"
