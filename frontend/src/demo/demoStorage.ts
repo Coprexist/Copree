@@ -32,7 +32,21 @@ const DEMO_MEMBERS = [
 ]
 
 const DEMO_AGENTS = [
-  { id: 2, name: 'AI 助手', avatar_url: null, owner_id: 1, ai_type: 'general', is_active: true },
+  {
+    id: 2, name: 'AI 助手', avatar_url: null, owner_id: 1, user_id: 0,
+    ai_type: 'general', is_active: true, state: 'active',
+    status_text: '在线', status_color: 'green',
+    original_system_prompt: '你是 Copree 演示版里的 AI 助手，说话简短、直接。',
+    current_system_prompt: '你是 Copree 演示版里的 AI 助手，说话简短、直接。',
+    original_temperature: 0.7, current_temperature: 0.7,
+    original_top_p: 1, current_top_p: 1,
+    original_presence_penalty: 0, current_presence_penalty: 0,
+    original_frequency_penalty: 0, current_frequency_penalty: 0,
+    chat_model: null, work_model: null,
+    thinking_enabled: false, hide_ai_identity: false, is_ai_editable: true,
+    config_profile: 'chat', delay_reply_enabled: null, max_tool_rounds: 8,
+    created_at: '2026-10-01T10:00:00.000Z',
+  },
 ]
 
 const DEMO_WELCOME = {
@@ -62,6 +76,9 @@ export function blobToBase64(blob: Blob): Promise<string> {
 // ── 初始化（首次访问时创建默认数据） ──
 
 export function initDemoData() {
+  // 早期版本的演示 AI 缺 state 等字段，会让列表页读状态标签时崩溃：检测到就重置这批种子
+  const seeded = read<any[]>('demo_agents', [])
+  if (seeded.length && seeded.some((a) => !a || !a.state)) write('demo_agents', DEMO_AGENTS)
   if (!localStorage.getItem('demo_inited')) {
     write('demo_groups', DEMO_GROUPS)
     write('demo_members', { '1': DEMO_MEMBERS })

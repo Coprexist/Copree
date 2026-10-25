@@ -11,6 +11,26 @@ const API = '/api'
 
 let _processing = false
 
+/**
+ * 群视界的演示世界：列表页与增删改都只动 localStorage，
+ * 不依赖后端。字段与 WorldsPage 的 World 接口一一对应。
+ */
+const WORLDS_KEY = 'demo_worlds'
+const DEMO_WORLDS_SEED = [
+  {
+    id: 34, name: '枕流镇', status: 'active', time_flow_rate: 1,
+    description: '一座靠在河湾上的小镇：雨天、旧书店，还有会说话的猫。天气会跟着群聊里的语气走。',
+    bindings: [{ entity_type: 'group', entity_id: 2 }],
+  },
+  {
+    id: 35, name: '灰烬回廊', status: 'sleeping', time_flow_rate: 0.5,
+    description: '解谜世界：每一扇门都记得上一次被打开的时间，走错一步就要重新写信给它。',
+    bindings: [],
+  },
+]
+
+const readWorlds = () => read<any[]>(WORLDS_KEY, DEMO_WORLDS_SEED)
+
 export function setupDemo() {
   initDemoData()
   localStorage.setItem('access_token', 'demo_token')
@@ -39,6 +59,41 @@ export function setupDemo() {
         } catch {}
       }
       return jsonRes({ status: 'ok' })
+    }
+
+    // 群视界：世界列表与增删改
+    if (path === `${API}/worlds`) {
+      const list = readWorlds()
+      if (method === 'POST') {
+        let body: any = {}
+        try { body = JSON.parse(String(init?.body || '{}')) } catch {}
+        const world = {
+          id: Date.now() % 100000,
+          name: body.name || '新世界',
+          description: body.description || '',
+          status: 'active',
+          time_flow_rate: body.time_flow_rate ?? 1,
+          bindings: [],
+        }
+        write(WORLDS_KEY, [...list, world])
+        return jsonRes(world)
+      }
+      return jsonRes(list)
+    }
+    const worldMatch = path.match(/^\/api\/worlds\/(\d+)(?:\/(wake|sleep))?$/)
+    if (worldMatch) {
+      const id = Number(worldMatch[1])
+      const list = readWorlds()
+      if (method === 'DELETE') {
+        write(WORLDS_KEY, list.filter((w) => w.id !== id))
+        return jsonRes({ status: 'ok' })
+      }
+      if (worldMatch[2]) {
+        const next = list.map((w) => w.id === id ? { ...w, status: worldMatch[2] === 'wake' ? 'active' : 'sleeping' } : w)
+        write(WORLDS_KEY, next)
+        return jsonRes(next.find((w) => w.id === id) || {})
+      }
+      return jsonRes(list.find((w) => w.id === id) || {})
     }
 
     // 群组
@@ -99,7 +154,7 @@ export function setupDemo() {
     if (r) return r
     // API 路径未 mock → 返回安全默认值
     if (path.startsWith(API)) {
-      const isList = /(groups|members|messages|dm|session|friends|files|agents|device)/.test(path)
+      const isList = /(groups|members|messages|dm|session|friends|files|agents|device|worlds)/.test(path)
       return jsonRes(isList ? [] : {})
     }
     // 非 API 路径（懒加载 JS、字体等）→ 走原始 fetch

@@ -171,7 +171,7 @@ export default function AgentsPage() {
                       </div>
                     </div>
                     <span className={`text-xs px-2 py-0.5 rounded-full font-medium border ${STATE_BADGE_COLORS[agent.state] || ''}`}>
-                      {t(stateLabelKeys[agent.state]) || agent.state}
+                      {stateLabelKeys[agent.state] ? t(stateLabelKeys[agent.state]) : agent.state}
                     </span>
                   </div>
 
@@ -912,7 +912,7 @@ function StateModal({ agent, onClose, onUpdated }: {
 
         <div className="space-y-3">
           <div>
-            <label className="block text-xs font-medium mb-1.5 text-textSecondary">{t('agents:currentState')} {t(stateLabelKeys[agent.state]) || agent.state}</label>
+            <label className="block text-xs font-medium mb-1.5 text-textSecondary">{t('agents:currentState')} {stateLabelKeys[agent.state] ? t(stateLabelKeys[agent.state]) : agent.state}</label>
             <select
               value={targetState}
               onChange={(e) => setTargetState(e.target.value)}
