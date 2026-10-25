@@ -46,6 +46,11 @@ jobs:
           BASE_URL: /${{ github.event.repository.name }}/
           # __IS_DEMO__ 常量由 vite.config.ts 的 define 注入（基于 BASE_URL 是否存在）
 
+      # GitHub Pages 没有 SPA 回退：把首页复制成 404.html，深链（/Copree/worlds 等）
+      # 才能进应用、由前端路由接管
+      - name: SPA fallback
+        run: cp dist/index.html dist/404.html
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v5
         with:
