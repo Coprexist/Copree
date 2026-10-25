@@ -136,15 +136,24 @@ class PostgresAuditBackend(AuditStorageBackend):
         db = _ensure_repo(db)
         if db is None:
             raise ValueError("PostgresAuditBackend.cleanup 需要 db 参数")
+        # 时间参数容错：调用方传的是 ISO 串，而 asyncpg 不会把字符串隐式转成 timestamp
+        cutoff = datetime.fromisoformat(before) if isinstance(before, str) else before
         total_deleted = 0
         while True:
-            result = await db.execute(
-                delete(SystemLog)
-                .where(SystemLog.created_at < before)
+            # 分批只能「先挑 id、再按 id 删」：SQLAlchemy 的 DELETE 没有 .limit()
+            # （PostgreSQL 原生也不支持 DELETE ... LIMIT）。旧写法在这里 AttributeError，
+            # 清理循环每 5 分钟报一次 WARN，审计表从来没被清过。
+            batch_ids = (
+                select(SystemLog.id)
+                .where(SystemLog.created_at < cutoff)
+                .order_by(SystemLog.id.asc())
                 .limit(batch_size)
             )
-            deleted = result.rowcount
+            result = await db.execute(delete(SystemLog).where(SystemLog.id.in_(batch_ids)))
+            deleted = int(result.rowcount or 0)
             total_deleted += deleted
+            if deleted:
+                await db.commit()          # 每批落地：表再大也不会攒成一个巨型事务
             if deleted < batch_size:
                 break
         return {"deleted": total_deleted, "cutoff": before}

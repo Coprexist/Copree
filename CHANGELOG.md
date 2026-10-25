@@ -9,6 +9,13 @@
 ## [Unreleased]
 
 ### 🐛 修复
+- **审计日志清理从来没跑通过**：`postgres_backend.cleanup` 在 DELETE 上链了 `.limit()`——
+  SQLAlchemy 的 `Delete` 没这个方法（PostgreSQL 原生也不支持 `DELETE ... LIMIT`），于是 bootstrap
+  的清理循环每 5 分钟一条 `AttributeError: 'Delete' object has no attribute 'limit'`，审计表只长不缩。
+  现在分批改成「先挑 id 子查询、再按 id 删」，每批提交一次（表再大也不攒成一个巨型事务），
+  传入的 ISO 串在入口转成 `datetime`（asyncpg 不做隐式转换）。
+  另钉一条用例 `tests/test_audit_cleanup.py`：过期记录删得掉、保留期内不许动、换新连接查得到结果（证明真提交了）。
+  线上现有 68 条超过 90 天保留期的记录，按设计会在 03:00 的定时清理里被删。
 - **运行模式是整个世界一个、刷新就回到默认**：把某个对话切到「自动」后，新开一场对话、或刷新页面，
   模式就跟着变——同一世界里随手问和大改只能互相将就。现在模式**跟着会话走**：记在
   `config.sessions[<sid>].ai_mode`，切会话 / 新对话 / 刷新页面读的都是这一场自己的值
