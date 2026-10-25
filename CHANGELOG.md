@@ -9,6 +9,22 @@
 ## [Unreleased]
 
 ### 🐛 修复
+- **运行模式是整个世界一个、刷新就回到默认**：把某个对话切到「自动」后，新开一场对话、或刷新页面，
+  模式就跟着变——同一世界里随手问和大改只能互相将就。现在模式**跟着会话走**：记在
+  `config.sessions[<sid>].ai_mode`，切会话 / 新对话 / 刷新页面读的都是这一场自己的值
+  （`get_mode(world, session_id)` 是唯一读取口、`set_mode` 是唯一写入口；该会话没选过时回退世界级
+  `config.ai_mode`）。**默认档改为「计划」**：打开页面即计划，动手前先出计划过目（21 个没设置过的世界
+  一并生效；4 个显式设过的世界保留原值，直到用户重新选择）。前端切模式带 `session_id` 一起送，
+  切/新建会话的载荷里带回这一场自己的 `ai_mode`，刷新时由 `/chat/status` 带回。
+  用例 `tests/test_world_ai_guardrails.py::test_mode_follows_each_conversation`。
+- **计划弹窗只能整份通过**：用户只想做其中几件事时，弹窗里没有地方表达，AI 重新提交计划只能从
+  一句自由文本里猜「哪几条过了」。现在 `present_plan` 可以带 `items`（AI 自己分条），弹窗里
+  「**同意**」仍是整份通过（一步结束，不多点一次），另有「只做其中几条」展开勾选——提交时把勾选下标
+  随回执送后端（`ApprovalRequest.approved_items`），工具结果给出 `approved_items` / `skipped_items`
+  两张单子，没勾的条目 AI 一条都不许做。没带 `items` 的审批（下载/删除确认）与旧前端行为完全不变；
+  一条都没勾却提交 = 按不通过处理，不会悄悄变成「全部通过」。用例
+  `tests/test_world_ai_guardrails.py::test_only_picked_items_are_approved` 等 5 条覆盖
+  整份通过 / 部分通过 / 一条没勾 / 条目裁长封顶。
 - **世界 AI 做页面时踩到的四处工具摩擦力**（它自己列的清单，逐条钉了用例
   `tests/test_world_file_tool_ergonomics.py`）：
   ① `file_edit` 的 `str_replace` 只判定「有几处匹配」，两行只差两个空格缩进时直接打回，它只能往上贴更多上下文——

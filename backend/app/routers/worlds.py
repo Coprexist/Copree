@@ -110,8 +110,12 @@ class SessionTitleRequest(BaseModel):
 
 
 class AiModeRequest(BaseModel):
-    """世界 AI 运行模式：auto（自动）/ review（审阅）/ plan（计划）— 只由用户/API 改"""
+    """世界 AI 运行模式：auto（自动）/ review（审阅）/ plan（计划）— 只由用户/API 改
+
+    模式跟着对话走：session_id 指定改哪一场会话（不传 = 当前会话）。
+    """
     mode: str = Field(..., description="auto | review | plan")
+    session_id: str | None = Field(default=None, description="哪一场会话；不传 = 当前会话")
 
 
 class ApprovalRequest(BaseModel):
@@ -120,6 +124,10 @@ class ApprovalRequest(BaseModel):
     approved: bool = Field(..., description="用户是否同意")
     note: str | None = Field(default=None, max_length=NOTE_MAX,
                            description="用户写的理由或补充要求（可选，随同意/不同意一起交给 AI）")
+    approved_items: list[int] | None = Field(
+        default=None,
+        description="分条审批（present_plan 的 items）里用户勾选的下标；不传 = 整份通过，"
+                    "传空列表 = 一条都没勾（按不通过处理）")
 
 
 class ApprovalTouchRequest(BaseModel):
@@ -878,10 +886,14 @@ async def _session_payload(db, world_repo, world_id: int, world, current_session
     """
     from app.services.world.world_chat_service import get_chat_history, list_sessions, session_id_for_db
 
+    from app.services.world.world_ai_mode import get_mode
+
     msgs = await get_chat_history(world_repo, world_id, 30, session_id=session_id_for_db(world))
     return {
         "current_session": current_session, "messages": msgs,
         "sessions": await list_sessions(world_repo, world),
+        # 切/新建会话后前端立刻拿到这一场自己的模式，不用再等一次状态轮询
+        "ai_mode": get_mode(world),
     }
 
 
@@ -1159,15 +1171,16 @@ async def set_ai_mode(
     """
     await _require_owner(db, world_id, current_user["user_id"])
     from app.models.world import World as _World
-    from app.services.world.world_ai_mode import MODES
+    from app.services.world.world_ai_mode import MODES, current_session, set_mode
     if req.mode not in MODES:
         raise HTTPException(status_code=400, detail=f"mode 必须是 {'/'.join(MODES)} 之一")
     world_row = await db.get(_World, world_id)
     if world_row is None:
         raise HTTPException(status_code=404, detail="世界不存在")
-    world_row.config = {**(world_row.config or {}), "ai_mode": req.mode}
+    # 只改这一场会话（默认当前会话）：同一世界不同对话各用各的模式
+    set_mode(world_row, req.mode, req.session_id)
     await db.commit()
-    return {"ai_mode": req.mode}
+    return {"ai_mode": req.mode, "session_id": req.session_id or current_session(world_row)}
 
 
 @router.post("/{world_id}/chat/approval")
@@ -1180,7 +1193,7 @@ async def resolve_chat_approval(
     """审批弹窗回执：用户点同意/不同意，等在服务端的工具调用随即继续（仅创建者）"""
     await _require_owner(db, world_id, current_user["user_id"])
     from app.services.world.world_ai_mode import resolve_approval
-    if not resolve_approval(req.approval_id, req.approved, req.note or ""):
+    if not resolve_approval(req.approval_id, req.approved, req.note or "", req.approved_items):
         raise HTTPException(status_code=404, detail="审批项不存在或已被处理")
     return {"success": True}
 

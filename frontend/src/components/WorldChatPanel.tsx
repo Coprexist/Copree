@@ -172,15 +172,17 @@ const WorldChatPanel = memo(forwardRef<WorldChatHandle, WorldChatPanelProps>(({ 
   const colHostRef = useRef<HTMLDivElement | null>(null)
   const setColumnHost = useCallback((el: HTMLDivElement | null) => { colHostRef.current = el }, [])
   const { contentWidth, dragging: widthDragging, ...handleProps } = useContentColumnWidth(columnWidth, colHostRef)
-  // 运行模式（对话栏内切换；与设计页配置弹窗是同一个后端字段，切换后回调父组件同步）
-  const [mode, setMode] = useState(aiMode || 'review')
+  // 运行模式（对话栏内切换）：权威值在 chat.aiMode —— 后端按会话记，刷新/切会话都由它带回；
+  // 这里只负责发起切换（带上当前会话）并把结果回报给父组件
   const [modeBusy, setModeBusy] = useState(false)
-  useEffect(() => { if (aiMode) setMode(aiMode) }, [aiMode])
+  // ── 内部管理所有聊天状态 ──
+  const chat = useWorldChat({ wid, onRefresh, onMsg })
+  const { setAiMode } = chat
+  const mode = chat.aiMode || aiMode || 'plan'
   const switchMode = useCallback(async (next: string) => {
     setModeBusy(true)
     try {
-      await api.put<{ ai_mode: string }>(`/worlds/${wid}/ai-mode`, { mode: next })
-      setMode(next)
+      await setAiMode(next)
       onModeChange?.(next)
       const item = MODE_ITEMS.find((m) => m.key === next)
       onMsg?.(item ? t(item.hintKey) : next)
@@ -189,9 +191,7 @@ const WorldChatPanel = memo(forwardRef<WorldChatHandle, WorldChatPanelProps>(({ 
     } finally {
       setModeBusy(false)
     }
-  }, [wid, onModeChange, onMsg, t])
-  // ── 内部管理所有聊天状态 ──
-  const chat = useWorldChat({ wid, onRefresh, onMsg })
+  }, [setAiMode, onModeChange, onMsg, t])
 
   // ── 计算派生状态 ──
   const isInterrupted = useMemo(() => {
@@ -707,7 +707,7 @@ const WorldChatPanel = memo(forwardRef<WorldChatHandle, WorldChatPanelProps>(({ 
           // key：换了一条审批就重挂载，输入框不会带着上一条残留的字
           key={chat.approvals[0].approval_id}
           approval={chat.approvals[0]}
-          onDecide={(ok, note) => chat.resolveApproval(chat.approvals[0].approval_id, ok, note)}
+          onDecide={(ok, note, picked) => chat.resolveApproval(chat.approvals[0].approval_id, ok, note, picked)}
           onTouch={chat.touchApproval}
         />
       )}

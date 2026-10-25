@@ -25,13 +25,14 @@ import json
 import logging
 import time
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
 MODES = ("auto", "review", "plan")
 MODE_LABELS = {"auto": "自动模式", "review": "审阅模式", "plan": "计划模式"}
-DEFAULT_MODE = "review"                 # 默认最安全的一档（老世界一并生效）
+DEFAULT_MODE = "plan"                   # 打开页面默认「计划」：动手前先出计划让用户过目
 
 # 三类敏感动作 → 工具名单（按动作类批准：一次同意覆盖本轮同类操作，避免弹窗轰炸）
 ACTION_TOOLS: dict[str, frozenset[str]] = {
@@ -73,10 +74,39 @@ _WAIT_FOR_VIEWER = 20                   # 没人在看时先等一小会儿（�
 _TOUCH_SLICE = 5                        # 等待循环的切片（秒）：切片够短，打字心跳才能及时续期
 
 
-def get_mode(world) -> str:
-    """世界当前运行模式（未设置/非法值 → DEFAULT_MODE）"""
-    mode = str((world.config or {}).get("ai_mode") or DEFAULT_MODE)
+def current_session(world) -> str:
+    """当前会话 key（default / uuid）——模式按会话记，取法只有这一处。"""
+    return str((world.config or {}).get("current_session") or "default")
+
+
+def get_mode(world, session_id: str | None = None) -> str:
+    """该会话的运行模式：会话自己的选择 > 世界默认 > DEFAULT_MODE。
+
+    模式**跟着对话走**（用户 2026-10-25）：同一世界里 A 会话在计划档、B 会话在自动档互不影响；
+    刷新页面读的就是当前会话自己那条，不会退回默认值。
+    """
+    cfg = world.config or {}
+    sid = current_session(world) if session_id is None else session_id
+    mode = str(((cfg.get("sessions") or {}).get(sid) or {}).get("ai_mode")
+               or cfg.get("ai_mode") or DEFAULT_MODE)
     return mode if mode in MODES else DEFAULT_MODE
+
+
+def set_mode(world, mode: str, session_id: str | None = None) -> str:
+    """切换某个会话的运行模式（唯一写入口：路由、/new、测试都走它）。
+
+    只改这一场会话的记录，不动别的会话；调用方负责 commit。
+    刻意不给 AI 任何改模式的工具：模式是用户对 AI 的约束，AI 能改就等于自己拆审阅。
+    """
+    if mode not in MODES:
+        raise ValueError(f"mode 必须是 {'/'.join(MODES)} 之一")
+    cfg = dict(world.config or {})
+    sid = current_session(world) if session_id is None else session_id
+    sessions = dict(cfg.get("sessions") or {})
+    sessions[sid] = {**(sessions.get(sid) or {}), "ai_mode": mode}
+    cfg["sessions"] = sessions
+    world.config = cfg
+    return mode
 
 
 def action_of(tool_name: str) -> str | None:
@@ -104,6 +134,11 @@ NOTE_MAX = 2000
 # 用户原话进工具结果时用的键（唯一约定）：门禁放行、旁路事后确认都写它，AI 从这里读
 USER_NOTE_KEY = "user_note"
 
+# 分条审批（present_plan 的条目）：条数与单条长度都要有上限——
+# 弹窗一次只显示一条审批，条目过多既看不完也没法勾，长度不封顶会把 SSE 撑爆。
+ITEMS_MAX = 20
+ITEM_MAX = 300
+
 
 @dataclass(frozen=True, slots=True)
 class Approval:
@@ -118,6 +153,33 @@ class Approval:
     note: str = ""            # 用户自己写的原话（理由 / 补充要求），没写就是空串
     attended: bool = True     # 真有人点了按钮才为 True（没前端 / 等超时 = False）
     reason: str = ""          # 一句话结论（进日志，也在无人应答时进 AI 上下文）
+    # 分条审批：items 是这次可以逐条勾选的内容（空 = 整份一起批，多数审批就是这样）；
+    # approved_indexes 是用户勾了的下标，空 = 一条没勾也没「部分通过」→ 按全部处理。
+    items: tuple[str, ...] = ()
+    approved_indexes: tuple[int, ...] = ()
+
+    @property
+    def approved_items(self) -> tuple[str, ...]:
+        """真正通过了的条目（全份通过 = 全部；部分通过 = 勾了的那几条）。"""
+        if not self.approved:
+            return ()
+        if not self.approved_indexes:
+            return self.items
+        return tuple(t for i, t in enumerate(self.items) if i in self.approved_indexes)
+
+    @property
+    def skipped_items(self) -> tuple[str, ...]:
+        """没通过、别去做的条目——AI 要按它把计划收窄。"""
+        if not self.approved:
+            return self.items
+        if not self.approved_indexes:
+            return ()
+        return tuple(t for i, t in enumerate(self.items) if i not in self.approved_indexes)
+
+    @property
+    def partial(self) -> bool:
+        """只通过了一部分（整份同意 / 压根没分条都不算）。"""
+        return bool(self.approved and self.items and len(self.approved_items) < len(self.items))
 
     @property
     def instruction(self) -> str:
@@ -225,12 +287,28 @@ async def _wait_decision(entry: dict, idle_timeout: int, hard_cap: int) -> bool:
         return bool(decided)
 
 
+def clean_items(items: Sequence[str] | None) -> tuple[str, ...]:
+    """审批条目归一（唯一入口）：去空、裁长、封顶条数。空 = 这份审批不逐条勾。"""
+    out = []
+    for raw in items or ():
+        text = str(raw or "").strip()
+        if text:
+            out.append(text[:ITEM_MAX])
+        if len(out) >= ITEMS_MAX:
+            break
+    return tuple(out)
+
+
 async def request_approval(
     world_id: int, turn_id: str, *, kind: str, title: str,
     detail: str = "", body: str = "", body_format: str = "text", body_lang: str = "",
     timeout: int = _APPROVAL_TIMEOUT, on_timeout: bool = False,
+    items: Sequence[str] | None = None,
 ) -> Approval:
     """弹窗征询用户同意（唯一审批通道）。返回 Approval（结论 + 用户原话 + 有没有人应答）。
+
+    items = 可选的分条（present_plan 用）：给了就能逐条勾选，
+    「同意」= 全部通过，「部分同意」= 只执行勾上的那几条；不给就是整份一起批。
 
     on_timeout = 没有人应答（没人看 / 等超时）时算不算放行——由调用方按模式声明，
     不要在这里猜：审阅/计划必须 False，自动档的 AI 主动提问才是 True。
@@ -238,11 +316,13 @@ async def request_approval(
     timeout = **多久没人动**才算超时（秒），不是总时长：用户在弹窗里打字
     （touch_approval 心跳）会把这段空闲窗口续上，总时长另由 _APPROVAL_MAX 封顶。
     """
+    cleaned = clean_items(items)                 # 条目归一（空 = 这份审批不逐条勾）
+
     def _unattended(reason: str) -> Approval:
         if on_timeout:
-            return Approval(approved=True, attended=False,
+            return Approval(approved=True, attended=False, items=cleaned,
                             reason=f"{reason}；自动档按你的判断继续（在回复里说明你的决定）")
-        return Approval(approved=False, attended=False, reason=reason)
+        return Approval(approved=False, attended=False, items=cleaned, reason=reason)
     # 页面未必已经在看这个轮次（外部发起的轮次靠空闲轮询接上）——先等一小会儿再判定无人。
     tbs = _broadcasters(world_id, turn_id)
     deadline = time.monotonic() + _WAIT_FOR_VIEWER
@@ -259,6 +339,7 @@ async def request_approval(
         # 由前端按 body_format 走聊天同款渲染器（markdown / code / text）
         "title": title, "detail": (detail or "")[:4000],
         "body": (body or "")[:_BODY_MAX], "body_format": body_format, "body_lang": body_lang,
+        "items": cleaned,                          # 分条审批：可逐条勾选的条目
         "created_at": time.time(),                 # 墙上时间：给前端显示什么时候开始的
         "started_at": time.monotonic(),            # 单调钟：算总时长上限（不受系统时间调整影响）
         "last_activity": time.monotonic(),         # 用户最近一次动作（点按钮 / 打字心跳）
@@ -269,26 +350,33 @@ async def request_approval(
         "approval_id": approval_id, "status": "pending", "kind": kind,
         "title": title, "detail": entry["detail"],
         "body": entry["body"], "body_format": entry["body_format"], "body_lang": entry["body_lang"],
+        "items": list(cleaned),
         "expires_in": remaining_seconds(entry),
     })
     # 未完成时的兜底结论（finally 里要广播回执，不能因为异常路径没赋值而炸）
-    result = Approval(approved=False, attended=False, reason="审批未完成（按「不通过」处理）")
+    result = Approval(approved=False, attended=False, items=cleaned,
+                      reason="审批未完成（按「不通过」处理）")
     try:
         for tb in tbs:
             await tb.broadcast(pending_event)
         logger.info(f"🔐 世界 #{world_id} 等待用户审批（{kind}）: {title[:60]}")
         approved = await _wait_decision(entry, timeout, _APPROVAL_MAX)
         note = entry.get("note") or ""
-        # 结论必在句子里：用户写了原话就原样附上（不改写用户的措辞），AI 才看得懂是"同意"还是"不同意"
+        picked = tuple(entry.get("picked") or ())
+        # 结论必在句子里：用户写了原话就原样附上（不改写用户的措辞），AI 才看得懂是"同意"还是"不同意"；
+        # 分条审批还要说清「只过了其中几条」——否则 AI 会以为自己被整份驳回或整份放行
+        verdict = "用户同意了" if approved else "用户选择不同意"
+        if approved and cleaned and picked and len(picked) < len(cleaned):
+            verdict = f"用户只同意了其中 {len(picked)}/{len(cleaned)} 条（没勾的别做）"
         result = Approval(
-            approved=approved, note=note,
-            reason=("用户同意了" if approved else "用户选择不同意")
-                   + (f"；用户补充说：{note}" if note else ""),
+            approved=approved, note=note, items=cleaned, approved_indexes=picked,
+            reason=verdict + (f"；用户补充说：{note}" if note else ""),
         )
     except ApprovalTimeout as e:
         result = _unattended(str(e))
     except asyncio.CancelledError:
-        result = Approval(approved=False, attended=False, reason="轮次被中断，审批未完成（按「不通过」处理）")
+        result = Approval(approved=False, attended=False, items=cleaned,
+                          reason="轮次被中断，审批未完成（按「不通过」处理）")
         raise
     finally:
         _pending.pop(approval_id, None)
@@ -305,8 +393,13 @@ async def request_approval(
     return result
 
 
-def resolve_approval(approval_id: str, approved: bool, note: str = "") -> bool:
+def resolve_approval(approval_id: str, approved: bool, note: str = "",
+                     approved_items: Sequence[int] | None = None) -> bool:
     """用户弹窗点击回执（HTTP 端点调用）。note = 用户写的理由/补充要求（可选）。
+
+    approved_items = 分条审批里用户勾选的条目下标：
+    - 不给 / None：整份通过（「同意」，行为与没有分条时一致）；
+    - 给了：只放行这些条目；一条都没勾等于什么都没同意，按「不通过」处理。
 
     返回是否命中待审批项。note 在这里收口裁剪：换行保留（用户可能分条写），长度封顶。
     """
@@ -314,6 +407,13 @@ def resolve_approval(approval_id: str, approved: bool, note: str = "") -> bool:
     if entry is None or entry["future"].done():
         return False
     entry["note"] = (note or "").strip()[:NOTE_MAX]
+    items = entry.get("items") or ()
+    if approved and approved_items is not None and items:
+        picked = tuple(sorted({i for i in approved_items if 0 <= i < len(items)}))
+        if not picked:                              # 勾过的都不在条目里 = 没东西可放行
+            entry["future"].set_result(False)
+            return True
+        entry["picked"] = picked
     entry["future"].set_result(bool(approved))
     return True
 
@@ -324,6 +424,7 @@ def pending_approvals(world_id: int) -> list[dict]:
         {"approval_id": e["id"], "kind": e["kind"], "title": e["title"],
          "detail": e["detail"], "body": e["body"],
          "body_format": e["body_format"], "body_lang": e["body_lang"],
+         "items": list(e["items"]),          # 分条审批：刷新后照旧画勾选框
          "created_at": e["created_at"],
          # 弹窗倒计时的唯一来源（刷新后照它接着走，不从头重数）
          "expires_in": remaining_seconds(e)}
@@ -474,6 +575,9 @@ def build_mode_prompt(mode: str) -> str:
         "不能写文件/世界数据/发群消息）；**计划通过后**本轮按自动模式执行，沙箱恢复可写——"
         "跑打包脚本、批量替换脚本都行，不用手工对齐产物；\n"
         "- 计划未通过前，任何写入/下载/删除工具都会被平台挡下，这是正常的，不要反复试；\n"
+        "- 把计划拆成 items 一起提交（每件事一条）：用户在弹窗里既能一键「同意」整份计划，"
+        "也能只勾其中几条——部分通过时工具结果里的 approved_items / skipped_items 就是"
+        "「能做 / 别做」两张单子，**没勾的一条都别做**，别自己补全；\n"
         "- 任务明显超过本轮默认工具轮次上限（例如要连改十几个文件）时，在 present_plan 里带 "
         "tool_rounds=N 一并申请提额：用户批准计划即批准提额，别硬着头皮开工、卡在最后一轮半途而废；\n"
         "- 用户在弹窗里可能只通过部分内容，或在输入框里写下修改意见（工具结果里的 "

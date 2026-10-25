@@ -152,11 +152,40 @@ def test_action_classes_are_conservative():
     assert action_of("world_stats") == "modify"          # 世界自定义 skill 同样受管
 
 
-def test_mode_defaults_to_review_and_ignores_garbage():
+def test_mode_defaults_to_plan_and_ignores_garbage():
     assert DEFAULT_MODE in MODES
-    assert get_mode(_World()) == DEFAULT_MODE
+    assert get_mode(_World()) == "plan"          # 打开页面默认「计划」（用户 2026-10-25）
     assert get_mode(_World("auto")) == "auto"
     assert get_mode(_World("nonsense")) == DEFAULT_MODE
+
+
+def test_mode_follows_each_conversation():
+    """模式跟着对话走：各会话各记各的，刷新/切换不串味，没选过的会话用默认值。"""
+    from app.services.world.world_ai_mode import set_mode
+
+    w = _World()
+    w.config = {"current_session": "s1"}
+    assert get_mode(w) == "plan"                       # 没选过 = 默认
+
+    set_mode(w, "auto")                                # 不传 session = 改当前会话
+    assert get_mode(w) == "auto"
+
+    w.config = {**w.config, "current_session": "s2"}
+    assert get_mode(w) == "plan"                       # 另一场会话不受影响
+
+    set_mode(w, "review", "s2")
+    assert get_mode(w, "s2") == "review" and get_mode(w, "s1") == "auto"
+
+    w.config = {**w.config, "current_session": "s1"}   # 切回来仍是它自己的模式
+    assert get_mode(w) == "auto"
+
+    try:
+        set_mode(w, "nonsense")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("非法模式必须拒绝")
+    assert get_mode(w) == "auto"
 
 
 async def test_gate_auto_allows_plan_blocks_review_needs_a_human():
@@ -389,6 +418,103 @@ async def test_ask_user_carries_the_users_own_words():
         assert r["approved"] is True and r["answered"] is True and r["answer"] == "同意"
         assert r[USER_NOTE_KEY] == "紫色那套，别太亮"
         assert "紫色那套，别太亮" in tool.summary(r)      # 卡片上也看得见用户说了什么
+    finally:
+        _workers.pop(wid_turn, None)
+
+
+# ═══════════════════════════════════════════════════════════════
+# 计划分条审批（用户 2026-10-25）：「同意」= 整份通过；想只做一部分时勾选后提交
+# ═══════════════════════════════════════════════════════════════
+
+def test_items_are_trimmed_and_capped():
+    """条目归一：去空、裁长、封顶条数——弹窗一屏要看完，SSE 也不能被撑爆。"""
+    from app.services.world.world_ai_mode import ITEM_MAX, ITEMS_MAX, clean_items
+
+    items = clean_items(["  改标题  ", "", None, "x" * (ITEM_MAX + 50)])
+    assert items[0] == "改标题" and len(items[1]) == ITEM_MAX and len(items) == 2
+    assert len(clean_items([f"第 {i} 条" for i in range(ITEMS_MAX + 10)])) == ITEMS_MAX
+    assert clean_items(None) == () and clean_items([]) == ()
+
+
+def test_approval_reports_what_passed_and_what_did_not():
+    """Approval 的三张面孔：整份通过 / 部分通过 / 不通过，AI 读字段而不是猜句子。"""
+    from app.services.world.world_ai_mode import Approval
+
+    items = ("改标题", "加按钮", "换配色")
+    full = Approval(approved=True, items=items)
+    assert full.approved_items == items and full.skipped_items == () and not full.partial
+
+    part = Approval(approved=True, items=items, approved_indexes=(0, 2))
+    assert part.approved_items == ("改标题", "换配色")
+    assert part.skipped_items == ("加按钮",)
+    assert part.partial
+
+    deny = Approval(approved=False, items=items)
+    assert deny.approved_items == () and deny.skipped_items == items and not deny.partial
+
+
+async def _plan_run(wid_turn: int, items: list[str]):
+    """起一个 present_plan 调用，返回 (tool, task, queue, turn_state)"""
+    from app.tools.world.present_plan import PresentPlanTool
+
+    tb = TurnBroadcast("t_items")
+    queue = tb.subscribe()
+    _workers[wid_turn] = _LiveWorker(tb)
+    world = _World("plan")
+    world.id = wid_turn
+    turn_state = {"turn_id": "t_items"}
+    ctx = WorldToolContext(
+        world_repo=None, world=world, arguments="{}",
+        args={"plan": "- " + "\n- ".join(items), "items": items},
+        turn_state=turn_state,
+    )
+    tool = PresentPlanTool()
+    return tool, asyncio.create_task(tool.execute(ctx)), queue, turn_state
+
+
+async def test_only_picked_items_are_approved():
+    """只勾一条 → AI 拿到 approved_items / skipped_items 两张单子，没勾的别做。"""
+    wid_turn = 987660
+    tool, task, queue, turn_state = await _plan_run(wid_turn, ["改标题", "加按钮"])
+    try:
+        payload = await _take_pending(queue)          # 弹窗必须带着条目，前端才好画勾选框
+        assert payload["items"] == ["改标题", "加按钮"]
+        assert resolve_approval(payload["approval_id"], True, "", [1]) is True
+        r = await asyncio.wait_for(task, timeout=2)
+        assert r["approved"] is True
+        assert r["approved_items"] == ["加按钮"] and r["skipped_items"] == ["改标题"]
+        assert "别做" in r["instruction"]
+        assert turn_state.get("plan_approved") is True       # 勾了的那几条按自动模式执行
+        assert "部分通过" in tool.summary(r)
+    finally:
+        _workers.pop(wid_turn, None)
+
+
+async def test_plain_approval_passes_the_whole_plan():
+    """点「同意」不勾选 = 全部通过，行为与没有分条时一致（旧前端也照旧能用）。"""
+    wid_turn = 987661
+    tool, task, queue, turn_state = await _plan_run(wid_turn, ["改标题", "加按钮"])
+    try:
+        payload = await _take_pending(queue)
+        assert resolve_approval(payload["approval_id"], True, "顺便把字调大") is True
+        r = await asyncio.wait_for(task, timeout=2)
+        assert r["approved"] is True and "skipped_items" not in r and "approved_items" not in r
+        assert r[USER_NOTE_KEY] == "顺便把字调大"
+        assert turn_state.get("plan_approved") is True
+    finally:
+        _workers.pop(wid_turn, None)
+
+
+async def test_picking_nothing_approves_nothing():
+    """一条都没勾却点了提交 → 不能悄悄变成「全部通过」，按不通过处理。"""
+    wid_turn = 987662
+    _, task, queue, turn_state = await _plan_run(wid_turn, ["改标题", "加按钮"])
+    try:
+        payload = await _take_pending(queue)
+        assert resolve_approval(payload["approval_id"], True, "再看看", []) is True
+        r = await asyncio.wait_for(task, timeout=2)
+        assert r["approved"] is False and turn_state.get("plan_approved") is None
+        assert r[USER_NOTE_KEY] == "再看看"
     finally:
         _workers.pop(wid_turn, None)
 

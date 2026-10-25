@@ -77,6 +77,8 @@ export interface Approval {
   body_lang?: string
   /** 距超时还剩多少秒（服务端唯一口径；输入框里打字的心跳会把它续回窗口大小） */
   expires_in?: number
+  /** 分条审批（present_plan）：给了就能只挑其中几条放行；空 = 整份一起批 */
+  items?: string[]
 }
 
 /** 解析 `[PREFIX]{json}` 事件体；前缀不匹配/JSON 坏返回 null */
@@ -141,6 +143,9 @@ export interface UseWorldChatReturn {
   isAtBottom: boolean
   chatCanScroll: boolean
   currentSession: string
+  /** 当前会话的运行模式（auto | review | plan）：跟着对话走，刷新不丢 */
+  aiMode: string
+  setAiMode: (mode: string) => Promise<void>
   sessionList: { id: string; title?: string; last_active_at?: string; pinned?: boolean }[]
   switchSession: (sid: string) => Promise<boolean>
   newSession: () => Promise<string | null>
@@ -150,7 +155,7 @@ export interface UseWorldChatReturn {
   unreadCount: number
   /** 待用户点按钮的审批项（队列，通常一次只有一条；刷新后由 /chat/status 恢复） */
   approvals: Approval[]
-  resolveApproval: (approvalId: string, approved: boolean, note?: string) => Promise<void>
+  resolveApproval: (approvalId: string, approved: boolean, note?: string, picked?: number[]) => Promise<void>
   /** 审批心跳（打字时调用）：返回剩余秒数，0 = 已被处理 */
   touchApproval: (approvalId: string) => Promise<number>
   /** 给会话改名（sessionId = 列表里任意一场）；返回规范化后的名字，'' = 已清除命名 */
@@ -173,6 +178,10 @@ export function useWorldChat({ wid, onRefresh, onMsg }: UseWorldChatOptions) {
   const [sessionList, setSessionList] = useState<{ id: string; title?: string; last_active_at?: string; pinned?: boolean }[]>([])
   const currentSessionRef = useRef(currentSession)
   currentSessionRef.current = currentSession
+  // 运行模式（跟着会话走）：后端按会话记，刷新后由 /chat/status 与切会话载荷带回
+  const [aiMode, setAiModeState] = useState<string>('plan')
+  const aiModeRef = useRef(aiMode)
+  aiModeRef.current = aiMode
   // 供 WS 回调（onMessage 闭包）引用组件级滚动函数——[INSERT] 插入消息后滚到底部
   /**
    * 贴底跟随：唯一实现见 hooks/useStickToBottom（DSH 对话页用同一份）。
@@ -233,8 +242,9 @@ export function useWorldChat({ wid, onRefresh, onMsg }: UseWorldChatOptions) {
       const q = opts?.before_id ? `?before_id=${opts.before_id}&limit=30` : '?limit=30'
       // 翻页时记录原滚动位置（prepend 后补回，作用于所有面板实例）
       const heights = listEls().map((el) => el.scrollHeight)
-      const r = await api.get<{ messages: ChatMsg[]; has_more: boolean; current_session?: string; sessions?: { id: string; title?: string; last_active_at?: string; pinned?: boolean }[]; commands?: CmdSpec[] }>(`/worlds/${wid}/chat${q}`)
+      const r = await api.get<{ messages: ChatMsg[]; has_more: boolean; current_session?: string; ai_mode?: string; sessions?: { id: string; title?: string; last_active_at?: string; pinned?: boolean }[]; commands?: CmdSpec[] }>(`/worlds/${wid}/chat${q}`)
       if (r.current_session) setCurrentSession(r.current_session)
+      if (r.ai_mode) setAiModeState(r.ai_mode)
       if (Array.isArray(r.sessions)) setSessionList(r.sessions)
       // 命令目录以后端为准（唯一来源）；空数组不下发时保留本地兜底
       if (Array.isArray(r.commands) && r.commands.length) setWorldCommands(r.commands)
@@ -452,7 +462,7 @@ export function useWorldChat({ wid, onRefresh, onMsg }: UseWorldChatOptions) {
                   : [...list, {
                     approval_id: ap.approval_id, kind: ap.kind, title: ap.title, detail: ap.detail,
                     body: ap.body, body_format: ap.body_format, body_lang: ap.body_lang,
-                    expires_in: ap.expires_in,
+                    expires_in: ap.expires_in, items: ap.items,
                   }])
             }
             continue
@@ -552,6 +562,8 @@ export function useWorldChat({ wid, onRefresh, onMsg }: UseWorldChatOptions) {
         const s = await r.json()
         // 刷新页面后重画待审批弹窗（弹窗事件是一次性广播，错过就靠这里补）
         if (Array.isArray(s?.approvals)) setApprovals(s.approvals)
+        // 模式跟着会话走：读到的是当前会话自己那条，不随刷新回到默认值
+        if (s?.ai_mode) setAiModeState(s.ai_mode)
         if (s && s.processing) {
           applyProcessing(true)
           // 有进行中的 turn → 订阅 SSE 直播，实时看到流式内容（不用等整轮跑完才一次性更新）
@@ -595,10 +607,11 @@ export function useWorldChat({ wid, onRefresh, onMsg }: UseWorldChatOptions) {
   // ── 会话切换 / 收藏（/new /use /pin 的前端等价操作，走 API 不占对话轮次）──
   const switchSession = useCallback(async (sid: string): Promise<boolean> => {
     try {
-      const r = await api.post<{ messages: ChatMsg[]; current_session: string; sessions: { id: string; title?: string; last_active_at?: string; pinned?: boolean }[] }>(
+      const r = await api.post<{ messages: ChatMsg[]; current_session: string; ai_mode?: string; sessions: { id: string; title?: string; last_active_at?: string; pinned?: boolean }[] }>(
         `/worlds/${wid}/chat/session`, { session_id: sid },
       )
       setCurrentSession(r.current_session)
+      if (r.ai_mode) setAiModeState(r.ai_mode)
       if (Array.isArray(r.sessions)) setSessionList(r.sessions)
       if (Array.isArray(r.messages)) setChatMsgs(r.messages)
       setChatHasMore(false)
@@ -612,10 +625,11 @@ export function useWorldChat({ wid, onRefresh, onMsg }: UseWorldChatOptions) {
    *  不再像过去那样发一条 /new 聊天消息（那会把 /new 写进旧会话并占一个轮次）。 */
   const newSession = useCallback(async (): Promise<string | null> => {
     try {
-      const r = await api.post<{ messages: ChatMsg[]; current_session: string; sessions: { id: string; title?: string; created_at?: string; last_active_at?: string; pinned?: boolean }[] }>(
+      const r = await api.post<{ messages: ChatMsg[]; current_session: string; ai_mode?: string; sessions: { id: string; title?: string; created_at?: string; last_active_at?: string; pinned?: boolean }[] }>(
         `/worlds/${wid}/chat/session/new`, {},
       )
       setCurrentSession(r.current_session)
+      if (r.ai_mode) setAiModeState(r.ai_mode)
       if (Array.isArray(r.sessions)) setSessionList(r.sessions)
       setChatMsgs(Array.isArray(r.messages) ? r.messages : [])
       setChatHasMore(false)
@@ -648,13 +662,29 @@ export function useWorldChat({ wid, onRefresh, onMsg }: UseWorldChatOptions) {
     await api.download(`/worlds/${wid}/chat/export?session_id=${encodeURIComponent(sessionId)}&format=${format}`, fallbackName)
   }, [wid])
 
+  /** 切运行模式：只改当前会话（session_id 一起送），失败回滚并抛给调用方提示。 */
+  const setAiMode = useCallback(async (mode: string) => {
+    const prev = aiModeRef.current
+    setAiModeState(mode)
+    try {
+      await api.put<{ ai_mode: string }>(`/worlds/${wid}/ai-mode`, {
+        mode, session_id: currentSessionRef.current,
+      })
+    } catch (e) {
+      setAiModeState(prev)
+      throw e
+    }
+  }, [wid])
+
   /** 审批弹窗回执：先乐观收起弹窗，再告诉后端（服务端据此恢复被挡住的工具调用）。
-   *  note = 用户在输入框里写的理由/补充要求，随点击一起交给 AI（后端并进工具结果的 user_note）。 */
-  const resolveApproval = useCallback(async (approvalId: string, approved: boolean, note = '') => {
+   *  note = 用户在输入框里写的理由/补充要求，随点击一起交给 AI（后端并进工具结果的 user_note）；
+   *  picked = 分条审批里勾选的下标（「部分同意」才传；不传 = 整份通过）。 */
+  const resolveApproval = useCallback(async (approvalId: string, approved: boolean, note = '', picked?: number[]) => {
     setApprovals((list) => list.filter((a) => a.approval_id !== approvalId))
     try {
       await api.post<{ success: boolean }>(`/worlds/${wid}/chat/approval`, {
         approval_id: approvalId, approved, note: note.trim() || undefined,
+        approved_items: picked,
       })
     } catch (e: any) {
       onMsg(`审批提交失败: ${e?.message || e}`)
@@ -801,6 +831,7 @@ export function useWorldChat({ wid, onRefresh, onMsg }: UseWorldChatOptions) {
     cmdActive, setCmdActive, cmdQuery, setCmdQuery, cmdIdx, setCmdIdx, cmdFiltered, worldCommands,
     submitText, insertSuggestion, isAtBottom, chatCanScroll, scrollToBottom, forceScrollToBottom,
     currentSession, sessionList, switchSession, newSession, togglePin, unreadCount,
+    aiMode, setAiMode,
     renameSession, exportSession,
     approvals, resolveApproval, touchApproval,
   }

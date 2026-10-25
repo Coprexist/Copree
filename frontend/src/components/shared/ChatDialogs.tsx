@@ -28,6 +28,8 @@ export interface ChatApproval {
   body_lang?: string
   /** 距超时还剩多少秒（服务端唯一口径；输入框里打字的心跳会把它续回窗口大小） */
   expires_in?: number
+  /** 分条审批（present_plan）：给了就能只挑其中几条放行；空/不给 = 整份一起批 */
+  items?: string[]
 }
 
 /** 一个选项：DSH 的提问可选带说明 */
@@ -195,7 +197,8 @@ export function formatRemaining(seconds: number): string {
  *  事件类型关键词由后端按下发的 kind 渲染，用户一眼看清在批什么。 */
 export function ApprovalDialog({ approval, onDecide, onTouch, allowNote = true }: {
   approval: ChatApproval
-  onDecide: (ok: boolean, note: string) => void
+  /** picked = 分条审批里勾选的下标（只有「部分同意」才传；整份通过时不传） */
+  onDecide: (ok: boolean, note: string, picked?: number[]) => void
   onTouch: (approvalId: string) => Promise<number>
   /** 有没有"补充一句"这条通道：DSH 的审批只有同意/不同意，没地方放附言，就别摆一个白写的输入框 */
   allowNote?: boolean
@@ -204,6 +207,18 @@ export function ApprovalDialog({ approval, onDecide, onTouch, allowNote = true }
   const kindKey = `tool:world.kind.${approval.kind}`
   const localized = t(kindKey)
   const body = approval.body || ''
+  // 分条审批：默认收起（「同意」就是整份通过），点「只做其中几条」才展开勾选，
+  // 勾上的下标随回执一起给后端，没勾的按不通过处理（用户 2026-10-25 定：同意 = 全部同意）
+  const items = approval.items ?? []
+  const [picking, setPicking] = useState(false)
+  const [picked, setPicked] = useState<Set<number>>(() => new Set(items.map((_, i) => i)))
+  const allPicked = items.length > 0 && picked.size === items.length
+  const toggleItem = (i: number) => setPicked((s) => {
+    const next = new Set(s)
+    if (next.has(i)) next.delete(i)
+    else next.add(i)
+    return next
+  })
   // 理由/补充要求（可选）：跟那一票一起发给 AI——不同意时说清为什么，同意时顺手加要求
   const [note, setNote] = useState('')
   // 倒计时（用户 2026-09-23：等确认的时间太紧，而且"正在编辑输入框"时还在计时）：
@@ -243,8 +258,26 @@ export function ApprovalDialog({ approval, onDecide, onTouch, allowNote = true }
         <div className="px-4 py-3 max-h-[55vh] overflow-y-auto space-y-2">
           <div className="text-sm font-medium">{approval.title}</div>
           {approval.detail && <div className="text-xs text-textSecondary">{approval.detail}</div>}
+          {/* 分条勾选：展开时用清单替掉正文——正文那份计划通常就是这些条目的铺陈，重复显示只会挤掉选择 */}
+          {picking && items.length > 0 && (
+            <div className="space-y-1">
+              <label className="flex items-center gap-2 pb-1 text-2xs text-textSecondary cursor-pointer">
+                <input type="checkbox" className="accent-accent-500" checked={allPicked}
+                       onChange={() => setPicked(allPicked ? new Set() : new Set(items.map((_, i) => i)))} />
+                {t('tool:world.approval.selectAll', { n: items.length })}
+              </label>
+              {items.map((text, i) => (
+                <label key={i}
+                       className={`flex items-start gap-2 rounded-control px-2 py-1.5 text-xs cursor-pointer ${picked.has(i) ? 'bg-elevated' : ''}`}>
+                  <input type="checkbox" className="mt-0.5 accent-accent-500" checked={picked.has(i)}
+                         onChange={() => toggleItem(i)} />
+                  <span className={picked.has(i) ? '' : 'text-textMuted'}>{text}</span>
+                </label>
+              ))}
+            </div>
+          )}
           {/* 正文按 AI 实际写的东西渲染：散文/计划走 markdown，代码走代码块（同日聊天同款渲染器） */}
-          {!!body && (
+          {!!body && !picking && (
             approval.body_format === 'code' ? (
               <div className="max-h-[45vh] overflow-auto">
                 <CodeRenderer className={`language-${approval.body_lang || 'plaintext'}`}>{body}</CodeRenderer>
@@ -277,12 +310,32 @@ export function ApprovalDialog({ approval, onDecide, onTouch, allowNote = true }
                 <span className="ml-1 text-textSecondary">· {t('tool:world.approval.remaining', { time: formatRemaining(remaining) })}</span>
               )}
             </span>
-            <Button size="sm" variant="outline" onClick={() => onDecide(false, note)}>
-              {t('tool:world.approval.deny')}
-            </Button>
-            <Button size="sm" onClick={() => onDecide(true, note)}>
-              {t('tool:world.approval.approve')}
-            </Button>
+            {picking ? (
+              <>
+                <Button size="sm" variant="outline" onClick={() => setPicking(false)}>
+                  {t('tool:world.approval.partialCancel')}
+                </Button>
+                <Button size="sm" disabled={picked.size === 0}
+                        onClick={() => onDecide(true, note, [...picked].sort((a, b) => a - b))}>
+                  {t('tool:world.approval.partialConfirm', { n: picked.size })}
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button size="sm" variant="outline" onClick={() => onDecide(false, note)}>
+                  {t('tool:world.approval.deny')}
+                </Button>
+                {/* 有分条才给「部分同意」：整份审批（下载/删除确认）没有可勾的东西 */}
+                {items.length > 0 && (
+                  <Button size="sm" variant="outline" onClick={() => setPicking(true)}>
+                    {t('tool:world.approval.partialButton', { n: items.length })}
+                  </Button>
+                )}
+                <Button size="sm" onClick={() => onDecide(true, note)}>
+                  {t('tool:world.approval.approve')}
+                </Button>
+              </>
+            )}
           </div>
         </div>
       </div>

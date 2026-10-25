@@ -645,8 +645,10 @@ POST /world/{id}/api/event     # 用户登录鉴权 + 群绑定/成员校验 + �
 | **review 审阅** | 弹窗确认 | 弹窗确认 | 弹窗确认 | 同类操作本轮只问一次 |
 | **plan 计划** | 计划通过后按自动执行 | 同左 | 同左 | 先出计划 → 弹窗通过 → 本轮转自动 |
 
-- **默认 review**（最安全的一档；世界 config 里没有 `ai_mode` 时按默认走，老世界一并生效）
-- **只由用户/API 改**：`PUT /worlds/{id}/ai-mode`，设计页运行模式三选一。**刻意不给 AI 任何改模式的工具**——模式是用户对 AI 的约束，AI 能改就等于自己拆审阅
+- **默认 plan**（打开页面即计划档：动手前先出计划让用户过目；2026-10-25 起）
+- **跟着对话走**：模式记在 `config.sessions[<sid>].ai_mode`，每场会话各记各的，刷新页面 / 切会话读的都是这一场自己的值；
+  该会话没选过时依次回退到世界级 `config.ai_mode`、再到默认 plan（`world_ai_mode.get_mode(world, session_id)`）。
+- **只由用户/API 改**：`PUT /worlds/{id}/ai-mode?session_id=<sid>`（不传 = 当前会话），设计页运行模式三选一。**刻意不给 AI 任何改模式的工具**——模式是用户对 AI 的约束，AI 能改就等于自己拆审阅
 - **按动作类判定，不逐个工具硬编码**：`world_ai_mode.ACTION_TOOLS` 把工具映射成 download/delete/modify 三类，**未登记的工具一律按 modify**（保守默认）。新增工具只在这里加一行，门禁本身不动
 - **「改动机制」的界定**：用户没说、AI 自己判断需要改的，或与用户先前说法有出入的改动。用户明确叫改的照样调工具——平台**仍会弹一次确认**（平台无法可靠区分"用户叫的"与"AI 自己想的"，宁可多问一次），但同类操作本轮只弹一次，批量改动不会被轰炸
 - **审批通道唯一**：`world_ai_mode.request_approval()` → SSE 下发 `[APPROVAL]` → 前端弹窗 → `POST /worlds/{id}/chat/approval` → 服务端 future 被唤醒 → 等在原地的工具调用继续。AI 侧的 `ask_user` / `present_plan` 工具走**同一条通道**，不存在第二套确认逻辑

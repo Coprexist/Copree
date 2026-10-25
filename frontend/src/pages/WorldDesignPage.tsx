@@ -608,7 +608,7 @@ export default function WorldDesignPage() {
           wid={wid}
           creator={world.creator}
           usageStats={usageStats}
-          aiMode={world.ai_mode || 'review'}
+          aiMode={world.ai_mode || 'plan'}
           onModeSaved={(mode) => setWorld((w) => (w ? { ...w, ai_mode: mode } : w))}
           onSaved={(updated) => setWorld((w) => (w ? { ...w, creator: updated } : w))}
           onClose={() => setShowCreatorForm(false)}
@@ -623,7 +623,7 @@ export default function WorldDesignPage() {
         onMsg={setMsg}
         onUnreadCountChange={setChatUnreadCount}
         creatorName={world?.creator?.name}
-        aiMode={world?.ai_mode || 'review'}
+        aiMode={world?.ai_mode || 'plan'}
         onModeChange={handleModeChange}
         onSessionsChange={handleSessionsChange}
       />

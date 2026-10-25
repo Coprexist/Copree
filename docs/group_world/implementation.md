@@ -73,7 +73,7 @@ GET /worlds/{id}/chat/stream?turn_id= ──订阅直播（30s 心跳；断开�
 | `file_read` / `file_write` / `file_edit` / `file_list` / `file_delete` | 世界文件夹读写（隔离目录+类型策略+防越界）；**file_edit 与主站共用同一份编辑核心** `app/utils/pure/file_edit.py`（str_replace 唯一性校验 / insert 行语义 / delete_lines 边界） |
 | `file_move` / `file_copy` | **移动/重命名与复制（2026-09-15）**：走同一套越界与后缀校验；目录可整体搬移/复制 |
 | `web_download` | **下载文件（2026-09-15 收敛）**：固定落点 `downloads/`、GitHub blob → raw 直链、违规内容拦截（`world_moderation`）、大小 32MB；审阅模式下由平台弹窗征得同意 |
-| `ask_user` / `present_plan` | **审批与协作（2026-09-15）**：`ask_user` 事件类型关键词必填（download/delete/modify/other）弹窗问用户；`present_plan` 计划模式下先出计划、通过后本轮按自动模式执行——与平台门禁共用同一条审批通道 |
+| `ask_user` / `present_plan` | **审批与协作（2026-09-15）**：`ask_user` 事件类型关键词必填（download/delete/modify/other）弹窗问用户；`present_plan` 计划模式下先出计划、通过后本轮按自动模式执行——与平台门禁共用同一条审批通道。**计划分条（2026-10-25）**：`items` 随审批下发，弹窗里「同意」= 整份通过、也可以只勾几条；回执带勾选下标，工具结果给 `approved_items` / `skipped_items` |
 | `update_world_info` | 改世界名/简介（以世界主人身份） |
 | `compact_context` | 压缩对话历史 → 存 `worlds.config.chat_summary`（复用主站 context_compression_service） |
 | `list_world_blocks` / `view_world_block` / `apply_world_block` | 积木体系（§七） |
@@ -91,7 +91,7 @@ GET /worlds/{id}/chat/stream?turn_id= ──订阅直播（30s 心跳；断开�
 
 **安全**：文件走 `world_file_service`（`data/worlds/{id}/` 隔离、`..` 拒绝、允许清单 + 禁用后缀三层防护）；工具以世界主人身份执行写操作；所有设计页端点仅创建者可调（`_require_owner`）。
 
-**运行模式门禁（2026-09-15）**：世界有 `auto`（自动）/ `review`（审阅，默认）/ `plan`（计划）三档，由用户在设计页切换、**AI 无工具可改**。审阅模式下下载/删除/改动机制三类操作由 `world_ai_mode.gate_tool_call` 弹窗征得用户同意后执行（同类本轮一次），计划模式下先 `present_plan` 通过再按自动模式执行。
+**运行模式门禁（2026-09-15）**：世界有 `auto`（自动）/ `review`（审阅）/ `plan`（计划，默认）三档，**跟着对话走**（`config.sessions[<sid>].ai_mode`，刷新不丢；2026-10-25），由用户在设计页切换、**AI 无工具可改**。审阅模式下下载/删除/改动机制三类操作由 `world_ai_mode.gate_tool_call` 弹窗征得用户同意后执行（同类本轮一次），计划模式下先 `present_plan` 通过再按自动模式执行。
 
 ---
 
