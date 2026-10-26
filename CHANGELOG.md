@@ -3,12 +3,25 @@
 本 CHANGELOG 遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/) 规范，
 版本号遵守 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-> **当前阶段**：v0.4.13 — 对话日志的长文手感（分片补渲染 + 折叠时长随位移缩放 + 导出前补完）+ 会话列表收成一份。
+> **当前阶段**：v0.4.14 — 世界侧分条审批与会话级运行模式 + 配置热更新就地生效 + Windows 启动链路与本地开发文档修通。
 >
 
-## [Unreleased]
+## [v0.4.14] - 2026-10-26
 
 ### 🐛 修复
+- **Windows 上服务起不来：维护标记目录默认写死 `/tmp`**：`maintenance_dir` 默认 `/tmp`，Windows 没有这个目录，
+  `os.path.join` 还会拼出 `/tmp\maintenance_startup`，lifespan 一写标记就 `FileNotFoundError`，整个进程启动失败。
+  现在默认跟着数据目录走（`<data_dir>/maintenance`，显式 `MAINTENANCE_DIR` 仍然优先），`_set_marker` 写前
+  `makedirs`，任何平台首次启动都不会因为目录不存在崩。（issue #3 的第三条栈）
+- **等数据库超时只说"未就绪"，把根因吞掉**：`wait_for_db` 的 `except` 里不留任何异常信息，30s 后抛一句
+  「数据库在 30s 内未就绪」，认证失败、连接被重置、缺扩展全都无从判断。现在首次失败就打印异常类型与脱敏后的
+  DSN（`config.mask_dsn`），超时错误带最后一条异常并保留异常链。（issue #4）
+- **脱离 Docker 起前端，四个代理一律 `ENOTFOUND backend`**：dev server 的代理目标硬编码成 compose 服务名
+  `http://backend:8000`，看着像后端没启动。改为读 `VITE_PROXY_TARGET`，默认值不变。
+- **桌面安装包三个产物全部双击即退（发布仓库）**：入口 `run_packaged.py` 首行 `from gui import AIsChatGUI`，
+  而三个平台的拷贝清单只拷了 `gui_app`、从没拷过兼容入口 `gui.py`，于是 v0.4.1 的 exe / dmg / tar.gz 都报
+  `ModuleNotFoundError: No module named 'gui'`。发布仓库改用 `scripts/stage.sh` 统一清单并当场校验
+  `gui` / `gui_app` / `server_core` 能否解析，漏文件就地失败。
 - **审计日志清理从来没跑通过**：`postgres_backend.cleanup` 在 DELETE 上链了 `.limit()`——
   SQLAlchemy 的 `Delete` 没这个方法（PostgreSQL 原生也不支持 `DELETE ... LIMIT`），于是 bootstrap
   的清理循环每 5 分钟一条 `AttributeError: 'Delete' object has no attribute 'limit'`，审计表只长不缩。
@@ -972,6 +985,10 @@
   `json.dumps(...)` 会把整份配置存成一个字符串，"已配置"随即读成空的（切供应商时踩到过）。
 
 ### 📝 文档
+- **README 本地开发按代码现状重写**：补上建角色 / 建库 / 装 `vector` 扩展 → `backend/.env` → 后端（迁移自动执行）
+  → 带 `VITE_PROXY_TARGET` 的前端；原文「Vite 将 /api/* 代理到 localhost:8000」与代码不符，删掉。
+  Windows 安装程序链接原先钉在 v0.4.0 的 `Copree-Installer.exe`（该 release 的资产名是 `AIsChat-Installer.exe`，
+  点开就是 404），改为 `releases/latest`。
 - **新增《创建 AI 参考》**（`docs/guides/创建AI参考.md`）：人设提示词怎么写。先讲清你的那一段落在
   六段装配的 personality 位（`utils/pure/prompting.py:79`、`ai/llm.py:1133`）、平台已经写死的约束在哪
   （`prompts/*.txt`），把那部分从人设里划掉；再给可操作的写法——四层结构（身份/关系/说话方式/边界）、
