@@ -53,7 +53,7 @@ docker compose up -d    # 启动后访问 http://localhost:5227
 
 ### 方式二：Windows 安装程序
 
-下载 [Copree-Installer.exe](https://github.com/Coprexist/Copree-Releases/releases/download/v0.4.0/Copree-Installer.exe)，双击运行安装程序，选择安装目录即可。详细说明见 [Copree-Releases](https://github.com/Coprexist/Copree-Releases)。
+下载 [AIsChat 安装程序](https://github.com/Coprexist/Copree-Releases/releases/latest)（`AIsChat-Installer.exe`），双击运行安装程序，选择安装目录即可。详细说明见 [Copree-Releases](https://github.com/Coprexist/Copree-Releases)。
 
 ## ✨ 群视界（Group World）——群聊即世界
 
