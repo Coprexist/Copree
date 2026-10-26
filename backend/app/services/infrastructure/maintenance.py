@@ -1,7 +1,7 @@
 """
 维护模式管理器 — 维护状态的唯一读写入口。
 
-- 状态：文件标记（单容器单进程部署，标记目录见 settings.maintenance_dir）
+- 状态：文件标记（单容器单进程部署，标记目录见 settings.maintenance_dir，默认 <data_dir>/maintenance）
 - 读：TTL 缓存（3s）避免每请求 stat；写：立即失效缓存，保证本进程内即时生效
 - 所有读写（lifespan / 中间件 / admin 路由）必须经过本类；
   外部直接 touch 文件时最长 TTL 内生效
@@ -100,6 +100,7 @@ class MaintenanceManager:
     def _set_marker(self, path: str, active: bool) -> bool:
         """设置/清除标记；返回操作后的状态"""
         if active:
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
             with open(path, "w"):
                 pass
         elif os.path.exists(path):

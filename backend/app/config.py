@@ -5,6 +5,7 @@
 """
 import json
 import logging
+import re
 import secrets
 from pathlib import Path
 
@@ -25,6 +26,11 @@ def _default_data_dir() -> str:
     backend_dir = Path(__file__).resolve().parents[1]
     repo_root = backend_dir.parent if backend_dir.name == "backend" else backend_dir
     return str(repo_root / "data")
+
+
+def mask_dsn(url: str) -> str:
+    """口令打码后的连接串，只用于日志与报错文案——口令进日志等于泄露。"""
+    return re.sub(r"(://[^:/@]+:).*@", r"\1***@", url or "")
 
 
 class Settings(BaseSettings):
@@ -212,7 +218,10 @@ class Settings(BaseSettings):
         return v
 
     # ── 维护模式标记目录 ──
-    maintenance_dir: str = "/tmp"
+    # 空 = 跟着数据目录走（<data_dir>/maintenance，见 _fill_maintenance_dir）。
+    # 以前默认 "/tmp"：Windows 上这个目录不存在，os.path.join 还会拼出 "/tmp\maintenance_startup"，
+    # 启动写标记时 FileNotFoundError，整个 lifespan 直接失败。
+    maintenance_dir: str = ""
 
     class Config:
         env_file = ".env"
@@ -228,6 +237,13 @@ class Settings(BaseSettings):
                 f"[CONFIG] 检测到未识别的配置字段（可能拼写错误或多余）: {extra_fields}"
                 f"（已知字段: {sorted(known_fields)}）"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _fill_maintenance_dir(self):
+        """维护标记落在数据目录下：与数据卷同生共死，且任何平台都可写"""
+        if not self.maintenance_dir:
+            self.maintenance_dir = str(Path(self.data_dir) / "maintenance")
         return self
 
     @model_validator(mode="after")

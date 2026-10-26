@@ -2,6 +2,12 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'path'
 
+// 代理目标：默认是 compose 里的服务名 backend。脱离 Docker 起（原生 uvicorn）时用
+// VITE_PROXY_TARGET=http://127.0.0.1:8000 覆盖——否则 /api 一律 getaddrinfo ENOTFOUND backend，
+// 看起来像"后端没启动"，实际只是名字解析不到。
+const backendOrigin = process.env.VITE_PROXY_TARGET || 'http://backend:8000'
+const backendWsOrigin = backendOrigin.replace(/^http/, 'ws')
+
 export default defineConfig({
   base: process.env.BASE_URL || '/',
   build: { sourcemap: process.env.BASE_URL ? true : false },
@@ -29,12 +35,12 @@ export default defineConfig({
     },
     proxy: {
       '/api': {
-        target: 'http://backend:8000',
+        target: backendOrigin,
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ''),
         configure: (proxy: any) => {
-          // FastAPI 对尾斜杠不匹配的路径会 307，而 changeOrigin 把 Host 改成了 backend:8000 ——
-          // 重定向于是指向 http://backend:8000/... ，浏览器解析不了这个内网名，请求直接 "Failed to fetch"。
+          // FastAPI 对尾斜杠不匹配的路径会 307，而 changeOrigin 把 Host 改成了上游主机名 ——
+          // 重定向于是指向上游地址，浏览器解析不了这个内网名，请求直接 "Failed to fetch"。
           // 不动请求路径（有的路由确实只注册了带尾斜杠的形式），只把 Location 换回浏览器可用的地址。
           proxy.on('proxyRes', (proxyRes: any) => {
             const loc = proxyRes.headers?.location
@@ -49,16 +55,16 @@ export default defineConfig({
         },
       },
       '/world/': {
-        target: 'http://backend:8000',
+        target: backendOrigin,
         changeOrigin: true,
         ws: true,
       },
       '/ws': {
-        target: 'ws://backend:8000',
+        target: backendWsOrigin,
         ws: true,
       },
       '/federation': {
-        target: 'http://backend:8000',
+        target: backendOrigin,
         changeOrigin: true,
         ws: true,
       },

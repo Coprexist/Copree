@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from fastapi import FastAPI
 from sqlalchemy import text
 
-from app.config import settings
+from app.config import mask_dsn, settings
 from app.database import async_session, engine
 from app.services.infrastructure.maintenance import maintenance
 
@@ -134,17 +134,27 @@ async def wait_for_db(timeout: float = 30.0) -> None:
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     warned = False
+    last: Exception | None = None
     while True:
         try:
             async with engine.connect() as conn:
                 await conn.execute(text("SELECT 1"))
             return
-        except Exception:
+        except Exception as e:
+            last = e
             if not warned:
-                logger.warning(f"[WAIT] 等待数据库就绪（最多 {timeout:.0f}s，超时将中止启动）...")
+                # 只报"未就绪"会把根因（认证失败、连接被重置、扩展缺失）吞掉，
+                # 用户拿到的栈里没有任何可查的信息，所以首次失败就带上目标与异常类型。
+                logger.warning(
+                    f"[WAIT] 等待数据库就绪（最多 {timeout:.0f}s，超时将中止启动）："
+                    f"{type(e).__name__}: {e}；目标 {mask_dsn(settings.database_url)}"
+                )
                 warned = True
             if loop.time() >= deadline:
-                raise RuntimeError(f"数据库在 {timeout:.0f}s 内未就绪，启动中止")
+                raise RuntimeError(
+                    f"数据库在 {timeout:.0f}s 内未就绪，启动中止："
+                    f"{mask_dsn(settings.database_url)} 最后一次错误 {type(last).__name__}: {last}"
+                ) from last
             await asyncio.sleep(0.5)
 
 

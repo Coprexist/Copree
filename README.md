@@ -130,14 +130,27 @@ docs/       文档（入口是 SUMMARY.md）
 
 ## 本地开发
 
+前置：Python 3.11+、Node 18+、PostgreSQL 16（需 pgvector 扩展）。无 Docker 时按下面走，用 Docker 见上方「方式一」。
+
 ```bash
-# 后端
+# 1) 建角色与库：名字与口令要和 DATABASE_URL 一致（compose 部署由 initdb 脚本自动完成）
+psql -U postgres -c "CREATE ROLE ai_chat LOGIN PASSWORD 'change_me';"
+psql -U postgres -c "CREATE DATABASE ai_group_chat OWNER ai_chat;"
+psql -U postgres -d ai_group_chat -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+# 2) 后端（默认连 postgresql+asyncpg://ai_chat:change_me@localhost:5432/ai_group_chat）
 cd backend && pip install -r requirements.txt
 uvicorn app.main:app --reload
 
-# 前端(Vite 将 /api/* 代理到 localhost:8000)
-cd frontend && npm install && npm run dev
+# 3) 前端
+cd frontend && npm install
+VITE_PROXY_TARGET=http://127.0.0.1:8000 npm run dev
 ```
+
+- 后端配置写在 `backend/.env`，键名与 `backend/app/config.py` 的字段同名（`DATABASE_URL`、`DATA_DIR`、`MAINTENANCE_DIR` 等）。
+- 前端 dev server 把 `/api`、`/world/`、`/ws`、`/federation` 代理到 `http://backend:8000`（compose 的服务名）。不走 Docker 时必须设 `VITE_PROXY_TARGET`，否则控制台只有 `getaddrinfo ENOTFOUND backend`，看着像后端没起来。
+- 建表与迁移在后端启动时自动执行。连不上库时，日志会打印脱敏后的 `DATABASE_URL` 与最后一次连接错误：角色不存在、口令不符、缺 `vector` 扩展都在这一步暴露。
+- 运行时文件按 `DATA_DIR` 推导（默认 `<repo>/data`），Windows 原生运行同样成立。
 
 ## 路线图 & 许可证
 
