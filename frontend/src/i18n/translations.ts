@@ -49,6 +49,7 @@ import { toolZh, toolEn, toolJa } from './ns/tool'
 import { adminConfigZh, adminConfigEn, adminConfigJa } from './ns/adminConfig'
 import { logsZh, logsEn, logsJa } from './ns/logs'
 import { outlineZh, outlineEn, outlineJa } from './ns/outline'
+import { updateZh, updateEn, updateJa } from './ns/update'
 
 export type { TranslationDict, NamespacedDict } from './types'
 
@@ -64,7 +65,7 @@ export const translations: Record<Lang, NamespacedDict> = {
     avatarCrop: avatarCropZh, modal: modalZh, preset: presetZh, aiType: aiTypeZh,
     error: errorZh, time: timeZh, opencli: opencliZh, backpack: backpackZh,
     desktop: desktopZh, tool: toolZh, adminConfig: adminConfigZh, logs: logsZh,
-    outline: outlineZh,
+    outline: outlineZh, update: updateZh,
   },
   en: {
     common: commonEn, nav: navEn, sidebar: sidebarEn, notFound: notFoundEn,
@@ -77,7 +78,7 @@ export const translations: Record<Lang, NamespacedDict> = {
     avatarCrop: avatarCropEn, modal: modalEn, preset: presetEn, aiType: aiTypeEn,
     error: errorEn, time: timeEn, opencli: opencliEn, backpack: backpackEn,
     desktop: desktopEn, tool: toolEn, adminConfig: adminConfigEn, logs: logsEn,
-    outline: outlineEn,
+    outline: outlineEn, update: updateEn,
   },
   ja: {
     common: commonJa, nav: navJa, sidebar: sidebarJa, notFound: notFoundJa,
@@ -90,7 +91,7 @@ export const translations: Record<Lang, NamespacedDict> = {
     avatarCrop: avatarCropJa, modal: modalJa, preset: presetJa, aiType: aiTypeJa,
     error: errorJa, time: timeJa, opencli: opencliJa, backpack: backpackJa,
     desktop: desktopJa, tool: toolJa, adminConfig: adminConfigJa, logs: logsJa,
-    outline: outlineJa,
+    outline: outlineJa, update: updateJa,
   },
 }
 

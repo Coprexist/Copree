@@ -34,6 +34,9 @@ services:
       # 做挂载源），不在这里钉死的话它会随 env_file 漏进容器，插件与世界的文件就会写进容器
       # 可写层、重建即丢。
       DATA_DIR: /app/data
+      # 发行方式：网页版据此在「管理面板 → 通用」给 compose 升级命令，而不是给安装包下载
+      # 按钮（见 backend/app/services/infrastructure/update_check.py）。桌面安装包里由启动器注入。
+      APP_DISTRIBUTION: docker
       # 平台自带协议端（profile: napcat）时填这两项：插件据此把"地址 + token"标成托管字段，
       # 卡片上就不让用户填了。留空 = 用户自带协议端，字段照常显示。
       NAPCAT_WS_URL: ${NAPCAT_WS_URL:-}

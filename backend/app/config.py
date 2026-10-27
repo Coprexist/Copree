@@ -38,6 +38,10 @@ class Settings(BaseSettings):
 
     # ── 应用版本（可从环境变量 APP_VERSION 注入，默认 0.4.14）──
     app_version: str = "0.4.15"
+    # 本实例的发行方式：source | docker | desktop。
+    # 只影响「怎么升级」的引导文案（git pull / compose / 下载安装包），不影响任何功能；
+    # 由 docker-compose.yml 与桌面启动器注入，见 services/infrastructure/update_check.py。
+    app_distribution: str = "source"
 
     # ── 数据库 ──
     db_backend: str = "postgres"
@@ -176,6 +180,32 @@ class Settings(BaseSettings):
     opencli_default_rate_limit: int = 5
     opencli_timeout_seconds: int = 60
     opencli_stdout_max_chars: int = 2000
+
+    # ── 版本更新检查（管理面板「通用」的版本卡片 / 桌面端更新提醒）──
+    # 出站请求只去 GitHub Releases；离线与内网部署把它关掉，界面会安静地显示「无法检查」。
+    update_check_enabled: bool = True
+    # 任何返回 JSON 的地址都行：GitHub Releases API 或自建镜像的简单形状，
+    # 两种形状由 update_check.parse_release 归一化（自建发布渠道不必改代码）。
+    update_check_url: str = "https://api.github.com/repos/Coprexist/Copree-Releases/releases?per_page=20"
+    update_check_ttl_seconds: int = 3600     # 缓存窗口：上游最多每小时被打一次
+    update_check_timeout_seconds: float = 6.0
+    # 更新渠道：stable 只认正式版，beta 连预发布一起认（给内测用户用）。
+    # 见 services/infrastructure/update_check.py 的 select_release。
+    update_check_channel: str = "stable"
+
+    @field_validator("app_distribution", mode="before")
+    @classmethod
+    def _known_distribution(cls, v: str) -> str:
+        """只认三种发行方式；写错不炸启动，退回 source（升级引导按源码部署走）。"""
+        value = str(v or "").strip().lower()
+        return value if value in ("source", "docker", "desktop") else "source"
+
+    @field_validator("update_check_channel", mode="before")
+    @classmethod
+    def _known_channel(cls, v: str) -> str:
+        """只认 stable / beta；写错退回 stable —— 渠道写错把测试版推给所有人是最坏的失败方式。"""
+        value = str(v or "").strip().lower()
+        return value if value in ("stable", "beta") else "stable"
 
     # ── 运行环境（development / production） ──
     environment: str = "development"

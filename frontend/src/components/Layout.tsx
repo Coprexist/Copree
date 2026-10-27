@@ -9,6 +9,8 @@ import NotificationToasts from './NotificationToasts'
 import { Wrench, X } from 'lucide-react'
 import { loadFromStorage, apply } from '../utils/cssFilters'
 import { isEmbedded } from '../embed/bridge'
+import { useAuth } from '../context/AuthContext'
+import UpdateBanner from './UpdateBanner'
 import { Dialog } from './ui'
 
 /** 嵌入模式（?embed=1）：隐藏本应用侧边栏/移动导航，只渲染对话内容，由宿主提供导航与外壳 */
@@ -26,6 +28,7 @@ export default function Layout() {
   const [softOnce, setSoftOnce] = useState(false)
   const [imgError, setImgError] = useState(false)
   const location = useLocation()
+  const { user } = useAuth()
 
   // 魔视界：首屏渲染完成后恢复 CSS 滤镜
   useEffect(() => {
@@ -239,15 +242,20 @@ export default function Layout() {
       {/* ── 主内容区 ── */}
       {/* 聊天详情页（hideNav）内部自己管理滚动（消息列表 flex-1 overflow-y-auto），main 不滚动，
           避免任何 scrollIntoView 连带滚动 main 把标题栏滚出视口；其他页面保持 overflow-y-auto */}
-      <main className={`flex-1 min-w-0 bg-canvas ${hideNav ? 'overflow-hidden pb-0' : 'overflow-y-auto pb-14 md:pb-0'}`}>
-        <Suspense fallback={
-          <div className="flex items-center justify-center h-64">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500" />
-          </div>
-        }>
-          <Outlet context={{ openDrawer: () => setDrawerOpen(true), closeDrawer: () => setDrawerOpen(false) }} />
-        </Suspense>
-      </main>
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/* 桌面安装版有新版本时贴在内容区顶部（网页版用户看不到——升级是管理员的事，
+            网页版管理员去「管理面板 → 通用」看完整卡片） */}
+        {!EMBED && <UpdateBanner enabled={user?.role === 'admin'} />}
+        <main className={`flex-1 min-w-0 bg-canvas ${hideNav ? 'overflow-hidden pb-0' : 'overflow-y-auto pb-14 md:pb-0'}`}>
+          <Suspense fallback={
+            <div className="flex items-center justify-center h-64">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500" />
+            </div>
+          }>
+            <Outlet context={{ openDrawer: () => setDrawerOpen(true), closeDrawer: () => setDrawerOpen(false) }} />
+          </Suspense>
+        </main>
+      </div>
 
       {/* ── 移动端底部导航（聊天详情页隐藏；嵌入模式不渲染） ── */}
       {!EMBED && !hideNav && <MobileNav closeDrawer={() => setDrawerOpen(false)} />}

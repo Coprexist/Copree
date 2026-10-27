@@ -6,6 +6,7 @@ import Toggle from '../../../components/Toggle'
 import { useT } from '../../../i18n/I18nContext'
 import { LANGUAGES } from '../../../i18n/languages'
 import ConfigGroupCard from '../../../components/ConfigGroupCard'
+import UpdateCard from '../../../components/UpdateCard'
 import { NOTICE_TEXT_CLASS, useNotice } from '../../../hooks/useNotice'
 
 export default function SystemSettingsTab() {
@@ -20,6 +21,7 @@ export default function SystemSettingsTab() {
   const [registrationEnabled, setRegistrationEnabled] = useState(true)
   const regToggleRef = useRef(false)
   const [auditUserActions, setAuditUserActions] = useState(false)
+  const [auditRealIp, setAuditRealIp] = useState(false)
   const [auditRetention, setAuditRetention] = useState(90)
   const [messageRetention, setMessageRetention] = useState(0)
   const [dailyBackupEnabled, setDailyBackupEnabled] = useState(false)
@@ -46,6 +48,7 @@ export default function SystemSettingsTab() {
       setDefaultConcurrentAiLimit(settings.default_concurrent_ai_limit ?? 2)
       setRegistrationEnabled(settings.registration_enabled ?? true)
       setAuditUserActions(settings.audit_user_actions ?? false)
+      setAuditRealIp(settings.audit_use_real_ip ?? false)
       setAuditRetention(settings.audit_log_retention_days ?? 90)
       setMessageRetention(settings.message_retention_days ?? 0)
       setDailyBackupEnabled(settings.daily_backup_enabled ?? false)
@@ -66,6 +69,7 @@ export default function SystemSettingsTab() {
       else if (field === 'concurrent_ai_limit') payload.default_concurrent_ai_limit = value
       else if (field === 'registration_enabled') payload.registration_enabled = value
       else if (field === 'audit_user_actions') payload.audit_user_actions = value
+      else if (field === 'audit_use_real_ip') payload.audit_use_real_ip = value
       else if (field === 'audit_retention') payload.audit_log_retention_days = value
       else if (field === 'message_retention') payload.message_retention_days = value
       else if (field === 'daily_backup_enabled') payload.daily_backup_enabled = value
@@ -104,6 +108,9 @@ export default function SystemSettingsTab() {
   return (
     <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
       <h3 className="xl:col-span-2 font-semibold text-textPrimary">{t('admin:systemSettings')}</h3>
+
+      {/* 版本与更新：放最上面——升级提示不该翻到卡片列表底部才看见 */}
+      <UpdateCard className="xl:col-span-2" />
 
       {/* 默认语言 */}
       <div className="bg-surface rounded-card border border-border p-4">
@@ -268,6 +275,26 @@ export default function SystemSettingsTab() {
             onChange={(val: boolean) => {
               setAuditUserActions(val)
               handleSave('audit_user_actions', val)
+            }}
+          />
+        </div>
+      </div>
+
+      {/* 真实客户端 IP */}
+      <div className="bg-surface rounded-card border border-border p-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <label className="text-sm font-medium text-textSecondary">记录真实客户端 IP</label>
+            <p className="text-xs text-textMuted mt-0.5">
+              开启后审计日志记录经反向代理透传的访客真实 IP；关闭则记录代理地址（无意义）。
+              需部署层传入 X-Real-IP，且仅信任 TRUSTED_PROXY_CIDRS 内的对端。
+            </p>
+          </div>
+          <Toggle
+            checked={auditRealIp}
+            onChange={(val: boolean) => {
+              setAuditRealIp(val)
+              handleSave('audit_use_real_ip', val)
             }}
           />
         </div>
