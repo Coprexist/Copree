@@ -3,10 +3,10 @@
 本 CHANGELOG 遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/) 规范，
 版本号遵守 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-> **当前阶段**：v0.4.15 — 桌面版首页与 browser 插件的 Windows 兼容修复。
+> **当前阶段**：v0.4.14 — 世界侧分条审批与会话级运行模式 + 配置热更新就地生效 + Windows 启动链路与本地开发文档修通。
 >
 
-## [v0.4.15] - 2026-10-27
+## [v0.4.14] - 2026-10-26
 
 ### 🐛 修复
 - **Windows 桌面版打开首页是状态 JSON 而不是页面**：启动器打开 `127.0.0.1:8000` 看到的是
@@ -20,10 +20,6 @@
   改为按平台查找 Chrome / Chromium / Edge（Windows 用系统自带 Edge 兜底，也可用 `CHROMIUM_BIN` /
   `CHROME_BIN` 覆盖），PID 文件落到系统临时目录，仅 Linux 拉起 D-Bus 与做全局进程清理；headless 参数
   换成 `--headless=new` 并显式指定临时 `user-data-dir`（Chrome 136 起禁止用默认数据目录开 CDP 端口）。
-
-## [v0.4.14] - 2026-10-26
-
-### 🐛 修复
 - **Windows 上服务起不来：维护标记目录默认写死 `/tmp`**：`maintenance_dir` 默认 `/tmp`，Windows 没有这个目录，
   `os.path.join` 还会拼出 `/tmp\maintenance_startup`，lifespan 一写标记就 `FileNotFoundError`，整个进程启动失败。
   现在默认跟着数据目录走（`<data_dir>/maintenance`，显式 `MAINTENANCE_DIR` 仍然优先），`_set_marker` 写前
