@@ -3,8 +3,23 @@
 本 CHANGELOG 遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/) 规范，
 版本号遵守 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-> **当前阶段**：v0.4.14 — 世界侧分条审批与会话级运行模式 + 配置热更新就地生效 + Windows 启动链路与本地开发文档修通。
+> **当前阶段**：v0.4.15 — 桌面版首页与 browser 插件的 Windows 兼容修复。
 >
+
+## [v0.4.15] - 2026-10-27
+
+### 🐛 修复
+- **Windows 桌面版打开首页是状态 JSON 而不是页面**：启动器打开 `127.0.0.1:8000` 看到的是
+  `{"service":"AI群聊社交网络","version":"0.4.14","status":"running"}`。桌面版由后端自己托管
+  `frontend/dist`，而替换根路由时只改了 `route.endpoint`——Starlette 在 `Route.__init__` 里就用
+  `request_response(endpoint)` 建好了处理闭包，事后改字段不会重建，`GET /` 始终走后端自带的状态接口；
+  `/login` 等路径走 catch-all 所以正常，看起来像「只有首页坏」。改为替换整条路由对象
+  （发布仓库 `server_core.py`）。
+- **Windows 桌面版 browser 插件不可用**：`browser_service` 把浏览器可执行文件写死 `/usr/bin/chromium`、
+  PID 文件写死 `/tmp`、收尾用 `pkill`，Windows 上启动日志必然出现「Chromium 未安装」并让插件启动失败。
+  改为按平台查找 Chrome / Chromium / Edge（Windows 用系统自带 Edge 兜底，也可用 `CHROMIUM_BIN` /
+  `CHROME_BIN` 覆盖），PID 文件落到系统临时目录，仅 Linux 拉起 D-Bus 与做全局进程清理；headless 参数
+  换成 `--headless=new` 并显式指定临时 `user-data-dir`（Chrome 136 起禁止用默认数据目录开 CDP 端口）。
 
 ## [v0.4.14] - 2026-10-26
 
