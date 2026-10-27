@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext'
 import { useT } from '../i18n/I18nContext'
 import { cacheLangForUnauth } from '../i18n/I18nContext'
 import { api } from '../api/client'
+import { useAppVersion } from '../hooks/useAppVersion'
 import { isEmbedded } from '../embed/bridge'
 import { MessageCircle, Mail } from 'lucide-react'
 import VerificationCodeInput from '../components/VerificationCodeInput'
@@ -65,6 +66,7 @@ export default function LoginPage() {
   }
 
   const saved = loadSessionState()
+  const appVersion = useAppVersion()      // 当前部署的版本（来自 /health，见 useAppVersion）
   const [mode, setMode] = useState<'login' | 'register'>(saved.mode || 'login')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -195,6 +197,9 @@ export default function LoginPage() {
           </div>
           <h1 className="text-2xl font-bold text-textPrimary tracking-tight">{t('auth:title')}</h1>
           <p className="text-sm text-textSecondary mt-2 font-medium">{t('auth:subtitle')}</p>
+          {appVersion && (
+            <p className="mt-3 text-xs font-medium tabular-nums text-textMuted">v{appVersion}</p>
+          )}
         </div>
 
         {/* 表单卡片 */}

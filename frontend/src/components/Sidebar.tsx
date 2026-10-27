@@ -7,6 +7,7 @@ import SearchOverlay from './SearchOverlay'
 import { useT } from '../i18n/I18nContext'
 import { mainNavItems, navLinkClass, navIconClass } from '../utils/navRegistry.tsx'
 import { usePendingRequests } from '../hooks/usePendingRequests'
+import { useAppVersion } from '../hooks/useAppVersion'
 
 export default function Sidebar({ mobile, onClose, translucent }: { mobile?: boolean; onClose?: () => void; translucent?: boolean }) {
   const { user, logout } = useAuth()
@@ -15,6 +16,7 @@ export default function Sidebar({ mobile, onClose, translucent }: { mobile?: boo
   const [toolsOpen, setToolsOpen] = useState(false)
   const t = useT()
   const pendingRequests = usePendingRequests()
+  const appVersion = useAppVersion()
 
   const handleLogout = () => {
     logout()
@@ -191,8 +193,13 @@ export default function Sidebar({ mobile, onClose, translucent }: { mobile?: boo
         )}
       </div>
 
-      {/* 退出 */}
+      {/* 版本 + 退出 */}
       <div className="p-2 border-t border-border shrink-0">
+        {!collapsed && appVersion && (
+          <div className="px-3 pb-1 text-[11px] font-medium tabular-nums text-textMuted select-all">
+            v{appVersion}
+          </div>
+        )}
         <button
           onClick={handleLogout}
           className={`flex items-center rounded-card text-textSecondary hover:text-rose-400 hover:bg-rose-500/10 transition-all duration-200 text-sm ${
