@@ -32,7 +32,7 @@ export default function Sidebar({ mobile, onClose, translucent }: { mobile?: boo
         {!collapsed && (
           <div className="flex items-center gap-2">
             <div className="w-6 h-6 rounded-control flex items-center justify-center shadow shadow-primary-500/30 overflow-hidden">
-              <img src="/brand/coprexist-icon-192.png" alt="Copree" className="w-full h-full object-contain" />
+              <img src="/brand/coprexist-icon.svg" alt="Copree" className="w-full h-full object-contain" />
             </div>
             <span className="text-base font-bold text-textPrimary tracking-tight">Copree</span>
           </div>

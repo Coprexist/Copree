@@ -189,7 +189,8 @@ export default function LoginPage() {
             <div className="absolute w-20 h-20 rounded-full ai-pulse-active" />
             <div className="absolute w-16 h-16 rounded-full bg-primary-500/20 blur-xl" />
             <div className="relative w-14 h-14 rounded-dialog flex items-center justify-center shadow-lg shadow-primary-500/25 overflow-hidden">
-              <img src="/brand/coprexist-icon-192.png" alt="Copree" className="w-full h-full object-contain" />
+              {/* 用矢量：Logo 在登录页是视觉中心，位图在高分屏/放大时一定糊（2026-10-27 用户反馈） */}
+              <img src="/brand/coprexist-icon.svg" alt="Copree" className="w-full h-full object-contain" />
             </div>
           </div>
           <h1 className="text-2xl font-bold text-textPrimary tracking-tight">{t('auth:title')}</h1>

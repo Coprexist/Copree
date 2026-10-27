@@ -158,7 +158,15 @@ async function request<T = any>(
     if (!res.ok) {
       throw new ApiError(`Request failed (${res.status})`, res.status)
     }
-    return {} as T
+    // 200 但 body 不是 JSON：最常见的来由是请求被静态兜底接管了（拿回 index.html）。
+    // 以前这里**静默**返回 {}，调用方拿到的"数组"变成对象，报错落在离现场很远的地方
+    //（`messages.map is not a function`——2026-10-27 桌面版点开对话就崩，根因就是这条静默）。
+    // 空 body 仍然返回 {}：那是正常的 204/无内容语义，不走这里。
+    throw new ApiError(
+      `服务返回了非 JSON 响应（${res.status}，${res.headers.get('content-type') || '无 content-type'}）：`
+      + '接口可能被静态页面兜底接管了，检查反向代理或 /api 前缀。',
+      res.status,
+    )
   }
 
   if (!res.ok) {
