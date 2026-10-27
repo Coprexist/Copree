@@ -80,6 +80,7 @@ export default function LoginPage() {
   const [code, setCode] = useState(saved.code || '')
   const [codeSent, setCodeSent] = useState(saved.codeSent || false)
   const [sendCooldown, setSendCooldown] = useState(0)
+  const [auditRealIp, setAuditRealIp] = useState(false)
 
   const { login, register } = useAuth()
   const navigate = useNavigate()
@@ -91,7 +92,7 @@ export default function LoginPage() {
       .then(r => setHasExistingUsers(r.has_users))
       .catch(() => setHasExistingUsers(true))
     // 获取可用的登录方式
-    api.get<{ default_language: string; login_providers?: string[]; require_email_verification?: boolean }>('/system/settings')
+    api.get<{ default_language: string; login_providers?: string[]; require_email_verification?: boolean; audit_use_real_ip?: boolean }>('/system/settings')
       .then(r => {
         cacheLangForUnauth(r.default_language === 'zh' ? 'zh' : 'en')
         if (r.login_providers && r.login_providers.length > 0) {
@@ -102,6 +103,7 @@ export default function LoginPage() {
           }
         }
         setRequireEmailVerification(r.require_email_verification || false)
+        setAuditRealIp(r.audit_use_real_ip || false)
       })
       .catch(() => {})
   }, [])
@@ -187,7 +189,7 @@ export default function LoginPage() {
             <div className="absolute w-20 h-20 rounded-full ai-pulse-active" />
             <div className="absolute w-16 h-16 rounded-full bg-primary-500/20 blur-xl" />
             <div className="relative w-14 h-14 rounded-dialog flex items-center justify-center shadow-lg shadow-primary-500/25 overflow-hidden">
-              <img src="/logo.png" alt="Copree" className="w-full h-full object-contain" />
+              <img src="/brand/coprexist-icon-192.png" alt="Copree" className="w-full h-full object-contain" />
             </div>
           </div>
           <h1 className="text-2xl font-bold text-textPrimary tracking-tight">{t('auth:title')}</h1>
@@ -423,6 +425,12 @@ export default function LoginPage() {
               </p>
             )}
           </div>
+
+          {auditRealIp && (
+            <p className="text-[11px] text-textMuted mt-3 text-center leading-relaxed px-2">
+              {t('auth:loginIpNotice')}
+            </p>
+          )}
         </div>
       </div>
     </div>
