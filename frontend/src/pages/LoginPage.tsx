@@ -184,6 +184,13 @@ export default function LoginPage() {
         }}
       />
 
+      {/* 左上角版本号：出问题时第一眼要能报出版本（数据来自 /health，见 useAppVersion） */}
+      {appVersion && (
+        <div className="absolute left-5 top-4 z-20 text-xs font-medium tabular-nums text-textMuted select-all">
+          v{appVersion}
+        </div>
+      )}
+
       <div className="relative z-10 flex flex-col items-center justify-center w-full px-4">
         {/* 标志 */}
         <div className="mb-10 text-center">
@@ -197,9 +204,6 @@ export default function LoginPage() {
           </div>
           <h1 className="text-2xl font-bold text-textPrimary tracking-tight">{t('auth:title')}</h1>
           <p className="text-sm text-textSecondary mt-2 font-medium">{t('auth:subtitle')}</p>
-          {appVersion && (
-            <p className="mt-3 text-xs font-medium tabular-nums text-textMuted">v{appVersion}</p>
-          )}
         </div>
 
         {/* 表单卡片 */}

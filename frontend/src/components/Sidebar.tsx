@@ -37,6 +37,11 @@ export default function Sidebar({ mobile, onClose, translucent }: { mobile?: boo
               <img src="/brand/coprexist-icon.svg" alt="Copree" className="w-full h-full object-contain" />
             </div>
             <span className="text-base font-bold text-textPrimary tracking-tight">Copree</span>
+            {appVersion && (
+              <span className="text-[10px] font-medium tabular-nums leading-none text-textMuted translate-y-[3px]">
+                v{appVersion}
+              </span>
+            )}
           </div>
         )}
         {mobile ? (
@@ -193,13 +198,8 @@ export default function Sidebar({ mobile, onClose, translucent }: { mobile?: boo
         )}
       </div>
 
-      {/* 版本 + 退出 */}
+      {/* 退出 */}
       <div className="p-2 border-t border-border shrink-0">
-        {!collapsed && appVersion && (
-          <div className="px-3 pb-1 text-[11px] font-medium tabular-nums text-textMuted select-all">
-            v{appVersion}
-          </div>
-        )}
         <button
           onClick={handleLogout}
           className={`flex items-center rounded-card text-textSecondary hover:text-rose-400 hover:bg-rose-500/10 transition-all duration-200 text-sm ${
