@@ -94,6 +94,16 @@
   判据相同），由 `frontend/scripts/patch-mdast-autolink.mjs` 在 postinstall 里幂等打补丁——发布流水线用的是
   `npm ci`，npm 没有补丁机制，所以没走 pnpm patchedDependencies。
 
+### 🔧 开发工具与测试
+- **发版从"一串靠记忆的命令"收成三步**：`scripts/release.py`（check / archive / tag / verify）。
+  版本号唯一出处定为 `backend/app/config.py::app_version`，预检一次列全判据：tag 未被占用、
+  CHANGELOG 有该版本段、发版关键文件没有未提交改动（可 `--allow-dirty` 显式放行，其它批次的脏文件
+  不会被误提交）、可一键跑全量测试。`tag --push` 推主仓 tag 后由新增的
+  `.github/workflows/release.yml` 校验 `tag == app_version` 再 `repository_dispatch` 通知发布仓构建，
+  **不再需要手工在两个仓库各打一次同名 tag**；`verify` 核对三平台产物与 `latest`。
+  流程、失败读法与"不许做的事"见 [发版（release）](docs/dev/release.md)；agent 的执行顺序放在本地
+  技能目录 `.dsh/skills/release/`（按 `.gitignore` 的约定不进版本库，公开知识只留在那份文档里）。
+
 ## [v0.4.15] - 2026-10-27
 
 ### ✨ 新增

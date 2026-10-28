@@ -1,0 +1,58 @@
+name: Release Tag Gate
+
+# tag 是唯一的发版触发器：打完 vX.Y.Z 推到主仓，这里校验"tag 与代码里的版本号一致"，
+# 再通知发布仓（Coprexist/Copree-Releases）按这个 tag 构建三平台。
+#
+# 为什么要有这道闸：发布仓的构建按 tag 去 checkout 主仓（ref: <tag>），而安装包里的版本号、
+# /health 的 version、更新检查比较的 app_version 都是**代码里写的那一个**。tag 和它对不上，
+# 用户装到的就是"标称 vA、实际 vB"的包，而更新检查会一直说"有新版本"。
+#
+# 为什么不再手工在发布仓打同名 tag：那是同一个动作做两遍，忘一处就是"构建没触发"或
+# "构建了一个不存在的 tag"。现在只推主仓的 tag。
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 校验 tag 与 app_version 一致
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          app=$(sed -n 's/^ *app_version: *str *= *"\([^"]*\)".*/\1/p' backend/app/config.py | head -1)
+          echo "tag=v$tag app_version=$app"
+          if [ -z "$app" ]; then
+            echo "::error::读不到 backend/app/config.py 的 app_version"
+            exit 1
+          fi
+          if [ "$tag" != "$app" ]; then
+            echo "::error::tag v$tag 与 app_version $app 不一致：先把 app_version 改成 $tag 再打 tag（打错了就删 tag 重来）"
+            exit 1
+          fi
+          echo "version=$app" >> "$GITHUB_OUTPUT"
+
+      - name: 通知发布仓构建三平台
+        env:
+          TOKEN: ${{ secrets.RELEASE_DISPATCH_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${TOKEN:-}" ]; then
+            echo "::error::缺少 RELEASE_DISPATCH_TOKEN：需要一个能对 Coprexist/Copree-Releases 发起 repository_dispatch 的 PAT"
+            exit 1
+          fi
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/Coprexist/Copree-Releases/dispatches \
+            -d "{\"event_type\":\"release\",\"client_payload\":{\"tag\":\"v${{ steps.version.outputs.version }}\"}}"
+          echo "已通知发布仓构建 v${{ steps.version.outputs.version }}"
