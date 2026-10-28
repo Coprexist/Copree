@@ -1199,7 +1199,7 @@ async def _trigger_dm_ai_reply(
         await add_pending_interrupt(agent_id, {
             "type": "user_message",
             "content": content,
-            "message_id": message_id,
+            "message_id": trigger_message_id,
             "session_id": session_id,
             "sender_id": sender_id,
             "sender_name": await display_name(db, sender_id),

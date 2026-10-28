@@ -48,7 +48,7 @@ class _Client:
         self.plan = plan
         self.calls: list[str] = []
 
-    async def get(self, url, headers=None, extensions=None):
+    async def request(self, method, url, headers=None, extensions=None, json=None):
         ip = urlparse(url).hostname or ""
         self.calls.append(ip)
         item = self.plan.get(ip)
@@ -60,7 +60,14 @@ class _Client:
 
 
 def _fake_dns():
-    """把 getaddrinfo 换成假表；返回恢复函数"""
+    """把 getaddrinfo 换成假表；返回恢复函数。
+
+    出站层现在解析结果有 60 秒缓存（`url_guard.resolve_host_addresses`），换假 DNS 前后都要清，
+    否则会读到上一个用例留下的真实/假地址。
+    """
+    from app.utils.pure import url_guard
+
+    url_guard.clear_resolution_cache()
     original = socket.getaddrinfo
 
     def fake(host, port, *a, **k):
@@ -70,7 +77,12 @@ def _fake_dns():
         return [(socket.AF_INET, 1, 6, "", (ip, 0))]
 
     socket.getaddrinfo = fake
-    return lambda: setattr(socket, "getaddrinfo", original)
+
+    def restore():
+        socket.getaddrinfo = original
+        url_guard.clear_resolution_cache()
+
+    return restore
 
 
 def test_mirror_table_renders_and_stays_empty_for_unknown_hosts():

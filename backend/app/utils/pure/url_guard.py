@@ -8,11 +8,17 @@
 （preset 的 Ollama http://localhost:11434、容器部署时的 embedding http://host.docker.internal:11434），
 而用户也合法地指向自己的局域网 LLM。所以分界线不是"URL 长什么样"，
 而是"**这个地址是不是用户已经声明过要用的那一个**"——见 base_url_registry。
+**两个入口，按上下文挑**：纯判定的逻辑只有一份（`classify_address`）；
+落成"这个 URL 是不是内网"时，同步上下文用 `is_private_target`，async 上下文必须用
+`is_private_target_async`——解析域名这一步在图省事的时候最贵：本机解析不到一个域名实测要
+16 秒（2026-10-28，`example.com`），同步解析摆在 async 函数里就是把整个 worker 停住。
 """
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import socket
+import time
 from urllib.parse import urlsplit
 
 # 明显是本机的名字（DNS 之前先挡掉，省一次解析）
@@ -106,25 +112,78 @@ def _ip_is_internal(ip: str) -> bool:
     return classify_address(ip) != "ok"
 
 
-def is_private_target(url: str) -> bool:
-    """目标是否指向内网/本机。
+# 解析结果的过程内缓存。TTL 短是有意的：地址会变（CDN/GSLB），缓存太久会让"刚改完解析"
+# 的机器仍按老地址判。缓存失败结果同样重要——解析不出去的那十几秒，不该每次点击重付一遍。
+_RESOLVE_TTL_SECONDS = 60.0
+_RESOLVE_CACHE_MAX = 256
+_resolve_cache: dict[str, tuple[float, tuple[str, ...]]] = {}
 
-    域名会做一次 DNS 解析（解析失败 → ``不当私网``，交给请求阶段报"无法连接"，
-    免得把"域名写错了"也误报成安全拦截）。
+
+def clear_resolution_cache() -> None:
+    """清解析缓存（换网络、改 DNS 后想让判定立刻生效时用；测试也用它）。"""
+    _resolve_cache.clear()
+
+
+def resolve_host_addresses(host: str) -> tuple[str, ...]:
+    """域名 → 地址串（去重保序）；解析失败返回空表。
+
+    空表在 `_judge` 里表现为"不当私网"，交给请求阶段报"无法连接"——
+    免得把"域名写错了"误报成安全拦截。
     """
-    p = _split(url)
-    host = (p.hostname or "").lower()
-    if not host:
-        return False
-    if host in _LOCAL_NAMES or host.endswith(_LOCAL_SUFFIXES):
-        return True
-    if _looks_like_ip(host):
-        return _ip_is_internal(host)  # IP 字面量：直接判，不用解析
+    cached = _resolve_cache.get(host)
+    if cached is not None:
+        expires_at, addresses = cached
+        if expires_at > time.monotonic():
+            return addresses
+        _resolve_cache.pop(host, None)
     try:
         infos = socket.getaddrinfo(host, None)
     except OSError:
+        addresses = ()
+    else:
+        addresses = tuple(dict.fromkeys(info[4][0] for info in infos))
+    if len(_resolve_cache) >= _RESOLVE_CACHE_MAX:
+        # 这本就是"短时间内的复用"，不做 LRU：满了整体丢掉，比维护淘汰顺序划算
+        _resolve_cache.clear()
+    _resolve_cache[host] = (time.monotonic() + _RESOLVE_TTL_SECONDS, addresses)
+    return addresses
+
+
+def _judge(host: str, addresses: tuple[str, ...]) -> bool:
+    if host in _LOCAL_NAMES or host.endswith(_LOCAL_SUFFIXES):
+        return True
+    if _looks_like_ip(host):
+        return _ip_is_internal(host)      # IP 字面量：没有可解析的东西
+    return any(_ip_is_internal(address) for address in addresses)
+
+
+def _needs_resolution(host: str) -> bool:
+    return not (host in _LOCAL_NAMES or host.endswith(_LOCAL_SUFFIXES) or _looks_like_ip(host))
+
+
+def is_private_target(url: str) -> bool:
+    """目标是否指向内网/本机（同步版：会真的解析域名，只给同步上下文用）。
+
+    域名解析带 60 秒缓存，同一个主机在缓存期内只问一次 DNS。
+    """
+    host = (_split(url).hostname or "").lower()
+    if not host:
         return False
-    return any(_ip_is_internal(info[4][0]) for info in infos)
+    return _judge(host, resolve_host_addresses(host) if _needs_resolution(host) else ())
+
+
+async def is_private_target_async(url: str) -> bool:
+    """同上，但域名解析丢到线程里跑——不把事件循环停在 DNS 上。
+
+    为什么必须有这一版：同步解析最坏要等十几秒（2026-10-28 实测 `example.com` 16.01s），
+    而判定跑在 async 请求路径上：一次"测试连接"就能让所有人的请求一起卡住。
+    """
+    host = (_split(url).hostname or "").lower()
+    if not host:
+        return False
+    if not _needs_resolution(host):
+        return _judge(host, ())
+    return _judge(host, await asyncio.to_thread(resolve_host_addresses, host))
 
 
 def _looks_like_ip(host: str) -> bool:

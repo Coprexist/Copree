@@ -69,8 +69,13 @@ def rule_schema_desc() -> str:
         "触发条件两种最常用写法（content_clean = 去掉 @ 令牌后的正文）："
         "「整句才触发」= {\"content_clean\":\"签到\"}；"
         "「提到就触发且不通知你」= {\"content_clean_contains\":\"签到\"}（慎用，可能会误触正常聊天）。"
-        "更细可写 {field, op, value}（op 可 eq/contains/starts_with/matches/similar/gt/lte/in 等；"
-        "similar 认错别字，长度用 content_len），并可 and/or/not 自由嵌套；拿不准先 test_decision_skill 试跑一条样例。"
+        "要带运算就写 {field, op, value}，照抄改值即可："
+        "{\"field\":\"content_clean\",\"op\":\"starts_with\",\"value\":\"训练\"}、"
+        "{\"field\":\"content_clean\",\"op\":\"matches\",\"value\":\"^(训练|游玩)\"}、"
+        "{\"field\":\"content_len\",\"op\":\"gt\",\"value\":0}"
+        "（op 可 eq/ne/contains/starts_with/matches/similar/gt/gte/lt/lte/in；similar 认错别字）；"
+        "也可写 {\"content_clean\":{\"starts_with\":\"训练\"}}，一个字段挂多个运算 = 同时满足。"
+        "并可 and/or/not 自由嵌套；拿不准先 test_decision_skill 试跑一条样例。"
         "do 四选一：reply_template（{action, reply} 固定回复，零成本；可用占位 "
         "{sender_name} {sender_id} {group_id} {content} {now}）/ call_tool（{action, name, arguments} 调平台工具）/ "
         "run_script（{action, code} 或 {action, entry} 沙箱脚本：在你自己的文件空间里跑，不能联网。"
@@ -698,6 +703,31 @@ def preview_sample_ctx(event_type: str, sample: dict, group_id: int | None = Non
     if group_id is not None:
         ctx.setdefault("group_id", group_id)
     return ctx
+
+
+async def verify_before_save(
+    db, kind: str, entity_id: int, rule: dict, verify: dict, *,
+    group_id: int | None = None,
+) -> tuple[bool, str, dict]:
+    """启用前检验：拿 AI 自己给的样例跑一次引擎，不命中就不许落地。
+
+    为什么必须有这一步：决策代理是「程序替它行动」的东西，写错了它自己也看不见——
+    规则不命中时没有任何反馈，只有某天它发现「我明明配了，为什么没动」。
+    样例由写规则的 AI 给（它最清楚想让它替什么），平台只负责跑一遍并如实回报。
+    """
+    if not isinstance(verify, dict) or not verify:
+        return False, "缺 verify：要给出一条「这条代理将来会触发我」的检验样例（event + 样例消息/条件）", {}
+    out = await preview_decision(
+        db, kind, entity_id, None,
+        str(verify.get("event") or "group_message"), verify,
+        rule=rule, execute=False, group_id=group_id,
+    )
+    if not out.get("success", True):
+        return False, str(out.get("error") or "检验未能执行"), out
+    if not out.get("hit"):
+        return False, ("这条规则在你给的检验样例下不会触发——它不会替你处理消息，也不会唤醒你；"
+                       "请检查 when 条件与样例是否匹配"), out
+    return True, "", out
 
 
 async def preview_decision(

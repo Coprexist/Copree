@@ -14,7 +14,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.utils.pure.url_guard import host_port, is_private_target
+from app.utils.pure.url_guard import host_port, is_private_target_async
 
 
 async def _platform_urls(db: AsyncSession) -> list[str]:
@@ -54,10 +54,15 @@ async def _user_urls(db: AsyncSession, user_id: int) -> list[str]:
     return urls
 
 
-def _private_only(urls: list[str]) -> set[str]:
-    return {host_port(u) for u in urls if u and is_private_target(u)}
+async def _private_only(urls: list[str]) -> set[str]:
+    """只留私网地址的 host:port；解析域名走 async 版，别把事件循环停在 DNS 上。"""
+    hosts: set[str] = set()
+    for url in urls:
+        if url and await is_private_target_async(url):
+            hosts.add(host_port(url))
+    return hosts
 
 
 async def saved_private_hosts(db: AsyncSession, user_id: int) -> set[str]:
     """该用户被允许请求的**私网** host:port 集合（公网不需要登记，故不进集合）。"""
-    return _private_only(await _platform_urls(db) + await _user_urls(db, user_id))
+    return await _private_only(await _platform_urls(db) + await _user_urls(db, user_id))

@@ -364,22 +364,15 @@ async def create_agent(
     # v0.1.8: 记忆系统已迁移到数据库（structured_records 表）
     # 文件系统记忆目录（memory_index.py）已废弃，新 AI 不再创建
 
-    # 自动将创建者添加为 AI 的好友（双向）
-    from app.models.friendship import Friendship
-    existing_check = await db.execute(
-        select(Friendship).where(
-            Friendship.user_id == owner_id,
-            Friendship.friend_type == "ai",
-            Friendship.friend_id == agent.user_id,
-        )
-    )
-    if not existing_check.scalar_one_or_none():
-        # 创建者 → AI（friend_id 统一用 User.id）
-        db.add(Friendship(user_id=owner_id, friend_type="ai", friend_id=agent.user_id))
-        # AI → 创建者
-        db.add(Friendship(user_id=ai_user.id, friend_type="human", friend_id=owner_id))
-        await db.flush()
-        logger.info(f"自动好友关系已建立: 用户#{owner_id} ↔ AI#{agent.id} (user_id={ai_user.id})")
+    # 自动将创建者添加为 AI 的好友（双向），走好友仓库那一扇门。
+    # 以前这里自己维护一份"加过没有"的判断，friend_service 那边却没有——两扇门一走岔，
+    # 就出现了「接受一条早就 pending 的申请→重复插入→唯一约束把整轮回复弄死」那类事故。
+    from app.repositories.friend_repo import SQLAlchemyFriendRepository
+    friend_repo = SQLAlchemyFriendRepository(db)
+    # 创建者 → AI，AI → 创建者（friend_id 统一用 User.id）
+    await friend_repo.add_friendship(owner_id, "ai", agent.user_id)
+    await friend_repo.add_friendship(ai_user.id, "human", owner_id)
+    logger.info(f"自动好友关系已建立: 用户#{owner_id} ↔ AI#{agent.id} (user_id={ai_user.id})")
 
     logger.info(f"AI '{name}' (id={agent.id}) 由用户 id={owner_id} 创建，api_credit_cost={api_credit_cost}")
     return agent

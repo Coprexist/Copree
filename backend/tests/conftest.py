@@ -6,8 +6,11 @@ pytest 全局配置 — 测试用独立数据库 ai_group_chat_test（不碰生�
 - fixture `migrated_db`（session 级）：用模型 metadata `drop_all` + `create_all` 建全量表
   —— **不跑 alembic**（历史迁移链无法从空库重建，模型即 schema，见 docs/guides/test_strategy.md §8.3）
 - 数据根目录在导入时指向临时目录：用例别写真实数据卷，非容器环境也写不动
+- 域名解析在导入时换成常量表：用例的耗时不该由这台机器的 DNS 决定
 """
+import ipaddress
 import os
+import socket
 import sys
 import tempfile
 from pathlib import Path
@@ -48,6 +51,37 @@ os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="copree-test-data-")
 # 任何用例只要碰到上传或清理（哪怕忘了自己 patch）就会动到真实头像——
 # 2026-10-23 就被「清理无引用头像」整批搬走过一次，全站头像变成碎图。
 os.environ["AVATARS_DIR"] = os.path.join(os.environ["DATA_DIR"], "avatars")
+
+
+# 公网域名在测试里解析成常量，不碰真实 DNS。
+# 为什么：url_guard.is_private_target() 对域名做一次真实解析（生产行为就是如此），于是任何拿
+# example.com 写条件的用例都要等一次解析；本机解析不到时那次等待是 16 秒（2026-10-28 实测：
+# example.com 16.01s，"Temporary failure in name resolution"），两个探针用例各 16s，加上其它
+# 碰到出站守卫的用例，全量被拖慢 30 秒以上，还随网络状况漂移（同一份代码昨天 90 秒、今天 124 秒）。
+# 什么不吃常量：单段名字（postgres / ai_group_postgres 这类容器服务名，测试库就挂在它上面）、
+# IP 字面量、回环与 .local/.internal 这类本机名字。
+TEST_DNS_PUBLIC_IP = "93.184.216.34"     # 任意公网地址；用它只为回答"算不算内网"
+_real_getaddrinfo = socket.getaddrinfo
+
+
+def _needs_real_dns(name: str) -> bool:
+    if "." not in name or name.endswith((".local", ".internal", ".lan", ".home")):
+        return True                      # 容器服务名、本机名字：真实解析
+    try:
+        ipaddress.ip_address(name.strip("[]"))
+        return True                      # IP 字面量：没有可解析的东西
+    except ValueError:
+        return False                     # 公网域名：吃常量
+
+
+def _fake_getaddrinfo(host, port, *args, **kwargs):
+    if _needs_real_dns(str(host).lower()):
+        return _real_getaddrinfo(host, port, *args, **kwargs)
+    return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "",
+             (TEST_DNS_PUBLIC_IP, port or 0))]
+
+
+socket.getaddrinfo = _fake_getaddrinfo
 
 
 def _tune_test_db() -> None:

@@ -215,6 +215,58 @@ def _get_tool_task_summary(tool_name: str, arguments: dict) -> str | None:
 # 系统错误通知
 # ============================================================
 
+def _key_fatal_reason(status_code: int) -> str:
+    """Key 不可用的说法：401 是钥匙不对，402 才是钱不够。
+
+    以前不管哪种状态码都写"余额不足"，用户按提示去充值，充完照旧不能说话——
+    真正的毛病是 Key 自己填错了。
+    """
+    if status_code == 401:
+        return "API Key 无效（401）"
+    if status_code == 402:
+        return "余额不足（402）"
+    return f"Key 不可用（{status_code}）"
+
+
+def _key_tail_suffix(api_key: str | None) -> str:
+    """Key 的点名说辞：末尾四位够认出是哪一把，又不至于把整把 Key 写进私信里。
+
+    短到不像 Key 的（占位符、手滑粘贴的半截）不点名：那种长度下"末尾四位"已经等于露了大半，
+    而且它本身就是填错，说"哪一把"没有意义。
+    """
+    key = (api_key or "").strip()
+    return f"（末尾 {key[-4:]}）" if len(key) >= 16 else ""
+
+
+def key_fatal_notice(
+    *, agent_name: str, source: str, status_code: int, api_key: str | None,
+    has_fallback: bool, tier_name: str,
+) -> str:
+    """「这把 Key 用不了」那条私信：谁不可用、为什么、下一步怎么办。
+
+    四种收件场景说四种话（还有下一级可降级 / 系统额度 / 用户自己的 Key / 其它），
+    所以组装只放在这一处：调用方只需算清楚 has_fallback，再由本函数决定说什么。
+    """
+    reason = _key_fatal_reason(status_code)
+    tail = _key_tail_suffix(api_key)
+    if has_fallback:
+        return (
+            f"⚠️ **{tier_name} Key{tail} 不可用**（{reason}）。\n"
+            f"正在自动切换至下一优先级额度…"
+        )
+    if source == "pool_key":
+        return (
+            f"⚠️ **系统额度暂不可用**（{reason}）{tail}。\n"
+            f"此次不记入你的额度使用情况。请稍后重试或联系管理员。"
+        )
+    if source == "user_key":
+        return (
+            f"⚠️ **{reason}**{tail}，且无可用系统额度。\n"
+            f"请前往 [个人设置](/settings) 检查 Key 是否填错、余额是否用尽，或联系管理员补充额度。"
+        )
+    return f"⚠️ AI「{agent_name}」的 API 调用失败（{reason}）{tail}。\n请检查 API 配置。"
+
+
 async def _send_system_error(
     db, agent, error_type: str, detail: str = "",
     conversation_type: str = "group",
@@ -238,7 +290,7 @@ async def _send_system_error(
         "insufficient_balance": (
             f"⚠️ AI「{agent.name}」的 API 余额不足（402），无法回复消息。\n\n"
             f"📌 **解决方法**：\n"
-            f"1. 前往 DeepSeek 官网充值\n"
+            f"1. 前往所用 API 提供商的官网充值\n"
             f"2. 前往 [个人设置](/settings) 更换全局 API Key\n"
             f"3. 前往 [AI 设置页](/agents/{agent.id}) 更换此 AI 的 Key\n"
             f"4. 或前往 [兑换码页面](/me) 输入兑换码获取额度"
@@ -605,6 +657,8 @@ async def _tool_call_loop(
     _has_sent_message = False
     # 轮末封存用的工具总账（工具轮历史 → 账本）
     _tool_log: list[dict] = []
+    # 已经就"Key 不可用"给用户发过一条带降级上下文的私信：末尾别再补一条同义的
+    _notified_fatal = False
     # 收尾轮：轮次用尽却一句话没发时白送一轮（只送一次），否则整轮检索等于白做
     _closing_extra = 0
     _closing_active = False
@@ -1079,30 +1133,12 @@ async def _tool_call_loop(
                     )
                     has_fallback = _next_check[0] is not None
 
-                    if has_fallback:
-                        msg_text = (
-                            f"⚠️ **{tier_name} Key 不可用**"
-                            f"（{'余额不足' if e.status_code == 402 else 'API Key 无效' if e.status_code == 401 else '未知错误'}）。\n"
-                            f"正在自动切换至下一优先级额度…"
-                        )
-                    elif current_credit_source == "pool_key":
-                        msg_text = (
-                            f"⚠️ **系统额度暂不可用**（{'余额不足' if e.status_code == 402 else 'API Key 无效' if e.status_code == 401 else '未知错误'}）。\n"
-                            f"此次不记入你的额度使用情况。请稍后重试或联系管理员。"
-                        )
-                    elif current_credit_source == "user_key":
-                        msg_text = (
-                            f"⚠️ **你的 API 余额不足**，且无可用系统额度。\n"
-                            f"请前往 [个人设置](/settings) 更新 API Key 或联系管理员补充额度。"
-                        )
-                    else:
-                        msg_text = (
-                            f"⚠️ AI「{agent.name}」的 API 调用失败"
-                            f"（{'余额不足' if e.status_code == 402 else 'API Key 无效' if e.status_code == 401 else '未知错误'}）。\n"
-                            f"请检查 API 配置。"
-                        )
-
-                    await _send_system_error_notification(db, agent, msg_text)
+                    await _send_system_error_notification(db, agent, key_fatal_notice(
+                        agent_name=agent.name, source=current_credit_source,
+                        status_code=e.status_code, api_key=current_api_key,
+                        has_fallback=has_fallback, tier_name=tier_name,
+                    ))
+                    _notified_fatal = True
                     logger.error(
                         f"AI {agent.name}({agent.id}) {current_credit_source} "
                         f"{e.status_code} 不可用，尝试降级 ({key_attempt + 1}/3)"
@@ -1128,10 +1164,12 @@ async def _tool_call_loop(
                     db, agent, messages, conversation_type,
                     group_id, session_id, has_output=False, model=model,
                 )
-                # 发送分类系统通知
+                # 发送分类系统通知：上面按 tier 已经发过一条更具体的（说明是哪把 Key、
+                # 有没有降级空间），这里再补一条就是同一件事说两遍，用户一早上收两条一样的
                 error_type = last_error_type or "all_failed"
-                await _send_system_error(db, agent, error_type, last_error_detail,
-                                         conversation_type, group_id, session_id)
+                if not _notified_fatal:
+                    await _send_system_error(db, agent, error_type, last_error_detail,
+                                             conversation_type, group_id, session_id)
                 return
 
             if response.get("reasoning_content"):
@@ -1442,10 +1480,9 @@ async def _log_key_fatal(db, pool_key_id: int | None, status_code: int, message:
         )
         key_row = key_result.scalar_one_or_none()
         key_name = key_row.name if key_row else f"#{pool_key_id}"
-        error_type = "余额不足" if status_code == 402 else "API Key 无效"
         logger.warning(
             f"  ⚠️ 系统通知：API Key 池「{key_name}」({pool_key_id}) 发生致命错误："
-            f"{error_type} ({status_code})，请管理员检查。详情: {message[:200]}"
+            f"{_key_fatal_reason(status_code)}，请管理员检查。详情: {message[:200]}"
         )
     except Exception as e:
         logger.error(f"记录 Key 致命错误失败: {e}")

@@ -88,6 +88,28 @@ async def send_friend_request(
     return result
 
 
+async def _may_resolve_request(
+    friend_repo: FriendRepository, req: FriendshipRequest, user_id: int, *, accepting: bool
+) -> bool:
+    """这条申请能不能由 user_id 处理。判据只写这一处，接受与拒绝共用。
+
+    - 收件方本人：能接受、也能拒绝。
+    - 收件方是 AI 时认两个主体：AI 自己的账号，和它的主人（主人在这个平台上就是替它负责的人，
+      代它点一次"通过"不该被拦）。不认这两个主体，就等于谁都能替任意 AI 结掉任意一条申请。
+    - 发起者：只能拒绝/撤回，**不能替对方答应**——否则一条申请自己点一下就成立了。
+    """
+    if req.requester_id == user_id:
+        return not accepting
+    if req.target_type == "human":
+        return req.target_id == user_id
+    if req.target_type == "ai":
+        if req.target_id == user_id:
+            return True
+        agent = await friend_repo.get_agent_by_user_id(req.target_id)
+        return bool(agent and agent.owner_id == user_id)
+    return False
+
+
 async def accept_friend_request(
     *,
     friend_repo: FriendRepository,
@@ -99,7 +121,7 @@ async def accept_friend_request(
     if req is None:
         raise ValueError("申请不存在")
 
-    if req.target_type == "human" and req.target_id != user_id:
+    if not await _may_resolve_request(friend_repo, req, user_id, accepting=True):
         raise ValueError("无权操作此申请")
 
     if req.status != "pending":
@@ -130,9 +152,7 @@ async def reject_friend_request(
     if req is None:
         raise ValueError("申请不存在")
 
-    is_target = (req.target_type == "human" and req.target_id == user_id)
-    is_requester = (req.requester_id == user_id)
-    if not is_target and not is_requester:
+    if not await _may_resolve_request(friend_repo, req, user_id, accepting=False):
         raise ValueError("无权操作此申请")
 
     if req.status != "pending":

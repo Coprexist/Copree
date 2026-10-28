@@ -4,6 +4,7 @@
 from datetime import datetime, timezone
 from typing import Optional, Protocol
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.friendship import Friendship, FriendshipRequest
@@ -114,7 +115,20 @@ class SQLAlchemyFriendRepository:
         return req
 
     async def add_friendship(self, user_id: int, friend_type: str, friend_id: int) -> None:
-        self.session.add(Friendship(user_id=user_id, friend_type=friend_type, friend_id=friend_id))
+        """加好友只加一次。
+
+        关系是"有没有"的事实，不是"加了几次"的流水：已经有这条关系时再插一次会撞
+        uq_friendship，而撞在建 flush 上的唯一约束会顺手把整个事务弄死——接受一条早就
+        pending 的申请（关系其实几个月前就建好了）正是这样把 AI 的一整轮回复弄没的。
+
+        用 ON CONFLICT DO NOTHING 而不是"先查再插"：唯一约束本来就由数据库守着，
+        让插入自己可重复比在应用层补一次 SELECT 更短，也没有查与插之间那个窗口。
+        """
+        await self.session.execute(
+            pg_insert(Friendship)
+            .values(user_id=user_id, friend_type=friend_type, friend_id=friend_id)
+            .on_conflict_do_nothing(constraint="uq_friendship")
+        )
 
     async def delete_friendship(self, friendship: Friendship) -> None:
         await self.session.delete(friendship)

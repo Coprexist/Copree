@@ -176,6 +176,20 @@ class ToolRegistry:
 2. **必填字段** — 缺少 required 字段 → 返回期望格式 vs 实际收到
 3. **字段类型** — 类型不匹配 → 返回字段名 + 期望类型 + 实际类型
 
+### 4.3 工具失败的收敛（2026-10-28）
+
+工具是「能给 AI 回一句话的失败」，不是「能带走整轮的失败」。四条口径：
+
+- **返回形状**：成功看 `success`，失败一律 `{"error": True, "message": "…"}`。`dispatch` 拿 `result.get("error")`
+  同时判「给 AI 的回复」与「工具用量统计」——写成 `{"success": False, "error": …}` 会被记成成功，
+  口径错在最下层，界面上永远看不出来。
+- **不许留脏事务**：工具在 flush 上撞唯一约束/类型/长度之后，SQLAlchemy 会话会停在「必须先 rollback」，
+  此后连记账都要再抛一次，异常一路窜到最外层——AI 这一轮连已经想好的话都发不出去（线上只剩一行 `Session 已回滚`）。
+  所以 `ToolRegistry.dispatch` 有一步 `_recover_session`：`is_active` 为假就地 rollback，并补刷调用方手里的 agent
+  （异步会话里过期属性会炸 `MissingGreenlet`）；世界侧技能兜底那条路同样走它，只有一个收口点。
+- **记账是旁路**：`_record_call` 把进程内指标与日聚合都兜住，记账失败只告警，绝不改工具结果。
+- **不靠「先查再插」维持不变量**：这类不变量该由数据库的唯一约束守，写入口用自己的 `ON CONFLICT DO NOTHING`
+  （见好友关系 `friend_repo.add_friendship`）；应用层再补一次 SELECT 只是把竞态窗口缩小。
 ---
 
 ## 五、流式响应层
@@ -316,11 +330,16 @@ class APIKeyPool:
 
 | 文件 | 职责 |
 |------|------|
-| `backend/app/services/llm_service.py` | LLM 调用封装、SSE 解析 |
-| `backend/app/services/tool_registry.py` | 工具注册、参数校验 |
-| `backend/app/services/ai_response_worker.py` | 工具调用循环、状态推送 |
-| `backend/app/services/api_key_pool_service.py` | API Key 池管理 |
-| `backend/app/services/credit_service.py` | 额度消耗、审计日志 |
+| `backend/app/ai/llm.py` | LLM 调用封装、SSE 解析、错误分类 |
+| `backend/app/ai/executor.py` | 工具调用循环、四层 Key 解析、系统通知口径 |
+| `backend/app/ai/response_worker.py` | 触发与调度（群聊 / 私信 / 闹钟 / 触发器） |
+| `backend/app/services/tool_registry.py` | 工具注册与参数校验入口 |
+| `backend/app/tools/base.py` | 工具基类与统一分发（dispatch / 会话复原 / 记账） |
+| `backend/app/services/infrastructure/api_key_pool_service.py` | API Key 池管理 |
+| `backend/app/services/infrastructure/quota_service.py` | 池 Key 选择、额度判定 |
+| `backend/app/services/infrastructure/credit_service.py` | 额度消耗、审计日志 |
+| `backend/app/services/agent/api_probe.py` | 供应商连通性探针（判定 + 人话；出站走 outbound_http） |
+| `backend/app/utils/outbound_http.py` | 带用户给的地址发请求的唯一一扇门（解析一次、钉地址、逐跳复检） |
 | `backend/app/tools/` | 工具实现目录 |
 | `backend/app/models/agent_config.py` | AI 配置 ORM |
 | `backend/app/models/api_key_pool.py` | API Key 池 ORM |

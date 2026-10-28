@@ -45,13 +45,13 @@ class HandleFriendRequest(ToolPlugin):
         action = str(arguments.get("action") or "")
         request_id = int(arguments.get("request_id") or 0)
         if action not in ("accept", "reject") or not request_id:
-            return {"success": False, "error": "缺少 action(accept/reject) 或 request_id"}
+            return {"error": True, "message": "缺少 action(accept/reject) 或 request_id"}
 
         agent = (await db.execute(
             select(AgentModel).where(AgentModel.id == agent_id)
         )).scalar_one_or_none()
         if agent is None:
-            return {"success": False, "error": "AI 不存在"}
+            return {"error": True, "message": "AI 不存在"}
 
         # 校验申请确实是发给自己的（防越权处理别人的申请）
         from app.models.friendship import FriendshipRequest
@@ -59,24 +59,34 @@ class HandleFriendRequest(ToolPlugin):
             select(FriendshipRequest).where(FriendshipRequest.id == request_id)
         )).scalar_one_or_none()
         if req is None or req.target_type != "ai" or req.target_id != agent.user_id:
-            return {"success": False, "error": "该申请不是发给你的，无法处理"}
+            return {"error": True, "message": "该申请不是发给你的，无法处理"}
 
         # 好友服务吃的是仓储（关键字参数），不是裸会话——借同一个 session 包装
         friend_repo = SQLAlchemyFriendRepository(db)
-        if action == "accept":
-            result = await accept_friend_request(
-                friend_repo=friend_repo, request_id=request_id, user_id=agent.user_id,
-            )
-            await db.commit()
-            logger.info(f"🤝 AI「{agent.name}」通过了好友申请 #{request_id}")
-            return {"success": True, "result": "已通过好友申请", **result}
-        else:
+        try:
+            if action == "accept":
+                result = await accept_friend_request(
+                    friend_repo=friend_repo, request_id=request_id, user_id=agent.user_id,
+                )
+                await db.commit()
+                logger.info(f"🤝 AI「{agent.name}」通过了好友申请 #{request_id}")
+                return {"success": True, "result": "已通过好友申请", **result}
             result = await reject_friend_request(
                 friend_repo=friend_repo, request_id=request_id, user_id=agent.user_id,
             )
             await db.commit()
             logger.info(f"🤝 AI「{agent.name}」拒绝了好友申请 #{request_id}")
             return {"success": True, "result": "已拒绝好友申请", **result}
+        except ValueError as e:
+            # 状态已变（别人先处理了）这类业务冲突：把写了一半的事务退回来，再如实回一句
+            await db.rollback()
+            return {"error": True, "message": str(e)}
+        except Exception as e:
+            # 兜住所有失败：出错后不回滚，会话会一直停在"必须先 rollback"的状态，
+            # 这一轮后面每一次入库都会再抛一次，最后连 AI 想发的那句话一起没了
+            await db.rollback()
+            logger.error(f"处理好友申请 #{request_id} 失败: {e}", exc_info=True)
+            return {"error": True, "message": f"处理好友申请失败：{e}"}
 
 
 ToolRegistry.register(HandleFriendRequest)

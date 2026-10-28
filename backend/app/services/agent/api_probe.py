@@ -24,6 +24,13 @@ from dataclasses import dataclass
 
 import httpx
 
+from app.utils.outbound_http import (
+    BLOCKED_PRIVATE,
+    BLOCKED_TIMEOUT,
+    BLOCKED_URL,
+    BlockedFetch,
+    request_pinned,
+)
 from app.utils.pure.llm_endpoint import chat_completions_url, models_url
 
 logger = logging.getLogger(__name__)
@@ -130,15 +137,18 @@ def _failure(resp: httpx.Response, api_key: str | None) -> ProbeResult:
 
 
 async def _probe_by_chat(
-    client: httpx.AsyncClient, base_url: str, api_key: str | None, model: str | None
+    client: httpx.AsyncClient, base_url: str, api_key: str | None, model: str | None,
+    allow_internal=None,
 ) -> ProbeResult:
     """GET /models 不存在时的兜底：真发一次极小 chat（业界做法）。
 
     只有真发一次，才能同时验证 key、base_url 版本段、模型名三者匹配。
+    请求走与网页取数同一条出站门（outbound_http.request_pinned）：判定用的那份解析结果
+    就是实际拨的地址，不给 httpx 自己再解析一次的机会。
     """
     use_model = model or resolve_probe_model(base_url)
-    resp = await client.post(
-        chat_completions_url(base_url),
+    resp = await request_pinned(
+        client, "POST", chat_completions_url(base_url),
         headers=_headers(api_key),
         json={
             "model": use_model,
@@ -146,24 +156,56 @@ async def _probe_by_chat(
             "max_tokens": PROBE_MAX_TOKENS,
             "stream": False,
         },
+        allow_internal=allow_internal,
     )
     if resp.status_code == 200:
         return ProbeResult(True, "ok", f"连接成功（已用 {use_model} 试调用一次）")
     return _failure(resp, api_key)
 
 
-def _private_hint(base_url: str) -> str:
+async def _private_hint(base_url: str) -> str:
     """连不上又恰好是本机/内网地址时，把「为什么」直接说出来。
 
     新手填了自己电脑上跑的中转（localhost:8888），看到的只有 "All connection attempts failed"——
     这句话不会让人想到「服务器和我的电脑不是一台机器」。
     """
-    from app.utils.pure.url_guard import is_private_target
+    from app.utils.pure.url_guard import is_private_target_async
 
-    if not is_private_target(base_url):
+    if not await is_private_target_async(base_url):
         return ""
     return ("\n这是本机或局域网地址：服务器访问不到它（localhost/127.0.0.1 指的是你的电脑，"
             "192.168.x.x 是内网）。请填公网能访问的地址，或者把 Base URL 清空、改走平台通道。")
+
+
+def _allow_internal_policy(allow_private: bool, allow_private_hosts: Collection[str]):
+    """探针自己的出站政策：管理员免检；普通用户只放行"自己保存过"的那个 host:port。
+
+    这段是**政策**，不是解析——解析与钉地址在 outbound_http 一处，两者不各写一份。
+    """
+    registered = set(allow_private_hosts)
+
+    def allow(host_port: str, _addresses: list[str]) -> bool:
+        return allow_private or host_port in registered
+
+    return allow
+
+
+async def _blocked_result(error: BlockedFetch, base_url: str, api_key: str | None) -> ProbeResult:
+    """把出站被拦的原因翻成探针的 kind + 人话（前端按 kind 分类）。"""
+    if error.kind == BLOCKED_URL:
+        return ProbeResult(False, "bad_url", str(error))
+    if error.kind == BLOCKED_PRIVATE:
+        return ProbeResult(
+            False,
+            "blocked_private",
+            "拒绝请求内网地址：如果这是你自建的 LLM，请先保存这个 Base URL（保存后才允许测试），"
+            "平台已配置的地址不受影响",
+        )
+    hint = await _private_hint(base_url)
+    if error.kind == BLOCKED_TIMEOUT:
+        return ProbeResult(False, "timeout", "连接超时：检查 Base URL 与服务器出网" + hint)
+    # 含 DNS 解析失败、连接被拒、重定向死循环：都不是"钥匙不对"，别让用户去查 key
+    return ProbeResult(False, "network", f"无法连接：{redact_secret(str(error), api_key)}" + hint)
 
 
 async def probe_provider(
@@ -179,27 +221,24 @@ async def probe_provider(
 
     client 只给测试注入（MockTransport），生产不传。
     私网目标默认拒绝：只有"已登记的地址"（用户/平台保存过的那个 host:port）才放行，
-    否则这个接口就是一个内网端口扫描器（见 url_guard / base_url_registry）。
+    否则这个接口就是一个内网端口扫描器（见 outbound_http / base_url_registry）。
     allow_private=True 是管理员路径：管理员本来就是这台机器的信任根。
     """
     if not (base_url or "").strip():
         return ProbeResult(False, "bad_url", "请先填写 Base URL")
 
-    if not allow_private:
-        from app.utils.pure.url_guard import host_port, is_private_target
-        if is_private_target(base_url) and host_port(base_url) not in set(allow_private_hosts):
-            return ProbeResult(
-                False,
-                "blocked_private",
-                "拒绝请求内网地址：如果这是你自建的 LLM，请先保存这个 Base URL（保存后才允许测试），"
-                "平台已配置的地址不受影响",
-            )
-
+    allow_internal = _allow_internal_policy(allow_private, allow_private_hosts)
     owns_client = client is None
     if owns_client:
         client = httpx.AsyncClient(timeout=PROBE_TIMEOUT)
     try:
-        resp = await client.get(models_url(base_url), headers=_headers(api_key))
+        try:
+            resp = await request_pinned(
+                client, "GET", models_url(base_url),
+                headers=_headers(api_key), allow_internal=allow_internal,
+            )
+        except BlockedFetch as e:
+            return await _blocked_result(e, base_url, api_key)
         if resp.status_code == 200:
             try:
                 models = extract_model_ids(resp.json())
@@ -208,14 +247,11 @@ async def probe_provider(
             return ProbeResult(True, "ok", f"连接成功，{len(models)} 个模型可用", models=models)
         if resp.status_code in (404, 405):
             # 这家没实现 /models（MiMo 就是），退化成真发一次
-            return await _probe_by_chat(client, base_url, api_key, model)
+            try:
+                return await _probe_by_chat(client, base_url, api_key, model, allow_internal)
+            except BlockedFetch as e:
+                return await _blocked_result(e, base_url, api_key)
         return _failure(resp, api_key)
-    except httpx.TimeoutException:
-        return ProbeResult(False, "timeout", "连接超时：检查 Base URL 与服务器出网" + _private_hint(base_url))
-    except httpx.HTTPError as e:
-        # 含 ConnectError / DNS 失败等；异常文本同样要脱敏（可能带 URL/凭据）
-        return ProbeResult(False, "network",
-                           f"无法连接：{redact_secret(str(e), api_key)}" + _private_hint(base_url))
     finally:
         if owns_client and client is not None:
             await client.aclose()

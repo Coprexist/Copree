@@ -12,8 +12,13 @@
 内置运算名：eq / ne / contains / starts_with / matches / gt / gte / lt / lte / in
 自定义运算与判词必须带命名空间（vendor.xxx），见 register_op / register_predicate。
 
-**历史写法（仅为兼容库里已有的决策技能规则，不再新增用法）**：
-{"字段": 值} 与 {"字段_contains": 值} 这类下划线后缀形式，只支持内置运算。
+**另外认三种叶子简写**（不是规范写法，但写了就按语义求值，不静默判假）：
+{"字段": 值}、{"字段_contains": 值} 这类下划线后缀形式，以及 {"字段": {运算: 值, ...}}
+——"一个字段挂多个运算"，多个运算按 and 求值。
+
+为什么对象值一律按"运算集合"读：ctx 的字段全是标量，拿对象做等值比较永远是 false。
+静默判假是最贵的一种错（规则看着生效、其实一条都不中），所以认不出来就当场报错，
+交给 validate_conditions 说清楚该改成哪一行。
 """
 from __future__ import annotations
 
@@ -237,14 +242,33 @@ def apply_op(value, op: str | None, expect) -> bool:
         return False
 
 
+def _known_op(name: str) -> bool:
+    return name in BUILTIN_OPS or name in _CUSTOM_OPS
+
+
+def _nested_ops(expect) -> dict | None:
+    """{"字段": {"运算": 值, ...}} → 运算表；不是这种写法返回 None。
+
+    判据是"键全是已注册的运算名"。标量字段比不出对象，所以剩下的可能只有"写错了"，
+    None 交给 validate_conditions 报错，别让它安静地按 eq 判假。
+    """
+    if not isinstance(expect, dict) or not expect:
+        return None
+    return expect if all(_known_op(str(name)) for name in expect) else None
+
+
 def _leaf(key: str, expect, ctx: dict) -> bool:
-    """历史写法的一个叶子：{"字段_运算": 值}。"""
+    """历史写法的一个叶子：{"字段_运算": 值}，或 {"字段": {运算: 值, ...}}。"""
     field = key
     op = "eq"
     for suffix, canonical in _LEGACY_SUFFIX.items():
         if key.endswith(suffix):
             field, op = key[: -len(suffix)], canonical
             break
+    # 后缀已经指定了运算，值就不该再是运算表（那种写法的校验见 _validate_leaf_object）
+    nested = _nested_ops(expect) if op == "eq" else None
+    if nested is not None:
+        return all(apply_op(ctx.get(field), name, arg) for name, arg in nested.items())
     return apply_op(ctx.get(field), op, expect)
 
 
@@ -271,7 +295,8 @@ def validate_conditions(conditions, *, check_refs: bool = True,
                         _depth: int = 0, _count: list | None = None) -> tuple[bool, str]:
     """校验条件树：形状、规模、引用到的运算与判词是否已注册。
 
-    规模闸与"引用存在性"都放在这里，写错当场说清楚，不留给运行期安静地不命中。
+    规模闸、入参闸（正则/相似度）与"引用存在性"都放在这里，写错当场说清楚，
+    不留给运行期安静地不命中。
     """
     count = _count if _count is not None else [0]
     if not isinstance(conditions, dict) or not conditions:
@@ -292,11 +317,11 @@ def validate_conditions(conditions, *, check_refs: bool = True,
             return False, f"「{op}」是判词，引用要写成 {ref}（$ 是判词引用标记，内置运算不带）"
         if check_refs and op not in BUILTIN_OPS and op not in _CUSTOM_OPS:
             return False, f"运算 {op} 未注册（可用：{list(op_names())}）"
-        if op == "matches":
-            return _validate_pattern(conditions.get("value"))
-        if op == "similar":
-            return _validate_similar(conditions.get("value"))
-        return True, ""
+        if op in ("eq", "ne") and isinstance(conditions.get("value"), dict):
+            return False, (f"字段「{conditions.get('field')}」是标量，拿对象做等值比较恒为假；"
+                           f"要在一个字段上判多个运算，写 {{\"字段\": {{\"运算\": 值}}}} "
+                           f"或拆成 and 数组")
+        return _validate_op_arg(op, conditions.get("value"))
     for key, value in conditions.items():
         if key in ("and", "or"):
             if not isinstance(value, list) or not value:
@@ -313,15 +338,17 @@ def validate_conditions(conditions, *, check_refs: bool = True,
             if not ok:
                 return False, err
             continue
-        op = "eq"
+        field, op = str(key), "eq"
         for suffix, canonical in _LEGACY_SUFFIX.items():
-            if str(key).endswith(suffix):
-                op = canonical
+            if field.endswith(suffix):
+                field, op = field[: -len(suffix)], canonical
                 break
-        if op == "matches":
-            ok, err = _validate_pattern(value)
-            if not ok:
-                return False, err
+        if isinstance(value, dict):
+            ok, err = _validate_leaf_object(str(key), field, op, value)
+        else:
+            ok, err = _validate_op_arg(op, value)
+        if not ok:
+            return False, err
     return True, ""
 
 
@@ -332,6 +359,36 @@ def _validate_pattern(value) -> tuple[bool, str]:
     risk = risky_pattern(pattern)
     if risk:
         return False, risk
+    return True, ""
+
+
+def _validate_op_arg(op: str, value) -> tuple[bool, str]:
+    """带参数的运算各自的入参闸；其它运算的入参不管（求值出错只算不命中）。"""
+    if op == "matches":
+        return _validate_pattern(value)
+    if op == "similar":
+        return _validate_similar(value)
+    return True, ""
+
+
+def _validate_leaf_object(key: str, field: str, op: str, value: dict) -> tuple[bool, str]:
+    """{"字段": {运算: 值, ...}} 的校验：认得出运算表就逐个校验入参，认不出就说清怎么改。"""
+    if op != "eq":
+        return False, (f"「{key}」的后缀已经指定了「{op}」运算，值只能是标量（收到对象）；"
+                       f'其它运算请写规范形式 {{"field": "{field}", "op": "{op}", "value": ...}}')
+    if not value:
+        return False, (f"条件「{key}」的值是空对象；要判它请写 "
+                       f'{{"field": "{key}", "op": "contains", "value": ...}}')
+    nested = _nested_ops(value)
+    if nested is None:
+        unknown = [str(name) for name in value if not _known_op(str(name))]
+        return False, (f"条件「{key}」的值是对象，但 {unknown} 不是已注册的运算"
+                       f"（可用：{list(op_names())}）；"
+                       f'规范写法是 {{"field": "{key}", "op": "contains", "value": ...}}')
+    for name, arg in nested.items():
+        ok, err = _validate_op_arg(name, arg)
+        if not ok:
+            return False, err
     return True, ""
 
 

@@ -48,6 +48,35 @@ async def test_agent_rule_fires_without_any_world(migrated_db):
         assert dec["hit"] and dec["handled"] and dec["reply"] == "已记录", dec
 
 
+async def test_a_rule_with_param_ops_really_fires(migrated_db):
+    """带参运算真的会命中：matches 认前缀、gt 判长度，正常聊天不会被顺带吃掉
+
+    这条是 2026-10-28 线上问题的回归：规则里写 {"content_clean": {"matches": ...}}
+    曾经整条是死的（叶子的对象值被按 eq 比掉），写规则的人只能退化成 _contains，
+    于是"我今天训练了个模型"也会触发。
+    """
+    from app.database import async_session
+    from app.services.world.decision_skill import run_decision_engine
+
+    async with async_session() as db:
+        await _seed(db)
+        ok, err = await _save(db, {
+            "name": "训练游玩", "when": {"event": "group_message", "conditions": {"and": [
+                {"content_clean": {"matches": r"^\s*(训练|游玩)\s"}},
+                {"content_len": {"gt": 0}},
+            ]}},
+            "do": {"action": "reply_template", "reply": "指令收到"}, "notify": False,
+        })
+        assert ok, err
+        hit = await run_decision_engine(db, "agent", 24, None, "group_message",
+                                        _incoming("训练 一只小鲸鱼"))
+        assert hit["hit"] and hit["reply"] == "指令收到", hit
+        # 只是聊天里提到"训练"：不该被规则吃掉
+        miss = await run_decision_engine(db, "agent", 24, None, "group_message",
+                                         _incoming("我今天训练了个模型"))
+        assert miss["hit"] is False, miss
+
+
 async def test_notify_true_still_wakes_the_owner_with_the_result(migrated_db):
     """notify=true：动作照跑，但本体仍被唤醒，且看得到执行结果（不重复劳动）"""
     from app.database import async_session

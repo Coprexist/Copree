@@ -53,3 +53,72 @@
   修法：认帧认 `context_ref`（同会话切回原帧，**帧 id 稳定**）；不变量兜在唯一写入点 `_save`（重复帧归并）。
   规则表见 [帧生命周期](../dev/frame_lifecycle.md)「同一段会话至多一帧」；测试 `tests/test_frame_lifecycle.py`。
 
+## 本轮线上问题修复（2026-10-27 ~ 10-28）
+
+- **iPad / iPhone（Safari < 16.4）打开任何对话都整页报错**：`Unexpected Application Error! Invalid regular
+  expression: invalid group specifier name`。根因不在页面：`remark-gfm` 的依赖
+  `mdast-util-gfm-autolink-literal@2.0.1` 用 lookbehind 正则匹配纯文本里的邮箱，而 WebKit 16.4（2023-03）之前
+  不支持 lookbehind，正则字面量在构造时就抛 —— 这段转换每次渲染 markdown 都跑，所以是「一打开就白屏」，
+  桌面 Chrome 完全正常，很容易被误判成设备问题。修法：删掉那段**冗余**的 lookbehind（同文件 `findEmail()`
+  本来就有等价的 `previous()` 逐字符校验，判据相同），由 `frontend/scripts/patch-mdast-autolink.mjs`
+  在 postinstall 里幂等打补丁（发布流水线走 `npm ci`，npm 没有 patchedDependencies）。
+
+- **AI 写出来的 SVG 显示成文件卡片，人上传的 SVG 只占 2×2 像素**：① `ai_write_file` 建文件记录时把
+  `mime_type` 硬编码成 `text/plain`，而前端只按 `mime_type.startsWith("image/")` 判附件渲染，于是一律走卡片；
+  ② 只有 `viewBox` 没有 `width/height` 的 SVG 没有固有尺寸，`max-width:100%` 在内容自适应容器里会绕回 0，
+  再叠一层 `block` 包裹就塌成 2×2。修法：新增 `utils/mime.py`（`guess_mime` / `effective_mime`）在写文件与发文件
+  两处统一口径，迁移 `0095` 回填历史记录与消息里的附件快照；前端把「是不是 SVG」与尺寸策略收进
+  `useAttachmentUpload.isSvgAttachment / attachmentImageSizing`（SVG 最小 120×120、其余 64×64、`object-contain`）。
+  验证：线上 `/api/fs/download/79` 返回 `image/svg+xml`；真实私信里 img 盒子 2×2 → 120×120（`naturalWidth` 150）。
+
+- **「你的 API 余额不足」是误报：那把 Key 里存的是占位符**：owner 的全局 Key 实际是 8 位 `Aa123456`，
+  接口直接回 401 `Authentication Fails, Your api key: ****3456 is invalid`；而执行器对自身 Key 的失败
+  一律写「余额不足」，还同时发「按优先级降级」与「全部失败」两条同义私信——用户查余额、钱一分没少。
+  修法：401（钥匙不对）/ 402（钱不够）分开说，通知带上**这把** Key 的末尾四位（短到不像 Key 的占位符不点名），
+  文案组装收成一个纯函数 `key_fatal_notice()`（四种收件场景各一条断言），出错那一级发过之后收尾不再补发。
+  验证：`tests/test_key_fatal_notice.py`；Key 由用户自行重填，代码不替他补。
+
+- **某个 AI 对某个人一律不回，日志里只剩一行 `Session 已回滚`**：好友关系 6 月就建好了，而那条好友申请
+  一直挂着 pending，AI 每轮回私信都顺手 accept 一遍 → 第二次插入撞 `uq_friendship` → IntegrityError 抛在 flush 上
+  → 会话进入「必须先 rollback」→ 失败记账再抛一次 → 异常窜到最外层，整轮连 `send_dm` 都没执行
+  （`ai_conversation_logs` 里一条记录都没有，所以从现象上完全看不出是好友申请干的）。
+  修法：① 好友关系只留**一扇门**（`friend_repo.add_friendship`，创建 AI 那条路也从它走——事故的根就是两扇门
+  各判各的），门内用 Postgres 的 `ON CONFLICT DO NOTHING` 让插入本身可重复；② `handle_friend_request`
+  失败后自行回滚；③ `ToolRegistry.dispatch` 兜底 `_recover_session`（坏事务就地复原 + 补刷 agent），
+  世界侧技能兜底那条路同样兜住；④ 工具错误形状统一成 `{"error": True, "message": …}`——`{"success": False}`
+  这种形状会被 `dispatch` 记成成功，工具用量统计一直不准。
+  规则写进 [AI 底层服务设计](../ai_service/design/ai_service_design.md) §4.3。
+  验证：`tests/test_friend_request_idempotent.py`、`tests/test_friendship_single_door.py`；
+  线上当场收到该 AI 的私信回复，那条挂了一季度的申请同时被正确接受。
+
+- **同一处剩下的口子：发给 AI 的好友申请，谁传都能接受**：`accept_friend_request` 只对
+  `target_type == "human"` 校验归属，AI 那种目标完全不判——传谁的 id 都行（工具层原本自己补了一道，
+  所以没出过事，但服务层这道门是虚的）。判据收敛到 `_may_resolve_request`：收件方本人能接受/拒绝，
+  收件方是 AI 时认它自己的账号与它的主人；发起者只能拒绝/撤回，**不能替对方答应**。
+  验证：`tests/test_friend_request_ownership.py`（路人拒之、申请者不能自批、AI 与主人可处理）。
+
+- **一次域名解析能把整个 worker 停住十几秒**：`url_guard.is_private_target()` 对域名做真实解析
+  （防 SSRF 的既定口径），而它被直接调在 async 的探针路径上；本机解析不到 `example.com` 要
+  16.01 秒（实测），于是用户点一次"测试连接"，所有人在等的请求一起卡住；全量测试也跟着慢出 30 秒，
+  且随这台机器的 DNS 状况漂移（同一份代码 90 秒 / 124 秒）。
+  修法分两步。① 止血：解析拆成 `resolve_host_addresses()`（60 秒缓存，失败也缓存）+ 两个入口——
+  `is_private_target` 给同步上下文、`is_private_target_async` 给 async 路径（解析走线程）；
+  "已登记私网地址"的收集改用 async 版；测试侧 `conftest.py` 把**公网域名**解析成常量，用例不再
+  依赖本机 DNS（124.63s → 71.95s）。② 收口：探针原来"先判一次、再让 httpx 自己拨"，判定与连接
+  是两次解析（DNS rebinding 的窗口，也正是安全文档早就写明不许的形状）——把网页取数那套"自己挑地址、
+  钉 IP、逐跳复检"提成 `app/utils/outbound_http.py::request_pinned`，取数与探针共用一扇门，
+  探针只多传一个"已登记内网可放行"的政策。
+  验证：`tests/test_url_guard_resolution.py`（两入口同口径、缓存只问一次、解析期间事件循环仍在转）、
+  `tests/test_api_probe.py` 与 `tests/test_mirror_fallback.py` 全绿（探针与取数共用同一条出站管线）。
+
+- **规则用 `{"字段": {"matches": …}}` 写的：校验通过、一条都不中**：反馈是"matches / starts_with / gt
+  整批失效，等值和 `_contains` 正常"。查下来运算符都是好的——坏的是叶子形状：`{"content_clean":
+  {"matches": …}}` 这种写法从来没进过求值分支（规范形式是 `{field, op, value}`，历史兼容是
+  `字段_contains` 这类下划线后缀），它落进"字段等于"的简写，拿字符串和对象比等值，恒假；而校验期只校验
+  正则形状、不认这个形状，于是放行。写成死规则的代价比报错大得多：规则看着生效、实际零命中，写规则的人
+  只能退化成 `_contains`，正常聊天提一句也会被治掉。
+  修法：对象值一律按"一个字段挂多个运算"读（多个为 and）；认不出来的对象值、后缀后接对象、显式 `eq` 比
+  对象，三种都在**校验期**拒并给出规范写法；`matches` / `similar` 的入参闸（长度、灾难形状、阈值）
+  抽成 `_validate_op_arg`，两条叶子路径共用。写法契约见 [触发组合规则](../dev/trigger_rules.md)「叶子的三种写法」。
+  验证：`tests/test_trigger_rules.py`（含对象值求值与三种拒法）、`tests/test_decision_layer.py`
+  里"带参运算真命中、正常聊天不被吃掉"这条；库里那条规则不动一个字符就活了。

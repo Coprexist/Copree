@@ -136,6 +136,7 @@
     - `"字段": 值` 简写（等于）
     - `"字段_contains": "子串"` / `"字段_starts_with": "前缀"` / `"字段_matches": "正则"`
     - `"字段_gt/lt/gte/lte": 数值`（比较）
+    - `"字段": {"运算": 值, ...}`（一个字段挂多个运算，同时满足；等价于把规范形式 `{field, op, value}` 并成一个对象）
     - 保留字段：`is_mention` / `is_at_all` / `sender_type` / `group_type` / `content` / `sender_id` 等
   - 例：`or: [{content_contains: "天气"}, {and: [{content_contains: "签到"}, {not: {is_mention: true}}]}]`
   - 进阶（后续）：表达式字符串模式（`(content contains '天气' or group_type == '冒险团') and not is_mention`），白名单解析器，供高级场景；初期以条件树为准。

@@ -39,6 +39,61 @@
   **启动器常驻也能提醒**——服务跑着时每 6 小时复查一次，最小化到托盘时改发托盘气泡（同一版本只提醒一次，
   气泡失败不影响启动器本体）。设计说明见 [docs/dev/update_check.md](docs/dev/update_check.md)。
 
+### 🐛 修复
+- **发给 AI 的好友申请，服务层谁传都能接受**：`accept_friend_request` 只对发给人类的申请校验归属，
+  目标是 AI 时完全不判——工具层自己补过一道，所以没出过事，但服务层这道门是虚的（路由 / 未来的调用方
+  都能绕过）。判据收敛到 `_may_resolve_request` 一处：收件方本人能接受/拒绝，收件方是 AI 时认它自己的
+  账号与它的主人；发起者只能拒绝/撤回，**不能替对方答应**（否则一条申请自己点一下就成立）。
+  验证：`tests/test_friend_request_ownership.py`。
+
+- **一次域名解析能把整个 worker 停住十几秒**：出站守卫 `is_private_target()` 对域名做真实解析
+  （防 SSRF 的既定口径），却被直接调在 async 的"测试连接"路径上；本机解析不到 `example.com` 实测
+  16.01 秒，于是点一次探针，所有人在等的请求一起卡；全量测试也因此慢出 30 秒并随本机 DNS 漂移。
+  修法分两步：① 解析独立成 `resolve_host_addresses()`（60 秒缓存、失败也缓存），判定分两个入口
+  （同步 `is_private_target` / async `is_private_target_async`，后者把解析丢到线程），探针与已登记
+  地址的收集改用 async 版，测试侧把公网域名解析成常量（全量 124.63s → 71.95s）；
+  ② 出站收成一扇门 `app/utils/outbound_http.py::request_pinned`——解析一次、把选中的 IP 钉进连接、
+  Host 与 SNI 仍是原域名、每跳重定向复检，网页取数与供应商探针共用（探针多传一个"已登记内网可放行"
+  的政策）。原来探针是"先判一次、再让 httpx 自己拨"，两次解析之间的窗口正是 DNS rebinding 能钻的地方。
+  验证：`tests/test_url_guard_resolution.py`、`tests/test_api_probe.py`、`tests/test_mirror_fallback.py`。
+
+- **规则里把运算写进对象，整条规则静默失效**：条件里 `{"content_clean": {"matches": "^(训练|游玩)"}}`
+  这种"字段 + 运算对象"的写法一直没被支持过——它落进"字段等于"的简写分支，拿字符串去和对象比等值，恒假；
+  校验期又只查正则形状、认不出这个形状，于是规则建好了、看着生效、一条都不中（线上那条「关键词训练游玩」
+  就是这么死的，写规则的人只好退化成 `_contains`，正常聊一句"我今天训练了个模型"于是也被吃掉）。
+  修法：对象值一律按**一个字段挂多个运算**读（多个按 and 求值），读不出来（运算名拼错、下划线后缀之后
+  又接对象、显式 `eq` 拿对象比）在校验期当场拒并给出规范写法；`matches` / `similar` 的入参闸抽成
+  一处，两条叶子路径共用。规范写法仍是 `{field, op, value}`。
+  验证：`tests/test_trigger_rules.py::test_object_valued_leaf_is_read_as_op_set_not_silent_false`、
+  `tests/test_decision_layer.py::test_a_rule_with_param_ops_really_fires`。
+
+- **「API Key 无效」被说成「余额不足」，而且同一件事一口气发两封私信**：Key 报 401 时，聊天界面那句话是写死的
+  「你的 API 余额不足，且无可用系统额度」——用户去查余额，钱一分没少，Key 却是错的（本次线上那把存的是
+  八位占位符）。401 是钥匙不对、402 才是钱不够，现在按状态码分开说，并在通知里带上**这把** Key 的末尾四位
+  （同一账号常存着好几把，不点名等于让用户自己挨个试；短到不像 Key 的占位符不点名）。同一轮里「按优先级降级」
+  的通知与「全部失败」的收尾通知原本各发一条，落到用户手上就是两条一模一样的提示，现在出错那一级发了、收尾
+  不再补。
+
+- **AI 一直不回某个人：其实是接受好友申请时撞唯一约束，整轮静默死掉**：好友关系早就在（六月建过），而那条
+  申请一直躺着 pending，AI 每次回私信都顺手 accept 一遍——第二次 add 撞 uq_friendship，IntegrityError
+  抛在 flush 上，SQLAlchemy 会话随即进入「必须先 rollback」的状态，之后连记账都要再抛一次，异常窜到最外层，
+  消息一条没发出去，日志里只剩一行 `Session 已回滚`——从现象上完全看不出是好友申请干的。
+  三处一起收：好友关系只留**一扇门**（`friend_repo.add_friendship`，创建 AI 那条路也从它走——
+  事故的根就是两扇门各判各的），门内用 Postgres 的 `ON CONFLICT DO NOTHING` 让插入本身可重复，
+  唯一约束继续由数据库守，应用层不再补一次 SELECT，也没有查与插之间那个窗口；
+  handle_friend_request 失败后自己回滚，与 send_friend_request 同一套写法；分发层再加一道防线——
+  工具把事务写炸后就地复原会话，并补刷调用方手里的 agent（否则过期属性在异步会话里会炸 MissingGreenlet），
+  记账失败也不许盖住工具失败。**一个工具失败不该带走整轮回复**。
+  顺带修掉忙时私信注入里一个未定义的 message_id（NameError）。
+- **iPad/iPhone（Safari < 16.4）打开任何对话都整页报错**：`Unexpected Application Error! Invalid regular
+  expression: invalid group specifier name`，错误边界接管整页。根因不在页面，而在 `remark-gfm` 的依赖
+  `mdast-util-gfm-autolink-literal@2.0.1`（npm 上的 latest，上游至今没修）——它用 **lookbehind 正则**
+  匹配纯文本里的邮箱，而 WebKit 16.4（2023-03）之前不支持 lookbehind，正则字面量在构造时直接抛错；
+  这个转换每次渲染 markdown 都会跑，所以是「一打开就白屏」，桌面 Chrome 完全正常，很容易被误判成设备问题。
+  修法：去掉那段**冗余**的 lookbehind（同文件 `findEmail()` 本来就有等价的 `previous()` 逐字符校验，
+  判据相同），由 `frontend/scripts/patch-mdast-autolink.mjs` 在 postinstall 里幂等打补丁——发布流水线用的是
+  `npm ci`，npm 没有补丁机制，所以没走 pnpm patchedDependencies。
+
 ## [v0.4.15] - 2026-10-27
 
 ### ✨ 新增

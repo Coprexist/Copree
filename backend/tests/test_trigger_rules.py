@@ -49,6 +49,36 @@ def test_one_canonical_condition_shape_plus_legacy_shorthand():
     assert not match_conditions({"op": "$vendor.level", "value": 4}, ctx)
 
 
+def test_object_valued_leaf_is_read_as_op_set_not_silent_false():
+    """{"字段": {运算: 值}} = 一个字段挂多个运算（and）；认不出就当场报错，不许安静判假。
+
+    来历：这种写法曾被按 eq 比对象、恒假，规则建好了、看着生效、一条都不中
+    （2026-10-28 线上问题：matches/starts_with/gt 整批"失效"，其实是叶子取值走错了路）。
+    """
+    from app.utils.pure.conditions import match_conditions, validate_conditions
+
+    ctx = {"content_clean": "训练 一只小鲸鱼", "content_len": 8, "is_mention": True}
+    assert match_conditions({"content_clean": {"starts_with": "训练"}}, ctx)
+    assert match_conditions({"content_clean": {"matches": r"^\s*(训练|游玩)\s"}}, ctx)
+    assert match_conditions({"content_len": {"gt": 0}}, ctx)
+    assert match_conditions({"content_clean": {"starts_with": "训练", "contains": "鲸鱼"}}, ctx)
+    assert not match_conditions({"content_clean": {"starts_with": "训练", "contains": "水母"}}, ctx)
+    assert match_conditions({"not": {"content_len": {"gt": 100}}}, ctx)
+
+    # 认不出的对象值、后缀后接对象、显式 eq 比对象：三种都当场拒，并给出改法
+    ok, err = validate_conditions({"content_clean": {"gtt": 0}})
+    assert not ok and "gtt" in err, err
+    ok, err = validate_conditions({"content_clean_contains": {"x": 1}})
+    assert not ok and "对象" in err, err
+    ok, err = validate_conditions({"field": "content_clean", "op": "eq", "value": {"a": 1}})
+    assert not ok and "标量" in err, err
+    # 对象写法里的入参闸照旧生效
+    ok, err = validate_conditions({"content_clean": {"matches": "(a+)+b"}})
+    assert not ok and "回溯" in err, err
+    ok, err = validate_conditions({"content_clean": {"similar": ""}})
+    assert not ok, err
+
+
 def test_extension_names_are_namespaced_and_platform_wins():
     """扩展名必须带命名空间；平台认领过的名字插件覆盖不了"""
     from app.utils.pure import trigger_rules

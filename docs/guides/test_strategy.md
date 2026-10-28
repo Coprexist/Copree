@@ -231,9 +231,19 @@ async with async_session() as db:
 却按产品行为白等了 `_WAIT_FOR_VIEWER = 20` 秒才走"无人应答"分支；现在它自己把该值压到 0
 （同文件另一个用例本来就是这么做的）。
 
+**4) 域名解析不许碰网络。** `url_guard.is_private_target()` 对域名做一次真实解析（生产行为就是
+这样），测试里拿 `example.com` 写条件就得等一次解析；**本机解析不到时那次等待是 16 秒**
+（2026-10-28 实测：16.01s，`Temporary failure in name resolution`）——两个探针用例各 16s，
+加上其它碰到出站守卫的用例，全量 124 秒。现在 `conftest.py` 在导入时把**公网域名**解析成常量
+`93.184.216.34`：单段名字（`postgres` / `ai_group_postgres` 这类容器服务名，测试库连接串就挂在
+它上面）、IP 字面量、回环与 `.local/.internal` 仍走真实解析。改完 124s → 72s，也不再随这台机器的
+DNS 快慢漂移。
+
 排查手法（下次变慢照这个走）：运行器现在**每个用例都打耗时**，末尾还给最慢 8 名；
 还嫌不够就 `python -m cProfile -s tottime tests/run_without_pytest.py`——
-这套问题就是靠它定位的：`epoll.poll` 占了 90s（都在等 I/O），CPU 几乎不花。
+这套问题就是靠它第一次定位的：`epoll.poll` 占了 90s（都在等 I/O），CPU 几乎不花。
+慢在**阻塞的 `getaddrinfo`** 上时 cProfile 会把时间记给 `socket.getaddrinfo`，先单独量一下
+`socket.getaddrinfo(那个域名)` 再怀疑代码。
 
 ---
 
