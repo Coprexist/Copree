@@ -318,6 +318,90 @@ function registerPluginRoutes(register, opts) {
   });
 }
 
+// src/commands.ts
+function toBridgeCommand(item) {
+  return {
+    name: String(item?.name ?? ""),
+    description: String(item?.description ?? ""),
+    hint: String(item?.input?.hint ?? "")
+  };
+}
+function toRun(settled) {
+  const result = settled?.result;
+  return {
+    kind: "ok",
+    commandId: String(settled?.commandId ?? ""),
+    result: result?.kind === "error" ? "error" : "success",
+    text: String(result?.text ?? "")
+  };
+}
+function createCommandsPort(ctx, options) {
+  let service;
+  let state = null;
+  const adopt = (candidate) => {
+    if (typeof candidate?.list === "function" && typeof candidate?.execute === "function") {
+      service = candidate;
+      if (state !== "ok") {
+        state = "ok";
+        options.log("dsh-copree: \u5DF2\u62FF\u5230 DSH \u7684 commands \u670D\u52A1\uFF08\u547D\u4EE4\u9762\u677F\u53EF\u7528\uFF09");
+      }
+    }
+  };
+  try {
+    ctx.inject?.(["commands"], (injected) => adopt(injected.commands ?? injected.get?.("commands")));
+  } catch (error) {
+    options.log(`dsh-copree: \u58F0\u660E commands \u4F9D\u8D56\u5931\u8D25\uFF1A${String(error?.message ?? error)}`);
+  }
+  adopt(ctx.get?.("commands") ?? ctx.commands);
+  const agentOf = (sessionId) => ctx.agents?.get?.(sessionId);
+  const note = () => {
+    if (state === "missing") return;
+    state = "missing";
+    options.log('dsh-copree: \u8FD9\u4E2A DSH \u7248\u672C\u6CA1\u6709\u5411\u63D2\u4EF6\u66B4\u9732 commands \u670D\u52A1\uFF08\u547D\u4EE4\u9762\u677F\u4F1A\u663E\u793A"\u6682\u4E0D\u53EF\u7528"\uFF09');
+  };
+  return {
+    get available() {
+      if (service === void 0) {
+        adopt(ctx.get?.("commands") ?? ctx.commands);
+      }
+      if (service === void 0) {
+        note();
+        return false;
+      }
+      return true;
+    },
+    list(sessionId) {
+      if (!service) return null;
+      const agent = agentOf(sessionId);
+      if (!agent) return null;
+      try {
+        return service.list(agent).map(toBridgeCommand);
+      } catch (error) {
+        options.log(`dsh-copree: \u5217\u547D\u4EE4\u5931\u8D25\uFF1A${String(error?.message ?? error)}`);
+        return null;
+      }
+    },
+    async execute(sessionId, line) {
+      if (!service) return { kind: "unavailable" };
+      const agent = agentOf(sessionId);
+      if (!agent) return { kind: "no-session" };
+      const controller = new AbortController();
+      try {
+        const settled = await service.execute(agent, line, [], controller.signal);
+        if (!settled) return { kind: "unknown" };
+        return toRun(settled);
+      } catch (error) {
+        return {
+          kind: "ok",
+          commandId: "",
+          result: "error",
+          text: String(error?.message ?? error)
+        };
+      }
+    }
+  };
+}
+
 // src/bridge.ts
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -1043,35 +1127,7 @@ function registerBridge(ctx, options) {
       return void 0;
     }
   };
-  let commandRemote;
-  ctx.inject?.(["typertGateway"], (gatewayCtx) => {
-    commandRemote = gatewayCtx.remote?.commands;
-  });
-  const commands = {
-    get available() {
-      return typeof commandRemote?.list === "function" && typeof commandRemote?.execute === "function";
-    },
-    list(sessionId) {
-      if (!commands.available) return null;
-      try {
-        return commandRemote.list(sessionId).map((item) => ({
-          name: String(item?.name ?? ""),
-          description: String(item?.description ?? ""),
-          hint: String(item?.input?.hint ?? "")
-        }));
-      } catch (error) {
-        options.log(`dsh-copree: \u5217\u547D\u4EE4\u5931\u8D25\uFF1A${String(error?.message ?? error)}`);
-        return null;
-      }
-    },
-    async execute(sessionId, line) {
-      if (!commands.available) return { kind: "unavailable" };
-      const execution = await commandRemote.execute(sessionId, line);
-      if (!execution) return { kind: "unknown" };
-      const result = execution.result?.kind === "error" ? "error" : "success";
-      return { commandId: String(execution.commandId ?? ""), result, text: String(execution.result?.text ?? "") };
-    }
-  };
+  const commands = createCommandsPort(ctx, { log: options.log });
   let disposeRoute = null;
   let stopHeartbeat = null;
   const apply2 = (allowed) => {

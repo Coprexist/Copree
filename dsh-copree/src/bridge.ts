@@ -17,6 +17,7 @@
  * Copree 可达地址），Copree 侧据此显示「运行中」并把管理端的请求转回来。
  */
 import type { Context } from '@deepseek-ai/cordis'
+import { createCommandsPort } from './commands'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { randomUUID, timingSafeEqual } from 'node:crypto'
 import { mkdir, writeFile } from 'node:fs/promises'
@@ -984,49 +985,8 @@ export function registerBridge(ctx: Context, options: BridgeOptions): () => void
       return scope
     } catch { return undefined }
   }
-  /**
-   * 命令端口：DSH 的 commands 服务是 Remote 服务，按 agent 作用域注册与执行；
-   * 这里只做「sessionId → agent」与形状收敛，不认识命令本身。
-   */
-  /**
-   * 命令入口只有一个：DSH 自己的 remote 分发面（typertGateway）。
-   *
-   * 为什么不直调 ctx.commands：@Remote 方法不是给进程内 caller 用的——分发器负责把 sessionId
-   * 解析成 Agent（必要时把会话拉活）并补上执行上下文与信号。直调服务时信号是 undefined，
-   * 命令会在留档那一刻炸成 500（实测：Cannot read properties of undefined (reading 'aborted')）。
-   *
-   * 分发面可选：老版本 DSH 没有它时插件照样装得上，两条命令路由回 501（页面据此说"更新插件并重启"）。
-   */
-  let commandRemote: any
-  ;(ctx as any).inject?.(['typertGateway'], (gatewayCtx: any) => { commandRemote = gatewayCtx.remote?.commands })
-
-  const commands: CommandsPort = {
-    get available() {
-      return typeof commandRemote?.list === 'function' && typeof commandRemote?.execute === 'function'
-    },
-    list(sessionId) {
-      if (!commands.available) return null
-      try {
-        return (commandRemote.list(sessionId) as any[]).map((item) => ({
-          name: String(item?.name ?? ''),
-          description: String(item?.description ?? ''),
-          hint: String(item?.input?.hint ?? ''),
-        }))
-      } catch (error) {
-        // 会话解析不出来（不在活动列表、续接失败）走这里：与"这条会话没有命令"分开
-        options.log(`dsh-copree: 列命令失败：${String((error as Error)?.message ?? error)}`)
-        return null
-      }
-    },
-    async execute(sessionId, line) {
-      if (!commands.available) return { kind: 'unavailable' }
-      const execution = await commandRemote.execute(sessionId, line)
-      // undefined = 语法不成立或名字没解析出来（DSH 的语义：准入未命中就不留任何事件）
-      if (!execution) return { kind: 'unknown' }
-      const result = execution.result?.kind === 'error' ? 'error' : 'success'
-      return { commandId: String(execution.commandId ?? ''), result, text: String(execution.result?.text ?? '') }
-    },
-  }
+  // 命令端口：DSH 的 commands 服务在进程内可取（cordis Service）；取法与形状收敛都在 commands.ts
+  const commands: CommandsPort = createCommandsPort(ctx as any, { log: options.log })
   /**
    * 开门 / 关门：**人点了同意才有桥**。
    *

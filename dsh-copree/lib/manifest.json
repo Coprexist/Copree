@@ -1,8 +1,8 @@
 {
   "name": "dsh-copree",
-  "version": "0.7.1",
-  "buildStamp": "2026-10-01T00:04:01.936Z",
-  "backendVersion": null,
+  "version": "0.7.2",
+  "buildStamp": "2026-10-28T11:51:30.360Z",
+  "backendVersion": "0.4.15",
   "files": {
     "dist/assets/AdminPage-CcRbiPSC.js": "300067d920f528f468699e3255e0070e51a4e264f942ead5cbc24167ccda28de",
     "dist/assets/AgentDetailPage-CB7Zj272.js": "9b84efadf3be76c7c9ce326e818f90546b53f86bc7a70ecc73528218590e67c1",
@@ -262,7 +262,7 @@
     "dist/study-room/js/sound.js": "7010da06e10cb2dbea5cc9f80edfaa657aa4779fe1526effafb33b0d5fd685e2",
     "dist/vite.svg": "615aaf0d999eaea59d2e828c1b6371b1a25f8db9e9026726cc2817a4c9e5b033",
     "lib/client.js": "b5eb727a805167c06399170929f518520df5b690af1e311845ff40faa8276b27",
-    "lib/index.js": "c0b4b465585d06205cc43ec17ce5d9cc8a4f8a7c13b4abf4a8400c65559542b8",
-    "package.json": "0b4607cd4ac5d68f374788cb115f2b568a968a009059ec1d4ba58dcb64df583d"
+    "lib/index.js": "9376facc8aa8c3a464e1a617bb1e31166155229ff8462545d4c62a90d997bbe4",
+    "package.json": "1480a816ca018916b9462b02b118c16dce51c686595028555c67af2a7f661069"
   }
 }

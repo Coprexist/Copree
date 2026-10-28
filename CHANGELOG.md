@@ -9,6 +9,14 @@
 ## [未发布]
 
 ### ✨ 新增
+- **Copro 对话页的「命令」按钮真的能用命令了**（dsh-copree 0.7.2）：以前按钮只会说"DSH 侧还没有
+  命令服务"——因为插件一直没拿到 DSH 的 `commands` 服务。真因有三层：它是 cordis Service，直接写
+  `ctx.commands` 时属性还不存在（要 Declare 依赖）；它的 `list/execute` 标了 @Remote 但那只是**额外**
+  给浏览器页的通道，进程内可调；`execute` 签名要求显式 `AbortSignal`（缺了才会在留档时炸
+  `reading 'aborted'`）。现在插件按 cordis 依赖声明取服务、用会话的 agent 作用域列与执行，
+  命令不进模型、不占一轮对话；服务不可用时如实说"暂不可用"并写清原因。
+  实现见 `dsh-copree/src/commands.ts`，文档见 [DSH 接入指南](docs/DSH接入指南.md) 与插件 README。
+
 - **状态栈 → 状态链：运行集合改成一条双向链表**：以前"谁是当前帧"靠数组顺序 + `status` 推，切一次会话
   就得重排整份栈（线上见过 126 帧 / 546 KB 的一份），而"帧 id 在队里第几个"只能扫数组。现在运行集合是
   显式双向链表（`agent_state_chain` + `agent_state_chain_node`）：节点**只存帧 id 与前驱后继**，

@@ -254,6 +254,10 @@ $DSH_HOME/copree-worlds/Copree群视界-<世界名>/
 - **AIC 侧边栏「功能」分组**：群视界 / 好友 / 我的AI / 管理 / 设置，点击在覆盖层打开对应前端页面
 - **嵌入模式**（`?embed=1`）：前端隐藏自身侧边栏，API 基址走 `/copree-api`；401 通知宿主；`?token=` 注入复用登录态；router basename `/copree-ui`
 - **世界页内嵌群聊**：后端注入 `window.WORLD_API` / `WORLD_UI`（DSH 嵌入 = `/copree-api` / `/copree-ui`，独立部署默认不变），世界代码的群聊面板/平台菜单/SSE 正确走代理
+- **对话页的「命令」按钮**（插件 0.7.2 起）：列这条 DSH 会话可用的斜杠命令并执行，
+  命令不进模型、不占一轮对话。实现是插件经 cordis 依赖声明取 DSH 的 `commands` 服务，
+  按会话的 agent 作用域调 `list` / `execute`（执行时带 AbortSignal）。
+  服务不可用时页面明说「暂不可用」，原因写在插件日志里。
 
 ---
 
@@ -276,6 +280,8 @@ $DSH_HOME/copree-worlds/Copree群视界-<世界名>/
 | 世界页打不开/显示宿主界面 | 世界无 index.html（提示"让群视界机器人生成"）；或路径未走 `/copree-api` |
 | token 丢了（重启后） | 重新打开 Copree 面板触发同步 |
 | 工具报"不属于任何 Copree 世界" | 会话 cwd 需在 `copree-worlds` 目录下（打开 Copree群视界-* 会话） |
+| 对话页「命令」按钮说"还没有命令服务" | 插件不是 0.7.2+，或改完没重启 DSH Web（Host 半必须重启）；确认 `~/.dsh/profiles/web/node_modules/dsh-copree/package.json` 的 version，再看 DSH 日志里 `dsh-copree:` 那几行 |
+| 命令列表空但会话有命令 | 命令挂在**活动会话**的 agent 上；先选一条会话（页面会提示"先选一条会话"），被清理掉的旧会话要先续接 |
 | 装插件报 `ERR_PNPM_UNEXPECTED_STORE` | 见下方「DSH_HOME 是符号链接时的两个坑」第 1 条 |
 | 装插件报 `ENOENT ... /data_s001/tmp/...` 或 `.../relocated/dsh-session-recovery` | 见下方第 2 条 |
 
