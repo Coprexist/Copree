@@ -36,6 +36,7 @@ class SendFile(ToolPlugin):
                       arguments: dict, context: dict) -> dict:
         from app.models.file import FileMetadata
         from app.services.content.file_service import ai_stored_path
+        from app.utils.mime import effective_mime
         from app.chat.gm import send_gm_message, gm_message_to_dict
         from app.chat.dm import send_dm_message, get_or_create_dm_session
         from app.models.agent import Agent as AgentModel
@@ -89,7 +90,9 @@ class SendFile(ToolPlugin):
                     "name": fp.rsplit("/", 1)[-1].rsplit("\\", 1)[-1],
                     "path": meta.path,
                     "size": meta.size,
-                    "mime_type": meta.mime_type or "application/octet-stream",
+                    # 存量行的类型可能是 text/plain（旧 ai_write_file 写死的），
+                    # 这里按扩展名兜底：消息附件快照是前端渲染的唯一依据，错了图就变卡片
+                    "mime_type": effective_mime(meta.path, meta.mime_type),
                 })
 
         if missing:

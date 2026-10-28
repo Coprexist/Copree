@@ -19,7 +19,7 @@ import { IconButton, MENU_CAPTION, MenuItem, MenuPanel, WidthHandles } from '../
 import { ApprovalDialog, QuestionDialog, type AskPrompt, type ChatApproval } from '../components/shared/ChatDialogs'
 import MarkdownContent from '../components/shared/MarkdownContent'
 import { CONTENT_W_VAR, ToolBubble, toolIcon, useContentColumnWidth } from '../components/shared/ChatPanelAtoms'
-import { useAttachmentUpload, type ReadyAttachment } from '../hooks/useAttachmentUpload'
+import { useAttachmentUpload, attachmentImageSizing, type ReadyAttachment } from '../hooks/useAttachmentUpload'
 import { useElementWidth } from '../hooks/useElementWidth'
 import { useStickToBottom } from '../hooks/useStickToBottom'
 import { streamSse } from '../utils/sse'
@@ -757,7 +757,7 @@ export default function DshChatPage() {
                             const url = fileDownloadUrl(img.file_id)
                             return (
                               <a key={img.file_id} href={url} target="_blank" rel="noreferrer" title={img.name}>
-                                <img src={url} alt={img.name} className="max-h-40 max-w-full rounded border border-border/60" />
+                                <img src={url} alt={img.name} className={`max-h-40 max-w-full rounded border border-border/60 ${attachmentImageSizing(img)}`} />
                               </a>
                             )
                           })}

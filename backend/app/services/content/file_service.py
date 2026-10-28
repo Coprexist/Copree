@@ -14,6 +14,7 @@ from app.models.file import FileMetadata, FileReference, FileCollaborator
 from app.config import settings
 from app.db_providers import get_provider
 from app.repositories.content_repo import ContentRepository, SQLAlchemyContentRepository
+from app.utils.mime import guess_mime, is_generic
 
 logger = logging.getLogger(__name__)
 
@@ -955,6 +956,9 @@ async def ai_write_file(db: AsyncSession, agent_id: int, file_path: str,
         metadata.owner_id = agent_id
         metadata.size = len(content_bytes)
         metadata.content_hash = content_hash
+        # 覆盖写入顺便纠正类型：存量行都是 text/plain，不改的话 svg/png 一直是文件卡片
+        if is_generic(metadata.mime_type):
+            metadata.mime_type = guess_mime(file_path)
         metadata.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
         await track_file_reference(db, metadata.id, "ai", agent_id, "write")
         await db.flush()
@@ -967,7 +971,8 @@ async def ai_write_file(db: AsyncSession, agent_id: int, file_path: str,
             owner_type="ai",
             owner_id=agent_id,
             size=len(content_bytes),
-            mime_type="text/plain",
+            # 按扩展名登记：写死的 text/plain 会让 svg/png 在聊天里渲染成文件卡片
+            mime_type=guess_mime(file_path),
             content_hash=content_hash,
             collaboration_mode=collaboration_mode,
             permissions={

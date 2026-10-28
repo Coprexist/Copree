@@ -33,6 +33,23 @@ export function isImageAttachment(a: { mime_type?: string }): boolean {
   return (a.mime_type || '').toLowerCase().startsWith('image/')
 }
 
+/**
+ * 附件图片的尺寸类：最小宽高兜底 + 等比缩放，上限由调用方的 max-* 决定。
+ *
+ * 为什么需要下限：只写了 viewBox、没有 width/height 的 SVG 没有「内在尺寸」，一旦外面
+ * 是「宽度由内容决定」的容器（聊天气泡就这样），max-width:100% 会循环求解成 0，图片
+ * 塌成一条 1px 边框。给个下限就打破循环，图片仍按自身比例铺到上限为止。
+ * SVG 多为图标，下限给大一点；光栅图按原尺寸显示，只兜一个不至于看不见的底。
+ */
+export function attachmentImageSizing(a: { mime_type?: string; name?: string }): string {
+  return isSvgAttachment(a) ? 'min-w-[120px] min-h-[120px] object-contain' : 'min-w-[64px] min-h-[64px] object-contain'
+}
+
+/** 是否 SVG 附件（MIME 优先，历史数据里类型可能是错的，名字兜底） */
+export function isSvgAttachment(a: { mime_type?: string; name?: string }): boolean {
+  return (a.mime_type || '').toLowerCase() === 'image/svg+xml' || /\.svg$/i.test(a.name || '')
+}
+
 const isImageFile = (f: File) => (f.type || '').toLowerCase().startsWith('image/')
 
 const IMAGE_ONLY_ERROR = '仅支持图片'

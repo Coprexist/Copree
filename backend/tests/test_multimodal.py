@@ -23,6 +23,7 @@ from app.utils.multimodal import (
     image_placeholder,
     injected_image_count,
     is_image,
+    is_vision_image,
     is_vision_unsupported_error,
     messages_have_images,
     strip_image_parts,
@@ -77,6 +78,22 @@ def test_placeholder_counts_images():
     assert image_placeholder([TXT]) == ""
     assert image_placeholder([IMG]) == IMAGE_PLACEHOLDER
     assert image_placeholder([IMG, {**IMG, "file_id": 9}]) == IMAGE_PLACEHOLDER + "×2"
+
+
+# SVG：能渲染（image/*），但发不进视觉接口，也不能被历史占位吞掉
+
+SVG = {"file_id": 3, "path": "a.svg", "name": "a.svg", "size": 10, "mime_type": "image/svg+xml"}
+
+
+def test_svg_is_an_image_but_not_a_vision_image():
+    assert is_image(SVG), "渲染语义：image/* 都算图片"
+    assert not is_vision_image(SVG), "视觉接口只吃 png/jpeg/gif/webp"
+    assert image_attachments([SVG]) == [], "SVG 不能进 build_content 的注入队列"
+
+
+def test_svg_history_still_shows_placeholder():
+    """发不过去不等于没发生过：历史里要留 [图片]，否则模型会装作看过。"""
+    assert image_placeholder([SVG]) == IMAGE_PLACEHOLDER
 
 
 # build_content

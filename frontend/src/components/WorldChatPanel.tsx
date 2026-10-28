@@ -7,7 +7,7 @@ import { WidthHandles } from './ui'
 import { ApprovalDialog, PendingQueuePanel } from './shared/ChatDialogs'
 import { IconButton, MenuPanel, MenuItem, INSET_CARD, confirmAsync } from './ui'
 import { useWorldChat, type Approval, type ChatMsg } from '../hooks/useWorldChat'
-import { useAttachmentUpload, isImageAttachment } from '../hooks/useAttachmentUpload'
+import { useAttachmentUpload, isImageAttachment, attachmentImageSizing } from '../hooks/useAttachmentUpload'
 import { AttachmentChips, DropMask } from './AttachmentChips'
 import { api, fileDownloadUrl } from '../api/client'
 import { useT } from '../i18n/I18nContext'
@@ -428,7 +428,7 @@ const WorldChatPanel = memo(forwardRef<WorldChatHandle, WorldChatPanelProps>(({ 
                 const url = fileDownloadUrl(att.file_id)
                 return isImageAttachment(att) ? (
                   <a key={ai} href={url} target="_blank" rel="noreferrer" title={att.name}>
-                    <img src={url} alt={att.name} className="max-h-40 max-w-full rounded border border-border/60" />
+                    <img src={url} alt={att.name} className={`max-h-40 max-w-full rounded border border-border/60 ${attachmentImageSizing(att)}`} />
                   </a>
                 ) : (
                   <span key={ai} className="text-3xs text-textMuted">{att.name}</span>

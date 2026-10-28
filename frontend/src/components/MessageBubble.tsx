@@ -10,6 +10,7 @@ import { scrollToInContainer } from '../utils/scroll'
 import { copyText } from '../utils/clipboard'
 import { useLang, useT } from '../i18n/I18nContext'
 import { api, fileDownloadUrl } from '../api/client'
+import { attachmentImageSizing } from '../hooks/useAttachmentUpload'
 import FilePreviewModal from './FilePreviewModal'
 import InvitationCard from './InvitationCard'
 import { MenuItem, MenuPanel } from './ui'
@@ -294,8 +295,8 @@ const MessageBubble = memo(function MessageBubble({
                 const fsize = att.size!
                 const fmime = att.mime_type!
                 if (fmime.startsWith('image/')) return (
-                  <button key={fid} onClick={() => setPreviewFile({ file_id: fid, name: fname, size: fsize, mime_type: fmime })} className="block max-w-full">
-                    <img src={dlUrl} alt={fname} className="max-w-[280px] max-h-[200px] rounded-control object-cover cursor-pointer hover:opacity-90 transition-opacity border border-white/10" title={fname} loading="lazy" />
+                  <button key={fid} type="button" onClick={() => setPreviewFile({ file_id: fid, name: fname, size: fsize, mime_type: fmime })} className="block max-w-full">
+                    <img src={dlUrl} alt={fname} className={`max-w-[280px] max-h-[200px] rounded-control cursor-pointer hover:opacity-90 transition-opacity border border-white/10 ${attachmentImageSizing(att)}`} title={fname} loading="lazy" />
                   </button>
                 )
                 return (

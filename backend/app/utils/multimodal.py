@@ -4,7 +4,8 @@
 （[{file_id, path, name, size, mime_type}]）转成 OpenAI 兼容的 content。
 
 三条约定（改这里即可，别在调用方各写一遍）：
-- 只有 image/* 进多模态，其余附件降级为文本标记；
+- 只有光栅图（png/jpeg/gif/webp）进多模态，其余附件降级为文本标记；SVG 虽然也是
+  image/*，但供应商的视觉接口不收，且 base64 的 XML 给模型等于噪声；
 - 没有可用图片时返回纯字符串——payload 与不带图的消息完全一致，prompt cache 友好；
 - 历史消息一律用 image_placeholder() 降级，只让"最新一条"带真实图片字节，避免 token 爆炸。
 """
@@ -31,21 +32,35 @@ VISION_UNSUPPORTED_HINT = (
 )
 
 
+# 模型侧的视觉接口只吃这四种；extension/svg 一律按"看得见但发不过去"处理
+VISION_MIMES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
+
+
 def is_image(att: dict) -> bool:
-    """该附件是否是图片。"""
+    """该附件是否是图片（渲染语义：image/* 都算，含 SVG）。"""
     return str(att.get("mime_type") or "").lower().startswith("image/")
 
 
+def is_vision_image(att: dict) -> bool:
+    """该附件能不能真的发给视觉模型（光栅图才行）。"""
+    mime = str(att.get("mime_type") or "").split(";")[0].strip().lower()
+    return mime in VISION_MIMES
+
+
 def image_attachments(attachments) -> list[dict]:
-    """取出图片附件（纯函数，兼容 JSON 字符串 / None / 非法值）。"""
+    """取出可进多模态的图片附件（纯函数，兼容 JSON 字符串 / None / 非法值）。"""
     # normalize_attachments 的契约是 list | None（JSON 坏了 / 传入 None 都返回 None），
     # 所以必须 `or []` 兜底——漏了它会让"没有附件的普通消息"整条路径抛 TypeError
-    return [a for a in (normalize_attachments(attachments) or []) if is_image(a)]
+    return [a for a in (normalize_attachments(attachments) or []) if is_vision_image(a)]
 
 
 def image_placeholder(attachments) -> str:
-    """历史消息的图片降级标记：只告诉模型"这里原本有图"，不给字节。"""
-    n = len(image_attachments(attachments))
+    """历史消息的图片降级标记：只告诉模型"这里原本有图"，不给字节。
+
+    按 is_image 计数而不是 image_attachments：SVG 发不进视觉接口，但"当时确实有张图"
+    是平台事实，历史里不该凭空消失（模型看到 [图片] 才知道别装作看过）。
+    """
+    n = sum(1 for a in (normalize_attachments(attachments) or []) if is_image(a))
     if n == 0:
         return ""
     return IMAGE_PLACEHOLDER if n == 1 else f"{IMAGE_PLACEHOLDER}×{n}"
