@@ -290,6 +290,26 @@ class ToolRegistry:
     # ── 工具调用分发 ──
 
     @classmethod
+    async def _recover_session(cls, db: AsyncSession, context: dict | None, tool_name: str) -> None:
+        """把会话从"必须先 rollback"的坏状态里救回来。
+
+        只收拾真的坏掉的那一种（flush 失败后 is_active 为假）。普通业务异常没有坏事务，
+        不该顺手把别处还没提交的写一起丢掉。
+        """
+        if db.is_active:
+            return
+        try:
+            await db.rollback()
+            # rollback 会把会话里的对象全部置为过期；调用方手里那份 agent 之后还要读
+            # （名字、id、状态），异步会话碰到过期属性会直接炸 MissingGreenlet，当场补一次
+            agent = (context or {}).get("_agent")
+            if agent is not None and agent in db:
+                await db.refresh(agent)
+            logger.warning(f"工具 {tool_name} 留下坏事务，会话已回滚复原")
+        except Exception as e:  # noqa: BLE001 —— 救不回来也不许再抛（外层还有兜底）
+            logger.warning(f"工具 {tool_name} 失败后回滚会话失败: {e}")
+
+    @classmethod
     async def dispatch(
         cls, db: AsyncSession, agent_id: int, group_id: int | None,
         tool_name: str, arguments: dict, context: dict,
@@ -347,6 +367,8 @@ class ToolRegistry:
                     if result is not None:
                         return result
             except Exception as e:
+                # 世界侧技能也可能是写库写炸的：同一个"失败→复原"的口径，别在另一条路上漏掉
+                await cls._recover_session(db, context, tool_name)
                 logger.warning(f"世界侧 skill 兜底执行失败 {tool_name}: {e}")
             return _build_tool_error(ToolErrorCode.UNKNOWN_TOOL, f"未知工具「{tool_name}」：没有此名称的工具")
 
@@ -360,6 +382,8 @@ class ToolRegistry:
                 await metrics.record_tool_call(tool_name, elapsed, False)
             except Exception:
                 pass
+            # 工具把事务写炸了就先复原会话：否则这一轮后面每一次入库都会再抛一次
+            await cls._recover_session(db, context, tool_name)
             logger.error(f"工具 {tool_name} 执行失败: {e}", exc_info=True)
             return _build_tool_error(ToolErrorCode.TOOL_EXEC_FAILED, f"执行失败：{e}")
 
