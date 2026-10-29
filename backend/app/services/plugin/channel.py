@@ -68,15 +68,29 @@ def all_declared() -> list[dict[str, Any]]:
 
 
 async def owned_agent(db: AsyncSession, agent_id: int, user_id: int):
-    from app.models.agent import Agent
+    """这个 AI 的通道管理员：主人，或（主人开关打开时）有编辑权的合作者。
+
+    通道配置里存的是机器人凭据，默认只有主人能碰；合作者是否需要这一权限由主人在
+    合作者区域单独决定（agents.collaborators_manage_channels），不做逐条通道的授权。
+    """
     from fastapi import HTTPException
+    from sqlalchemy import select
+
+    from app.models.agent import Agent, AgentCollaborator
 
     agent = await db.get(Agent, agent_id)
     if agent is None:
         raise HTTPException(404, "AI 不存在")
-    if int(agent.owner_id) != int(user_id):
-        raise NotOwned("这不是你的 AI")
-    return agent
+    if int(agent.owner_id) == int(user_id):
+        return agent
+    if bool(getattr(agent, "collaborators_manage_channels", False)):
+        collaborator = (await db.execute(select(AgentCollaborator).where(
+            AgentCollaborator.agent_id == int(agent_id),
+            AgentCollaborator.user_id == int(user_id),
+        ))).scalars().first()
+        if collaborator is not None and bool(collaborator.can_edit):
+            return agent
+    raise NotOwned("这不是你的 AI")
 
 
 async def group_options(
@@ -625,8 +639,12 @@ async def _plugin_enabled(db: AsyncSession, plugin_id: str) -> bool:
 
 async def views(db: AsyncSession, agent_id: int, user_id: int) -> list[dict[str, Any]]:
     """这个 AI 的全部通道视图（配置、运行态、配对名单）——有几条通道由插件说了算"""
-    # 卡片里的落点候选 = 你管理的所有群（合并/指落点都要选得到；选中后平台会把这个 AI 加进去）
-    options = await group_options(db, agent_id, user_id, include_unjoined=True)
+    # 落点候选按 AI 主人算：合作者代管时也一样，否则他们看不到主人管理的群
+    from app.models.agent import Agent
+
+    agent = await db.get(Agent, agent_id)
+    owner_id = int(agent.owner_id) if agent is not None else int(user_id)
+    options = await group_options(db, agent_id, owner_id, include_unjoined=True)
     return [
         await _view_one(db, declared_channel=ch, agent_id=agent_id, user_id=user_id, group_options=options)
         for ch in all_declared()

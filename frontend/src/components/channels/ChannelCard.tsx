@@ -4,6 +4,7 @@ import { api } from '../../api/client'
 import { useLang, useT } from '../../i18n/I18nContext'
 import type { Lang } from '../../i18n/languages'
 import { Button, Card, Input, Select, confirmAsync } from '../ui'
+import ChannelTokenBudgetCard from './ChannelTokenBudgetCard'
 
 /**
  * 「通道」页签 —— 一个 AI 接几条外部通道，由**插件自己声明**（后端 catalog.channels()）：
@@ -724,6 +725,9 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
           </div>
         )}
       </Card>
+
+      {/* 对话额度：设置属于插件（上面 schema 表单），这里展示每个对话的账与单独调整 */}
+      <ChannelTokenBudgetCard agentId={agentId} pluginId={view.plugin_id} />
 
       {/* 能力与限制：插件自带（平台不替它总结），用户配之前就该知道能做到什么 */}
       {view.limits.length > 0 && (

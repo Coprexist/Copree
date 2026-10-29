@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.services.channel import token_quota
 from app.services.plugin import channel
 from app.services.plugin.runtime_control import StartFailed, UnknownInstance
 from app.utils.auth import get_current_user
@@ -93,7 +94,7 @@ async def save_channel(
     agent = await _owned(db, agent_id, user)
     try:
         result = await channel.save(
-            db, plugin_id=plugin_id, agent_id=agent_id, user_id=int(user["user_id"]),
+            db, plugin_id=plugin_id, agent_id=agent_id, user_id=int(agent.owner_id),
             values=req.values or {}, actor=str(user.get("username") or user["user_id"]),
             target_agent_name=agent.name,
         )
@@ -114,10 +115,11 @@ async def create_landing_group(
 ):
     """在 Copree 新建一个群当外部消息的落点（用户是群主，这个 AI 是成员）"""
     declared = _declared(plugin_id)
-    await _owned(db, agent_id, user)
+    agent = await _owned(db, agent_id, user)
     try:
+        # 落在 AI 主人名下：合作者代管时，新建的落点群不该换个群主
         return await channel.create_landing_group(
-            db, agent_id=agent_id, user_id=int(user["user_id"]), name=req.name,
+            db, agent_id=agent_id, user_id=int(agent.owner_id), name=req.name,
             origin_channel=str(declared["kind"]),
         )
     except ValueError as e:
@@ -260,3 +262,69 @@ async def forget_pairing(
     if not ok:
         raise HTTPException(404, "没有这条配对记录")
     return {"message": "已解除"}
+
+# ── 对话额度：每个 QQ 群 / QQ 私聊最多用多少 token ──────────────────────
+# 额度按对话算（群一个、私聊一个），默认值按「AI × 通道种类」设一份；
+# 记账在 conversation_log_service 里统一做（所有 LLM 轮次唯一的落账口），
+# 这里只负责读写这份账和给单个对话开口子。
+
+
+class TokenConversationRequest(BaseModel):
+    """单个对话的覆盖：clear=True 或两项都不给 = 回到跟随默认"""
+    conversation: str
+    limit_tokens: int | None = None
+    meter_mode: str | None = None
+    clear: bool = False
+
+
+class TokenResetRequest(BaseModel):
+    """重置已用量：给 conversation 就只清那一个，不给就清这个通道的全部对话"""
+    conversation: str | None = None
+
+
+@router.get("/{agent_id}/channels/{plugin_id}/token-budget")
+async def get_token_budget(
+    agent_id: int,
+    plugin_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """默认策略 + 每个对话的用量与剩余（页面那张卡的全部数据）"""
+    declared = _declared(plugin_id)
+    await _owned(db, agent_id, user)
+    return await token_quota.overview(db, agent_id, str(declared["kind"]))
+
+
+@router.put("/{agent_id}/channels/{plugin_id}/token-budget/conversation")
+async def put_token_conversation(
+    agent_id: int,
+    plugin_id: str,
+    req: TokenConversationRequest,
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """给单个对话单独设口径/额度，或 clear 回到跟随默认"""
+    declared = _declared(plugin_id)
+    await _owned(db, agent_id, user)
+    await token_quota.set_override(
+        db, agent_id, str(declared["kind"]), req.conversation,
+        limit_tokens=req.limit_tokens, meter_mode=req.meter_mode, clear=req.clear,
+    )
+    await db.commit()
+    return {"message": "已保存"}
+
+
+@router.post("/{agent_id}/channels/{plugin_id}/token-budget/reset")
+async def reset_token_usage(
+    agent_id: int,
+    plugin_id: str,
+    req: TokenResetRequest,
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """把已用量清零（额度回来；被拦下的对话立刻恢复）"""
+    declared = _declared(plugin_id)
+    await _owned(db, agent_id, user)
+    await token_quota.reset_usage(db, agent_id, str(declared["kind"]), req.conversation)
+    await db.commit()
+    return {"message": "已重置"}

@@ -539,6 +539,35 @@ async def get_collaborators(
     }
 
 
+@router.get("/{agent_id}/channel-access")
+async def get_channel_access(
+    agent_id: int,
+    agent: any = Depends(_require_agent_access),
+    current_user: dict = Depends(get_current_user),
+):
+    """通道配置（机器人凭据）是否允许合作者查看与编辑——只有主人能读写这一项"""
+    return {
+        "allow_collaborators": bool(getattr(agent, "collaborators_manage_channels", False)),
+        "is_owner": agent.owner_id == current_user["user_id"],
+    }
+
+
+@router.put("/{agent_id}/channel-access")
+async def put_channel_access(
+    agent_id: int,
+    req: dict,
+    agent: any = Depends(_require_agent_access),
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """打开/关闭「合作者可管理通道配置」。只有主人能改：这是把凭据交给别人的动作。"""
+    if agent.owner_id != current_user["user_id"]:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只有主人能设置这一项")
+    agent.collaborators_manage_channels = bool(req.get("allow_collaborators", False))
+    await db.commit()
+    return {"message": "已保存", "allow_collaborators": bool(agent.collaborators_manage_channels)}
+
+
 @router.post("/{agent_id}/collaborators")
 async def add_agent_collaborator(
     agent_id: int,

@@ -29,6 +29,10 @@ class Agent(Base):
     # 能力懒加载版本（2026-08-06）：{source: version}
     cap_known_versions = Column(json_column(), default=dict, comment="能力源告知进度（已注入变更通知的版本）")
     cap_effective_versions = Column(json_column(), default=dict, comment="能力源生效进度（请求实际使用的工具定义版本，compact 时更新）")
+    # 锁定态的工具名单：与上面的 effective 版本一起锁。只冻版本不够——名单是
+    # get_allowed_tools(状态/开关) 每轮现算的，状态一变 tools 数组就变，整段前缀 miss。
+    # 解锁点（compact/clear）清空重算，见 capability_versioning.clear_frozen_allowed
+    cap_effective_allowed = Column(json_column(), default=dict, comment="锁定态工具名单（{状态}|allowed → [工具名]，compact 时清空重算）")
     current_temperature = Column(Float)
     current_top_p = Column(Float)
     current_presence_penalty = Column(Float)
@@ -103,6 +107,10 @@ class Agent(Base):
 
     # AI 类型 (v0.1.3): general(通用) | semi_general(半通用) | resonance(共振, 默认)
     ai_type = Column(String(20), default="resonance")
+
+    # 通道配置（机器人凭据）对合作者是否开放：默认否，由主人在合作者区域决定
+    collaborators_manage_channels = Column(Boolean, default=False,
+                                           comment="是否允许合作者查看并编辑此 AI 的通道配置")
 
     # ── 对话权限与限额 (v0.1.8) ──
     allow_others_chat = Column(Boolean, default=True, comment="是否允许非主人触发此 AI 对话")

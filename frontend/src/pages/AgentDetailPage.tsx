@@ -363,6 +363,8 @@ export default function AgentDetailPage() {
   }
   const [collaborators, setCollaborators] = useState<Collaborator[]>([])
   const [isOwner, setIsOwner] = useState(false)
+  /** 通道配置（机器人凭据）是否允许合作者查看与编辑：默认关，只有主人能改 */
+  const [collabChannelAccess, setCollabChannelAccess] = useState(false)
   const [collabSearch, setCollabSearch] = useState('')
   const [collabSearchResults, setCollabSearchResults] = useState<Array<{id:number;username:string;avatar_url:string|null}>>([])
   const [addingCollab, setAddingCollab] = useState(false)
@@ -380,8 +382,20 @@ export default function AgentDetailPage() {
       const data = await api.get<{ collaborators: Collaborator[]; is_owner: boolean }>(`/agents/${agentId}/collaborators`)
       setCollaborators(data.collaborators || [])
       setIsOwner(data.is_owner)
+      // 通道配置（机器人凭据）是否对合作者开放：主人可在下面单独打开
+      const access = await api.get<{ allow_collaborators: boolean }>(`/agents/${agentId}/channel-access`)
+      setCollabChannelAccess(!!access.allow_collaborators)
     } catch { /* ignore */ }
   }, [agentId])
+
+  const toggleChannelAccess = async (value: boolean) => {
+    setCollabChannelAccess(value)
+    try {
+      await api.put(`/agents/${agentId}/channel-access`, { allow_collaborators: value })
+    } catch {
+      setCollabChannelAccess(!value)   // 保存失败就退回原值，不让界面说谎
+    }
+  }
 
   const searchUsers = useCallback(async (q: string) => {
     if (q.length < 1) { setCollabSearchResults([]); return }
@@ -1193,6 +1207,21 @@ export default function AgentDetailPage() {
                     className="flex-1 px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
                   />
                 </div>
+                {/* 通道配置权限：默认关。打开后合作者能看到并修改机器人凭据（AppID/Secret 等） */}
+                {isOwner && (
+                  <label className="flex items-start gap-2 mb-3 text-xs text-textSecondary cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={collabChannelAccess}
+                      onChange={e => toggleChannelAccess(e.target.checked)}
+                      className="rounded mt-0.5"
+                    />
+                    <span>
+                      {t('agentDetail:channelAccessTitle')}
+                      <span className="block text-3xs text-textMuted mt-0.5">{t('agentDetail:channelAccessHint')}</span>
+                    </span>
+                  </label>
+                )}
                 {/* 权限勾选 */}
                 <div className="flex flex-wrap gap-3 mb-3">
                   <label className="flex items-center gap-1.5 text-xs text-textSecondary">

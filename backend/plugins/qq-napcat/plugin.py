@@ -238,6 +238,50 @@ def _endpoint_schema() -> dict:
     multi_instance=True,
     config_schema={
         **_endpoint_schema(),
+        "quota_meter_mode": {
+            "type": "string", "title": "对话额度按什么算",
+            "title_en": "How conversation budget is metered",
+            "title_ja": "会話ごとの上限をどう数えるか",
+            "description": "每个 QQ 群 / 每个私聊单独记账。默认按交涉 token（未命中的输入 + 输出）；"
+                           "也可以按全部 token（含缓存命中）。",
+            "description_en": "Each QQ group and each DM is metered separately. Default is billable tokens "
+                              "(uncached input + output); alternatively every token including cache hits.",
+            "description_ja": "QQ グループと DM を個別に計上します。既定は課金対象（未キャッシュ入力＋出力）。"
+                              "キャッシュ命中を含む全トークンでも数えられます。",
+            "default": "billable",
+            "options": [
+                {"value": "billable", "label": "交涉 token（未命中输入 + 输出，默认）",
+                 "label_en": "Billable (uncached input + output)",
+                 "label_ja": "課金対象（未キャッシュ入力＋出力）"},
+                {"value": "total", "label": "全部 token（含缓存命中）",
+                 "label_en": "All tokens (including cache hits)",
+                 "label_ja": "全トークン（キャッシュ命中を含む）"},
+            ],
+        },
+        "quota_limit_tokens": {
+            "type": "string", "title": "每个对话的默认额度（token）",
+            "title_en": "Default budget per conversation (tokens)",
+            "title_ja": "会話ごとの既定上限（トークン）",
+            "description": "留空 = 1000000（100 万）。单个对话可在下面的「对话额度」里单独调整。",
+            "description_en": "Empty = 1,000,000. A single conversation can be adjusted below.",
+            "description_ja": "空欄＝1,000,000。会話ごとに下で個別調整できます。",
+            "default": "1000000",
+        },
+        "quota_blocked_reply": {
+            "type": "boolean", "title": "额度用完后自动回一句", "default": True,
+            "title_en": "Reply automatically when the budget is used up",
+            "title_ja": "上限に達したら自動で返信する",
+            "description": "默认开启：同一个对话被拦下时回一句说明（10 分钟内最多一次）。",
+            "description_en": "On by default: reply once per 10 minutes when a conversation is blocked.",
+            "description_ja": "既定でオン：ブロック時に 10 分に 1 回まで説明を返します。",
+        },
+        "quota_blocked_reply_text": {
+            "type": "string", "title": "自动回复内容",
+            "title_en": "Auto reply text", "title_ja": "自動返信の文面",
+            "description": "留空 = 平台默认的官方口吻那一句。",
+            "description_en": "Empty = the platform's default wording.",
+            "description_ja": "空欄＝プラットフォーム既定の文面。",
+        },
         "target_agent": {
             "type": "string", "title": "这个通道接哪个 AI", "required": True, "managed": True,
             "description": "由平台按「这个 AI 的页面」自动填，不需要手工填；群里 @机器人 就等于在群里 @它",
@@ -276,7 +320,10 @@ class QqNapcatPlugin(ServicePlugin):
         self._access_token = ""
         self._copree_group_id = 0
         self._target_agent = ""
+        self._target_agent_id = 0
         self._target_user_id = 0
+        # 额度闸门（绑定目标后按新主人重建，见 _quota_gate）
+        self._quota: Any | None = None
         self._allow: set[str] = set()
         self._dm_policy = "pairing"
         # 配对码通知节流：同一个人反复私聊时别把码刷屏（60 秒最多提醒一次）
@@ -364,6 +411,7 @@ class QqNapcatPlugin(ServicePlugin):
         self._access_token = str(cfg.get("access_token") or "").strip()
         self._allow = _split_list(cfg.get("qq_group_allowlist"))
         self._dm_policy = (str(cfg.get("dm_policy") or "pairing").strip().lower() or "pairing")
+        await self._quota_gate().sync_policy(cfg)
         self._client = NapCatClient(self._http_base, self._access_token)
         self.last_error = ""
         self.connected = False
@@ -439,7 +487,9 @@ class QqNapcatPlugin(ServicePlugin):
             scope = f"Copree 群 #{self._copree_group_id}" if self._copree_group_id else "全站"
             raise ValueError(f"{scope}里找不到名叫「{agent_name}」的 AI")
         self._target_agent = str(row[2])
+        self._target_agent_id = int(row[0])
         self._target_user_id = int(row[1])
+        self._quota = None
 
     # ── WebSocket 连接（含重连） ────────────────────────────────
     async def _supervise(self) -> None:
@@ -659,6 +709,31 @@ class QqNapcatPlugin(ServicePlugin):
             logger.warning(f"QQ 配对码下发失败：{self.last_error}")
         return False
 
+    def _quota_gate(self):
+        """额度闸门：绑定哪个 AI、哪种通道就记着那层关系；同步设置与准入都走它。
+
+        设置解析、判定、异常兜底都在 app.services.channel.quota_gate —— 两个 QQ 插件
+        各写一遍同样的东西，迟早会在其中一份里漏掉一个 if。
+        """
+        if self._quota is None:
+            from app.services.channel.quota_gate import QuotaGate
+
+            self._quota = QuotaGate(self._target_agent_id, self.channel_kind, logger)
+        return self._quota
+
+    async def _send_quota_notice(self, *, kind: str, text: str, qq_group: str = "", qq_user: str = "") -> None:
+        """额度说明：NapCat 是自建协议端，主动发没有被动窗口限制；发不出去就算了"""
+        client = self._client
+        if client is None or not text:
+            return
+        try:
+            if kind == "group" and qq_group:
+                await client.send_group_msg(int(qq_group), text)
+            elif kind == "dm" and qq_user:
+                await client.send_private_msg(int(qq_user), text)
+        except Exception as e:
+            logger.info(f"额度说明没发出去（{kind}）：{str(e)[:120]}")
+
     async def _deliver_to_group(
         self, qq_group: str, user_id: str, sender: dict, content: str, wake: bool
     ) -> None:
@@ -676,6 +751,14 @@ class QqNapcatPlugin(ServicePlugin):
         from app.services.plugin.channel_user import ensure_channel_user
 
         async with async_session() as db:
+            if not await self._quota_gate().admit(
+                db, kind="group", target=self._copree_group_id,
+                copree_group_id=self._copree_group_id,
+                notify=lambda text: self._send_quota_notice(
+                    kind="group", text=text, qq_group=qq_group),
+            ):
+                await db.commit()
+                return
             ensured = await ensure_channel_user(
                 db,
                 kind=self.channel_kind,
@@ -735,6 +818,14 @@ class QqNapcatPlugin(ServicePlugin):
             sender_id, _peer_name = ensured
             session = await get_or_create_dm_session(db, sender_id, self._target_user_id)
             session_id = str(session["session_id"])
+            if not await self._quota_gate().admit(
+                db, kind="dm", target=session_id, label=str(_peer_name or ""),
+                dm_session_id=session_id,
+                notify=lambda text: self._send_quota_notice(
+                    kind="dm", text=text, qq_user=user_id),
+            ):
+                await db.commit()
+                return None
             payload = await send_dm_message(db, session_id, sender_id=sender_id, content=content)
             await fanout_dm_message(session_id, payload, sender_id)
             await db.commit()

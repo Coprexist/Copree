@@ -29,6 +29,8 @@ from app.models.agent_metrics import AgentMetricsSnapshot
 from app.models.api_key_pool import ApiKeyPool, UserApiAssignment
 from app.models.api_usage_log import ApiUsageLog
 from app.models.usage_daily import UsageDaily
+from app.models.channel_token import ChannelTokenPolicy, ChannelConversationUsage
+from app.models.tool_usage_daily import ToolUsageDaily
 from app.models.system_settings import SystemSettings
 from app.models.verification_code import VerificationCode
 from app.models.personality_anchor import PersonalityAnchor
@@ -37,6 +39,7 @@ from app.models.agent_trigger import AgentTrigger
 from app.models.agent_attention import AgentAttention
 from app.models.group import MemberSilence
 from app.models.agent_state_stack import AgentStateStack
+from app.models.agent_state_chain import AgentStateChain, AgentStateChainNode
 from app.models.user_preferences import UserGroupPreference, UserDMPreference
 from app.models.plugin import Plugin, UserPluginPref
 from app.models.agent_skill_relation import AgentSkillRelation
@@ -91,6 +94,9 @@ __all__ = [
     "UserApiAssignment",
     "ApiUsageLog",
     "UsageDaily",
+    "ToolUsageDaily",
+    "ChannelTokenPolicy",
+    "ChannelConversationUsage",
     "SystemSettings",
     "VerificationCode",
     "PersonalityAnchor",
@@ -98,6 +104,8 @@ __all__ = [
     "AgentTrigger",
     "AgentAttention",
     "AgentStateStack",
+    "AgentStateChain",
+    "AgentStateChainNode",
     "AgentCollaborator",
     "CapabilityVersion",
     "AgentSkillRelation",

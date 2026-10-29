@@ -127,6 +127,21 @@ async def save_conversation_log(
         except Exception as e:
             logger.error(f"累加用量日聚合失败 (agent={agent_id}): {e}")
 
+        # 通道对话额度：只给"从外部通道来的对话"记账（群看 groups.origin_channel，
+        # 私聊看对端用户的 origin_channel）。放在这里而不是各个调用方——
+        # 这里是所有 LLM 轮次唯一的落账口，漏一处就会有一个通道对话永远用不完额度。
+        try:
+            from app.services.channel import token_quota
+            # 包在 SAVEPOINT 里：这是顺带记的账，写失败不能把整个落库事务打成 aborted
+            async with content_repo.session.begin_nested():
+                await token_quota.charge(
+                    content_repo, agent_id=agent_id, group_id=group_id,
+                    session_id=session_id, usage=token_usage,
+                )
+        except Exception as e:
+            # 额度算错了不该连累这一轮回复：账可以后补，回复错过就没了
+            logger.error(f"累加通道对话用量失败 (agent={agent_id}): {e}")
+
         # 清理超出限制的旧记录
         await _trim_old_logs(content_repo, agent_id)
 
