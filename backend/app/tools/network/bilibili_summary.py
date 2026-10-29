@@ -7,7 +7,6 @@ bilibili_summary 工具 — 获取B站视频 AI 总结
 import logging
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text
 from app.tools.base import ToolPlugin, ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -105,13 +104,21 @@ class BilibiliSummary(ToolPlugin):
             return {"error": True, "message": f"获取B站总结失败: {str(e)}"}
 
     async def _get_sessdata(self, db: AsyncSession) -> str | None:
-        """从 system_settings.system_prompt_overrides->'bilibili'->>'sessdata' 读取"""
+        """从 system_settings.system_prompt_overrides 里取 bilibili.sessdata。
+
+        用 SQLAlchemy 的 JSON 下标而不是手写 `->'bilibili'->>'sessdata'`：
+        PG 编译成 ->>，SQLite 编译成 json_extract。
+        """
         try:
+            from sqlalchemy import select
+            from app.models.system_settings import SystemSettings
+
             result = await db.execute(
-                text("SELECT system_prompt_overrides->'bilibili'->>'sessdata' FROM system_settings WHERE id = 1")
+                select(
+                    SystemSettings.system_prompt_overrides["bilibili"]["sessdata"].as_string()
+                ).where(SystemSettings.id == 1)
             )
-            row = result.scalar_one_or_none()
-            return row if row else None
+            return result.scalar_one_or_none()
         except Exception:
             return None
 

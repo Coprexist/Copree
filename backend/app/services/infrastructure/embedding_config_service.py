@@ -148,10 +148,15 @@ async def check_dimension_consistency(db) -> list[str]:
 
     orm_dim = getattr(RoughMemory.__table__.c.embedding.type, "dim", None)
     configured = get_db_override("embedding_dimension") or settings.embedding_dimension
-    actual = (await db.execute(sa_text(
-        "select distinct atttypmod from pg_attribute "
-        "where attrelid = 'rough_memories'::regclass and attname = 'embedding'"
-    ))).scalar()
+    # pg_attribute 只存在于 PG；SQLite 上向量列是 JSON 文本、没有定长类型，
+    # 「库里实际列维度」这个概念不成立，跳过这一项（其余两项仍然校验）。
+    from app.db_providers import get_provider
+    actual = None
+    if get_provider().name == "postgres":
+        actual = (await db.execute(sa_text(
+            "select distinct atttypmod from pg_attribute "
+            "where attrelid = 'rough_memories'::regclass and attname = 'embedding'"
+        ))).scalar()
 
     problems: list[str] = []
     if orm_dim and configured and int(orm_dim) != int(configured):

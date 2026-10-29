@@ -527,12 +527,12 @@ async def get_user_agents_token_summary(
             ud.agent_id,
             ag.name AS agent_name,
             NULLIF(ud.model, '') AS model,
-            COALESCE(SUM(ud.total_tokens), 0)::bigint AS total_tokens,
-            COALESCE(SUM(ud.prompt_tokens), 0)::bigint AS prompt_tokens,
-            COALESCE(SUM(ud.completion_tokens), 0)::bigint AS completion_tokens,
-            COALESCE(SUM(ud.reasoning_tokens), 0)::bigint AS reasoning_tokens,
-            COALESCE(SUM(ud.cached_tokens), 0)::bigint AS cached_tokens,
-            COALESCE(SUM(ud.api_calls), 0)::bigint AS total_calls
+            CAST(COALESCE(SUM(ud.total_tokens), 0) AS BIGINT) AS total_tokens,
+            CAST(COALESCE(SUM(ud.prompt_tokens), 0) AS BIGINT) AS prompt_tokens,
+            CAST(COALESCE(SUM(ud.completion_tokens), 0) AS BIGINT) AS completion_tokens,
+            CAST(COALESCE(SUM(ud.reasoning_tokens), 0) AS BIGINT) AS reasoning_tokens,
+            CAST(COALESCE(SUM(ud.cached_tokens), 0) AS BIGINT) AS cached_tokens,
+            CAST(COALESCE(SUM(ud.api_calls), 0) AS BIGINT) AS total_calls
         FROM usage_daily ud
         JOIN agents ag ON ag.id = ud.agent_id
         WHERE {where_sql}
@@ -545,12 +545,12 @@ async def get_user_agents_token_summary(
             -1 AS agent_id,
             '群视界 agent' AS agent_name,
             NULLIF(ud.model, '') AS model,
-            COALESCE(SUM(ud.total_tokens), 0)::bigint AS total_tokens,
-            COALESCE(SUM(ud.prompt_tokens), 0)::bigint AS prompt_tokens,
-            COALESCE(SUM(ud.completion_tokens), 0)::bigint AS completion_tokens,
-            COALESCE(SUM(ud.reasoning_tokens), 0)::bigint AS reasoning_tokens,
-            COALESCE(SUM(ud.cached_tokens), 0)::bigint AS cached_tokens,
-            COALESCE(SUM(ud.api_calls), 0)::bigint AS total_calls
+            CAST(COALESCE(SUM(ud.total_tokens), 0) AS BIGINT) AS total_tokens,
+            CAST(COALESCE(SUM(ud.prompt_tokens), 0) AS BIGINT) AS prompt_tokens,
+            CAST(COALESCE(SUM(ud.completion_tokens), 0) AS BIGINT) AS completion_tokens,
+            CAST(COALESCE(SUM(ud.reasoning_tokens), 0) AS BIGINT) AS reasoning_tokens,
+            CAST(COALESCE(SUM(ud.cached_tokens), 0) AS BIGINT) AS cached_tokens,
+            CAST(COALESCE(SUM(ud.api_calls), 0) AS BIGINT) AS total_calls
         FROM usage_daily ud
         WHERE {world_sql}
         GROUP BY ud.model
@@ -586,12 +586,12 @@ async def get_agent_token_daily(
     stmt = text(f"""
         SELECT
             ud.stat_date AS date,
-            COALESCE(SUM(ud.total_tokens), 0)::bigint AS total_tokens,
-            COALESCE(SUM(ud.prompt_tokens), 0)::bigint AS prompt_tokens,
-            COALESCE(SUM(ud.completion_tokens), 0)::bigint AS completion_tokens,
-            COALESCE(SUM(ud.reasoning_tokens), 0)::bigint AS reasoning_tokens,
-            COALESCE(SUM(ud.cached_tokens), 0)::bigint AS cached_tokens,
-            COALESCE(SUM(ud.api_calls), 0)::bigint AS request_count
+            CAST(COALESCE(SUM(ud.total_tokens), 0) AS BIGINT) AS total_tokens,
+            CAST(COALESCE(SUM(ud.prompt_tokens), 0) AS BIGINT) AS prompt_tokens,
+            CAST(COALESCE(SUM(ud.completion_tokens), 0) AS BIGINT) AS completion_tokens,
+            CAST(COALESCE(SUM(ud.reasoning_tokens), 0) AS BIGINT) AS reasoning_tokens,
+            CAST(COALESCE(SUM(ud.cached_tokens), 0) AS BIGINT) AS cached_tokens,
+            CAST(COALESCE(SUM(ud.api_calls), 0) AS BIGINT) AS request_count
         FROM usage_daily ud
         WHERE {where_sql}
         GROUP BY ud.stat_date
@@ -631,12 +631,12 @@ async def get_admin_global_token_daily(
     stmt = text(f"""
         SELECT
             ud.stat_date AS date,
-            COALESCE(SUM(ud.total_tokens), 0)::bigint AS total_tokens,
-            COALESCE(SUM(ud.prompt_tokens), 0)::bigint AS prompt_tokens,
-            COALESCE(SUM(ud.completion_tokens), 0)::bigint AS completion_tokens,
-            COALESCE(SUM(ud.reasoning_tokens), 0)::bigint AS reasoning_tokens,
-            COALESCE(SUM(ud.cached_tokens), 0)::bigint AS cached_tokens,
-            COALESCE(SUM(ud.api_calls), 0)::bigint AS request_count
+            CAST(COALESCE(SUM(ud.total_tokens), 0) AS BIGINT) AS total_tokens,
+            CAST(COALESCE(SUM(ud.prompt_tokens), 0) AS BIGINT) AS prompt_tokens,
+            CAST(COALESCE(SUM(ud.completion_tokens), 0) AS BIGINT) AS completion_tokens,
+            CAST(COALESCE(SUM(ud.reasoning_tokens), 0) AS BIGINT) AS reasoning_tokens,
+            CAST(COALESCE(SUM(ud.cached_tokens), 0) AS BIGINT) AS cached_tokens,
+            CAST(COALESCE(SUM(ud.api_calls), 0) AS BIGINT) AS request_count
         FROM usage_daily ud
         {where_sql}
         GROUP BY ud.stat_date
@@ -673,12 +673,12 @@ async def get_admin_global_token_stats(
     # 人数与 AI 数仍然只数得到真实 agent 的那些，与改前口径一致
     stmt = text(f"""
         SELECT
-            COALESCE(SUM(ud.total_tokens), 0)::bigint AS total_tokens,
-            COALESCE(SUM(ud.prompt_tokens), 0)::bigint AS prompt_tokens,
-            COALESCE(SUM(ud.completion_tokens), 0)::bigint AS completion_tokens,
-            COALESCE(SUM(ud.reasoning_tokens), 0)::bigint AS reasoning_tokens,
-            COALESCE(SUM(ud.cached_tokens), 0)::bigint AS cached_tokens,
-            COALESCE(SUM(ud.api_calls), 0)::bigint AS total_calls,
+            CAST(COALESCE(SUM(ud.total_tokens), 0) AS BIGINT) AS total_tokens,
+            CAST(COALESCE(SUM(ud.prompt_tokens), 0) AS BIGINT) AS prompt_tokens,
+            CAST(COALESCE(SUM(ud.completion_tokens), 0) AS BIGINT) AS completion_tokens,
+            CAST(COALESCE(SUM(ud.reasoning_tokens), 0) AS BIGINT) AS reasoning_tokens,
+            CAST(COALESCE(SUM(ud.cached_tokens), 0) AS BIGINT) AS cached_tokens,
+            CAST(COALESCE(SUM(ud.api_calls), 0) AS BIGINT) AS total_calls,
             COUNT(DISTINCT ag.id) AS unique_agents,
             COUNT(DISTINCT ag.owner_id) AS unique_users
         FROM usage_daily ud
@@ -728,12 +728,12 @@ async def get_admin_users_token_summary(
             u.username,
             ud.agent_id,
             ag.name AS agent_name,
-            COALESCE(SUM(ud.total_tokens), 0)::bigint AS total_tokens,
-            COALESCE(SUM(ud.prompt_tokens), 0)::bigint AS prompt_tokens,
-            COALESCE(SUM(ud.completion_tokens), 0)::bigint AS completion_tokens,
-            COALESCE(SUM(ud.reasoning_tokens), 0)::bigint AS reasoning_tokens,
-            COALESCE(SUM(ud.cached_tokens), 0)::bigint AS cached_tokens,
-            COALESCE(SUM(ud.api_calls), 0)::bigint AS total_calls
+            CAST(COALESCE(SUM(ud.total_tokens), 0) AS BIGINT) AS total_tokens,
+            CAST(COALESCE(SUM(ud.prompt_tokens), 0) AS BIGINT) AS prompt_tokens,
+            CAST(COALESCE(SUM(ud.completion_tokens), 0) AS BIGINT) AS completion_tokens,
+            CAST(COALESCE(SUM(ud.reasoning_tokens), 0) AS BIGINT) AS reasoning_tokens,
+            CAST(COALESCE(SUM(ud.cached_tokens), 0) AS BIGINT) AS cached_tokens,
+            CAST(COALESCE(SUM(ud.api_calls), 0) AS BIGINT) AS total_calls
         FROM usage_daily ud
         JOIN agents ag ON ag.id = ud.agent_id
         JOIN users u ON u.id = ag.owner_id

@@ -69,6 +69,9 @@ class SQLiteProvider(BaseProvider):
             "SQLite P0 阶段不支持 SQL 内向量检索，请使用文本搜索降级"
         )
 
+    def json_text_expr(self, column: str, key: str) -> str:
+        return f"json_extract({column}, '$.{key}')"
+
     def hybrid_search_sql(self) -> str:
         # P0: 降级——返回 None 表示调用方走文本搜索
         return None

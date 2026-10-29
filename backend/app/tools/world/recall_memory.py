@@ -4,11 +4,16 @@
 """
 import logging
 
+from app.db_providers import get_provider
+from app.services.memory.vector_fallback import score_by_cosine
 from app.tools.world.base import WorldToolPlugin, WorldToolContext
 from sqlalchemy import select
 
 
 logger = logging.getLogger(__name__)
+
+#: 无 SQL 向量运算的后端上（SQLite 安装包），Python 侧算余弦的候选上限
+_PY_VECTOR_CANDIDATES = 300
 
 
 class RecallMemoryTool(WorldToolPlugin):
@@ -38,13 +43,27 @@ class RecallMemoryTool(WorldToolPlugin):
             # 第一轮：向量语义检索（与主站 recall 同款：embedding <=> 余弦距离）
             try:
                 vec = await get_embedding(query, api_base_url=api_base, api_key=api_key)
-                emb_str = "[" + ",".join(str(x) for x in vec) + "]"
-                rows = (await ctx.world_repo.execute(
-                    select(WorldAIMemory)
-                    .where(WorldAIMemory.world_id == ctx.world.id, WorldAIMemory.embedding != None)
-                    .order_by(WorldAIMemory.embedding.op("<=>")(emb_str))
-                    .limit(top_k)
-                )).scalars().all()
+                if get_provider().supports_sql_vector_search:
+                    emb_str = "[" + ",".join(str(x) for x in vec) + "]"
+                    rows = (await ctx.world_repo.execute(
+                        select(WorldAIMemory)
+                        .where(WorldAIMemory.world_id == ctx.world.id,
+                               WorldAIMemory.embedding.is_not(None))
+                        .order_by(WorldAIMemory.embedding.op("<=>")(emb_str))
+                        .limit(top_k)
+                    )).scalars().all()
+                else:
+                    # SQLite 安装包没有 `<=>`：候选取回，Python 侧算余弦
+                    candidates = (await ctx.world_repo.execute(
+                        select(WorldAIMemory)
+                        .where(WorldAIMemory.world_id == ctx.world.id,
+                               WorldAIMemory.embedding.is_not(None))
+                        .limit(_PY_VECTOR_CANDIDATES)
+                    )).scalars().all()
+                    scored = score_by_cosine(
+                        candidates, [m.embedding for m in candidates], vec, top_k,
+                    )
+                    rows = [m for _sim, m in scored]
                 memories = [
                     {"title": m.title, "content": m.content, "created_at": str(m.created_at) if m.created_at else None}
                     for m in rows

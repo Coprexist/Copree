@@ -35,6 +35,9 @@ class PostgresProvider(BaseProvider):
         # pgvector: <=> 是余弦距离，1 - distance = 相似度 (0~1)
         return f"(1 - ({column} <=> :{param_name}))"
 
+    def json_text_expr(self, column: str, key: str) -> str:
+        return f"{column} ->> '{key}'"
+
     def hybrid_search_sql(self) -> str:
         # 由调用方组装参数；这里返回纯 SQL 模板
         return """

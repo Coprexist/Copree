@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, update, delete
 from pydantic import BaseModel, Field
 from app.config import settings
+from app.db_providers import get_provider
 from app.services.infrastructure.maintenance import maintenance
 from app.database import get_db
 from app.routers.deps import get_user_repo, get_system_settings_repo, get_verification_repo
@@ -159,23 +160,28 @@ async def ops_overview(
 
     since = utc_now() - timedelta(days=days)
 
-    # jsonb 字段用原生 SQL 取（全仓既有写法，见 conversation_log_service 的 token 聚合）。
+    # details 是 JSON 列（PG: JSONB / SQLite: JSON 文本），取值按方言展开：
+    # PG 用 ->>，SQLite 用 json_extract。聚合条件写 CASE 而不是 FILTER，
+    # 两种方言都认，也不要求 SQLite >= 3.30。
     # details.kind 是本功能引入的：上线前写的行没有这个键，一律按 fail 计。
-    row = (await db.execute(sql_text("""
+    kind = get_provider().json_text_expr("details", "kind")
+    login_id = get_provider().json_text_expr("details", "login_id")
+    locked_for = get_provider().json_text_expr("details", "locked_for")
+    row = (await db.execute(sql_text(f"""
         SELECT
-          count(*) FILTER (WHERE log_type = 'login')                                    AS login_ok,
-          count(DISTINCT operator_id) FILTER (WHERE log_type = 'login')                 AS login_ok_accounts,
+          sum(CASE WHEN log_type = 'login' THEN 1 ELSE 0 END)                          AS login_ok,
+          count(DISTINCT CASE WHEN log_type = 'login' THEN operator_id END)             AS login_ok_accounts,
           -- 「登录失败」只数真的输错了密码的那些；被锁定挡回去的算在「已拦截」里，不重复计数
-          count(*) FILTER (WHERE log_type = 'login_failed'
-                             AND COALESCE(details->>'kind', 'fail') = 'fail')           AS login_fail,
-          count(DISTINCT details->>'login_id') FILTER (WHERE log_type = 'login_failed'
-                             AND COALESCE(details->>'kind', 'fail') = 'fail')           AS login_fail_accounts,
-          count(*) FILTER (WHERE log_type = 'login_failed'
-                             AND COALESCE(details->>'kind', 'fail') = 'fail'
-                             AND details->>'locked_for' IS NOT NULL)                    AS lockouts,
-          count(*) FILTER (WHERE log_type = 'login_failed'
-                             AND details->>'kind' = 'locked')                           AS blocked_lockout,
-          count(*) FILTER (WHERE log_type = 'register')                                 AS new_audit
+          sum(CASE WHEN log_type = 'login_failed'
+                    AND COALESCE({kind}, 'fail') = 'fail' THEN 1 ELSE 0 END)            AS login_fail,
+          count(DISTINCT CASE WHEN log_type = 'login_failed'
+                    AND COALESCE({kind}, 'fail') = 'fail' THEN {login_id} END)          AS login_fail_accounts,
+          sum(CASE WHEN log_type = 'login_failed'
+                    AND COALESCE({kind}, 'fail') = 'fail'
+                    AND {locked_for} IS NOT NULL THEN 1 ELSE 0 END)                     AS lockouts,
+          sum(CASE WHEN log_type = 'login_failed'
+                    AND {kind} = 'locked' THEN 1 ELSE 0 END)                            AS blocked_lockout,
+          sum(CASE WHEN log_type = 'register' THEN 1 ELSE 0 END)                        AS new_audit
         FROM system_logs WHERE created_at >= :since
     """), {"since": since})).first()
     (login_ok, login_ok_users, login_fail, fail_accounts,
@@ -183,39 +189,39 @@ async def ops_overview(
 
     # 「反复失败占比」：失败来自失败 >=2 次的来源 IP 的比例——拦截数旁边要给这个，
     # 否则就是一个只有量、没有效果的虚荣指标（来源是否在反复试，才是要不要处理的信号）
-    repeat = (await db.execute(sql_text("""
+    repeat = (await db.execute(sql_text(f"""
         SELECT
-          count(*) FILTER (WHERE ip_address IN (
+          sum(CASE WHEN ip_address IN (
             SELECT ip_address FROM system_logs
             WHERE created_at >= :since AND log_type = 'login_failed'
-              AND COALESCE(details->>'kind', 'fail') = 'fail' AND ip_address IS NOT NULL
+              AND COALESCE({kind}, 'fail') = 'fail' AND ip_address IS NOT NULL
             GROUP BY ip_address HAVING count(*) >= 2
-          )) AS repeat_failures,
+          ) THEN 1 ELSE 0 END) AS repeat_failures,
           count(*) AS total_failures
         FROM system_logs
         WHERE created_at >= :since AND log_type = 'login_failed'
-          AND COALESCE(details->>'kind', 'fail') = 'fail'
+          AND COALESCE({kind}, 'fail') = 'fail'
     """), {"since": since})).first()
     repeat_failures, total_failures = (int(x or 0) for x in repeat)
 
     # 疑似攻击来源：按来源 IP 与被撞账号各聚合一次，两边都算（有的攻击换账号、有的换 IP）
     suspects = [
         {"kind": r[0], "value": r[1], "failures": int(r[2])}
-        for r in (await db.execute(sql_text("""
+        for r in (await db.execute(sql_text(f"""
             SELECT kind, value, failures FROM (
               SELECT 'ip' AS kind, ip_address AS value, count(*) AS failures
               FROM system_logs
               WHERE created_at >= :since AND log_type = 'login_failed'
-                AND COALESCE(details->>'kind', 'fail') = 'fail' AND ip_address IS NOT NULL
+                AND COALESCE({kind}, 'fail') = 'fail' AND ip_address IS NOT NULL
               GROUP BY ip_address
               UNION ALL
-              SELECT 'account', details->>'login_id', count(*)
+              SELECT 'account', {login_id}, count(*)
               FROM system_logs
               WHERE created_at >= :since AND log_type = 'login_failed'
-                AND COALESCE(details->>'kind', 'fail') = 'fail'
-                AND details->>'login_id' IS NOT NULL
+                AND COALESCE({kind}, 'fail') = 'fail'
+                AND {login_id} IS NOT NULL
               -- 写列名而不是序号：SQLite 把 GROUP BY 2 当常量 2，聚合会静默出错
-              GROUP BY details->>'login_id'
+              GROUP BY {login_id}
             ) s WHERE failures >= :min ORDER BY failures DESC
         """), {"since": since, "min": OPS_SUSPECT_MIN})).all()
     ]

@@ -92,6 +92,14 @@ class BaseProvider(ABC):
             LIMIT :top_k
         """
 
+    def json_text_expr(self, column: str, key: str) -> str:
+        """返回「按 key 取 JSON 列里的字符串值」的 SQL 片段（原生 SQL 里用）。
+
+        Postgres: {column} ->> '{key}'
+        SQLite:   json_extract({column}, '$.{key}')
+        """
+        raise NotImplementedError
+
     @abstractmethod
     def hybrid_search_sql(self) -> str:
         """返回混合检索 SQL（向量 + 全文 + 时间衰减）。

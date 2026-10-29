@@ -137,3 +137,22 @@ async def _embed_via_endpoint(
 def get_cached_dimension() -> int:
     """获取已缓存的嵌入维度（不会触发检测）"""
     return _embedding_dimension or 1536
+
+
+def cosine_similarity(vec_a, vec_b) -> float:
+    """纯 Python 余弦相似度（给没有 SQL 内向量运算能力的后端做检索降级）。
+
+    pgvector 的 `<=>` 只有 PG 认，SQLite 安装包上必须把候选取回来在 Python 里算。
+    维度不一致视为不可比（换过 embedding 模型的历史数据），返回 0。
+    """
+    if not vec_a or not vec_b or len(vec_a) != len(vec_b):
+        return 0.0
+    dot = norm_a = norm_b = 0.0
+    for x, y in zip(vec_a, vec_b):
+        fx, fy = float(x), float(y)
+        dot += fx * fy
+        norm_a += fx * fx
+        norm_b += fy * fy
+    if norm_a <= 0 or norm_b <= 0:
+        return 0.0
+    return dot / ((norm_a ** 0.5) * (norm_b ** 0.5))
