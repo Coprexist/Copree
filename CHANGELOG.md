@@ -9,6 +9,19 @@
 ## [未发布]
 
 ### ✨ 新增
+- **QQ 通道的对话额度**（qq-channel / qq-napcat 插件）：每个 QQ 群、每个 QQ 私聊单独记账，默认
+  100 万**交涉 token**（未命中的输入 + 输出；也可切换成含缓存命中的全部 token）。额度用完这条通道
+  不再把消息交给 AI，并可选自动回一句说明（默认开，同一对话 10 分钟内最多一次）。
+  分工按插件体系来：设置声明在插件自己的 `config_schema` 里（口径 / 默认额度 / 自动回复开关与文案），
+  平台只保存生效中的策略并在唯一的落账口（`save_conversation_log`）记账——只有通道对话才计数
+  （群看 `groups.origin_channel`，私聊看对端用户的 `origin_channel`）。
+  通道卡片新增「对话额度」：列出每个对话的已用与剩余，可单独设额度或重置。迁移 0096。
+- **合作者的通道权限**：主人可在合作者区域打开「允许合作者管理通道配置」（默认关）。
+  关闭时通道配置（含机器人凭据）只有主人可见；打开后有编辑权的合作者可看可改，新建落点群仍归 AI 主人。
+  迁移 0097。
+- **tag 闸门不再自己解析版本号**：`.github/workflows/release.yml` 里那条 sed 正则删了，改成
+  `python scripts/release.py version`。版本号只有一个解析处（`read_version()`），CI 与本地共用；
+  同一条正则抄两遍、改一处忘一处，表现正是"tag 与 app_version 不一致"这种最难查的错。
 - **Copro 对话页的「命令」按钮真的能用命令了**（dsh-copree 0.7.2）：以前按钮只会说"DSH 侧还没有
   命令服务"——因为插件一直没拿到 DSH 的 `commands` 服务。真因有三层：它是 cordis Service，直接写
   `ctx.commands` 时属性还不存在（要 Declare 依赖）；它的 `list/execute` 标了 @Remote 但那只是**额外**

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""发版三步：check / archive / tag / verify。
+"""发版三步：check / archive / tag / verify（外加 version：只打印版本号，给 CI 用）。
 
 发版原来是一串靠记忆拼起来的动作：改版本号、写 CHANGELOG、打 tag、推两个仓库、盯三个平台的
 构建、再人工核对产物与 latest。这里面绝大多数是**判据**，判据该写进代码而不是每次重新想一遍：
@@ -62,6 +62,17 @@ def read_version() -> str:
     if not found:
         raise SystemExit(f"✘ 在 {CONFIG.relative_to(ROOT)} 里找不到 app_version —— 版本号必须只有一个出处")
     return found.group(1)
+
+
+def cmd_version(args: argparse.Namespace) -> int:
+    """只打印版本号：给 CI 用的机器可读出口。
+
+    为什么要有它：tag 闸门（.github/workflows/release.yml）也要读这个版本号。
+    那边若自己再写一条 sed 正则，就是同一个知识两处实现——改了一处忘另一处，
+    表现正是"tag 与 app_version 不一致"这种最难查的错。所以 CI 也走这一处。
+    """
+    print(args.version or read_version())
+    return 0
 
 
 def tag_exists(version: str) -> bool:
@@ -292,7 +303,9 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Copree 发版三步（check / archive / tag / verify）")
+    parser = argparse.ArgumentParser(
+        description="Copree 发版三步（check / archive / tag / verify）；version 只打印 app_version",
+    )
     # --version 挂成每个子命令都能用：archive --version 0.4.16 这种读法最顺，
     # 不必记 argparse 的"参数要放在子命令前面"。
     common = argparse.ArgumentParser(add_help=False)
@@ -313,6 +326,9 @@ def main() -> int:
     tag.add_argument("--push", action="store_true", help="推 main 与 tag（推 tag 会触发发布仓构建）")
     tag.add_argument("--allow-dirty", action="store_true", help="同 check 的 --allow-dirty")
     tag.set_defaults(func=cmd_tag)
+
+    version = sub.add_parser("version", parents=[common], help="只打印 app_version（给 CI 与脚本取用）")
+    version.set_defaults(func=cmd_version)
 
     verify = sub.add_parser("verify", parents=[common], help="发布后核对产物、latest 与站点版本")
     verify.add_argument("--repo", default=RELEASE_REPO, help=f"发布仓（默认 {RELEASE_REPO}）")

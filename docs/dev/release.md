@@ -6,13 +6,14 @@
 
 改版本号 → 归档 CHANGELOG → 预检 → 打 tag 推主仓 →（CI 自动）通知发布仓构建三平台 → 核对产物与 latest。
 
-四步都是 `scripts/release.py`：
+四步都是 `scripts/release.py`（另有 `version` 只打印版本号，给 CI 与脚本取用）：
 
     python scripts/release.py check              # 只读预检：版本号/tag/CHANGELOG/关键文件
     python scripts/release.py check --tests      # 预检 + 全量后端测试（约 70 秒）
     python scripts/release.py archive            # 把 [未发布] 归档成 ## [vX] - 日期
     python scripts/release.py tag --push         # 打注释 tag 并推主仓
     python scripts/release.py verify --site https://coprexist.com   # 发布后核对
+    python scripts/release.py version            # 只打印 app_version（CI 与脚本取用）
 
 预检把所有判据一次列全（`✔ / ✘ / ·`），不用逐条试。**它只读，不动 git**；打 tag 是单独一步。
 

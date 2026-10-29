@@ -28,7 +28,8 @@ jobs:
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME#v}"
-          app=$(sed -n 's/^ *app_version: *str *= *"\([^"]*\)".*/\1/p' backend/app/config.py | head -1)
+          # 版本号只有一处解析：scripts/release.py 的 read_version()（同一个出处也供 check/archive/tag 用）
+          app=$(python3 scripts/release.py version)
           echo "tag=v$tag app_version=$app"
           if [ -z "$app" ]; then
             echo "::error::读不到 backend/app/config.py 的 app_version"
