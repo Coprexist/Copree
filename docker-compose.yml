@@ -2,6 +2,9 @@ services:
   postgres:
     image: pgvector/pgvector:pg17
     container_name: ai_group_postgres
+    # 数据目录常落在 FUSE/ZFS 挂载上：挂载抖断会让 postgres 直接 PANIC 退出。
+    # 没有重启策略时它就静默躺着，前端只能看到一堆 500。
+    restart: unless-stopped
     env_file:
       - .env
     environment:
@@ -14,7 +17,7 @@ services:
       - ${DATA_DIR:-./data}/postgres:/var/lib/postgresql/data
       - ./backend/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ai_chat"]
+      test: ["CMD-SHELL", "pg_isready -U ai_chat -d ai_group_chat"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -22,6 +25,7 @@ services:
   backend:
     build: ./backend
     container_name: ai_group_backend
+    restart: unless-stopped
     ports:
       - "5228:8000"
     env_file:
@@ -47,6 +51,9 @@ services:
       # 模型列定义在 import 时读这个值（DB 里的 embedding 配置来得太晚，管不到列类型），
       # 本地 nomic-embed-text = 768，四个向量列也都是 vector(768) —— 不一致时写入会静默失败
       EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-768}
+      # 真实客户端 IP 的信任链：只有来自这些网段（容器网络）的请求，才采信边缘 nginx
+      # 写入的 X-Real-IP。填容器网络段而不是 127.0.0.1，是因为请求要经过 vite 容器中转。
+      TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-192.168.192.0/24}
     # 容器内用 host.docker.internal 指向宿主机。Linux 靠这行（host-gateway 由 Docker 解析网关）；
     # Docker Desktop（macOS/Windows）本来就自带这个名字，重复声明无副作用。
     # 于是 embedding_base_url 可以跨平台统一写 http://host.docker.internal:11434，
@@ -78,6 +85,7 @@ services:
   frontend:
     build: ./frontend
     container_name: ai_group_frontend
+    restart: unless-stopped
     ports:
       - "5227:3000"
     volumes:
