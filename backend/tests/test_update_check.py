@@ -21,7 +21,8 @@ def _next_patch(version: str | None = None) -> str:
     上游版本不能写死成某个具体号：发版 bump app_version 时，写死的那个数就变成
     "和本站一样"，has_update 断言随之变红——用例测的是"有新版本"这件事，不是某个号。
     """
-    major, minor, patch = (int(x) for x in (version or settings.app_version).split(".")[:3])
+    base = (version or settings.app_version).split("-", 1)[0]   # 预发布后缀先剥掉
+    major, minor, patch = (int(x) for x in base.split(".")[:3])
     return f"{major}.{minor}.{patch + 1}"
 
 
