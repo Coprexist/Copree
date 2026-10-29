@@ -10,9 +10,21 @@ from app.database import Base
 
 
 class Agent(Base):
+    """AI 代理本体。
+
+    id 与 user_id 是两套标识，用途不重叠：
+    - id（agents.id）：AI 本体。文件空间、沙箱、记忆、知识库、技能、用量、模型与
+      工具配置都挂在它上面；路径 agents/{id}/ 也按它算（app/paths.agent_dir）。
+    - user_id：AI 在 users 表里的虚拟账号。群成员、消息 sender_id、好友、@提及、
+      世界绑定这些「人和 AI 共处一表」的位置用它，AI 与人类在那里必须同构。
+
+    判据：这个值会不会同时是某个人类的身份？会 → user_id；只有 AI 才有 → agents.id。
+    两套 id 数值会撞（本表 id=40 的 AI 与另一 AI 的虚拟账号 40），所以一个字段只许
+    存一种，查询也不要写 id == X OR user_id == X（会一次命中两行）。
+    """
     __tablename__ = "agents"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    id = Column(Integer, primary_key=True, autoincrement=True)  # AI 本体 id：文件空间/沙箱/记忆/配置
     owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     name = Column(String(50), nullable=False)
 
@@ -62,7 +74,8 @@ class Agent(Base):
     # 三档 AI 配置：chat / immersive / digital_life（选一个作为起点，之后可自由调参）
     config_profile = Column(String(20), default="chat")
 
-    # AI 在 users 表中的身份（统一 ID 空间，用于私信等场景）
+    # AI 在 users 表中的虚拟账号（社交身份）。群成员、消息 sender_id、好友、世界绑定用它；
+    # 资源归属（文件/沙箱/记忆）用上面的 id，两套标识不要互相换算后写进对方的列
     user_id = Column(Integer, ForeignKey("users.id"))
 
     # 对话日志：此 AI 的保留上限（NULL=使用全局 max_conversation_logs）

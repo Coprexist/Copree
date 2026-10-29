@@ -17,6 +17,8 @@ class Message(Base):
     group_id = Column(Integer, ForeignKey("groups.id", ondelete="CASCADE"), nullable=False)
     # 'human'（users.id）| 'ai'（agents 的 users 行 id）| 'assistant'（group_assistants.id）
     sender_type = Column(String(10), nullable=False)
+    # 一律 users.id：human 是人本身，ai 是该 AI 的虚拟账号（agent.user_id），assistant 是
+    # group_assistants.id。agents.id 不进这一列——消息表里人与 AI 同构，换两套 id 就没法按会话一把取
     sender_id = Column(Integer, nullable=False)
     sender_name = Column(String(100), nullable=True)  # 联邦消息的发送者名称（本地消息为 NULL，由关联查询获取）
     content = Column(Text, nullable=False)

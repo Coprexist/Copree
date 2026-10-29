@@ -41,5 +41,8 @@ def world_dir(world_id: int) -> Path:
 
 
 def agent_dir(agent_id: int) -> Path:
-    """某个 AI 的文件空间（同时是它的代码沙箱目录）"""
+    """某个 AI 的文件空间（同时是它的代码沙箱目录）
+
+    agent_id 是 agents.id（AI 本体 id），不是虚拟账号 users.id；调用方不要先换算。
+    """
     return (AGENTS_DIR / str(agent_id)).resolve()

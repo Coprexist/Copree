@@ -1,4 +1,4 @@
-﻿"""
+"""
 文件元数据 + 引用追踪 + 协作模式模型
 """
 from sqlalchemy import (
@@ -15,7 +15,11 @@ class FileMetadata(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     path = Column(String, nullable=False)
-    owner_type = Column(String(10), nullable=False)  # 'ai' | 'group' | 'system'
+    # 多态归属：owner_type='ai' 时 owner_id 必须是 agent.id（AI 本体），不是它的虚拟账号
+    # users.id——文件是 AI 独有的东西；human → users.id，group → groups.id，system → 0。
+    # 这列没有外键，语义靠写入方保证；读取侧一律经 file_service._owner_agent 归一，
+    # 存量脏数据由 scripts/repair_ai_file_owner_ids.py 归正
+    owner_type = Column(String(10), nullable=False)  # 'human' | 'ai' | 'group' | 'system'
     owner_id = Column(Integer, nullable=False)
     size = Column(BigInteger)
     mime_type = Column(String(100))

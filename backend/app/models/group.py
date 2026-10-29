@@ -90,6 +90,8 @@ class GroupMember(Base):
 
     group_id = Column(Integer, ForeignKey("groups.id", ondelete="CASCADE"), nullable=False)
     member_type = Column(String(10), nullable=False)  # 'human' | 'ai'
+    # 与 member_type 配套，一律 users.id：ai 填该 AI 的虚拟账号（agent.user_id），不是 agents.id。
+    # 群成员表是人与 AI 共处的地方，统一到 users 才能一条查询取全会话参与者
     member_id = Column(Integer, nullable=False)
     role = Column(String(20), default="member")  # owner|admin|member
     # NULL/过去 = 没设免打扰；有值且在将来 = 免打扰中；"永久"存 2099-12-31（见 chat/delivery.py）
