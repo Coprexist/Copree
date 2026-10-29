@@ -16,10 +16,17 @@ WORLD_ID = 987654
 
 
 def _entry() -> dict:
+    """一条待审批项的最小形状 —— 必须与 `world_ai_mode._request_approval` 造的那份同形。
+
+    `items` 看着可有可无（分条审批空着就是 []），但 `pending_approvals` 直接读 `e["items"]`：
+    这里漏一个键，刷新待审批列表就会 KeyError（2026-10-27 修的就是这个——夹具停在"分条审批"
+    之前，线上那份 entry 一直是带 items 的）。
+    """
     now = time.monotonic()
     return {
         "id": uuid.uuid4().hex[:8], "world_id": WORLD_ID, "kind": "modify", "title": "t",
         "detail": "", "body": "", "body_format": "text", "body_lang": "",
+        "items": [],                                  # 分条审批：可逐条勾选的条目（空 = 整份通过）
         "created_at": time.time(), "started_at": now, "last_activity": now,
         "future": asyncio.get_running_loop().create_future(),
     }

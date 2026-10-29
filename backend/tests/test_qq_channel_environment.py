@@ -1,12 +1,15 @@
 """QQ 插件接入环境接口：只读内存（零新增网络往返），事实不再由 brief 重复第二遍。"""
 import importlib.util
 import time
+from pathlib import Path
 
 import pytest
 
 pytestmark = pytest.mark.anyio
 
-PLUGIN_PATH = "/app/plugins/qq-channel/plugin.py"
+# 插件目录跟着仓库走：本地是 backend/plugins，容器里是 /app/plugins。
+# 写死 /app 在 GitHub Actions 上直接 FileNotFoundError。
+PLUGIN_PATH = Path(__file__).resolve().parents[1] / "plugins" / "qq-channel" / "plugin.py"
 _MOD = None
 
 

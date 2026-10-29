@@ -3,8 +3,11 @@
 正文落在 AI 的文件空间（data/agents/{id}/knowledge/），元数据落 agent_knowledge；
 索引进系统提示时与记忆索引同段、一起走能力版本链冻结。
 """
+import shutil
+
 import pytest
 from sqlalchemy import text
+from app.paths import agent_dir
 
 pytestmark = pytest.mark.anyio
 
@@ -14,6 +17,9 @@ AGENT_ID, OWNER, AGENT_USER = 999001, 1, 999002
 async def _seed(db):
     from db_reset import clear
 
+    # 用例共用同一个 AGENT_ID：只清库不清文件的话，上一轮写下的 manual.md 还在，
+    # 这边 add_entry 就会落成 manual-3.md，清单断言随之错位。
+    shutil.rmtree(agent_dir(AGENT_ID), ignore_errors=True)
     await clear(db, "agents", "users")
     await db.execute(text(
         "INSERT INTO users (id, username, password_hash, type) VALUES "
