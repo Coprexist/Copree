@@ -528,8 +528,8 @@ export default function MarketPage() {
         {msg && <div className="text-xs text-accent-400 mt-2">{msg}</div>}
       </div>
 
-      {/* 列表 */}
-      <div className="flex-1 overflow-y-auto p-4">
+      {/* 列表 —— 底部余量按悬浮胶囊的实际高度留（见 index.css 的 .pb-nav 说明） */}
+      <div className="flex-1 overflow-y-auto p-4 pb-nav">
         {tab === 'local' ? (
           loading ? (
             <div className="text-center text-textMuted text-sm py-16">加载中…</div>

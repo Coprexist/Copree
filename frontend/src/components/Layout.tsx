@@ -2,11 +2,13 @@ import { useState, useEffect, Suspense } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
 import Sidebar from './Sidebar'
 import MobileNav from './MobileNav'
+import MobileScrollbar from './MobileScrollbar'
 import BalancePromptModal from './BalancePromptModal'
 import { useDesktopNotification } from '../hooks/useDesktopNotification'
 import { useNotificationSocket } from '../hooks/useNotificationSocket'
 import NotificationToasts from './NotificationToasts'
 import { Wrench, X } from 'lucide-react'
+import { isChatDetailPath, scrollsInMain } from '../utils/pageRegistry'
 import { loadFromStorage, apply } from '../utils/cssFilters'
 import { isEmbedded } from '../embed/bridge'
 import { useAuth } from '../context/AuthContext'
@@ -144,9 +146,10 @@ export default function Layout() {
   // 站内弹窗：常驻通知连接收群/私聊消息、审批结果与系统通知（与系统通知分工：后台归系统通知）
   const notifications = useNotificationSocket()
 
-  // 聊天详情页（群聊/私信）/ 沉浸界面（世界视界）隐藏底部导航栏
-  const hideNav = /^\/chat\/(dm\/[^/]+|\d+)/.test(location.pathname)
-                   || /^\/dm\/[^/]+/.test(location.pathname)
+  // 聊天详情页（群聊/私信）/ 沉浸界面（世界视界）隐藏底部导航栏。
+  // 会话路由归 pageRegistry 管，判定也从那里取，别再在本文件写一份正则。
+  const hideNav = isChatDetailPath(location.pathname)
+                   || /^\/dm\/[^/]+/.test(location.pathname)   // 旧地址，DMPage 会转成 /chat/dm/...
                    || /^\/world-view\//.test(location.pathname)
 
   // 沉浸界面（世界视界）：隐藏侧边栏，全屏沉浸
@@ -246,7 +249,10 @@ export default function Layout() {
         {/* 桌面安装版有新版本时贴在内容区顶部（网页版用户看不到——升级是管理员的事，
             网页版管理员去「管理面板 → 通用」看完整卡片） */}
         {!EMBED && <UpdateBanner enabled={user?.role === 'admin'} />}
-        <main className={`flex-1 min-w-0 bg-canvas ${hideNav ? 'overflow-hidden pb-0' : 'overflow-y-auto pb-14 md:pb-0'}`}>
+        {/* pb-nav = 悬浮胶囊占的高度（见 index.css）：内容照常从胶囊下面穿过，滚到底时
+            最后一条停在胶囊上沿。只有内容真在 main 里滚的页面才挂（见 scrollsInMain）；
+            页面自带滚动容器的，余量归它自己，main 再挂一段就只会把内容盒压矮。 */}
+        <main className={`flex-1 min-h-0 min-w-0 bg-canvas ${hideNav ? 'overflow-hidden' : `overflow-y-auto ${scrollsInMain(location.pathname) ? 'pb-nav' : ''}`}`}>
           <Suspense fallback={
             <div className="flex items-center justify-center h-64">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-500" />
@@ -259,6 +265,8 @@ export default function Layout() {
 
       {/* ── 移动端底部导航（聊天详情页隐藏；嵌入模式不渲染） ── */}
       {!EMBED && !hideNav && <MobileNav closeDrawer={() => setDrawerOpen(false)} />}
+      {/* 手机端滚动指示：轨道止于导航上沿，内容照旧从导航下穿过 */}
+      {!EMBED && !hideNav && <MobileScrollbar />}
 
       {/* ── 全局弹窗 ── */}
       <BalancePromptModal />

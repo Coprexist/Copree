@@ -77,6 +77,36 @@ export function getPublicRoutes(): RouteObject[] {
 }
 
 /**
+ * 是否停在某个具体会话的聊天详情页（群聊 / 私信）。
+ *
+ * 底部导航栏与 main 的滚动策略都看这个判定。路由表就在本文件，
+ * 判定也放这里：两处必须同步，分开放必然漂移——群聊路由从 /chat/:id
+ * 改成 /chat/gm/:id 时，Layout 里那条 /^\/chat\/(dm\/[^/]+|\d+)/ 就再也没命中过，
+ * 结果是进入群聊后底部导航栏一直压着输入框。
+ */
+export function isChatDetailPath(pathname: string): boolean {
+  return /^\/chat\/(?:gm|dm)\/[^/]+/.test(pathname)
+}
+
+/**
+ * 内容直接铺在 Layout 的 main 里滚动的页面。
+ *
+ * 默认反过来定：页面根是 h-full、内部自带 overflow-y-auto，滚动与底部余量都归页面
+ * 自己那个容器（挂 .pb-nav）。只有把内容整个交给 main 的页面才写进这个名单。
+ *
+ * 为什么不能反过来（main 统一加内边距、页面自己再挂 .pb-nav）：那样 main 的内容盒
+ * 被压矮一截，页面内部那个滚动容器的下沿正好停在悬浮胶囊上沿，内容永远滚不到胶囊
+ * 后面去——胶囊只剩一条空底色，玻璃效果全无，而且白白少掉一屏可滚高度。
+ * 名单和路由放一起，新增「铺在 main 里滚动」的页面时只改这里。
+ */
+const MAIN_SCROLL_PATHS = ['/manual']
+
+/** 页面内容是否直接由 Layout 的 main 滚动（决定 main 要不要留底部导航的余量） */
+export function scrollsInMain(pathname: string): boolean {
+  return MAIN_SCROLL_PATHS.some((p) => pathname === p || pathname.startsWith(p + '/'))
+}
+
+/**
  * 受保护路由（需要登录，放在 ProtectedLayout 下）
  * 返回 RouteObject[] 供 createBrowserRouter 使用
  */

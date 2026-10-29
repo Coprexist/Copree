@@ -670,8 +670,9 @@ export default function AgentDetailPage() {
 
   if (!agent) return null
 
+  // 本页自己滚动（不铺在 Layout 的 main 里），底部余量按悬浮胶囊的高度留
   return (
-    <div className="h-full overflow-y-auto p-4 md:p-6 bg-canvas">
+    <div className="h-full overflow-y-auto p-4 pb-nav md:p-6 bg-canvas">
       {/* 表单页 content 够用；日志是长文加两列，给 wider 档（组件内部的 xl 断点也才够得着） */}
       <ContentColumn width={activeTab === 'logs' ? 'wider' : 'content'}>
         {/* Header */}

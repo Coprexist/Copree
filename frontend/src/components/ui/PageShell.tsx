@@ -47,11 +47,13 @@ export default function PageShell({
       <PageHeader title={title} subtitle={subtitle} onBack={onBack} leading={leading}>
         {actions}
       </PageHeader>
-      <div className="flex-1 min-h-0 overflow-y-auto scroll-floor">
+      {/* 页面自己的滚动容器：底部余量（.pb-nav）与滚动指示条的挂载点都在这里。
+          挂到外层 main 只会把内容盒压矮，内容永远滚不到悬浮胶囊后面 */}
+      <div className="flex-1 min-h-0 overflow-y-auto scroll-floor pb-nav">
         {flush ? (
           children
         ) : (
-          <ContentColumn width={width} className={`px-4 py-4 md:px-6 md:py-6 pb-24 md:pb-6 ${contentClassName}`}>
+          <ContentColumn width={width} className={`px-4 py-4 md:px-6 md:py-6 ${contentClassName}`}>
             {children}
           </ContentColumn>
         )}

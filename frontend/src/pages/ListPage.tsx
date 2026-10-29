@@ -423,8 +423,8 @@ export default function ListPage() {
         onChange={setTab}
       />
 
-      {/* 内容区 */}
-      <div className="flex-1 overflow-y-auto pb-[var(--safe-bottom)] md:pb-0">
+      {/* 内容区 —— 底部余量挂在真正滚动的这个容器上（.pb-nav，见 index.css） */}
+      <div className="flex-1 overflow-y-auto pb-nav">
         {loading ? (
           <div className="flex items-center justify-center py-20">
             <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-500" />
@@ -581,7 +581,7 @@ export default function ListPage() {
                 {searchBox}
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto divide-y divide-border/50 pb-[var(--safe-bottom)]">
+            <div className="flex-1 overflow-y-auto divide-y divide-border/50 pb-nav">
               {sortedFriends.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-20 text-textMuted">
                   <Search size={40} className="mb-3 opacity-30" />
