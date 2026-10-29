@@ -114,6 +114,27 @@ def _normalize_collab_type(requester_type: str) -> str:
     return requester_type
 
 
+async def _owner_agent(db: AsyncSession, metadata: FileMetadata):
+    """AI 文件归谁：owner_id 约定是 agent.id，查不到再按 AI 的虚拟账号兜一次。
+
+    存量里有 15 条记录（2026-07 那批）把 agents.user_id 当 agent.id 写了进去，
+    例如 owner_id=16 其实属于 agent 10、41 属于 agent 25，path 也跟着落在 agents/16/。
+    scripts/repair_ai_file_owner_ids.py 归正、这类记录清零之后，这里可以只剩 db.get。
+
+    不能写成一个 where(id == X OR user_id == X)：agents.user_id 与别的 agent.id 数值
+    撞上会同时命中两行，scalar_one_or_none 直接抛 MultipleResultsFound。
+    """
+    from app.models.agent import Agent as AgentModel
+
+    agent = await db.get(AgentModel, metadata.owner_id)
+    if agent is not None:
+        return agent
+    result = await db.execute(
+        select(AgentModel).where(AgentModel.user_id == metadata.owner_id).limit(1)
+    )
+    return result.scalars().first()
+
+
 async def check_file_access(db: AsyncSession, file_id: int, requester_type: str,
                             requester_id: int, required_perm: str = "read") -> FileMetadata | None:
     db = _ensure_repo(db)
@@ -137,13 +158,8 @@ async def check_file_access(db: AsyncSession, file_id: int, requester_type: str,
 
     # AI 的文件 → 其制作者和合作者也有权限
     if metadata.owner_type == "ai" and requester_type == "human":
-        from app.models.agent import Agent as AgentModel, AgentCollaborator
-        agent_result = await db.execute(
-            select(AgentModel).where(
-                (AgentModel.id == metadata.owner_id) | (AgentModel.user_id == metadata.owner_id)
-            )
-        )
-        agent = agent_result.scalar_one_or_none()
+        from app.models.agent import AgentCollaborator
+        agent = await _owner_agent(db, metadata)
         if agent is not None:
             # 制作者
             if agent.owner_id == requester_id:
@@ -151,7 +167,7 @@ async def check_file_access(db: AsyncSession, file_id: int, requester_type: str,
             # 合作者
             collab_result = await db.execute(
                 select(AgentCollaborator).where(
-                    AgentCollaborator.agent_id == metadata.owner_id,
+                    AgentCollaborator.agent_id == agent.id,
                     AgentCollaborator.user_id == requester_id,
                 )
             )
@@ -933,6 +949,16 @@ async def ai_write_file(db: AsyncSession, agent_id: int, file_path: str,
                         content: str, collaboration_mode: str = "solo") -> FileMetadata:
     db = _ensure_repo(db)
     """AI 写入文件（创建或覆盖）"""
+    # agent_id 必须是 agents.id（文件空间 id 的单一口径）。传虚拟账号 users.id 时，同名 id
+    # 在 agents 上也存在，文件会落进另一个 AI 的目录、原 AI 自己读不到——存量 data/agents/16/
+    # 就是 2026-07 那批这么写出来的（见 docs/dev/id_semantics.md）
+    from app.models.agent import Agent as AgentModel
+    if await db.get(AgentModel, agent_id) is None:
+        virtual = await db.execute(
+            select(AgentModel.id).where(AgentModel.user_id == agent_id).limit(1)
+        )
+        if virtual.first() is not None:
+            raise ValueError(f"未知 AI：{agent_id}（agent_id 须是 agents.id，不是虚拟账号 users.id）")
     file_path = ai_stored_path(agent_id, file_path)
 
     physical_path = _get_physical_path(file_path)

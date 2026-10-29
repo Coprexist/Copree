@@ -122,3 +122,19 @@
   抽成 `_validate_op_arg`，两条叶子路径共用。写法契约见 [触发组合规则](../dev/trigger_rules.md)「叶子的三种写法」。
   验证：`tests/test_trigger_rules.py`（含对象值求值与三种拒法）、`tests/test_decision_layer.py`
   里"带参运算真命中、正常聊天不被吃掉"这条；库里那条规则不动一个字符就活了。
+
+## 本轮线上问题修复（2026-10-29）
+
+- **AI 存储页打开文件一律 HTTP 500，预览只剩「直接下载」**：`GET /fs/download/{id}` 每次 500，
+  日志 `sqlalchemy.exc.MultipleResultsFound`，落在 `file_service.check_file_access` 查归属 AI 那一步。
+  原查询是 `select(Agent).where((Agent.id == owner_id) | (Agent.user_id == owner_id))`：`agents.user_id`
+  是 AI 自己的虚拟账号，数值会与另一个 agent.id 撞上（线上实例：agent 29 的虚拟账号是 user 49，而文件
+  归属的 agent 49 的 id 就是 49），一次命中两行，`scalar_one_or_none` 直接抛异常——权限还没判就先炸了。
+  修法：归属解析收成一个入口 `_owner_agent()`——先按主键 `db.get(Agent, owner_id)`，查不到再按虚拟账号
+  兜一次并 `limit(1)`；协作者匹配改用 `agent.id`（兜底路径下 owner_id 已经不是 agent.id）。
+  顺带查清了兜底查询的到底是什么：存量 15 条记录的 owner_id 是虚拟账号 id（16 → agent 10、41 → agent 25），
+  path 与物理文件也落在 `agents/16/`、`agents/41/`，这些文件连 AI 自己都读不到；新增
+  `scripts/repair_ai_file_owner_ids.py`（默认 dry-run）一次性归正记录与物理文件，归正后这批记录不再走兜底。
+  验证：`tests/test_file_access.py` 四个用例（id 撞车仍可访问、无关用户判拒绝而不是抛异常、旧数据兜底、
+  协作者按 agent.id 命中）；把查询改回旧写法时三例失败；`/fs/download/112`、`/fs/download/113` 从 500 变 200。
+
