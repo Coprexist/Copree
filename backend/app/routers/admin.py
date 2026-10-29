@@ -1490,6 +1490,7 @@ async def update_system_settings(
                 registration_enabled=req.registration_enabled,
                 geoip_provider_url=req.geoip_provider_url,
                 audit_user_actions=req.audit_user_actions,
+                audit_use_real_ip=req.audit_use_real_ip,
                 audit_log_retention_days=req.audit_log_retention_days,
                 message_retention_days=req.message_retention_days,
                 daily_backup_enabled=req.daily_backup_enabled,

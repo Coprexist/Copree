@@ -1,14 +1,15 @@
 """
-基础系统路由：健康检查、维护消息、服务根路径。
+基础系统路由：健康检查、维护消息、登录页公开设置、服务根路径。
 """
 import asyncio
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.database import check_db_connection
+from app.database import check_db_connection, get_db
 from app.services.infrastructure.maintenance import maintenance
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,24 @@ async def root():
 async def public_maintenance_msg():
     """维护状态公开接口"""
     return maintenance.get_public_message()
+
+
+@router.get("/system/settings")
+async def public_system_settings(db: AsyncSession = Depends(get_db)):
+    """登录页/注册页用的公开设置（无需认证）。
+
+    只暴露前端渲染必需、且本身不敏感的字段；SMTP、厂商配置等一律不在这里返回。
+    """
+    from app.services.infrastructure.system_settings_service import get_settings
+
+    sys = await get_settings(db)
+    return {
+        "default_language": sys.get("default_language", "en"),
+        "login_providers": sys.get("login_providers", ["direct"]),
+        "require_email_verification": bool(sys.get("require_email_verification", False)),
+        "registration_enabled": bool(sys.get("registration_enabled", True)),
+        "audit_use_real_ip": bool(sys.get("audit_use_real_ip", False)),
+    }
 
 
 @router.get("/system/update-status")

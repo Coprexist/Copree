@@ -1,14 +1,13 @@
 """
 HTTP 中间件 — 请求日志/Request ID + CORS + 请求 IP 追踪 + 维护模式拦截。
 
-IP 追踪只取 uvicorn 解析后的 request.client，不自行解析 X-Forwarded-For：
-uvicorn 的 ProxyHeadersMiddleware 仅信任 --forwarded-allow-ips 内的代理
-（默认 127.0.0.1，即默认不信任任何代理头），自行解析会绕过该可信检查。
-
-注意：当前 docker 端口映射部署下（浏览器 → docker-proxy 网关 → vite → backend），
-vite 看到的客户端源是网关 IP，后端审计 IP 为网关地址；要还原真实客户端 IP，
-需在宿主层加反向代理并配置 uvicorn --forwarded-allow-ips 指向该代理。
+IP 追踪分两种口径，统一由 resolve_client_ip() 决定：
+- 默认（管理员未开启「记录真实客户端 IP」）：只取 TCP 对端地址，不采信任何转发头；
+- 开启且对端落在 TRUSTED_PROXY_CIDRS 内：采用边缘反向代理写入的 X-Real-IP
+  （nginx 用 $remote_addr 覆盖，客户端自带的值无效）。
+审计入库的 IP 与 /auth 限流的分桶键都走这一个入口，避免两处口径漂移。
 """
+import ipaddress
 import logging
 import time
 import uuid
@@ -16,13 +15,95 @@ import uuid
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
 
 from app.config import settings
+from app.database import async_session
 from app.services.infrastructure.maintenance import maintenance
 from app.utils.auth import set_current_request_ip
 from app.utils.rate_limit import SlidingWindow
 
 logger = logging.getLogger(__name__)
+
+
+# ── 真实客户端 IP 解析 ──
+
+def _parse_net(cidr: str):
+    try:
+        return ipaddress.ip_network(cidr.strip(), strict=False)
+    except ValueError:
+        return None
+
+
+_TRUSTED_PROXY_NETS = [
+    net for net in (_parse_net(c) for c in (settings.trusted_proxy_cidrs or "").split(",")) if net
+]
+
+# 开关读库结果的 TTL 缓存：设置页改完最多 30s 生效，避免每请求查一次库
+_AUDIT_REAL_IP_TTL = 30.0
+_audit_real_ip_cache: dict = {"ts": 0.0, "value": False}
+_UNSET = object()
+
+
+def _parse_ip(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        return str(ipaddress.ip_address(value.strip()))
+    except ValueError:
+        return None
+
+
+def _is_trusted_proxy(peer: str | None) -> bool:
+    if not peer or not _TRUSTED_PROXY_NETS:
+        return False
+    try:
+        addr = ipaddress.ip_address(peer)
+    except ValueError:
+        return False
+    return any(addr in net for net in _TRUSTED_PROXY_NETS)
+
+
+async def _audit_use_real_ip() -> bool:
+    now = time.monotonic()
+    if now - _audit_real_ip_cache["ts"] < _AUDIT_REAL_IP_TTL:
+        return _audit_real_ip_cache["value"]
+    try:
+        async with async_session() as db:
+            value = (await db.execute(
+                text("SELECT audit_use_real_ip FROM system_settings WHERE id = 1")
+            )).scalar()
+        value = bool(value)
+    except Exception:
+        # 数据库未就绪/表不存在时按关闭处理：不影响请求本身
+        value = False
+    _audit_real_ip_cache.update(ts=now, value=value)
+    return value
+
+
+async def resolve_client_ip(request: Request) -> str | None:
+    """解析客户端 IP：默认 TCP 对端；开关打开且对端是可信代理时取 X-Real-IP。"""
+    cached = getattr(request.state, "resolved_client_ip", _UNSET)
+    if cached is not _UNSET:
+        return cached
+
+    peer = request.client.host if request.client else None
+    result = peer
+    if peer and await _audit_use_real_ip() and _is_trusted_proxy(peer):
+        real = _parse_ip(request.headers.get("x-real-ip"))
+        if real:
+            result = real
+        else:
+            # 兼容只传 X-Forwarded-For 的反代：取最右一跳（由我们的边缘代理追加）
+            forwarded = request.headers.get("x-forwarded-for")
+            if forwarded:
+                for part in reversed(forwarded.split(",")):
+                    ip = _parse_ip(part)
+                    if ip:
+                        result = ip
+                        break
+    request.state.resolved_client_ip = result
+    return result
 
 # 硬维护放行路径：健康检查/文档/管理/认证/维护消息本身/维护弹窗公开图片
 _EXACT_BYPASS = ("/health", "/", "/docs", "/openapi.json")
@@ -47,8 +128,9 @@ async def request_logging_middleware(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
     if request.url.path != "/health":
+        client_ip = await resolve_client_ip(request)
         logger.info(
-            f"[{request_id}] {request.method} {request.url.path} → "
+            f"[{request_id}] {client_ip or '-'} {request.method} {request.url.path} → "
             f"{response.status_code} ({elapsed_ms:.0f}ms)"
         )
     return response
@@ -57,7 +139,7 @@ async def request_logging_middleware(request: Request, call_next):
 async def client_ip_middleware(request: Request, call_next):
     """记录请求 IP 到 contextvar（供审计日志使用）"""
     try:
-        set_current_request_ip(request.client.host if request.client else None)
+        set_current_request_ip(await resolve_client_ip(request))
     except Exception as e:
         logger.exception(f"client_ip_middleware error: {e}")
     return await call_next(request)
@@ -113,7 +195,7 @@ async def auth_rate_limit_middleware(request: Request, call_next):
     """
     path = request.url.path
     if path.startswith("/auth"):
-        ip = request.client.host if request.client else "-"
+        ip = await resolve_client_ip(request) or "-"
         # 凭证端点按 (IP, 路径) 分桶：一次登录爆破不该把同 IP 的注册配额也吃掉
         if path in _AUTH_CREDENTIAL_PATHS:
             retry_after = _auth_credential_window.hit(f"{ip}:{path}")

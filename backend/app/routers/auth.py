@@ -25,7 +25,7 @@ from app.services.infrastructure.auth_service import (
     update_user_settings, rebind_email, unbind_email,
 )
 from app.services.infrastructure.verification_service import generate_and_send_code, verify_code
-from app.utils.auth import get_current_user
+from app.utils.auth import get_current_user, get_current_request_ip
 from app.models.user import User
 
 router = APIRouter(prefix="/auth", tags=["认证"])
@@ -81,7 +81,7 @@ async def register(
         )
         from app.repositories.audit_repo import SQLAlchemyAuditRepository
         from app.services.audit_service import log_user_action
-        ip = request.client.host if request.client else None
+        ip = get_current_request_ip()
         await log_user_action(SQLAlchemyAuditRepository(db), "register", user.id, "user", details={"username": req.username}, ip=ip)
         # 注册后自动登录（使用用户名+密码方式）
         return await login_user(
@@ -112,7 +112,7 @@ async def login(
     """
     from app.services.infrastructure import login_guard
 
-    ip = request.client.host if request.client else None
+    ip = get_current_request_ip()
     locked = login_guard.retry_after(req.login_id, ip)
     if locked:
         await login_guard.audit_failure(login_id=req.login_id, ip=ip, repeat=True,
@@ -228,7 +228,7 @@ async def send_verification_code(
     """发送邮箱验证码。频率限制：每分钟 1 次，每小时 5 次。"""
     try:
         # 获取客户端 IP
-        ip = request.client.host if request.client else None
+        ip = get_current_request_ip()
         # 如果是注册用途，检查邮箱唯一性（但不透露是否已存在）
         if req.purpose == "register":
             existing = await db.execute(

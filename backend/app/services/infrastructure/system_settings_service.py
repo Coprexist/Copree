@@ -108,6 +108,7 @@ async def get_settings(db: AsyncSession) -> dict:
         "provider_config": getattr(row, "provider_config", None),
         "geoip_provider_url": getattr(row, "geoip_provider_url", None),
         "audit_user_actions": getattr(row, "audit_user_actions", False) or False,
+        "audit_use_real_ip": bool(getattr(row, "audit_use_real_ip", False)),
         "audit_log_retention_days": getattr(row, "audit_log_retention_days", 90) or 90,
         "message_retention_days": getattr(row, "message_retention_days", 0) or 0,
         "daily_backup_enabled": bool(getattr(row, "daily_backup_enabled", False)),
@@ -125,6 +126,7 @@ async def update_settings(
     registration_enabled: bool | None = None,
     geoip_provider_url: str | None = None,
     audit_user_actions: bool | None = None,
+    audit_use_real_ip: bool | None = None,
     audit_log_retention_days: int | None = None,
     message_retention_days: int | None = None,
     daily_backup_enabled: bool | None = None,
@@ -212,6 +214,10 @@ async def update_settings(
     if audit_user_actions is not None:
         row.audit_user_actions = audit_user_actions
         logger.info(f"  用户行为日志: {'开启' if audit_user_actions else '关闭'}")
+
+    if audit_use_real_ip is not None:
+        row.audit_use_real_ip = audit_use_real_ip
+        logger.info(f"  审计真实 IP: {'开启' if audit_use_real_ip else '关闭'}")
 
     if audit_log_retention_days is not None:
         row.audit_log_retention_days = audit_log_retention_days

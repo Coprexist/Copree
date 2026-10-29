@@ -247,6 +247,12 @@ class Settings(BaseSettings):
             return [s.strip() for s in v.split(",") if s.strip()]
         return v
 
+    # ── 真实客户端 IP 的信任链 ──
+    # 逗号分隔的 CIDR。仅当请求的 TCP 对端落在这里面时，才采信边缘反向代理
+    # 写入的 X-Real-IP；默认空 = 不信任任何转发头（审计记录的是代理地址）。
+    # compose 部署下应填容器网络段（如 192.168.192.0/24），见 docker-compose.yml。
+    trusted_proxy_cidrs: str = ""
+
     # ── 维护模式标记目录 ──
     # 空 = 跟着数据目录走（<data_dir>/maintenance，见 _fill_maintenance_dir）。
     # 以前默认 "/tmp"：Windows 上这个目录不存在，os.path.join 还会拼出 "/tmp\maintenance_startup"，

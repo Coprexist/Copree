@@ -50,6 +50,7 @@ export const authZh: TranslationDict = {
   'codeSentTo': '验证码已发送至 {email}',
   'tooManyRequests': '验证码发送太频繁，请稍后再试',
   'smtpNotConfigured': '邮件服务未配置，请联系管理员',
+  'loginIpNotice': '我们会记录你的真实 IP，仅用于安全审计与登录保护。',
 }
 
 export const authEn: TranslationDict = {
@@ -91,6 +92,7 @@ export const authEn: TranslationDict = {
   'codeSentTo': 'Code sent to {email}',
   'tooManyRequests': 'Too many requests, please try again later',
   'smtpNotConfigured': 'Email service not configured, contact admin',
+  'loginIpNotice': 'We record your real IP address only for security auditing and login protection.',
 }
 
 export const authJa: TranslationDict = {
@@ -132,4 +134,5 @@ export const authJa: TranslationDict = {
   'codeSentTo': '{email} にコードを送信しました',
   'tooManyRequests': 'リクエストが多すぎます。しばらく待ってから再試行してください',
   'smtpNotConfigured': 'メールサービスが設定されていません。管理者にお問い合わせください',
+  'loginIpNotice': '実際の IP アドレスを、セキュリティ監査とログイン保護の目的に限り記録します。',
 }
