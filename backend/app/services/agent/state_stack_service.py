@@ -1,16 +1,24 @@
 """
 状态帧服务 — push/pop/close/list 状态帧 + 提示词注入。
 
-两层要分清（这是全篇的前提）：
+三层要分清（这是全篇的前提）：
 - **存储** = agents.state_stack 整个数组，全量保留，只在「他交接完后事」（finish_frame）时删；
-- **运行集合** = 数组里 status 处于 active/paused/suspended 的那串指针，"栈"只剩它。
+- **运行集合 = 状态链**（agent_state_chain / _node 两张表）：一条双向链表，节点只存
+  「帧 id + 前驱后继」，链尾是最后加入、正在执行的那一端。链头是压得最久的那端；
+- **执行窗口** = 链尾起 max_active 个节点（默认 1 ⇒ 只跑链尾那一帧）。
 
-顺序不变量（normalize_order）：数组 = [历史区][运行区，当前帧在末尾]。读写各收口一次
-（_get_stack 读时归一化、_save 唯一写入点），于是全仓 stack[-1] 恒等于当前帧。
+为什么要有链：以前"谁是当前帧"靠数组顺序 + status 推，切个会话就得重排整份栈（线上见过
+126 帧 / 546 KB 的一份），而"帧 id → 在队里第几个"只能扫数组。现在顺序由链说了算：
+切回某帧 = 把它拉到链尾（常数条指针更新），帧 id → 节点号有 O(1) 索引。
+指针算术全在 utils/pure/state_chain.py，本层只负责把补丁打到行上。
+
+顺序不变量：数组 = [历史区][运行区，当前帧在末尾]，由链决定（order_by_chain）。
+**当前帧 = 链尾**：调用方只管把帧标成 active，_save（唯一写入点）把它挪到链尾，
+所以 push / pop / close / restore / ensure_active 各条路径都不必各自记得动链。
 身份不变量：一个 context_ref（一段会话）至多一帧——push 认出同会话就切回原帧（帧 id 稳定），
 _save 再兜底归并（规则表见 pure.merge_same_context）；契约 docs/dev/frame_lifecycle.md。
 
-纯函数在 utils/pure/state_stack.py，本层只做 DB 编排。
+纯函数在 utils/pure/state_stack.py（帧）与 utils/pure/state_chain.py（链），本层只做 DB 编排。
 """
 import json
 import logging
@@ -20,6 +28,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.agent import Agent
 from app.repositories.agent_repo import AgentRepository, SQLAlchemyAgentRepository
 from app.utils.pure.handover import drop_note
+from app.models.agent_state_chain import AgentStateChain, AgentStateChainNode
+from app.utils.pure import state_chain
 from app.utils.pure.state_stack import (
     make_state_frame, format_state_stack_summary, format_handoff_tail,
     DEFAULT_FRAME_CAPACITY, ENDED_STATUS,
@@ -64,6 +74,194 @@ async def _write_stack(db: AsyncSession, agent_id: int, stack: list[dict]) -> No
     )
 
 
+# ═══════════════════════════════════════════════════════════════
+# 状态链（运行集合）：帧 id ↔ 链节点，切帧 = 挪指针
+# ═══════════════════════════════════════════════════════════════
+
+async def _load_chain(db: AsyncSession, agent_id: int) -> dict | None:
+    """读这条 AI 的链；**没建过链的老 AI 返回 None**（由 _ensure_chain 首次现建）。
+
+    只读两张小表：一条元数据行 + 每帧一行节点（各四个整数/短串），帧内容一概不碰——
+    链不知道谁在干嘛，只关心谁排在谁后面。
+    """
+    db = _ensure_repo(db)
+    row = (await db.execute(
+        select(AgentStateChain.head_id, AgentStateChain.tail_id, AgentStateChain.max_active)
+        .where(AgentStateChain.agent_id == agent_id))).first()
+    if row is None:
+        return None
+    nodes = (await db.execute(
+        select(AgentStateChainNode.id, AgentStateChainNode.frame_id,
+               AgentStateChainNode.prev_id, AgentStateChainNode.next_id)
+        .where(AgentStateChainNode.agent_id == agent_id))).all()
+    return state_chain.from_rows(row, nodes)
+
+
+async def _apply_chain_patches(db: AsyncSession, patches: list[dict]) -> None:
+    """把纯函数算出来的指针补丁打到行上：一次 executemany、最多三行。"""
+    if not patches:
+        return
+    db = _ensure_repo(db)
+    await db.execute(
+        text("UPDATE agent_state_chain_node SET prev_id = :prev, next_id = :next WHERE id = :id"),
+        [{"id": p["id"], "prev": p["prev"], "next": p["next"]} for p in patches],
+    )
+
+
+async def _write_chain_ends(db: AsyncSession, agent_id: int, chain: dict) -> None:
+    """端点与窗口大小落库（一 AI 一行）。链上增删都必须过这里，head/tail 才不会飘。"""
+    db = _ensure_repo(db)
+    await db.execute(
+        text("INSERT INTO agent_state_chain (agent_id, head_id, tail_id, max_active) "
+             "VALUES (:aid, :head, :tail, :max) "
+             # updated_at 要自己写：这里走裸 SQL，模型的 onupdate 不会触发
+             "ON CONFLICT (agent_id) DO UPDATE "
+             "SET head_id = :head, tail_id = :tail, max_active = :max, updated_at = now()"),
+        {"aid": agent_id, "head": chain["head"], "tail": chain["tail"], "max": chain["max_active"]},
+    )
+
+
+async def _chain_attach(db: AsyncSession, agent_id: int, chain: dict, frame_id: str) -> int | None:
+    """让这个帧上链（第一次进运行集合）；已经在链上就当成「拉到最末」处理。
+
+    节点行只写 `(agent_id, frame_id)`，指针由纯函数算完再补——链怎么连只有一处写法。
+    """
+    db = _ensure_repo(db)
+    fid = str(frame_id or "")
+    if not fid:
+        return None
+    existing = state_chain.node_of_frame(chain, fid)
+    if existing is not None:
+        await _chain_move_tail(db, agent_id, chain, existing)
+        return existing
+    node_id = (await db.execute(
+        text("INSERT INTO agent_state_chain_node (agent_id, frame_id) VALUES (:aid, :fid) "
+             "ON CONFLICT (agent_id, frame_id) DO NOTHING RETURNING id"),
+        {"aid": agent_id, "fid": fid})).scalar_one_or_none()
+    if node_id is None:
+        # 并发首挂：对面已插进去，读回它的号码接着连（绝不重复挂第二个节点）
+        node_id = (await db.execute(
+            text("SELECT id FROM agent_state_chain_node WHERE agent_id = :aid AND frame_id = :fid"),
+            {"aid": agent_id, "fid": fid})).scalar_one()
+    await _apply_chain_patches(db, state_chain.attach_tail(chain, node_id, fid))
+    await _write_chain_ends(db, agent_id, chain)
+    return node_id
+
+
+async def _chain_move_tail(db: AsyncSession, agent_id: int, chain: dict, node_id: int) -> None:
+    """把一个节点拉到链尾（切回这段会话 / 唤醒这一帧）——「只执行最末位」就落在这一步。
+
+    前后帧相连、本帧接到旧尾之后，常数条行更新；已经在链尾就什么都不做（幂等）。
+    """
+    patches = state_chain.move_to_tail(chain, node_id)
+    if not patches:
+        return
+    await _apply_chain_patches(db, patches)
+    await _write_chain_ends(db, agent_id, chain)
+
+
+async def _chain_detach(db: AsyncSession, agent_id: int, chain: dict, node_id: int) -> None:
+    """节点下链（帧出运行集合：pop / close / 挂起 / 代销 / 归并）。行删掉，前后帧直接相连。"""
+    db = _ensure_repo(db)
+    patches = state_chain.detach(chain, node_id)
+    await _apply_chain_patches(db, patches)
+    await db.execute(
+        text("DELETE FROM agent_state_chain_node WHERE id = :id"), {"id": node_id})
+    await _write_chain_ends(db, agent_id, chain)
+
+
+async def _ensure_chain(db: AsyncSession, agent_id: int, stack: list[dict]) -> dict:
+    """取这条 AI 的链；改造前的老 AI 没有链，第一次写栈时按当时的运行集合现建一条。
+
+    建链顺序取当时的栈序（调用方已 normalize_order 过：[历史][运行区]），所以老 AI
+    升级后"当前帧"不变——只是从"数组末尾恰好是谁"换成"链尾是谁"。
+    """
+    db = _ensure_repo(db)
+    chain = await _load_chain(db, agent_id)
+    if chain is not None:
+        return chain
+    await db.execute(
+        text("INSERT INTO agent_state_chain (agent_id, max_active) VALUES (:aid, 1) "
+             "ON CONFLICT (agent_id) DO NOTHING"), {"aid": agent_id})
+    chain = await _load_chain(db, agent_id) or state_chain.empty_chain()
+    for frame in running(stack):
+        await _chain_attach(db, agent_id, chain, str(frame.get("id") or ""))
+    logger.info(f"Agent({agent_id}) 状态链首次建立：{state_chain.chain_size(chain)} 帧")
+    return chain
+
+
+async def _rebuild_chain(db: AsyncSession, agent_id: int, chain: dict,
+                        stack: list[dict]) -> dict:
+    """链断了就**整条重建**（原地改 chain：调用方手里是同一个对象）。
+
+    触发条件只有 `problems()` 非空——环、断头、同一个帧挂两个节点。这三种都只会由
+    **并发写**造成（两个请求读到了同一条尾）：增量去修容易再拧一次，不如按"还读得出位次"
+    重挂一遍——从链尾回溯得到可达顺序，剩下的运行中帧按数组顺序接在后面（帧一帧都不丢，
+    只是排到最后）。
+    """
+    db = _ensure_repo(db)
+    problems = state_chain.problems(chain)
+    alive = {str(f.get("id") or "") for f in running(stack)}
+    order = [fid for fid in state_chain.frames_by_chain(chain) if fid in alive]
+    for frame in running(stack):                   # 读不出位次的（孤儿、环里的）接在后面
+        frame_id = str(frame.get("id") or "")
+        if frame_id and frame_id not in order:
+            order.append(frame_id)
+
+    await db.execute(
+        text("DELETE FROM agent_state_chain_node WHERE agent_id = :aid"), {"aid": agent_id})
+    max_active = chain.get("max_active") or state_chain.DEFAULT_MAX_ACTIVE
+    chain.clear()
+    chain.update(state_chain.empty_chain(max_active))
+    for frame_id in order:
+        await _chain_attach(db, agent_id, chain, frame_id)
+    logger.warning(f"Agent({agent_id}) 状态链不变量异常，已整条重建：{problems}")
+    return chain
+
+
+async def _reconcile_chain(db: AsyncSession, agent_id: int, chain: dict,
+                           stack: list[dict]) -> dict:
+    """链 ↔ 运行集合对账，并把当前帧归位到链尾。
+
+    **只在这里做**（_save 是帧的唯一写入点），于是 push / pop / close / restore /
+    ensure_active 各条路径都不必记得动链——它们只管改 status，链由这一处跟着改。
+    偏差两个方向都要修：运行中但链上没有（老数据、或某条路径漏挂）→ 挂到链尾；
+    链上有但已不运行（pop / close / 挂起 / 代销 / 归并）→ 摘掉。
+    """
+    db = _ensure_repo(db)
+    if state_chain.problems(chain):                # 断链先整条重建，再按正常路子对账
+        chain = await _rebuild_chain(db, agent_id, chain, stack)
+    plan = state_chain.reconcile(chain, [str(f.get("id") or "") for f in running(stack)])
+    for node_id in plan["drop"]:
+        await _chain_detach(db, agent_id, chain, node_id)
+    for frame_id in plan["append"]:
+        await _chain_attach(db, agent_id, chain, frame_id)
+
+    # 当前帧归位：调用方把谁标成 active，谁就该在链尾（切会话、闹钟唤醒都只是这一步）
+    for frame in running(stack):
+        if frame.get("status") != "active":
+            continue
+        node_id = state_chain.node_of_frame(chain, str(frame.get("id") or ""))
+        if node_id is not None:
+            await _chain_move_tail(db, agent_id, chain, node_id)
+
+    # 执行窗口内一律 active：窗口默认 1，就是上面挪到末尾的那帧；>1 时把链尾前几帧一并提上来
+    window = state_chain.window(chain)
+    for node_id in window:
+        frame = by_id(stack, state_chain.frame_of_node(chain, node_id))
+        if frame is not None and is_running(frame) and frame.get("status") != "active":
+            frame["status"] = "active"
+    actives = [f for f in running(stack) if f.get("status") == "active"]
+    if len(actives) > len(window):
+        logger.warning(
+            f"Agent({agent_id}) 运行集合里有 {len(actives)} 帧是 active，"
+            f"执行窗口只有 {len(window)}：实际只跑链尾那 {len(window)} 帧")
+
+    if problems := state_chain.problems(chain):
+        logger.warning(f"Agent({agent_id}) 状态链不变量异常：{problems}")
+    return plan
+
+
 async def _frame_capacity(db: AsyncSession, agent_id: int) -> int:
     """帧容量（AI 可自配）：NULL/0 回落到默认值。"""
     db = _ensure_repo(db)
@@ -102,21 +300,27 @@ def _attach_notices(stack: list[dict], agent_id: int, notes: list[dict]) -> None
 
 
 async def _save(db: AsyncSession, agent_id: int, stack: list[dict]) -> list[dict]:
-    """**帧的唯一写入点**：归一化顺序 + 同会话归并 + 容量处置，再落库。返回挂起待交接的帧 id。
+    """**帧的唯一写入点**：链对账 + 同会话归并 + 容量处置，再落库。返回挂起待交接的帧 id。
 
     同一段会话归并（见 pure.merge_same_context）与容量处置都放这里：都是"帧本身的状态"，
     与"谁触发的那次写入"无关；分散到各调用点就会出现"push 一套、切会话另一套"。
+    链对账（_reconcile_chain）同理放在这里：各条路径只改 status，谁在链尾、谁下链由这一处定。
     归一是**原地**的，调用方手里那份栈与落库的是同一份。
     走的方式按这档 AI 的取向分两条（挂起待交接 / 平台代销），但**都不静默**：
     挂起的会收到清单，代销的会收到一条「平台代销」告知。
     """
     db = _ensure_repo(db)
-    # 原地归一 + 同会话归并：都是"帧本身的状态"，各 push 点不必各自记得
+    # ① 先按 status 归一（链还没建时这是唯一依据）
     stack[:] = normalize_order(stack)
+    # ② 老 AI 第一次写栈：按上面这个顺序把链建起来（当前帧因此不变）
+    chain = await _ensure_chain(db, agent_id, stack)
+    # ③ 此后顺序由链说了算：数组只是把链序摊平成老读者认得的形状
+    stack[:] = state_chain.order_by_chain(stack, chain)
+    # 同会话归并：和容量处置一样，都是"帧本身的状态"，各 push 点不必各自记得
     merged = merge_same_context(stack)
     if merged:
         logger.warning(f"Agent({agent_id}) 同一会话的重复帧已归并：{[f.get('id') for f in merged]}")
-        stack[:] = normalize_order(stack)
+        stack[:] = state_chain.order_by_chain(stack, chain)
     capacity = await _frame_capacity(db, agent_id)
     if await _retire_handover_self(db, agent_id):
         retired_ids = retire_overflow(stack, capacity)
@@ -134,6 +338,9 @@ async def _save(db: AsyncSession, agent_id: int, stack: list[dict]) -> list[dict
         notes.append(drop_note(backlog, "backlog"))
         logger.warning(f"Agent({agent_id}) 待交接积压超限：平台代销 {[f.get('id') for f in backlog]}")
     _attach_notices(stack, agent_id, notes)
+    # ④ 链 ↔ 运行集合对账（挂上 / 摘掉 / 当前帧归位），顺序再摊平一次后落库
+    await _reconcile_chain(db, agent_id, chain, stack)
+    stack[:] = state_chain.order_by_chain(stack, chain)
     await _write_stack(db, agent_id, stack)
     if retired_ids:
         logger.info(f"Agent({agent_id}) 帧容量超限：挂起待交接 {retired_ids}")
@@ -164,6 +371,12 @@ async def dispose_context_frames(db: AsyncSession, context_ref: str) -> dict:
             _attach_notices(stack, agent_id, [drop_note(dropped, "session")])
             out["dropped"] += len(dropped)
             logger.info(f"Agent({agent_id}) 会话 {context_ref} 已消失：平台代销 {[f.get('id') for f in dropped]}")
+        # 这条路绕开了 _save（会话没了、不设计容闸），链得在这里自己对上一遍：
+        # 被挂起/代销的帧下链，剩下的按链序摊平后再落库
+        chain = await _load_chain(db, agent_id)
+        if chain is not None:
+            await _reconcile_chain(db, agent_id, chain, stack)
+            stack[:] = state_chain.order_by_chain(stack, chain)
         await _write_stack(db, agent_id, stack)
     return out
 
@@ -171,6 +384,47 @@ async def dispose_context_frames(db: AsyncSession, context_ref: str) -> dict:
 async def get_frames(db: AsyncSession, agent_id: int) -> list[dict]:
     """全量存储的帧（历史区在前、当前帧在末尾）；含已结束与待交接的。"""
     return await _get_stack(db, agent_id)
+
+
+async def get_chain(db: AsyncSession, agent_id: int) -> dict:
+    """运行集合的读视图（工具/界面用）：当前执行帧、整条队列、执行窗口大小。
+
+    queue **尾在前**——"接下来依次跑谁"就是这个顺序；current 是链尾（= 当前帧）。
+    只读两张小表，不碰帧内容；要内容另取 get_frames。
+    老 AI 还没建链时按当时的运行集合现算一份（只读不写：读接口不该顺手改库）。
+    """
+    db = _ensure_repo(db)
+    chain = await _load_chain(db, agent_id)
+    materialized = chain is not None
+    if chain is None:
+        # 还没建链（改造后的 AI 只要再写一次栈就会建）：按运行集合现算一条**只在内存里**的链。
+        # 队列口径与真链共用同一段代码——不另写一份"把运行集合倒过来"，两处迟早会分叉。
+        chain = state_chain.empty_chain()
+        for node_id, frame in enumerate(running(await _get_stack(db, agent_id)), start=1):
+            frame_id = str(frame.get("id") or "")
+            if frame_id:
+                state_chain.attach_tail(chain, node_id, frame_id)
+    executing = state_chain.executing_frames(chain)
+    return {
+        "max_active": chain["max_active"],
+        "current": executing[0] if executing else None,
+        "queue": state_chain.queue_frames(chain),
+        "materialized": materialized,
+    }
+
+
+async def set_chain_max_active(db: AsyncSession, agent_id: int, value) -> int:
+    """改这个 AI 的执行窗口（并发执行帧数）——将来那个设置项要改的就是这一列。
+
+    窗口 = 链尾起 n 个节点，所以"多跑几帧"不必动任何帧记录：改一个整数、查一次窗口。
+    n=1 就是老行为（只跑链尾那一帧）。上界见 state_chain.MAX_ACTIVE_CAP。
+    """
+    db = _ensure_repo(db)
+    chain = await _ensure_chain(db, agent_id, await _get_stack(db, agent_id))
+    n = state_chain.set_max_active(chain, value)
+    await _write_chain_ends(db, agent_id, chain)
+    logger.info(f"Agent({agent_id}) 执行窗口 = {n}（链尾起 {n} 帧）")
+    return n
 
 
 async def restore_frame(db: AsyncSession, agent_id: int, frame_id: str,

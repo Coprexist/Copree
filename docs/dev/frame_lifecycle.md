@@ -18,15 +18,54 @@
 | 环境（在哪个会话、接没接渠道、绑没绑世界） | 会话帧字段 + 帧上的锁定副本 | **换新**：锁定副本对齐现值，下一次请求用新环境 | 环境变化只置脏 + 落一条通知，不碰前缀；帧的锁定副本随帧记录一起保留（帧不再被静默裁掉） |
 | 待通知脏位 | 会话帧字段 | **清空**（环境已随解锁并入前缀） | 同帧生灭 |
 
-## 帧的存储与运行
+## 帧的存储、运行链与执行窗口
 
-帧由 `app/services/agent/state_stack_service.py` 管理。**存储与运行是两层**：
+帧由 `app/services/agent/state_stack_service.py` 管理。**三层**，各管一件事：
 
 - **存储** = `agents.state_stack` 整个数组，全量保留（形状与帧字段不变，无需迁移）；
-- **运行集合** = 数组里 `status ∈ {active, paused, suspended}` 的那串指针，"栈"只剩它。
+- **运行链** = `agent_state_chain` + `agent_state_chain_node`（迁移 `0094`）：一条**双向链表**，
+  节点只存「帧 id + 前驱后继」，**不复制帧内容**。链头是压得最久的那端，**链尾是最后加入、
+  正在执行的那端**；帧 id → 节点号走唯一键 `(agent_id, frame_id)`，O(1)；
+- **执行窗口** = 链尾起 `max_active` 个节点（`agent_state_chain.max_active`，默认 1 ⇒ 只跑链尾那帧）。
 
-顺序不变量：数组 = **[历史区][运行区，当前帧在末尾]**。读写各收口一次（`_get_stack` 读时归一化、
-`_save` 唯一写入点），所以全仓把 `stack[-1]` 当"当前帧"用的地方不必改，也不会有漏改的半吊子。
+顺序不变量：数组 = **[历史区][运行区，当前帧在末尾]**，**由链决定**
+（`state_chain.order_by_chain` 把链序摊平进数组）。`_save` 是帧的唯一写入点，链序只在这一处落进
+数组，所以全仓把 `stack[-1]` 当"当前帧"用的地方不必改，也不会有漏改的半吊子。
+
+**当前帧 = 链尾**：调用方只改 `status`（`push_state` / `pop_state` / `close_state` /
+`restore_frame` / `ensure_active_frame` 都是这样），`_save` 里的对账（`_reconcile_chain`）
+把标成 `active` 的那帧挪到链尾、把离开运行集合的帧下链、把运行中却没上链的帧挂上。
+于是「链怎么连」只有一处写法（`app/utils/pure/state_chain.py`），各条路径不必各自记得动链。
+
+> 术语：别的文档和历史注释里的**「栈顶帧」就是链尾（当前帧）**——含 `stack[-1]` 那句老不变量。
+> 名字不逐个改，口径只在这里对齐一次。
+
+链的指针算法（attach / move_to_tail / detach）、执行窗口与实测代价单独成篇：
+[状态链](./state_chain.md)。本页只管「帧的生命周期」——它什么时候进、什么时候出、出的时候留什么。
+
+**切回一段会话 = 把它拉到链尾**（`move_to_tail`）：① 让位——此帧的前后帧直接相连；
+② 落座——上一个最末帧的 `next` 记成本帧、本帧的 `prev` 记成上一个最末帧、`next` 置空。
+落在存储上是 **≤4 行指针更新，与链长无关**（改造前这等于重排整份栈，线上见过 126 帧 / 546 KB 的一份）。
+
+**老 AI 不需要数据迁移**：没有链的 AI 在第一次写栈时按当时的运行集合现建一条
+（`_ensure_chain`），"当前帧"因此不变，只是依据从"数组末尾恰好是谁"换成"链尾是谁"。
+读接口（`get_chain`）遇到没有链的 AI 只现场算一份视图，**不写库**。
+
+**执行窗口 > 1 的现状**：`max_active` 已就位并被对账尊重（窗口内一律 `active`），但一轮唤醒
+仍然只驱动链尾那一帧——真正的并行执行还没有接线。调大目前只是让"窗口"的语义提前成立。
+
+**实测代价**（126 帧 / 774 KB 的一份栈，`backend/tests` 同款数据）：
+
+| 动作 | 耗时 | SQL 条数 |
+|---|---|---|
+| `get_chain`（当前帧 + 整条队列） | 0.75 ms | 2 |
+| `get_current_frame`（读整份数组找 active） | 5.38 ms | 1 |
+| 一次 `_save`（位次没变） | 15.6 ms | 6，链一条都没写 |
+| 一次 `_save`（切会话，位次变了） | 16.6 ms | 8，链只多 2 条（补丁 + 端点） |
+
+也就是说：**排序与查询已经是 O(1)/常数条**，但一次写栈的大头仍然是"把整份 `state_stack`
+重写一遍"（15 ms 里占绝大部分）——那是存储层的代价，链没有、也不该替它付。
+真要把它降下来，下一步是把帧从"一个大 JSON"拆成"一帧一行"，那是另一场改造。
 
 ### 同一段会话至多一帧
 
@@ -62,6 +101,28 @@
 | `suspended` | 会话切走了，等它回来 | 是 |
 | `ended` | 已结束（`pop_state` / `close_state`，或同会话重复帧被归并），记录留在存储 | 否 |
 | `retired` | 待交接：会话已消失、或容量超限被挑中 | 否 |
+
+```mermaid
+stateDiagram-v2
+    state "active（当前帧 = 链尾）" as ACTIVE
+    state "paused（被压着，还要回来）" as PAUSED
+    state "suspended（会话切走了，等它回来）" as SUSPENDED
+    state "ended（已出运行集合，记录留在存储）" as ENDED
+    state "retired（待交接）" as RETIRED
+    [*] --> ACTIVE : push / ensure_active 新建
+    ACTIVE --> PAUSED : 被新的 push 压下去
+    ACTIVE --> SUSPENDED : 切到别的会话
+    PAUSED --> ACTIVE : 切回来，或 pop 回到它
+    SUSPENDED --> ACTIVE : 切回来
+    ACTIVE --> ENDED : pop_state / close_state
+    PAUSED --> ENDED : 选择性回跳时被一并结束
+    SUSPENDED --> ENDED : 同会话重复帧被归并
+    ACTIVE --> RETIRED : 容量超限被挑中
+    PAUSED --> RETIRED : 容量超限被挑中
+    SUSPENDED --> RETIRED : 会话已消失（群解散）
+    ENDED --> [*] : finish_frame 删除记录
+    RETIRED --> [*] : finish_frame，或平台代销
+```
 
 **删除点只有两处**（其余一律只改 status）：
 
@@ -150,6 +211,9 @@ compact / clear 时才把锁定副本刷成现值、同事务清脏，这一步�
 - 状态帧：`app/services/agent/state_stack_service.py`（`ensure_active_frame` / `release_active_frame_notes` / `load_trigger_state` / `dispose_context_frames` / `park_frame`）
 - 世界帧（进群视界 = 激活世界专属帧；绑定时预建沉睡帧、帧内工具白名单 = 基础集 + 世界侧技能）：`app/services/world/world_frame_service.py`
 - 帧的存储/运行分界、容量闸与同会话归并：`app/utils/pure/state_stack.py`（`running` / `current` / `normalize_order` / `context_frames` / `merge_same_context` / `_overflow` / `retire_overflow` / `drop_overflow` / `drop_retired_overflow`）
+- 状态链的指针算术：`app/utils/pure/state_chain.py`（`attach_tail` / `move_to_tail` / `detach` / `window` / `reconcile` / `problems` / `order_by_chain`）
+- 状态链的存储与读写：`app/models/agent_state_chain.py`；`state_stack_service` 的 `_load_chain` / `_ensure_chain` / `_chain_attach` / `_chain_move_tail` / `_chain_detach` / `_reconcile_chain` / `get_chain` / `set_chain_max_active`；迁移 `0094`
+- 状态链的用例：`backend/tests/test_state_chain.py`（纯函数 + 服务集成）
 - 后事告知的文案与幂等键：`app/utils/pure/handover.py`；销帧工具：`app/tools/self_management/finish_frame.py`
 - 告知落历史：`app/ai/llm.py`（`_deliver_handover` / `_deliver_focus_notices`，与便签/能力变更通知同一出口）
 - 档位开关：`agents.retire_handover_self`（迁移 `0083`，预设值在 `agent_service.CONFIG_PROFILES`）

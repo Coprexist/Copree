@@ -1020,14 +1020,23 @@ async def _maybe_trigger_ai_reply(
     from app.services.tool_registry import get_allowed_tools
     from app.services.capability_versioning import (
         get_effective_definitions, keep_request_tools, SOURCE_PLATFORM,
+        freeze_allowed, frozen_allowed,
     )
     delay_allowed = await _is_delay_reply_allowed(db, agent)
     current_tools = get_allowed_tools(agent.state, thinking_enabled=effective_cfg["thinking_enabled"], delay_reply_allowed=delay_allowed)
     allowed_names = {t["function"]["name"] for t in current_tools}
     from app.services.history.context_sync import context_ref
+    _session_ref = context_ref(group_id=group_id)
+    # 名单与定义版本一起锁：锁定态里状态切换/开关变化不再改 tools 数组（改了就是整段前缀 miss）。
+    # 首见（这个会话还没锁过）按此刻算一份并锁上；解锁点由 mark_prefix_fresh 清空重算。
+    _frozen = frozen_allowed(agent, _session_ref)
+    if _frozen is None:
+        freeze_allowed(agent, _session_ref, allowed_names)
+    else:
+        allowed_names = set(_frozen)
     effective_defs = await get_effective_definitions(
         SQLAlchemyCapabilityRepository(db), agent, SOURCE_PLATFORM, current_tools,
-        state=context_ref(group_id=group_id))
+        state=_session_ref)
     tools = keep_request_tools(effective_defs, allowed_names)
 
     # + 绑定世界的世界侧 skills（居民能力；群绑定或 agent 直接绑定；effective 版本快照，版本化懒加载）
@@ -1259,14 +1268,22 @@ async def _trigger_dm_ai_reply(
     from app.services.tool_registry import get_allowed_tools
     from app.services.capability_versioning import (
         get_effective_definitions, keep_request_tools, SOURCE_PLATFORM,
+        freeze_allowed, frozen_allowed,
     )
     delay_allowed = await _is_delay_reply_allowed(db, agent)
     current_tools = get_allowed_tools(agent_state, thinking_enabled=effective_cfg["thinking_enabled"], delay_reply_allowed=delay_allowed)
     allowed_names = {t["function"]["name"] for t in current_tools}
     from app.services.history.context_sync import context_ref
+    _session_ref = context_ref(session_id=session_id)
+    # 同上：私信与群聊共用同一条锁
+    _frozen = frozen_allowed(agent, _session_ref)
+    if _frozen is None:
+        freeze_allowed(agent, _session_ref, allowed_names)
+    else:
+        allowed_names = set(_frozen)
     effective_defs = await get_effective_definitions(
         SQLAlchemyCapabilityRepository(db), agent, SOURCE_PLATFORM, current_tools,
-        state=context_ref(session_id=session_id))
+        state=_session_ref)
     tools = keep_request_tools(effective_defs, allowed_names)
 
     # 世界帧：私信里也按同一条帧走——进了世界就只给世界侧技能 + 基础集，不分群聊私信。

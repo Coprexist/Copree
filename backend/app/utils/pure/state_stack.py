@@ -3,7 +3,10 @@
 
 存储与运行是两层（本模块的分界线）：
 - 存储 = 整个数组（含已结束 ended、待交接 retired 的帧，全量保留，只在他交接完后事时删）；
-- 运行集合 = running(stack)，status 处于 active/paused/suspended 的那串指针，"栈"只剩它。
+- 运行集合 = running(stack)，status 处于 active/paused/suspended 的那串指针。
+
+运行集合的**顺序**不在这里算：它是状态链（agent_state_chain，见 pure/state_chain.py）的事——
+切回某帧是把它拉到链尾，不是重排这个数组。本模块只回答"哪些帧还在跑"，链回答"接下来跑谁"。
 
 make_state_frame(): 构建单个状态帧（交接驱动：handoff/completed_handoff）
 normalize_order(): 排成 [历史区][运行区，当前帧在末尾]——全仓 stack[-1] 等于当前帧的依据

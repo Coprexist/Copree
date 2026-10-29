@@ -499,6 +499,33 @@ def write_progress(holder, field: str, state: str | None, source: str, version: 
     _set_holder_map(holder, field, m)
 
 
+# ── 锁定态的工具名单 ──
+# 只冻定义版本不够：请求里的 tools = 快照 ∩ 名单，而名单是 get_allowed_tools(状态/开关) 每轮现算的。
+# 状态一换（active→dnd）、开关一改（thinking/delay_reply），tools 数组就变，带 tools 的整段前缀
+# 一起 miss。所以名单与版本同锁：锁定时记下这一份，解锁点（compact/clear）清空重算。
+ALLOWED_SOURCE = "allowed"
+
+
+def frozen_allowed(holder, state: str | None) -> list[str] | None:
+    """锁定态该状态的工具名单；None = 还没锁过（首见，按当前算一份并锁上）。"""
+    raw = _holder_map(holder, "cap_effective_allowed").get(progress_key(state, ALLOWED_SOURCE))
+    return [str(n) for n in raw] if isinstance(raw, list) else None
+
+
+def freeze_allowed(holder, state: str | None, names) -> None:
+    """把这一份名单锁进 holder（排序后存：顺序本身就是字节，不能依赖 set 遍历）"""
+    m = _holder_map(holder, "cap_effective_allowed")
+    m[progress_key(state, ALLOWED_SOURCE)] = sorted(str(n) for n in (names or ()))
+    _set_holder_map(holder, "cap_effective_allowed", m)
+
+
+def clear_frozen_allowed(holder, state: str | None) -> None:
+    """解锁点清空：前缀刚换新，名单也该按此刻的状态/开关重算一次"""
+    m = _holder_map(holder, "cap_effective_allowed")
+    if m.pop(progress_key(state, ALLOWED_SOURCE), None) is not None:
+        _set_holder_map(holder, "cap_effective_allowed", m)
+
+
 def scope_covers(scope: str | None, state: str | None, foci=None) -> bool:
     """这条版本的作用域覆盖不覆盖该状态——决定变更通知该不该送到这个状态。
 
@@ -696,6 +723,8 @@ async def mark_prefix_fresh(
             continue
         write_progress(holder, "cap_effective_versions", state, source, latest.version)
         write_progress(holder, "cap_known_versions", state, source, latest.version)
+    # 名单与版本同进同退：解锁之后按此刻的状态/开关重新算一次
+    clear_frozen_allowed(holder, state)
 
 
 # ═══════════════════════════════════════════════════════════════
