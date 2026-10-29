@@ -29,14 +29,14 @@ _UPSERT_ROW = text("""
         used_total, used_billable, created_at, updated_at
     ) VALUES (
         :agent_id, :channel_kind, :conversation, :label, :copree_group_id, :dm_session_id,
-        0, 0, now(), now()
+        0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
     )
     ON CONFLICT (agent_id, channel_kind, conversation) DO UPDATE SET
         label = CASE WHEN EXCLUDED.label <> '' THEN EXCLUDED.label
                      ELSE channel_conversation_usage.label END,
         copree_group_id = COALESCE(EXCLUDED.copree_group_id, channel_conversation_usage.copree_group_id),
         dm_session_id = COALESCE(EXCLUDED.dm_session_id, channel_conversation_usage.dm_session_id),
-        updated_at = now()
+        updated_at = CURRENT_TIMESTAMP
     RETURNING *
 """)
 
@@ -66,7 +66,7 @@ async def get_policy(db, agent_id: int, channel_kind: str) -> dict:
         await db.execute(text("""
             INSERT INTO channel_token_policy (agent_id, channel_kind, meter_mode, limit_tokens,
                                               blocked_reply_enabled, updated_at)
-            VALUES (:agent_id, :channel_kind, :mode, :limit, true, now())
+            VALUES (:agent_id, :channel_kind, :mode, :limit, true, CURRENT_TIMESTAMP)
             ON CONFLICT (agent_id, channel_kind) DO NOTHING
         """), {**params, "mode": pure.DEFAULT_METER_MODE, "limit": pure.DEFAULT_LIMIT_TOKENS})
         row = (await db.execute(text(
@@ -121,7 +121,7 @@ async def decide(db, *, agent_id: int, channel_kind: str, conversation: str, lab
         if due:
             notice = pure.blocked_reply_text(policy["blocked_reply_text"])
             await db.execute(text(
-                "UPDATE channel_conversation_usage SET blocked_notice_at=now(), updated_at=now() "
+                "UPDATE channel_conversation_usage SET blocked_notice_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP "
                 "WHERE agent_id=:agent_id AND channel_kind=:channel_kind AND conversation=:conversation"
             ), {"agent_id": int(agent_id), "channel_kind": str(channel_kind), "conversation": str(conversation)})
     return {
@@ -151,14 +151,14 @@ _CHARGE_ROW = text("""
         used_total, used_billable, created_at, updated_at
     ) VALUES (
         :agent_id, :channel_kind, :conversation, :label, :copree_group_id, :dm_session_id,
-        :total, :billable, now(), now()
+        :total, :billable, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
     )
     ON CONFLICT (agent_id, channel_kind, conversation) DO UPDATE SET
         used_total = channel_conversation_usage.used_total + EXCLUDED.used_total,
         used_billable = channel_conversation_usage.used_billable + EXCLUDED.used_billable,
         label = CASE WHEN EXCLUDED.label <> '' THEN EXCLUDED.label
                      ELSE channel_conversation_usage.label END,
-        updated_at = now()
+        updated_at = CURRENT_TIMESTAMP
 """)
 
 
@@ -260,7 +260,7 @@ async def set_policy(db, agent_id: int, channel_kind: str, *,
         params["blocked_reply_text"] = str(blocked_reply_text).strip() or None
     if sets:
         await db.execute(text(
-            f"UPDATE channel_token_policy SET {', '.join(sets)}, updated_at=now() "
+            f"UPDATE channel_token_policy SET {', '.join(sets)}, updated_at=CURRENT_TIMESTAMP "
             "WHERE agent_id=:agent_id AND channel_kind=:channel_kind"
         ), params)
     return await get_policy(db, agent_id, channel_kind)
@@ -274,7 +274,7 @@ async def set_override(db, agent_id: int, channel_kind: str, conversation: str, 
     if clear or (limit_tokens is None and meter_mode is None):
         await db.execute(text(
             "UPDATE channel_conversation_usage SET limit_override=NULL, meter_mode_override=NULL, "
-            "updated_at=now() WHERE agent_id=:agent_id AND channel_kind=:channel_kind AND conversation=:conversation"
+            "updated_at=CURRENT_TIMESTAMP WHERE agent_id=:agent_id AND channel_kind=:channel_kind AND conversation=:conversation"
         ), params)
         return
     sets: list[str] = []
@@ -284,7 +284,7 @@ async def set_override(db, agent_id: int, channel_kind: str, conversation: str, 
     if meter_mode is not None:
         sets.append("meter_mode_override=:mode_override")
         params["mode_override"] = pure.normalize_mode(meter_mode)
-    sets.append("updated_at=now()")
+    sets.append("updated_at=CURRENT_TIMESTAMP")
     await db.execute(text(
         f"UPDATE channel_conversation_usage SET {', '.join(sets)} "
         "WHERE agent_id=:agent_id AND channel_kind=:channel_kind AND conversation=:conversation"
@@ -303,5 +303,5 @@ async def reset_usage(db, agent_id: int, channel_kind: str, conversation: str | 
         params["conversation"] = str(conversation)
     await db.execute(text(
         "UPDATE channel_conversation_usage SET used_total=0, used_billable=0, "
-        f"blocked_notice_at=NULL, updated_at=now() WHERE {where}"
+        f"blocked_notice_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE {where}"
     ), params)

@@ -54,7 +54,9 @@ async def accumulate_usage_daily(
         "model": model or "",
         **values,
     }
-    # ON CONFLICT 在 PG 与 SQLite 上语法一致，唯一键由 uq_usage_daily_key 保证
+    # ON CONFLICT 在 PG 与 SQLite 上语法一致，唯一键由 uq_usage_daily_key 保证。
+    # 时间戳用 SQL 标准的 CURRENT_TIMESTAMP：now() 只有 PG 有，安装包走 SQLite，
+    # 每次记账都会报 no such function: now（用量统计因此只丢不涨）。
     await content_repo.execute(text("""
         INSERT INTO usage_daily (
             stat_date, agent_id, user_id, model,
@@ -63,7 +65,7 @@ async def accumulate_usage_daily(
         ) VALUES (
             :stat_date, :agent_id, :user_id, :model,
             :total_tokens, :prompt_tokens, :completion_tokens,
-            :reasoning_tokens, :cached_tokens, :api_calls, now()
+            :reasoning_tokens, :cached_tokens, :api_calls, CURRENT_TIMESTAMP
         )
         ON CONFLICT (stat_date, agent_id, user_id, model) DO UPDATE SET
             total_tokens = usage_daily.total_tokens + EXCLUDED.total_tokens,
@@ -72,7 +74,7 @@ async def accumulate_usage_daily(
             reasoning_tokens = usage_daily.reasoning_tokens + EXCLUDED.reasoning_tokens,
             cached_tokens = usage_daily.cached_tokens + EXCLUDED.cached_tokens,
             api_calls = usage_daily.api_calls + EXCLUDED.api_calls,
-            updated_at = now()
+            updated_at = CURRENT_TIMESTAMP
     """), params)
 
 
@@ -1020,17 +1022,20 @@ async def get_session_token_usage(
     session_id: str,
     user_id: int,
 ) -> dict:
-    """获取指定 DM 会话的 token 消耗汇总（用于前端自费聊天显示）"""
+    """获取指定 DM 会话的 token 消耗汇总（用于前端自费聊天显示）
+
+    取 JSON 字段用 SQLAlchemy 的 JSON 下标 + as_integer()，而不是手写
+    `->>'x'::int`：后者是 PG 专有写法，安装包走 SQLite 会直接语法错。
+    两种方言都会编译成各自正确的形式（PG：CAST(col ->> 'x' AS INTEGER)，
+    SQLite：CAST(json_extract(col, '$.x') AS INTEGER)）。
+    """
+    from sqlalchemy import func, select
     from app.models.conversation_log import ConversationLog
+    total = func.coalesce(func.sum(ConversationLog.token_usage["total_tokens"].as_integer()), 0)
+    calls = func.coalesce(func.sum(ConversationLog.token_usage["api_calls"].as_integer()), 0)
     result = await content_repo.execute(
-        text("""
-            SELECT
-                COALESCE(SUM((token_usage->>'total_tokens')::int), 0) AS total_tokens,
-                COALESCE(SUM((token_usage->>'api_calls')::int), 0) AS api_calls
-            FROM ai_conversation_logs
-            WHERE session_id = :sid
-        """),
-        {"sid": session_id},
+        select(total.label("total_tokens"), calls.label("api_calls"))
+        .where(ConversationLog.session_id == session_id)
     )
     row = result.one()
     return {

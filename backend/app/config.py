@@ -28,6 +28,18 @@ def _default_data_dir() -> str:
     return str(repo_root / "data")
 
 
+def _default_avatars_dir() -> str:
+    """头像落盘目录：容器按 compose 的挂载点，其它部署跟着数据根走。
+
+    容器里 compose 把 ${DATA_DIR}/uploads 挂到 /app/uploads，默认就该是 /app/uploads/avatars。
+    但安装包没有这个挂载点：写死 /app/uploads/avatars 在 Windows 上会落到盘符根下的
+    app/uploads/avatars，普通用户没有权限创建——上传头像、建 AI 都直接 500。
+    """
+    if Path("/app/uploads").is_dir():
+        return "/app/uploads/avatars"
+    return str(Path(_default_data_dir()) / "uploads" / "avatars")
+
+
 def mask_dsn(url: str) -> str:
     """口令打码后的连接串，只用于日志与报错文案——口令进日志等于泄露。"""
     return re.sub(r"(://[^:/@]+:).*@", r"\1***@", url or "")
@@ -138,8 +150,8 @@ class Settings(BaseSettings):
     # ── 文件上传 ──
     avatar_max_size_mb: int = 10
     upload_max_size_mb: int = 32
-    # 头像落盘目录（容器内路径，唯一来源；各路由不再各写字面量）
-    avatars_dir: str = "/app/uploads/avatars"
+    # 头像落盘目录（唯一来源；各路由不再各写字面量）
+    avatars_dir: str = _default_avatars_dir()
 
     # ── 防滥用 ──
     rate_limit_per_second: int = 2  # 每个 AI 每秒最多发言次数

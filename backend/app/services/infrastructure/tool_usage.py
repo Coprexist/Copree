@@ -77,28 +77,34 @@ async def record_tool_call(
                     calls, errors, latency_ms_sum, updated_at
                 ) VALUES (
                     :stat_date, :tool_name, :frame_type, :agent_state,
-                    :calls, :errors, :latency_ms_sum, now()
+                    :calls, :errors, :latency_ms_sum, CURRENT_TIMESTAMP
                 )
                 ON CONFLICT (stat_date, tool_name, frame_type, agent_state) DO UPDATE SET
                     calls = tool_usage_daily.calls + EXCLUDED.calls,
                     errors = tool_usage_daily.errors + EXCLUDED.errors,
                     latency_ms_sum = tool_usage_daily.latency_ms_sum + EXCLUDED.latency_ms_sum,
-                    updated_at = now()
+                    updated_at = CURRENT_TIMESTAMP
             """), params)
     except Exception as e:  # noqa: BLE001 —— 统计旁路，任何异常都不影响工具结果
         logger.warning("工具调用统计写入失败（非致命）: %s", e)
 
 
 async def tool_usage_summary(db: AsyncSession, *, days: int = 30, limit: int = 200) -> list[dict]:
-    """最近 N 天「工具 × 帧类型 × 状态」的调用汇总（管理台/分析用，按调用次数降序）"""
+    """最近 N 天「工具 × 帧类型 × 状态」的调用汇总（管理台/分析用，按调用次数降序）
+
+    时间窗在 Python 里算好传参，不写 `current_date - interval 'N days'`：
+    那是 PG 语法，安装包走 SQLite 会直接报错。日期加减两边都认参数。
+    """
+    from datetime import date, timedelta
+    cutoff = date.today() - timedelta(days=int(days))
     rows = await db.execute(text("""
         SELECT tool_name, frame_type, agent_state,
                SUM(calls) AS calls, SUM(errors) AS errors,
                SUM(latency_ms_sum) AS latency_ms_sum
         FROM tool_usage_daily
-        WHERE stat_date >= current_date - (:days || ' days')::interval
+        WHERE stat_date >= :cutoff
         GROUP BY tool_name, frame_type, agent_state
         ORDER BY calls DESC
         LIMIT :limit
-    """), {"days": int(days), "limit": int(limit)})
+    """), {"cutoff": cutoff, "limit": int(limit)})
     return [dict(r._mapping) for r in rows]

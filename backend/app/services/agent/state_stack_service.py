@@ -116,7 +116,7 @@ async def _write_chain_ends(db: AsyncSession, agent_id: int, chain: dict) -> Non
              "VALUES (:aid, :head, :tail, :max) "
              # updated_at 要自己写：这里走裸 SQL，模型的 onupdate 不会触发
              "ON CONFLICT (agent_id) DO UPDATE "
-             "SET head_id = :head, tail_id = :tail, max_active = :max, updated_at = now()"),
+             "SET head_id = :head, tail_id = :tail, max_active = :max, updated_at = CURRENT_TIMESTAMP"),
         {"aid": agent_id, "head": chain["head"], "tail": chain["tail"], "max": chain["max_active"]},
     )
 

@@ -6,12 +6,14 @@
 找不到时的说法会各写一套。这里只保留一份：路径解析、目录提取、关键词命中。
 
 路径不写死：容器里 docs 是单独只读挂载的（/app/docs），本地从源码跑则在 backend 同级的
-../docs。找不到时返回明确的位置清单，方便部署侧判断是没挂载还是挂错。
+../docs，安装包（PyInstaller）里 docs 作为数据文件跟程序放在一起。找不到时返回明确的
+位置清单，方便部署侧判断是没挂载还是挂错。
 """
 from __future__ import annotations
 
 import os
 import re
+import sys
 from pathlib import Path
 
 # 允许 AI 读的文档：id 是稳定键（工具参数用它，改标题不动 id），path 相对 docs 根
@@ -48,10 +50,21 @@ def candidates() -> list[Path]:
     env = os.environ.get("COPREE_DOCS_DIR", "").strip()
     if env:
         cands.append(Path(env))
+    # 打包版（PyInstaller onedir）：docs 作为 datas 落在 _MEIPASS 里；
+    # 有的安装器会把数据放到可执行文件旁边，两个位置都认。
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        cands.append(Path(meipass) / "docs")
+    if getattr(sys, "frozen", False):
+        cands.append(Path(sys.executable).resolve().parent / "docs")
     cands.append(Path("/app/docs"))       # 容器：docker-compose 把 ./docs 只读挂到这里
     cands.append(Path("/copree/docs"))    # 老部署约定的位置，留着以免挂载方式不同
     # 源码运行：backend/app/services/docs/library.py → 上溯四级就是仓库根
-    cands.append(Path(__file__).resolve().parents[4] / "docs")
+    # （打包后这个位置没有意义，留着只是让源码部署少一个分支）
+    try:
+        cands.append(Path(__file__).resolve().parents[4] / "docs")
+    except IndexError:
+        pass
     return cands
 
 
@@ -151,7 +164,7 @@ def read(doc_id: str = "manual", keyword: str = "") -> dict:
     root = resolve_root()
     if root is None:
         looked = "、".join(str(c) for c in candidates())
-        return {"ok": False, "error": f"文档目录没找到，找过：{looked}；检查 docker-compose 是否把 ./docs 挂进容器"}
+        return {"ok": False, "error": f"文档目录没找到，找过：{looked}；容器部署检查 docker-compose 是否把 ./docs 挂进 /app/docs，安装包部署确认安装目录里带 docs"}
 
     path = root / spec["path"]
     if not path.is_file():

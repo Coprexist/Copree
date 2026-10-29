@@ -214,7 +214,8 @@ async def ops_overview(
               WHERE created_at >= :since AND log_type = 'login_failed'
                 AND COALESCE(details->>'kind', 'fail') = 'fail'
                 AND details->>'login_id' IS NOT NULL
-              GROUP BY 2
+              -- 写列名而不是序号：SQLite 把 GROUP BY 2 当常量 2，聚合会静默出错
+              GROUP BY details->>'login_id'
             ) s WHERE failures >= :min ORDER BY failures DESC
         """), {"since": since, "min": OPS_SUSPECT_MIN})).all()
     ]

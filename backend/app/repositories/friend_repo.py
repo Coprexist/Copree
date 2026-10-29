@@ -124,10 +124,13 @@ class SQLAlchemyFriendRepository:
         用 ON CONFLICT DO NOTHING 而不是"先查再插"：唯一约束本来就由数据库守着，
         让插入自己可重复比在应用层补一次 SELECT 更短，也没有查与插之间那个窗口。
         """
+        # 冲突目标写成列列表，不写约束名：SQLite 没有具名约束，写成
+        # constraint="uq_friendship" 会被渲染成 ON CONFLICT (uq_friendship)，
+        # SQLite 把括号里的东西当列名解析，直接报 no such column。列列表两边都认。
         await self.session.execute(
             pg_insert(Friendship)
             .values(user_id=user_id, friend_type=friend_type, friend_id=friend_id)
-            .on_conflict_do_nothing(constraint="uq_friendship")
+            .on_conflict_do_nothing(index_elements=["user_id", "friend_type", "friend_id"])
         )
 
     async def delete_friendship(self, friendship: Friendship) -> None:
