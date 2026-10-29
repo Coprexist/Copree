@@ -3,10 +3,12 @@
 本 CHANGELOG 遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/) 规范，
 版本号遵守 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-> **当前阶段**：v0.4.15 — 桌面版「点开对话就崩」的根因修复（打包版 /api 前缀中间件）+ 前端不再把非 JSON 当成功 + 品牌 Logo 改用矢量。
+> **当前阶段**：v0.4.16 — QQ 通道对话额度（设置长在插件里、账记在平台唯一的落账口）+ 合作者的通道权限 + AI 状态链 + 真实客户端 IP 审计。
 >
 
 ## [未发布]
+
+## [v0.4.16] - 2026-10-29
 
 ### ✨ 新增
 - **QQ 通道的对话额度**（qq-channel / qq-napcat 插件）：每个 QQ 群、每个 QQ 私聊单独记账，默认

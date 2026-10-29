@@ -15,7 +15,21 @@ from app.config import settings
 from app.services.infrastructure import update_check as uc
 
 
-def _github_payload(version: str = "v0.4.16") -> dict:
+def _next_patch(version: str | None = None) -> str:
+    """比"本站版本"高一个 patch。
+
+    上游版本不能写死成某个具体号：发版 bump app_version 时，写死的那个数就变成
+    "和本站一样"，has_update 断言随之变红——用例测的是"有新版本"这件事，不是某个号。
+    """
+    major, minor, patch = (int(x) for x in (version or settings.app_version).split(".")[:3])
+    return f"{major}.{minor}.{patch + 1}"
+
+
+LATEST = _next_patch()
+
+
+def _github_payload(version: str = "") -> dict:
+    version = version or f"v{LATEST}"
     return {
         "tag_name": version,
         "html_url": f"https://github.com/Coprexist/Copree-Releases/releases/tag/{version}",
@@ -59,9 +73,9 @@ def _fake_fetch(result, calls: list):
 def test_parse_github_release():
     release = uc.parse_release(_github_payload())
     assert release is not None
-    assert release.version == "0.4.16"          # 前缀 v 已归一化
-    assert release.tag == "v0.4.16"
-    assert release.url.endswith("/v0.4.16")
+    assert release.version == LATEST          # 前缀 v 已归一化
+    assert release.tag == f"v{LATEST}"
+    assert release.url.endswith(f"/v{LATEST}")
     assert release.published_at == "2026-10-28T10:00:00Z"
     assert "\r" not in release.notes             # CRLF 已归一化
     assert "\n\n\n" not in release.notes         # 连续空行已压缩
@@ -87,7 +101,7 @@ def test_parse_rejects_unusable_payloads():
     assert uc.parse_release({"message": "Not Found"}) is None
     assert uc.parse_release({"tag_name": "latest"}) is None      # 没有数字，认不出
     assert uc.parse_release([]) is None
-    assert uc.parse_release("0.4.16") is None
+    assert uc.parse_release(LATEST) is None
     assert uc.parse_release(None) is None
 
 
@@ -137,7 +151,7 @@ async def test_ttl_cache_avoids_second_request():
         uc.reset()
     assert len(calls) == 1
     assert first["cached"] is False and second["cached"] is True
-    assert second["latest"] == "0.4.16"
+    assert second["latest"] == LATEST
     assert second["has_update"] is True
     assert second["checked_at"].endswith("Z")
 
@@ -159,7 +173,7 @@ async def test_concurrent_misses_single_flight():
         uc._fetch = original
         uc.reset()
     assert len(calls) == 1, "并发未命中只允许打一次上游"
-    assert all(r["latest"] == "0.4.16" for r in results)
+    assert all(r["latest"] == LATEST for r in results)
 
 
 async def test_force_is_throttled_inside_the_window():
@@ -207,7 +221,7 @@ async def test_failure_keeps_last_known_release():
     finally:
         uc._fetch = original
         uc.reset()
-    assert status["latest"] == "0.4.16"
+    assert status["latest"] == LATEST
     assert status["has_update"] is True
     assert status["ok"] is True
     assert status["error"] == "unreachable"
@@ -250,15 +264,16 @@ def test_payload_download_url_only_for_desktop():
 def test_payload_flags_update_and_current():
     uc.reset()
     try:
-        with _patched_settings(app_version="0.4.15"):
-            uc._cache.release = uc.parse_release(_github_payload("v0.4.15"))
+        here = settings.app_version
+        with _patched_settings(app_version=here):
+            uc._cache.release = uc.parse_release(_github_payload(f"v{here}"))
             uc._cache.fetched_at = time.monotonic()
             same = uc._payload(cached=True)
-            assert same["has_update"] is False and same["latest"] == "0.4.15"
-            uc._cache.release = uc.parse_release(_github_payload("v0.4.16"))
+            assert same["has_update"] is False and same["latest"] == here
+            uc._cache.release = uc.parse_release(_github_payload(f"v{LATEST}"))
             newer = uc._payload(cached=True)
             assert newer["has_update"] is True
-        uc._cache.release = uc.parse_release(_github_payload("v0.4.14"))
+        uc._cache.release = uc.parse_release(_github_payload("v0.0.1"))
         uc._cache.fetched_at = time.monotonic()
         older = uc._payload(cached=True)
         assert older["has_update"] is False, "本站版本比上游 tag 新时（手动构建）不该提示升级"

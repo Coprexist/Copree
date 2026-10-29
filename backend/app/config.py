@@ -36,8 +36,8 @@ def mask_dsn(url: str) -> str:
 class Settings(BaseSettings):
     """全局应用配置 — 所有字段由 pydantic-settings 自动从环境变量读取"""
 
-    # ── 应用版本（可从环境变量 APP_VERSION 注入，默认 0.4.14）──
-    app_version: str = "0.4.15"
+    # ── 应用版本（唯一出处；可被环境变量 APP_VERSION 覆盖，默认值见右）──
+    app_version: str = "0.4.16"
     # 本实例的发行方式：source | docker | desktop。
     # 只影响「怎么升级」的引导文案（git pull / compose / 下载安装包），不影响任何功能；
     # 由 docker-compose.yml 与桌面启动器注入，见 services/infrastructure/update_check.py。
