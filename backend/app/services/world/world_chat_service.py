@@ -630,13 +630,13 @@ async def ensure_session_lifecycle(world_repo, world) -> dict:
 
     返回 {auto_newed: bool, cleaned: int}"""
     from datetime import datetime, timezone, timedelta
-    from zoneinfo import ZoneInfo
     from app.models.world import WorldChatMessage
     from sqlalchemy import delete as sa_delete
 
     # auto_new 按用户时区（display_timezone）算；retention 用 UTC（时长比较与基准无关）
     from app.config import settings as _settings
-    tz = ZoneInfo(_settings.display_timezone)
+    from app.utils.pure.timeutil import get_zoneinfo
+    tz = get_zoneinfo(_settings.display_timezone)
     local_now = datetime.now(tz)
     now_utc = datetime.now(timezone.utc)
     cfg = dict(world.config or {})
@@ -1413,9 +1413,10 @@ async def _prepare_world_chat(
             logger.warning(f"🌐 世界 #{world_id} 记忆地图注入失败（本轮降级）: {e}")
     if needs_compress:
         messages.append({"role": "system", "content": "⚠️ 上下文已接近上限，请调用 compact_context 工具压缩对话历史后再继续。"})
-    from zoneinfo import ZoneInfo
-    tz = ZoneInfo(settings.display_timezone)
-    messages.append({"role": "system", "content": f"## 当前时间\n{datetime.now(tz).strftime(f'%Y-%m-%d %H:%M {tz.key}')}\n"})
+    from app.utils.pure.timeutil import get_zoneinfo
+    tz_name = settings.display_timezone
+    tz = get_zoneinfo(tz_name)
+    messages.append({"role": "system", "content": f"## 当前时间\n{datetime.now(tz).strftime(f'%Y-%m-%d %H:%M {tz_name}')}\n"})
     # 世界时间（2026-08-13 从前缀移到这里）：每次对话 apply_time_compensation 都变，
     # 放前缀会破坏 DeepSeek 缓存；放尾部动态区不影响前缀命中
     messages.append({"role": "system", "content": f"## 世界时间\n{world.world_time.isoformat() if world.world_time else '未开始'}\n"})

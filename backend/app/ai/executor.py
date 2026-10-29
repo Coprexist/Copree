@@ -14,13 +14,13 @@ import logging
 import re
 import time
 from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from app.config import settings
 from app.database import async_session
 from app.chat import chat_api
 from app.utils.pure.history import tool_ledger_note
 from app.utils.pure.provider_config import channel_provider_info
+from app.utils.pure.timeutil import get_zoneinfo
 from app.utils.pure.tool_chain import heal_tool_chain
 
 # ── 中断消息注入：AI 忙碌时，新消息不另起 executor，注入当前循环（链路见 docs/dev/conversation_history.md §4.2）──
@@ -130,12 +130,10 @@ def interrupt_message_block(pm: dict, agent_name: str) -> dict:
         # 平台说的一句话（能力/记忆变更的提前量）：系统口吻、随轮消失，不进历史
         return {"role": "system", "content": str(pm.get("content") or "")}
 
-    from zoneinfo import ZoneInfo
-
     from app.utils.pure.prompting import format_message
 
-    tz = ZoneInfo(settings.display_timezone)
-    now_str = datetime.now(tz).strftime(f"%Y-%m-%d %H:%M {tz.key}")
+    tz_name = settings.display_timezone
+    now_str = datetime.now(get_zoneinfo(tz_name)).strftime(f"%Y-%m-%d %H:%M {tz_name}")
     msg_struct = {
         "time": now_str,
         "speaker_name": pm.get("sender_name") or "用户",
@@ -1588,7 +1586,7 @@ def _is_conversation_idle(messages: list[dict], hours: int = 12) -> bool:
     # 消息内容里的时间戳是**北京时间**（format_time_shanghai）：以前当 UTC 裸时间比，
     # 只要"上海时刻 > 当前 UTC 时刻"（东八区，一天里大半时间成立）就被判成"未来"、
     # 走年-1 兜底 → 变成去年 → 空闲判定恒真、每轮都压缩（2026-09-25 用户实测）
-    tz_cn = ZoneInfo("Asia/Shanghai")
+    tz_cn = get_zoneinfo("Asia/Shanghai")
     now = datetime.now(tz_cn)
 
     def _parse_ts(content: str):

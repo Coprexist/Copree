@@ -425,10 +425,10 @@ async def _maybe_trigger_dm_ai_reply(
 
     # ── 2026-08-09: AI↔AI 私信限额 ──
     from datetime import datetime
-    from zoneinfo import ZoneInfo
     from app.config import settings
     from app.services.social import dm_quota
-    now = datetime.now(ZoneInfo(settings.display_timezone))
+    from app.utils.pure.timeutil import get_zoneinfo
+    now = datetime.now(get_zoneinfo(settings.display_timezone))
 
     # 创建者发消息 → 重置该 AI 的 creator_chat 计数
     if sender_id == agent.owner_id:

@@ -13,9 +13,31 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import logging
+from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Any
 from zoneinfo import ZoneInfo
+
+logger = logging.getLogger(__name__)
+
+# 时区库读不到时退到的固定偏移：展示时区就是 Asia/Shanghai，中国不实行夏令时，
+# 固定 +08:00 与它在任何日期都一致，最多差一个时区名。
+_FALLBACK_OFFSET = timedelta(hours=8)
+
+
+def get_zoneinfo(name: str) -> tzinfo:
+    """按名字取时区，取不到就退到 UTC+8。
+
+    Windows 没有系统时区库，zoneinfo 只能从 tzdata 包读（见 requirements.txt 与
+    Copree.spec）；Linux/macOS 走 /usr/share/zoneinfo。安装包若漏打包 tzdata，
+    ZoneInfo(name) 会抛 ZoneInfoNotFoundError——这只是一次时间格式化，不该让整条
+    回复崩掉，所以降级并留日志，把打包问题留给发布流程去修。
+    """
+    try:
+        return ZoneInfo(name)
+    except Exception:
+        logger.warning("时区 %s 不可用（缺 tzdata？），本轮按 UTC+8 处理", name)
+        return timezone(_FALLBACK_OFFSET)
 
 
 def utc_now() -> datetime:
@@ -47,7 +69,7 @@ def local_time_fields(tz_name: str, now: datetime | None = None) -> dict[str, An
     条件里写"晚上 8 点后"必须是它眼前的钟，给 UTC 只会算错。
     时区名由调用方传入：纯函数不读配置，测试也能钉住时刻。
     """
-    local = (now or datetime.now(timezone.utc)).astimezone(ZoneInfo(tz_name))
+    local = (now or datetime.now(timezone.utc)).astimezone(get_zoneinfo(tz_name))
     return {
         "now": local.strftime("%H:%M"),
         "today": local.strftime("%Y-%m-%d"),

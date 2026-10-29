@@ -12,8 +12,12 @@ a = Analysis(
         ('backend/app', 'app'),
         ('frontend/dist', 'frontend/dist'),
         ('frontend/public/logo-transparent.ico', 'frontend/public'),
-    ] + collect_data_files('customtkinter'),
+    ] + collect_data_files('customtkinter')
+      # tzdata 只有数据文件没有模块逻辑：Windows 上没有系统时区库，
+      # zoneinfo 全靠它，漏了就是 ZoneInfoNotFoundError（私信触发回复时直接崩）
+      + collect_data_files('tzdata'),
     hiddenimports=[
+        'tzdata',
         'customtkinter',
         'customtkinter',
         'pystray',
