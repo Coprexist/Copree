@@ -127,6 +127,28 @@
   流程、失败读法与"不许做的事"见 [发版（release）](docs/dev/release.md)；agent 的执行顺序放在本地
   技能目录 `.dsh/skills/release/`（按 `.gitignore` 的约定不进版本库，公开知识只留在那份文档里）。
 
+### 🐞 修复（2026-10-30 重打包）
+
+- **通道对话额度从来没记上账**：`save_conversation_log` 的第一参数有的调用方传仓库、有的传裸
+  `AsyncSession`，两者只差 `.session`，而额度那段要用它开 SAVEPOINT——于是每轮都炸在
+  「累加通道对话用量失败 (agent=1): 'AsyncSession' object has no attribute 'session'」，
+  还被外层 `try/except` 咽成一行日志：额度永远停在 0、也就永远不拦。现在服务入口统一过
+  `as_content_repo()`（唯一转换处），两种入参都合法；新增 `tests/test_channel_usage_charging.py`
+  钉住两种写法口径一致。
+- **决策技能三处收紧**：`verify` 收数组（正例 + 反例，`expect` 默认 `hit`、反例写 `miss`），
+  任何一条不符预期就拒绝落地并指明第几条；包一层的 `{"samples": [...]}` 当场拒绝（以前会静默
+  当成空样例）。命中统计写进规则 `config._stats`（首末命中时间 + 最近 20 条），列表里
+  `hit_count=0` 就是「从没触发过」。新增 `on_error`：`wake`（默认）/ `fallback_reply`（代发
+  `error_reply`）/ `silent`（不唤醒也不代发，但**必须写账本**——不叫醒 ≠ 不知道）。
+- **文件预览里的 HTML「点不动」**：预览 iframe 是不透明源（`sandbox` 只给 `allow-scripts`），
+  页面脚本一碰 `localStorage`/`sessionStorage` 就抛 `SecurityError`，入口脚本中断，后面的点击
+  监听根本没挂上；同一个文件下载到本地（有真源）却正常。现在在文档最前面注入内存版存储替身，
+  沙箱补 `allow-forms`/`allow-modals`，`allow-same-origin` 仍然不给（给了页面就能读本站 token）。
+- **图标发糊**：小档（16/20/24/32/40/48）改成逐档生成并分档锐化（主图的双环描边在这个尺寸下只有
+  1~2px，直接 LANCZOS 会糊成灰边），ICO 不再只留一份主图由 Pillow 现缩；安装器装完调
+  `SHChangeNotify` 让资源管理器重读图标，控制面板里的版本号改用 tag 注入的 `${VER3}`
+  （原来写死 0.3.14）。
+
 ## [v0.4.15] - 2026-10-27
 
 ### ✨ 新增
