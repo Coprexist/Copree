@@ -452,7 +452,8 @@ const ChatSidebar = memo(function ChatSidebar({
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto py-1">
+      {/* pb-nav：会话列表自己滚动，底部要给悬浮导航留出余量（见 index.css） */}
+      <div className="flex-1 overflow-y-auto py-1 pb-nav">
         {/* ── 置顶区 ── */}
         {pinnedItems.length > 0 && (
           <>

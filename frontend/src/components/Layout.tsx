@@ -8,7 +8,7 @@ import { useDesktopNotification } from '../hooks/useDesktopNotification'
 import { useNotificationSocket } from '../hooks/useNotificationSocket'
 import NotificationToasts from './NotificationToasts'
 import { Wrench, X } from 'lucide-react'
-import { isChatDetailPath, scrollsInMain } from '../utils/pageRegistry'
+import { showsBottomNav, scrollsInMain } from '../utils/pageRegistry'
 import { loadFromStorage, apply } from '../utils/cssFilters'
 import { isEmbedded } from '../embed/bridge'
 import { useAuth } from '../context/AuthContext'
@@ -146,11 +146,9 @@ export default function Layout() {
   // 站内弹窗：常驻通知连接收群/私聊消息、审批结果与系统通知（与系统通知分工：后台归系统通知）
   const notifications = useNotificationSocket()
 
-  // 聊天详情页（群聊/私信）/ 沉浸界面（世界视界）隐藏底部导航栏。
-  // 会话路由归 pageRegistry 管，判定也从那里取，别再在本文件写一份正则。
-  const hideNav = isChatDetailPath(location.pathname)
-                   || /^\/dm\/[^/]+/.test(location.pathname)   // 旧地址，DMPage 会转成 /chat/dm/...
-                   || /^\/world-view\//.test(location.pathname)
+  // 悬浮底部导航是否出现：判定在 pageRegistry（聊天详情、世界视界、DSH 插件对话页、
+  // 控制台、创建向导这些页面底部自带输入框/操作条/导航，胶囊压上去挡的就是它们）
+  const hideNav = !showsBottomNav(location.pathname)
 
   // 沉浸界面（世界视界）：隐藏侧边栏，全屏沉浸
   const isWorldView = /^\/world-view\//.test(location.pathname)

@@ -1270,8 +1270,10 @@ export default function SettingsPage() {
     </div>
   )
 
+  // 手机端底部是悬浮胶囊导航：sticky 贴 scrollport 底边会被它压住，所以上移一个导航高度
+  // （--mobile-nav-reserved 是唯一出处，见 index.css）；桌面端没有导航，照旧贴底。
   const renderSaveFooter = () => (
-    <div className="sticky bottom-0 z-10 bg-gradient-to-t from-canvas via-canvas/95 to-transparent pt-6 pb-2 px-3 md:px-6">
+    <div className="sticky bottom-[var(--mobile-nav-reserved)] md:bottom-0 z-10 bg-gradient-to-t from-canvas via-canvas/95 to-transparent pt-6 pb-2 px-3 md:px-6">
       {saveNotice && (
         <div className={`text-sm px-3 py-2 rounded-card mb-3 ${NOTICE_BOX_CLASS[saveNotice.tone]}`}>
           {saveNotice.text}
@@ -1314,7 +1316,7 @@ export default function SettingsPage() {
 
       {/* ── 移动端：分类导航列表 ── */}
       {mobileView === 'list' && (
-        <div className="md:hidden flex-1 overflow-y-auto p-4 pb-[var(--safe-bottom)] bg-canvas space-y-4">
+        <div className="md:hidden flex-1 overflow-y-auto p-4 pb-nav bg-canvas space-y-4">
           {user?.role === 'admin' && (
             <button
               onClick={() => navigate('/admin')}

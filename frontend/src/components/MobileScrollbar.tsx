@@ -118,7 +118,7 @@ export default function MobileScrollbar() {
   return (
     <div
       aria-hidden="true"
-      className="md:hidden pointer-events-none fixed right-[3px] z-overlay w-[3px] rounded-full bg-primary-500/20 transition-opacity duration-300"
+      className="md:hidden pointer-events-none fixed right-[2px] z-overlay w-[4px] rounded-full bg-primary-500/20 transition-opacity duration-300"
       style={{ top: track.top, height: track.height, opacity: scrolling ? 1 : 0.55 }}
     >
       <div

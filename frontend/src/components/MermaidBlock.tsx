@@ -30,17 +30,33 @@ function svgFromHtml(html: string): string | null {
   return svgs ? svgs[svgs.length - 1] : null
 }
 
+/** 从根 svg 的 width 属性或 style 里的 max-width 取出 mermaid 算出的自然宽度 */
+function naturalWidthOf(tag: string): number {
+  const m = tag.match(/max-width:\s*([\d.]+)px/i) || tag.match(/\swidth="([\d.]+)(?:px)?"/i)
+  const width = m ? Number(m[1]) : NaN
+  return Number.isFinite(width) && width > 0 ? width : NaN
+}
+
 /**
- * 去掉根 svg 上的固定尺寸（width / height / style 里的 max-width）。
- * mermaid 会按图表内容算出一小块尺寸写进属性，小图就被钉死成一丁点大，
- * 同一页里几张图因此大小不一；尺寸交给容器的 CSS 决定。
+ * 清掉根 svg 上的固定尺寸，只把自然宽度留成 max-width。
+ *
+ * mermaid 会按内容算好画布尺寸写进根 svg：width / height 属性 + style 里的 max-width。
+ * width / height 属性必须去掉，否则图被钉死在内容高度上，宽度也没法跟着容器走。
+ * 但宽度上限不能一起丢掉：容器 CSS 按 width:100% 铺开，没有上限的话，
+ * 一张自然宽度 198px 的窄图会被拉到 780px，SVG 是等比缩放的，
+ * 框里的字跟着放大四倍——手册页那张「注册账号」流程图高 2900px 就是这么来的。
+ *
  * 顺手注入 CSS 防止 CJK 字符被 foreignObject 裁剪（见 mermaid#4950、#7359）。
  */
 function normalizeSvgSize(svg: string): string {
+  const rootTag = svg.match(/<svg\b[^>]*>/i)?.[0] ?? ''
+  const naturalWidth = naturalWidthOf(rootTag)
+  const cap = Number.isFinite(naturalWidth) ? ` max-width:${naturalWidth}px` : ''
   const cleaned = svg.replace(/<svg\b[^>]*>/i, (tag) => tag
     .replace(/\s+width="[^"]*"/i, '')
     .replace(/\s+height="[^"]*"/i, '')
-    .replace(/\s+style="[^"]*"/i, ''))
+    .replace(/\s+style="[^"]*"/i, '')
+    .replace(/>$/, cap ? ` style="${cap.trim()}"` + '>' : '>'))
   const styleTag = '<style>foreignObject{overflow:visible!important}</style>'
   return cleaned.includes(styleTag) ? cleaned : cleaned.replace('</svg>', styleTag + '</svg>')
 }

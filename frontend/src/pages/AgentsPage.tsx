@@ -129,8 +129,8 @@ export default function AgentsPage() {
         </Button>
       </PageHeader>
 
-      {/* 内容 */}
-      <div className="flex-1 overflow-y-auto">
+      {/* 内容 —— pb-nav：底部给悬浮导航留余量（见 index.css） */}
+      <div className="flex-1 overflow-y-auto pb-nav">
         <div className="p-4 md:p-6">
         <div className="max-w-4xl mx-auto">
 

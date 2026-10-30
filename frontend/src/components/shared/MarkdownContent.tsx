@@ -2,6 +2,7 @@
  * 共享 Markdown 渲染器 — 消息气泡 / 群视界设计页对话 共用（单一实现，勿各自手写）。
  * 从 MessageBubble 抽出：GFM + 数学公式 + 换行 + 代码高亮 + 彩色文字标签 + XSS 过滤。
  */
+import { memo } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
@@ -47,7 +48,7 @@ function colorize(content: string, darkBubble: boolean) {
     .replace(/\\\(([\s\S]*?)\\\)/g, '$$$1$$')
 }
 
-export default function MarkdownContent({ content, isMine = false }: { content: string; isMine?: boolean }) {
+function MarkdownContent({ content, isMine = false }: { content: string; isMine?: boolean }) {
   // 表情渲染收口于此：正文是字符或 :id: 短码，装了插件才把短码画成图
   const packs = useEmojiPacks()
   const darkBubble = useBubbleDark(isMine)
@@ -80,3 +81,10 @@ export default function MarkdownContent({ content, isMine = false }: { content: 
     />
   )
 }
+
+/**
+ * memo 出口：Markdown 是全站最贵的渲染（remark/rehype 每次都要重新解析一遍）。
+ * 没有它，页面上任何一个与消息无关的状态变化（最典型：输入框每按一个键）
+ * 都会把整页所有气泡重新解析一遍——表现就是输入框"按不动"。
+ */
+export default memo(MarkdownContent)

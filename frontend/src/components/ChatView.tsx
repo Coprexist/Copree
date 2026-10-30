@@ -1196,7 +1196,7 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
         <DropMask {...attachments.dropState('list')} label={t('chat:dropToAdd')} />
         <div
           ref={containerRef}
-          className="absolute inset-0 overflow-y-auto px-4 py-4 bg-canvas"
+          className="absolute inset-0 overflow-y-auto px-2 py-3 md:px-4 md:py-4 bg-canvas"
         >
           {/* 顶部哨兵（加载更旧消息的触发器） */}
           <div ref={topSentinelRef} className="h-1" />

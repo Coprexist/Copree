@@ -13,6 +13,7 @@
 import type { RouteObject } from 'react-router-dom'
 import { Navigate } from 'react-router-dom'
 import { lazy, type ComponentType, type ReactNode } from 'react'
+import { isEmbedded } from '../embed/bridge'
 import LoginPage from '../pages/LoginPage'
 // ChatPage 首屏常用，保持急加载
 import ChatPage from '../pages/ChatPage'
@@ -86,6 +87,24 @@ export function getPublicRoutes(): RouteObject[] {
  */
 export function isChatDetailPath(pathname: string): boolean {
   return /^\/chat\/(?:gm|dm)\/[^/]+/.test(pathname)
+}
+
+/**
+ * 是否渲染悬浮底部导航（false 的页面不渲染，也不留它的余量）。
+ *
+ * 判据只有两条：底部要输入文字的地方（胶囊会挡住输入框），以及整屏沉浸的画面。
+ * 其余页面——设置、列表、群视界、我的——留不留都行，一律保留：底部导航是站内
+ * 唯一的全局入口，能留就留着。
+ * 判定和路由一样放本文件，新增这类页面时改这里一处，Layout 只负责调用。
+ */
+export function showsBottomNav(pathname: string): boolean {
+  if (isEmbedded()) return false                     // ?embed=1：宿主页面自己管导航
+  if (isChatDetailPath(pathname)) return false       // 群聊/私信：底部是输入框
+  if (/^\/dm\/[^/]+/.test(pathname)) return false       // 旧地址，DMPage 会转成 /chat/dm/...
+  if (/^\/dsh(\/|$)/.test(pathname)) return false        // DSH 插件对话页：底部同样是输入框
+  if (/^\/world-view(\/|$)/.test(pathname)) return false // 世界沉浸：整页是画面，主要目的是沉浸
+  if (/^\/agents\/create(\/|$)/.test(pathname)) return false // 创建向导：底部是输入框 + 「直接创建」主按钮
+  return true
 }
 
 /**

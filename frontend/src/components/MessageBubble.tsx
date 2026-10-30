@@ -212,7 +212,7 @@ const MessageBubble = memo(function MessageBubble({
     <div id={messageId ? `msg-${messageId}` : undefined} className={`flex ${gap} ${mb} msg-enter group ${isMine ? 'flex-row-reverse' : ''}`}>
       <div className="relative shrink-0">
         {!isMine && (thinking || isTyping) && (
-          <div className="absolute -inset-px w-10 h-10 rounded-full ai-pulse-active" />
+          <div className="absolute -inset-0.5 rounded-full ai-pulse-active" />
         )}
         {hasAvatar ? (
           <div
@@ -257,7 +257,7 @@ const MessageBubble = memo(function MessageBubble({
           {/* 背景层：只上色/圆角/边框/阴影，不含图片 → 天然被魔视界选中旋转；尺寸由外层决定 */}
           <div data-mv-force className={`absolute inset-0 ${bubbleBg}`} aria-hidden="true" />
           {/* 内容层：文字/图片/布局，不参与旋转（图片保持清晰） */}
-          <div className={`bubble-content relative px-4 py-2.5 text-sm leading-relaxed break-words ${bubbleText} ${layoutCls}`} style={tableVars}>
+          <div className={`bubble-content relative px-2.5 py-2 md:px-4 md:py-2.5 text-sm leading-relaxed break-words ${bubbleText} ${layoutCls}`} style={tableVars}>
           {replyTo != null && (
             <div className={`flex items-start gap-1.5 mb-1.5 pb-1.5 border-b ${isMine ? 'border-white/20' : 'border-border'} cursor-pointer hover:opacity-80 transition-opacity`}
               onClick={() => {

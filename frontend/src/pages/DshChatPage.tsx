@@ -9,9 +9,9 @@
  * 与群视界对话的差别只在数据源：那边是 useWorldChat 的 WS 流，这边是 DSH 桥接的 SSE 帧；
  * 所以本页**不解释也不保存**会话内容，只把帧铺开。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowLeft, ArrowDown, Bot, Brain, CheckCircle2, Circle, ImagePlus, Info, MessageSquare, Plus, RefreshCw, Send, Square, Terminal, XCircle } from 'lucide-react'
+import { ArrowLeft, ArrowDown, Bot, Brain, CheckCircle2, ChevronDown, Circle, ImagePlus, Info, MessageSquare, Plus, RefreshCw, Send, Square, Terminal, XCircle } from 'lucide-react'
 import { api, fileDownloadUrl, getApiBaseUrl } from '../api/client'
 import { useT } from '../i18n/I18nContext'
 import { DropMask, AttachmentChips } from '../components/AttachmentChips'
@@ -49,11 +49,33 @@ interface SessionItem {
 /** 已交给 DSH、但还没在会话里回显的一条消息（先给气泡，避免用户以为没发出去而再按一次） */
 interface OutboxItem { id: number; text: string }
 
+/**
+ * 一条命令的本地回执。
+ * 命令不进模型、也不会作为消息回显，所以它**没有**"等回显"这个阶段：
+ * POST 的返回就是它的结论，气泡一出现就已经结算（running 只是请求还没回来）。
+ */
+interface CommandReceipt { id: number; text: string; state: 'running' | 'ok' | 'error'; detail: string }
+
 /** DSH 侧注册的一条斜杠命令（名字不带 /；hint 非空表示要自由输入） */
 interface DshCommand { name: string; description: string; hint: string }
 
 /** 命令写法：/名字 + 可选参数（与 DSH 的 parseCommand 同口径——名字是字母开头的标识符） */
 const COMMAND_LINE = /^\/[A-Za-z][A-Za-z0-9_-]*(\s|$)/
+
+/**
+ * 忙时的发送行为（与 DSH 本体同一套策略，见 dsh-client-ui-conversation 的 resolveSubmitMode）：
+ * Enter / 发送按钮用选中的那种，Ctrl(Cmd)+Enter 用另一种。
+ * 两者都只是"把这条消息交出去"，区别只在 DSH 收到它的时机——
+ *   queue：排在当前这一轮之后当下一轮（DSH 的默认）
+ *   steer：插到最近的步骤边界，正在跑的 AI 当场读到
+ * 空闲时没有区别：都是开新一轮。
+ */
+const BUSY_SEND_KEY = 'copree.dsh.busySend'
+type BusySend = 'queue' | 'steer'
+
+function readBusySend(): BusySend {
+  try { return localStorage.getItem(BUSY_SEND_KEY) === 'steer' ? 'steer' : 'queue' } catch { return 'queue' }
+}
 
 interface Line {
   id: number
@@ -105,6 +127,33 @@ const KIND_LABEL_KEYS: Record<string, string> = {
   other: 'tool:dsh.kind.other',
   // 思考不是工具分类，但阶段标题与它共用同一张表
   __think: 'tool:dsh.kind.think',
+}
+
+/**
+ * 「工具只声明了卡片、没声明分类」时按卡片补一个分类。
+ * DSH 的 fs / bash 工具就是这么声明的：presentCall 给 card + title，不给 kind
+ * （见 dsh-tool-fs 的 write/edit）。卡片是工具自己说的"这次产生了什么"——
+ * diff 改了文件、terminal 跑了命令——照它补分类是读声明，不是猜名字。
+ */
+const KIND_BY_CARD: Record<string, string> = { diff: 'edit', terminal: 'execute' }
+
+/** 归一化分类：真分类优先；只有 other/空 时才看卡片 */
+function normalizeKind(kind: string, card: string): string {
+  const declared = (kind || '').trim()
+  if (declared && declared !== 'other') return declared
+  return KIND_BY_CARD[(card || '').trim()] || declared || 'other'
+}
+
+/**
+ * 卡片标签：只认 DSH 声明的中立分类（kind），不按工具名特判。
+ * 拿不到分类（旧插件）就把工具名原样显示——猜一个中文名反而会误导。
+ * 放在模块层是因为工具行也是 memo 组件：它得自己算标签，不能靠父组件现做一个回调。
+ */
+function kindLabel(t: ReturnType<typeof useT>, value?: string): string {
+  const key = (value || '').trim()
+  const labelKey = key ? KIND_LABEL_KEYS[key] : undefined
+  if (labelKey) return t(labelKey)
+  return key || t('tool:dsh.kind.other')
 }
 
 /**
@@ -248,7 +297,7 @@ function reduce(lines: Line[], frame: any, nextId: () => number): Line[] {
       const args = String(frame.args || '')
       // 卡片来自工具自己的声明（card/kind/title/detail）；只有旧插件才退回本地摘要
       const declared = typeof frame.card === 'string' && typeof frame.title === 'string'
-      const kind = declared ? String(frame.kind || 'other') : ''
+      const kind = declared ? normalizeKind(String(frame.kind || ''), String(frame.card)) : ''
       const summary = declared ? String(frame.title || '') : toolSummary(args)
       const line: Line = {
         id: nextId(), role: 'tool', name, text: summary,
@@ -273,6 +322,122 @@ function reduce(lines: Line[], frame: any, nextId: () => number): Line[] {
       return lines
   }
 }
+
+/**
+ * 思考块：默认三行，点开看全文。
+ * 之前是死截断 + title 悬停——悬停既看不全也看不方便，与群视界对话的手感也不一致。
+ */
+const ThinkBlock = memo(function ThinkBlock({ line }: { line: Line }) {
+  const t = useT()
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="min-w-0">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        title={t(open ? 'tool:dsh.think.collapse' : 'tool:dsh.think.expand')}
+        className="flex w-full items-start gap-1.5 text-left rounded hover:bg-elevated/30 transition-colors"
+      >
+        <Brain size={11} className="shrink-0 mt-1 text-textMuted/70" />
+        <div className={`flex-1 min-w-0 text-3xs text-textMuted whitespace-pre-wrap break-words ${open ? 'max-h-64 overflow-y-auto' : 'line-clamp-3'}`}>{line.text}</div>
+        <ChevronDown size={11} className={`shrink-0 mt-1 text-textMuted/70 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+    </div>
+  )
+})
+
+/**
+ * 用户气泡与 AI 气泡各自 memo：
+ * 输入框的每一次按键都会让页面这一层重渲染，消息体不该跟着重画——
+ * 尤其 AI 气泡里的 Markdown 与工具卡片，重画一次就是一次完整解析。
+ */
+const UserBubble = memo(function UserBubble({ line }: { line: Line }) {
+  const t = useT()
+  return (
+    <div className="flex justify-end">
+      <div className="world-msg max-w-[90%] min-w-0 rounded-control px-3 py-2 text-sm bg-primary-500/20 text-textPrimary">
+        <div className="text-3xs text-textMuted mb-0.5">{t('tool:dsh.msg.me')}</div>
+        {!!line.images?.length && (
+          <div className="flex flex-wrap gap-1.5 mb-1">
+            {line.images.map((img) => {
+              const url = fileDownloadUrl(img.file_id)
+              return (
+                <a key={img.file_id} href={url} target="_blank" rel="noreferrer" title={img.name}>
+                  <img src={url} alt={img.name} className={`max-h-40 max-w-full rounded border border-border/60 ${attachmentImageSizing(img)}`} />
+                </a>
+              )
+            })}
+          </div>
+        )}
+        <span className="whitespace-pre-wrap break-words">{stripImageMarkers(line.text)}</span>
+      </div>
+    </div>
+  )
+})
+
+const AiBubble = memo(function AiBubble({ line }: { line: Line }) {
+  const t = useT()
+  return (
+    <div className="flex justify-start">
+      <div className="world-msg max-w-[90%] min-w-0 rounded-control px-3 py-2 text-sm bg-elevated/80 text-textSecondary">
+        <div className="text-3xs text-textMuted mb-0.5">{t('tool:dsh.msg.ai')}</div>
+        {line.text
+          ? <MarkdownContent content={line.text} />
+          : <span className="italic opacity-50">{t('tool:dsh.msg.thinking')}</span>}
+      </div>
+    </div>
+  )
+})
+
+/** 工具行：与气泡同一套 memo——一百多次工具调用在一条会话里很常见，按键时不该重画它们 */
+const ToolRow = memo(function ToolRow({ line }: { line: Line }) {
+  const t = useT()
+  return (
+    <div className="space-y-0.5">
+      <ToolBubble
+        name={kindLabel(t, line.kind || line.name)}
+        label={line.title || line.text || ''}
+        detail={line.detail}
+        running={line.running}
+        error={line.ok === false}
+        icon={toolIcon((line.kind || line.name || '') + ' ' + (line.text || ''))}
+      />
+      {/* 完成态卡片铺开的多行：PTC 下 run_code 的子操作（编辑/读取/命令）就在这里 */}
+      {!!line.lines?.length && (
+        <div className="pl-5 space-y-0.5">
+          {line.lines.map((text, li) => (
+            <div key={li} className="text-3xs text-textMuted truncate" title={text}>{text}</div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+})
+
+/**
+ * 本地气泡：自己这边产生、不进会话的两类东西——「已发出、等回显」的消息与命令回执。
+ * 骨架一模一样，只差语气（等待 / 执行中 / 成功 / 失败），所以合成一处，别再各写一副。
+ */
+const LocalNote = memo(function LocalNote({ label, text, tone, detail }: {
+  label: string; text: string; tone: 'pending' | 'running' | 'ok' | 'error'; detail?: string
+}) {
+  const skin = tone === 'error'
+    ? 'bg-rose-500/10 text-textPrimary/90 border-rose-400/40'
+    : tone === 'ok' ? 'bg-primary-500/20 text-textPrimary border-primary-400/30'
+      : 'bg-primary-500/10 text-textPrimary/80 border-dashed border-primary-400/30'
+  return (
+    <div className="flex justify-end">
+      <div className={`world-msg max-w-[90%] min-w-0 rounded-control px-3 py-2 text-sm border ${skin}`}>
+        <div className="text-3xs text-textMuted mb-0.5">{label}</div>
+        <span className="whitespace-pre-wrap break-words">{text}</span>
+        {!!detail && (
+          <div className={`mt-1 whitespace-pre-wrap break-words text-3xs ${tone === 'error' ? 'text-rose-400' : 'text-textSecondary'}`}>{detail}</div>
+        )}
+      </div>
+    </div>
+  )
+})
 
 /** 相对时间：一眼看出哪条是刚聊过的（会话标题普遍为空，时间比标题好认） */
 function useAgoLabel() {
@@ -304,6 +469,13 @@ export default function DshChatPage() {
   const [lines, setLines] = useState<Line[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
+  /**
+   * 忙时要「排队」还是「插队」：由用户在输入框上选，记在本地。
+   * 以前是"忙就一律 steer"——想等这一轮跑完再发就没别的路了。
+   */
+  const [busySend, setBusySend] = useState<BusySend>(readBusySend)
+  /** 这一页进来时这一轮是否已经在跑：流只会告诉你"结束了"，不会告诉你"进来时就在跑" */
+  const busySeeded = useRef('')
   const [error, setError] = useState('')
   /** 快照是否已到：用来把「正在载入」与「这条会话确实没内容」分开 */
   const [phase, setPhase] = useState<'idle' | 'loading' | 'ready'>('idle')
@@ -311,20 +483,29 @@ export default function DshChatPage() {
   const [asks, setAsks] = useState<AskPrompt[]>([])
   /** 已发出、等回显的气泡：没有它，用户点完发送看不到任何动静，就会再按一次（实测就是这么出现重复消息的） */
   const [outbox, setOutbox] = useState<OutboxItem[]>([])
+  /** 命令回执：与 outbox 分开——那条列表的出口是"会话回显"，命令永远等不到，混进去就成了一条挂在页面上的幽灵气泡 */
+  const [receipts, setReceipts] = useState<CommandReceipt[]>([])
   /** 一句解释性提示（例如"这条已经在会话里了，跳过"）：只说明情况，不当错误 */
   const [notice, setNotice] = useState('')
   /** DSH 侧注册的斜杠命令：命令在 DSH 本体执行、不进模型（见后端 /admin/dsh/command） */
   const [commands, setCommands] = useState<DshCommand[]>([])
   const [cmdOpen, setCmdOpen] = useState(false)
-  /** 命令服务不可用（插件版本旧 / 桥接离线）：菜单里要说清是"取不到"，不能谎报"没有命令" */
-  const [cmdUnavailable, setCmdUnavailable] = useState(false)
+  /**
+   * 取不到命令的原因（桥接/插件原话）：菜单里要如实说。
+   * 501 才是"DSH 没提供命令服务"（插件旧 / 未重启），404 是"这条会话不在活动列表"——
+   * 桥接已经把这几种分开了，页面一律译成"插件版本旧"就是误诊。
+   */
+  const [cmdProblem, setCmdProblem] = useState('')
   const cmdMenuRef = useRef<HTMLDivElement | null>(null)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
   const outboxSeq = useRef(1)
+  const receiptSeq = useRef(1)
   /** 最近提交过的文本：5 秒内同一条再提交一次，判为"上一次没反馈、又按了一下"，直接忽略 */
   const recentSubmits = useRef<{ text: string; at: number }[]>([])
   const nextId = useRef(1)
   const streamAbort = useRef<AbortController | null>(null)
+  /** 刷新会话列表的入口（流这边只拿到 turnEnd，列表里的 running 要单独刷一下才不会一直闪） */
+  const refreshSessions = useRef<() => void>(() => {})
   // 贴底跟随：与群视界对话**同一份实现**（阈值/多列表/断开跟随都在 useStickToBottom 里）
   const stick = useStickToBottom()
 
@@ -356,6 +537,9 @@ export default function DshChatPage() {
     }
   }, [])
 
+  // 把刷新入口交给流那一侧：一轮结束时列表里的 running 该灭了（它不会自己知道）
+  useEffect(() => { refreshSessions.current = () => { void loadSessions() } })
+
   useEffect(() => { loadStatus() }, [loadStatus])
   useEffect(() => {
     const timer = setInterval(loadStatus, 5000)
@@ -368,17 +552,19 @@ export default function DshChatPage() {
   // 命令挂在会话的 agent 上：没有会话就问不出「有哪些命令」，所以跟着会话走
   useEffect(() => {
     setCmdOpen(false)
-    if (!sessionId || status?.state !== 'online') { setCommands([]); setCmdUnavailable(false); return }
+    if (!sessionId || status?.state !== 'online') { setCommands([]); setCmdProblem(''); return }
     let cancelled = false
     // 命令挂在会话的 agent 上，而 agent 是随流被拉活的：刚切过去就取，可能还没活跃。
     // 失败后隔一拍自愈一次——这就是全部重试，不做指数退避（它只在切会话的那一瞬间可能发生）
     const load = (attempt: number) => {
       api.get<{ items: DshCommand[] }>(`/admin/dsh/commands?sessionId=${encodeURIComponent(sessionId)}`)
-        .then((data) => { if (!cancelled) { setCommands(data.items || []); setCmdUnavailable(false) } })
-        .catch(() => {
+        .then((data) => { if (!cancelled) { setCommands(data.items || []); setCmdProblem('') } })
+        .catch((e: any) => {
           if (cancelled) return
           if (attempt === 0) { setTimeout(() => load(1), 1500); return }
-          setCommands([]); setCmdUnavailable(true)
+          setCommands([])
+          const detail = String(e?.detail || e?.message || '')
+          setCmdProblem(e?.status === 501 || !detail ? t('tool:dsh.cmd.unavailable') : detail)
         })
     }
     load(0)
@@ -404,6 +590,8 @@ export default function DshChatPage() {
   useEffect(() => {
     streamAbort.current && streamAbort.current.abort()
     setOutbox([])
+    // 回执跟着会话走：换会话等于换一屏，上一屏的命令结论不该留在这里
+    setReceipts([])
     if (!sessionId) { setPhase('idle'); return }
     const controller = new AbortController()
     streamAbort.current = controller
@@ -422,6 +610,9 @@ export default function DshChatPage() {
       // 只有压根连不上才走到这里（未注册/未同意/鉴权失败）：说清原因，别留一个空白的对话页
       onError: (e: any) => setError(e && e.message ? e.message : String(e)),
       onFrame: (frame: any) => {
+        // 除了快照与"这一轮结束"，任何一帧都说明这一轮还在跑：让按钮的「排队 / 插队」
+        // 跟真实状态走，而不是等下一次 prompt 回来才更新
+        if (frame && frame.k !== 'snapshot' && frame.k !== 'turnEnd' && frame.k !== 'error') setBusy(true)
         if (frame && frame.k === 'ask') {
           // 同一个请求可能被重连补发：按 id 去重，别弹出两个一样的窗
           setAsks((prev) => prev.some((a) => a.id === frame.ask.id) ? prev : [...prev, frame.ask])
@@ -444,7 +635,7 @@ export default function DshChatPage() {
         }
         if (frame && frame.k === 'snapshot') { setPhase('ready'); setError('') }
         if (frame && frame.k === 'error') { setPhase('ready'); setError(String(frame.message || '')) }
-        if (frame && (frame.k === 'turnEnd' || frame.k === 'error')) setBusy(false)
+        if (frame && (frame.k === 'turnEnd' || frame.k === 'error')) { setBusy(false); refreshSessions.current() }
       },
     })
     return () => controller.abort()
@@ -483,19 +674,28 @@ export default function DshChatPage() {
 
   /**
    * 执行一条斜杠命令：与发消息分开——命令不进模型，由 DSH 的 commands 服务直接跑。
-   * 命令不会在会话里回显（它不是消息），所以先自己记一条气泡，否则用户看不出发生过什么。
+   * 命令不会在会话里回显（它不是消息），所以这里自己记一条**回执**：
+   * 结论（例如"已压缩 N 段历史"）就落在气泡里，而不是丢给只活 8 秒的提示——
+   * 那样飘走之后，页面就只剩一条永远等不到回显的气泡，等于什么也没说。
    */
   const runCommand = useCallback(async (line: string) => {
     if (!sessionId) { setError(t('tool:dsh.cmd.needsSession')); return }
     setCmdOpen(false)
     setError('')
-    setOutbox((prev) => [...prev, { id: outboxSeq.current++, text: line }])
+    const id = receiptSeq.current++
+    setReceipts((prev) => [...prev, { id, text: line, state: 'running', detail: '' }])
+    /** 结论只写一次：请求回来是唯一出口，异常也走这里，别让回执卡在"执行中" */
+    const settle = (state: 'ok' | 'error', detail: string) => setReceipts((prev) => {
+      const next = prev.map((item) => (item.id === id ? { ...item, state, detail } : item))
+      // 回执只回答"我刚才做了什么"：留最近一屏，别让常开的页面一直长
+      return next.length > 20 ? next.slice(next.length - 20) : next
+    })
     try {
       const res = await api.post<{ result: 'success' | 'error'; text: string }>('/admin/dsh/command', { sessionId, line })
-      if (res.result === 'error') setError(res.text || t('tool:dsh.cmd.failed'))
-      else setNotice(res.text || t('tool:dsh.cmd.done'))
+      if (res.result === 'error') settle('error', res.text || t('tool:dsh.cmd.failed'))
+      else settle('ok', res.text || t('tool:dsh.cmd.done'))
     } catch (e: any) {
-      setError(e && e.message ? e.message : String(e))
+      settle('error', e && e.message ? e.message : String(e))
     }
   }, [sessionId, t])
 
@@ -517,11 +717,11 @@ export default function DshChatPage() {
   }, [runCommand, t])
 
   /**
-   * 发送：空闲就直接发，正在跑就排进队列。
+   * 发送：命令走命令链（不进模型），消息按调用方给的时机交给 DSH（排队 / 插队，见 modeFor）。
    * 为什么不能"忙就丢掉"：丢掉时页面上看不出任何区别，用户以为发了——
-   * 结果 DSH 没收到、他却已经在等回复。排队面板让"还没发出去"这件事可见。
+   * 结果 DSH 没收到、他却已经在等回复。先记一条 outbox 气泡，让"还没回显"这件事可见。
    */
-  const submit = () => {
+  const submit = (mode?: 'steer') => {
     const text = input.trim()
     const ready = attachments.ready
     if (!text && ready.length === 0) return
@@ -536,9 +736,9 @@ export default function DshChatPage() {
     // 放过去只会让 DSH 收到两条一模一样的消息（实测出现过，用户看到后说"我没发这个"）
     if (ready.length === 0 && recentSubmits.current.some((p) => p.text === text && now - p.at < 5000)) return
     recentSubmits.current = [...recentSubmits.current.filter((p) => now - p.at < 60_000), { text, at: now }]
-    // 忙就 steer：DSH 把消息插到最近一个步骤边界，AI 当场看到；闲就正常开一轮。
-    // 客户端不再自己排队——排队要么等整轮跑完、要么在服务端再排一次，都是同一件事做两遍。
-    void sendNow(text, ready, busy ? 'steer' : undefined)
+    // 时机由调用方定（排队 / 插队，见 modeFor）：客户端不自己排队——
+    // 排队要么等整轮跑完、要么在服务端再排一次，都是同一件事做两遍。
+    void sendNow(text, ready, mode)
     setInput('')
     attachments.clear()
   }
@@ -566,19 +766,37 @@ export default function DshChatPage() {
     setBusy(false)
   }
 
+  /**
+   * 进来就对齐真实状态：会话列表里的 running 是 DSH 的投影，而流里只有 turnEnd
+   * （"结束了"），没有"进门时已经在跑"这一帧。少了这一步，正在跑的会话会被当成空闲——
+   * 按钮从「插队发送」变回「发送」，人以为它停了，再点一次就成了排队的下一轮。
+   */
+  useEffect(() => {
+    if (!sessionId || busySeeded.current === sessionId) return
+    const item = sessions.find((s) => s.sessionId === sessionId)
+    if (!item) return
+    busySeeded.current = sessionId
+    setBusy(item.running)
+  }, [sessions, sessionId])
+
+  const chooseBusySend = (next: BusySend) => {
+    setBusySend(next)
+    try { localStorage.setItem(BUSY_SEND_KEY, next) } catch { /* 隐私模式下记不住就只本次生效 */ }
+  }
+
+  /**
+   * 这一次交出去该用哪个时机：忙时按选的那种，另一个手势取反（与 DSH 的 Cmd/Ctrl+Enter 同为反选）；
+   * 空闲时 undefined = 普通 prompt，就是开新一轮。
+   */
+  const modeFor = (gesture: 'enter' | 'other'): 'steer' | undefined => {
+    if (!busy) return undefined
+    const enterIsSteer = busySend === 'steer'
+    return (gesture === 'enter' ? enterIsSteer : !enterIsSteer) ? 'steer' : undefined
+  }
+
   const current = useMemo(() => sessions.find((item) => item.sessionId === sessionId), [sessions, sessionId])
   // 一条会话一个分组序列：阶段行 + 该段的工具/思考，渲染不再逐行平铺
   const groups = useMemo(() => groupLines(lines), [lines])
-  /**
-   * 卡片标签：只认 DSH 声明的中立分类（kind），不按工具名特判。
-   * 拿不到分类（旧插件）就把工具名原样显示——猜一个中文名反而会误导。
-   */
-  const toolLabel = useCallback((value?: string) => {
-    const key = (value || '').trim()
-    const labelKey = key ? KIND_LABEL_KEYS[key] : undefined
-    if (labelKey) return t(labelKey)
-    return key || t('tool:dsh.kind.other')
-  }, [t])
   const stateIcon = status && status.state === 'online'
     ? <CheckCircle2 size={12} className="text-mint-400" />
     : status && status.state === 'unreachable'
@@ -709,79 +927,33 @@ export default function DshChatPage() {
                   {group.phase && (
                     <div className="flex items-center gap-1.5 text-2xs text-textMuted pt-1 min-w-0">
                       {group.phase.name === '__think' ? <Brain size={11} /> : <Terminal size={11} />}
-                      <span className="font-medium shrink-0">{toolLabel(group.phase.name)}</span>
+                      <span className="font-medium shrink-0">{kindLabel(t, group.phase.name)}</span>
                       {group.phase.text && <span className="truncate">{group.phase.text}</span>}
                     </div>
                   )}
                   <div className={group.phase ? 'pl-3 border-l border-border/60 space-y-1' : 'space-y-1'}>
                   {group.items.map((line) => {
-                if (line.role === 'tool') {
-                  return (
-                    <div key={line.id} className="space-y-0.5">
-                      <ToolBubble
-                        name={toolLabel(line.kind || line.name)}
-                        label={line.title || line.text || ''}
-                        detail={line.detail}
-                        running={line.running}
-                        error={line.ok === false}
-                        icon={toolIcon((line.kind || line.name || '') + ' ' + (line.text || ''))}
-                      />
-                      {/* 完成态卡片铺开的多行：PTC 下 run_code 的子操作（编辑/读取/命令）就在这里 */}
-                      {!!line.lines?.length && (
-                        <div className="pl-5 space-y-0.5">
-                          {line.lines.map((text, li) => (
-                            <div key={li} className="text-3xs text-textMuted truncate" title={text}>{text}</div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )
-                }
-                if (line.role === 'think') {
-                  return (
-                    <div key={line.id} className="text-3xs text-textMuted whitespace-pre-wrap line-clamp-3" title={line.text}>
-                      {line.text}
-                    </div>
-                  )
-                }
+                if (line.role === 'tool') return <ToolRow key={line.id} line={line} />
+                if (line.role === 'think') return <ThinkBlock key={line.id} line={line} />
                 const isUser = line.role === 'user'
-                return (
-                  <div key={line.id} className={isUser ? 'flex justify-end' : 'flex justify-start'}>
-                    <div className={`world-msg max-w-[90%] min-w-0 rounded-control px-3 py-2 text-sm ${
-                      isUser ? 'bg-primary-500/20 text-textPrimary' : 'bg-elevated/80 text-textSecondary'
-                    }`}>
-                      <div className="text-3xs text-textMuted mb-0.5">{isUser ? t('tool:dsh.msg.me') : t('tool:dsh.msg.ai')}</div>
-                      {!!line.images?.length && (
-                        <div className="flex flex-wrap gap-1.5 mb-1">
-                          {line.images.map((img) => {
-                            const url = fileDownloadUrl(img.file_id)
-                            return (
-                              <a key={img.file_id} href={url} target="_blank" rel="noreferrer" title={img.name}>
-                                <img src={url} alt={img.name} className={`max-h-40 max-w-full rounded border border-border/60 ${attachmentImageSizing(img)}`} />
-                              </a>
-                            )
-                          })}
-                        </div>
-                      )}
-                      {isUser ? (
-                        <span className="whitespace-pre-wrap break-words">{stripImageMarkers(line.text)}</span>
-                      ) : (
-                        line.text ? <MarkdownContent content={line.text} /> : <span className="italic opacity-50">{t('tool:dsh.msg.thinking')}</span>
-                      )}
-                    </div>
-                  </div>
-                )
+                return isUser
+                  ? <UserBubble key={line.id} line={line} />
+                  : <AiBubble key={line.id} line={line} />
               })}
                   </div>
                 </div>
               ))}
+              {receipts.map((item) => (
+                <LocalNote
+                  key={'receipt-' + item.id}
+                  label={t(item.state === 'running' ? 'tool:dsh.msg.cmdRunning' : 'tool:dsh.msg.cmd')}
+                  tone={item.state}
+                  text={item.text}
+                  detail={item.detail || undefined}
+                />
+              ))}
               {outbox.map((item) => (
-                <div key={'outbox-' + item.id} className="flex justify-end">
-                  <div className="world-msg max-w-[90%] min-w-0 rounded-control px-3 py-2 text-sm bg-primary-500/10 text-textPrimary/80 border border-dashed border-primary-400/30">
-                    <div className="text-3xs text-textMuted mb-0.5">{t('tool:dsh.msg.sending')}</div>
-                    <span className="whitespace-pre-wrap break-words">{item.text}</span>
-                  </div>
-                </div>
+                <LocalNote key={'outbox-' + item.id} label={t('tool:dsh.msg.sending')} tone="pending" text={item.text} />
               ))}
             </div>
             <WidthHandles varName={CONTENT_W_VAR} dragging={dragging} title={t('tool:dsh.colWidth')} {...handleProps} />
@@ -821,7 +993,10 @@ export default function DshChatPage() {
                 el.style.height = Math.min(el.scrollHeight, 240) + 'px'
               }}
               onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submit() }
+                if (event.key !== 'Enter' || event.shiftKey) return
+                event.preventDefault()
+                // Ctrl/Cmd+Enter 走"另一种"时机（与 DSH 同款反选），忙时才有意义
+                submit(modeFor(event.ctrlKey || event.metaKey ? 'other' : 'enter'))
               }}
               rows={2}
               placeholder={busy ? t('tool:dsh.input.busy') : t('tool:dsh.input')}
@@ -855,7 +1030,7 @@ export default function DshChatPage() {
                       <div className={MENU_CAPTION}>
                         {!sessionId
                           ? t('tool:dsh.cmd.needsSession')
-                          : cmdUnavailable ? t('tool:dsh.cmd.unavailable') : t('tool:dsh.cmd.empty')}
+                          : cmdProblem || t('tool:dsh.cmd.empty')}
                       </div>
                     ) : commands.map((cmd) => (
                       <MenuItem key={cmd.name} onClick={() => pickCommand(cmd)} className="flex flex-col items-start gap-0.5">
@@ -869,12 +1044,29 @@ export default function DshChatPage() {
               {busy && <span className="min-w-0 truncate text-3xs text-textMuted">{t('tool:dsh.input.busyHint')}</span>}
               <div className="flex-1" />
               {busy && <button onClick={stop} className="btn btn-sm btn-outline shrink-0"><Square size={12} /> {t('tool:dsh.stop')}</button>}
+              {/* 忙时的两种时机：选中的那种给 Enter 和发送按钮，Ctrl/Cmd+Enter 走另一种 */}
+              {busy && (
+                <div role="group" aria-label={t('tool:dsh.busySend.title')} className="shrink-0 inline-flex items-center rounded-control border border-border overflow-hidden">
+                  {(['queue', 'steer'] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => chooseBusySend(mode)}
+                      aria-pressed={busySend === mode}
+                      title={t(mode === 'queue' ? 'tool:dsh.busySend.queueHint' : 'tool:dsh.busySend.steerHint')}
+                      className={`h-7 px-2 text-3xs transition-colors ${busySend === mode ? 'bg-primary-500/20 text-textPrimary' : 'text-textMuted hover:text-textPrimary hover:bg-elevated/40'}`}
+                    >
+                      {t(mode === 'queue' ? 'tool:dsh.busySend.queue' : 'tool:dsh.busySend.steer')}
+                    </button>
+                  ))}
+                </div>
+              )}
               <button
-                onClick={submit}
+                onClick={() => submit(modeFor('enter'))}
                 disabled={!input.trim() && attachments.ready.length === 0}
                 className="shrink-0 inline-flex items-center gap-1 h-7 px-2.5 rounded-control bg-primary-500 hover:bg-primary-600 text-white text-xs font-medium transition-colors disabled:opacity-40"
               >
-                {busy ? t('tool:dsh.steer') : t('tool:dsh.send')} <Send size={12} />
+                {busy ? t(busySend === 'steer' ? 'tool:dsh.steer' : 'tool:dsh.send.queue') : t('tool:dsh.send')} <Send size={12} />
               </button>
             </div>
           </div>

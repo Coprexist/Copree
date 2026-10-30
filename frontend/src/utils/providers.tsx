@@ -5,8 +5,9 @@ export function getChatStyle(): 'cozy' | 'compact' {
 
 /** 根据聊天样式返回间距/尺寸类名 */
 export function chatStyleClasses(style: 'cozy' | 'compact') {
-  if (style === 'compact') return { gap: 'gap-2', mb: 'mb-3', avatar: 'w-7 h-7', textSize: 'text-3xs' }
-  return { gap: 'gap-3', mb: 'mb-5', avatar: 'w-9 h-9', textSize: 'text-xs' }
+  // 手机屏上横向空间更值钱：头像 32px（桌面 36px），头像与气泡/名字之间收到 8px（桌面 12px）
+  if (style === 'compact') return { gap: 'gap-1 md:gap-2', mb: 'mb-3', avatar: 'w-6 h-6 md:w-7 md:h-7', textSize: 'text-3xs' }
+  return { gap: 'gap-1.5 md:gap-3', mb: 'mb-5', avatar: 'w-8 h-8 md:w-9 md:h-9', textSize: 'text-3xs md:text-xs' }
 }
 
 /** 供应商纯数据工具（零 IO、零状态） */

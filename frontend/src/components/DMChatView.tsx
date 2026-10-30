@@ -75,8 +75,8 @@ export default function DMChatView({ sessionId, onMobileBack }: DMChatViewProps)
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      {/* 私信头部 — 与群聊头部布局对齐 */}
-      <div className="px-4 h-14 border-b border-border bg-surface flex items-center gap-2 shrink-0">
+      {/* 私信头部 — 与群聊头部布局对齐；窄屏收紧两侧留白 */}
+      <div className="px-3 md:px-4 h-14 border-b border-border bg-surface flex items-center gap-2 shrink-0">
         {/* 移动端：打开会话列表 */}
         <button
           onClick={() => navigate('/chat')}
@@ -112,14 +112,20 @@ export default function DMChatView({ sessionId, onMobileBack }: DMChatViewProps)
           )}
         </button>
 
-        {/* 对方信息 */}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
+        {/* 对方信息：手机一行（名字 + 类型标），桌面两行（名字 / 类型 · 状态 · 用量） */}
+        <div className="flex-1 min-w-0 flex items-center gap-1.5 md:block">
+          <div className="flex items-center gap-1.5 min-w-0 md:gap-2">
             <span className="font-semibold text-textPrimary text-sm truncate">
               {partner?.name || t('dm:loading')}
             </span>
+            {/* 副标题在手机上不显示，类型改成一个图标跟在名字后面 */}
+            <span className="md:hidden shrink-0 text-textMuted">
+              {partner?.type === 'system' ? <ShieldAlert size={12} className="text-rose-400" />
+                : partner?.type === 'ai' ? <Bot size={12} />
+                : <User size={12} />}
+            </span>
           </div>
-          <span className="text-3xs text-textMuted">
+          <span className="hidden md:inline text-3xs text-textMuted">
             {partner?.type === 'system' ? <><ShieldAlert size={12} className="inline text-rose-400" /> 系统通知</>
             : partner?.type === 'ai' ? <><Bot size={12} className="inline" /> {t('dm:ai')}</>
             : <><User size={12} className="inline" /> {t('dm:user')}</>}

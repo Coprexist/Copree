@@ -185,7 +185,7 @@ export default function ConsolePage() {
 
       {/* 移动端：分组列表（全部工作区平铺，和以前一模一样） */}
       {mobileView === 'list' && (
-        <div className="md:hidden flex-1 overflow-y-auto p-4 pb-[var(--safe-bottom)] bg-canvas space-y-4">
+        <div className="md:hidden flex-1 overflow-y-auto p-4 pb-nav bg-canvas space-y-4">
           {CONSOLE_WORKSPACES.map(w => (
             <div key={w.key}>
               <div className="text-xs font-semibold text-textMuted uppercase tracking-wider px-1 mb-1.5">{t(w.labelKey)}</div>
@@ -213,7 +213,7 @@ export default function ConsolePage() {
       )}
 
       {/* 移动端：详情内容区 */}
-      <div className={'md:hidden flex-1 overflow-y-auto p-4 pb-[var(--safe-bottom)] bg-canvas ' + (mobileView === 'list' ? 'hidden' : '')}>
+      <div className={'md:hidden flex-1 overflow-y-auto p-4 pb-nav bg-canvas ' + (mobileView === 'list' ? 'hidden' : '')}>
         <ContentColumn width={contentWidth}>
           <ActiveTab />
         </ContentColumn>
