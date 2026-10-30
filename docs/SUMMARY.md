@@ -83,7 +83,6 @@
 |------|---------|------|
 | [插件开发者文档入口](./plugin-dev/README.md) | 插件开发者 | 索引与阅读顺序；公共契约与平台内部设计的分界 |
 | [环境上报接口](./plugin-dev/environment-api.md) | 插件开发者 | 环境上报公共契约：一个方法、扁平返回、一条判定、`text` 覆盖渲染、五种迁移 |
-| [agent-channels.md](./agent-channels.md) | 用户 / 管理员 | 给自己的 AI 接 QQ：三种身份、配对制、归属与实例约定、接口与已知限制 |
 
 ### 四、子系统专题
 
@@ -136,8 +135,12 @@
 |------|---------|------|
 | [LLM 端点入口](./dev/llm_endpoint.md) | 开发者 | base_url 版本段拼接规则、供应商连接探针、内网地址策略 |
 | [能力懒加载](./dev/capability_lazy_loading.md) | 开发者 | skills/tools 版本化与增量变更注入（锁定/解锁 + 前缀缓存不变式） |
+| [帧、锁与重建点](./dev/frame_lifecycle.md) | 开发者 | **单一来源**：compact/clear 动什么、帧的状态机、容量闸与同会话归并 |
+| [通道对话额度](./dev/channel_token_budget.md) | 开发者 / 用户 | QQ / NapCat 每个对话的 token 额度：插件的设置、平台的账、拦截与自动回复 |
+| [状态链](./dev/state_chain.md) | 开发者 | **单一来源**：运行集合（双向链表）的结构、指针算法、执行窗口、不变量与自愈、实测代价 |
+| [技能目录与工具装载](./dev/skill_catalog_and_modes.md) | 开发者 | 技能目录 + 要点（层级/排序/去重/预算）、按状态帧装载工具、名单冻结与执行闸、分状态调用统计、PTC、决策代理 |
 | [跨状态交接](./dev/cross_state_context.md) | 开发者 | 换会话时怎么接上线头：原文尾巴（保底）+ 跨状态便签（投递制、40 次调用窗口），以及它们和前缀缓存锁的关系 |
-| [会话历史与前缀缓存（设计稿，待批）](./dev/conversation_history.md) | 开发者 | 两卷历史（工具轮/普历史）+ 轮末封存 + end_turn 结算 + 两级压缩 + 图片不降级；请求体固定三段、compact 才重写 |
+| [会话历史与前缀缓存](./dev/conversation_history.md) | 开发者 | 两卷历史 + 轮末结算 + 两级压缩；账本分层、三段请求体、阈值三档、解锁与迁移（设计稿，落地进度见 §13） |
 | [Repository 化重构进度](./dev/repository_refactor_progress.md) | 开发者 | 重构进度的唯一权威存档，接续工作前先读 |
 | [重构实施开发文档](./dev/重构实施开发文档.md) | 开发者 | 后端重构实施细节 |
 | [AI↔AI 私信规则与限额](./dev/ai_ai_dm_quota.md) | 开发者 | 私信规则、配额与限额 |

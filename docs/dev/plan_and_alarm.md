@@ -118,7 +118,7 @@
 4. **`backend/app/ai/llm.py`**：群聊与私信两条路径都接上（在 `sync_*_history` **之前**投递）；
    顺手把 `_deliver_frame_notes` / `_build_capability_notice` / 计划投递三个源收成一个 `_collect_injection_events`
    （现在那三行在 1146-1151 与 1528-1533 各抄了一遍）。
-5. **`backend/app/ai/alarm.py`**：`set_alarm` 落 `frame_id` / `origin_context_ref`（读 `get_frames` 的栈顶）；
+5. **`backend/app/ai/alarm.py`**：`set_alarm` 落 `frame_id` / `origin_context_ref`（读 `get_frames` 的当前帧 = 链尾）；
    `_process_alarm_event` 先按 `frame_id` 恢复状态（`restore_frame`）再执行，并把「被 #几 唤醒、当初写的是什么」说清楚。
 6. **开关链**：`schemas/agent.py` → `services/agent/agent_service.py`（`CONFIG_PROFILES` + `current_values` + `get_effective_config`）
    → `utils/pure/presets.py` → `routers/agents.py`（创建/更新/预设预览）→ 前端四处 → i18n 三语 → `update_self_config`。
@@ -135,6 +135,8 @@
 | `backend/app/ai/alarm.py` | `set_alarm` / `update_alarm` / `cancel_alarm` / `fire_alarm` / `list_alarms` / `get_due_alarms` / `alarm_scheduler` / `_process_alarm_event` |
 | `backend/app/ai/decider.py` | `_decide_alarm_action`（优先级 85） |
 | `backend/app/services/agent/state_stack_service.py` | `get_frames` / `restore_frame`（闹钟唤醒时按帧恢复状态）/ `ensure_active_frame` / `push_state` / `pop_state` / `close_state` / `get_state_stack_summary` / `frame_turn_context` |
+| `backend/app/models/agent_state_chain.py` | `AgentStateChain`（一 AI 一条链：链头 / 链尾 / 执行窗口 `max_active`）+ `AgentStateChainNode`（链节点 → 帧 id，只存前驱后继） |
+| `backend/app/utils/pure/state_chain.py` | `attach_tail` / `move_to_tail` / `detach` / `window` / `reconcile` / `order_by_chain`——闹钟唤醒就是"把这一帧拉到链尾" |
 | `backend/app/utils/pure/state_stack.py` | `make_state_frame` / `format_state_stack_summary` / `running` / `current` / `normalize_order` / `context_frames` / `retire_overflow` / `drop_overflow` / `drop_retired_overflow`（容量默认 `DEFAULT_FRAME_CAPACITY`=31） |
 | `backend/app/utils/pure/handover.py` | 后事告知文案、代销来由与幂等键（`handover:{帧 id}` / `drop:{时刻}`） |
 | `backend/app/models/agent.py` | `state_stack` / `cross_state_notes` / `foci` / `state_stack_max_chars` / `frame_capacity` / `retire_handover_self` |

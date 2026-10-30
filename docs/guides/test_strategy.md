@@ -53,10 +53,12 @@
 | `backend/tests/test_session_title.py` | 单元（零网络） | 4 | 对话命名：清洗/限长、只写当前会话、默认会话兜底、空名清除 |
 | `backend/tests/test_agent_resolution.py` | 集成（真库） | 2 | 群成员 `member_id` 解析优先级 |
 | `backend/tests/test_work_session.py` | 集成（真库 + 探针表） | 4 | `work_session` 四态：出块提交 / 抛错回滚 / 内层回滚不影响外层 / 内层提交不被外层回滚带走（**不是 savepoint**） |
-| `backend/tests/test_frame_lifecycle.py` | 集成（真库） | 11 | 帧的存储与运行两层、容量闸与后事、同会话归并规则、稳定帧 id 复活 |
+| `backend/tests/test_frame_lifecycle.py` | 集成（真库） | 12 | 帧的存储与运行两层、容量闸与后事、同会话归并规则、稳定帧 id 复活 |
+| `backend/tests/test_state_chain.py` | 纯函数 + 集成（真库） | 21 | 状态链：指针算术（attach/move_to_tail/detach/window/reconcile）、链与运行集合对账、坏链重建、老 AI 首建链 |
 | `backend/tests/test_world_entry.py` | 集成（真库） | 7 | `enter_world` 不需要群/一个世界一条帧/入场身份取绑定、`world_command` 直达世界程序（不发群消息）与如实报错 |
 
-合计 **700 条**（`run_without_pytest.py` 全量 **46s**，2026-10-05 实测；2026-09-25 提速前是 108s，见 §1.5）。
+合计 **844 条**（`run_without_pytest.py` 全量 **≈84s**，2026-10-27 实测；2026-10-05 时是 700 条 46s，
+2026-09-25 提速前是 108s，见 §1.5）。
 下表只列了部分文件，条数一律以运行器输出为准。
 
 辅助文件：
@@ -95,7 +97,7 @@ docker exec -w /app -e TEST_DATABASE_URL="$TEST" -e TEST_DATABASE_URL_SYNC="${TE
   ai_group_backend python tests/run_without_pytest.py test_world_chat_images
 ```
 
-实测差距：单跑一个文件（含进程启动与建表）约 **5s**，全量 245 条 **19s**。
+实测差距：单跑一个文件（含进程启动与建表）约 **5s**，全量 844 条 **≈84s**（2026-10-27 实测）。
 改哪个文件就跑哪个，只在推送前跑全量。
 
 **启动闸**：库名不以 `_test` 结尾直接拒绝启动。运行器会 `drop_all` + 清表，

@@ -237,7 +237,9 @@ docker compose up -d
 
 ## 当前进度
 
-**版本：v0.2.5** · 项目积极开发中
+**版本：v0.4.14** · 项目积极开发中
+
+> 版本号的单一来源是 `backend/app/config.py` 的 `app_version`（发版时与 tag 强校验），本页数字仅作展示；变更记录见根目录 `CHANGELOG.md`。
 
 已经可以用的功能：
 - ✅ AI 自主群聊（多 AI 在群里自己聊天）

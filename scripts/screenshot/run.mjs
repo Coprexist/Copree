@@ -42,14 +42,16 @@ function avatarBody(fileName) {
 }
 
 function parseArgs(argv) {
-  const opts = { url: process.env.AISCHAT_URL || DEFAULT_URL, out: DEFAULT_OUT, only: null, lang: process.env.SHOT_LANG || 'zh' }
+  const opts = { url: process.env.AISCHAT_URL || DEFAULT_URL, out: DEFAULT_OUT, only: null, lang: process.env.SHOT_LANG || 'zh', theme: process.env.SHOT_THEME || 'light' }
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--url') opts.url = argv[++i]
     else if (argv[i] === '--out') opts.out = path.resolve(argv[++i])
     else if (argv[i] === '--only') opts.only = argv[++i]
     else if (argv[i] === '--lang') opts.lang = argv[++i]
+    else if (argv[i] === '--theme') opts.theme = argv[++i]
   }
   if (!['zh', 'en', 'ja'].includes(opts.lang)) throw new Error('--lang 只认 zh / en / ja：' + opts.lang)
+  if (!['light', 'dark'].includes(opts.theme)) throw new Error('--theme 只认 light / dark：' + opts.theme)
   process.env.SHOT_LANG = opts.lang
   return opts
 }
@@ -94,7 +96,7 @@ async function main() {
   const session = await Session.connect(wsUrl)
   mkdirSync(opts.out, { recursive: true })
 
-  console.log('目标：' + opts.url + ' ｜ 输出：' + opts.out + ' ｜ 界面语言：' + opts.lang + ' ｜ 浏览器：' + bin)
+  console.log('目标：' + opts.url + ' ｜ 输出：' + opts.out + ' ｜ 界面语言：' + opts.lang + ' ｜ 主题：' + opts.theme + ' ｜ 浏览器：' + bin)
 
   await session.send('Page.enable')
   await session.send('Runtime.enable')
@@ -112,10 +114,10 @@ async function main() {
   session.on('Fetch.requestPaused', async (p) => {
     const url = p.request.url
     try {
-      // 头像：demo-avatar-<名字>、demo-group-<名字> 现场生成（人 / 群自定义图）；
-      // 其余是演示数据里 AI 各自的文件名，发团队自绘那张
+      // 头像：demo-avatar-<名字> 现场生成字母头像；其余是演示数据里 AI 各自的文件名，发团队自绘那张。
+      // 群头像只用应用内建的 default / members 两档，不再生成方块图
       if (url.includes('/fs/download-avatar/')) {
-        const generated = url.match(/demo-(?:avatar|group)-([^/?#]+)\.png/)
+        const generated = url.match(/demo-avatar-([^/?#]+)\.png/)
         const avatar = generated ? null : avatarBody(decodeURIComponent((url.split('/fs/download-avatar/')[1] || '').split(/[?#]/)[0]))
         await session.send('Fetch.fulfillRequest', {
           requestId: p.requestId,
@@ -159,6 +161,8 @@ async function main() {
   await session.eval('localStorage.setItem("access_token", ' + JSON.stringify(token) + ')')
   // App 取语言的顺序是：设置向导覆盖 → 用户设置 → 缓存。截图统一用第一档顶掉，跟演示数据的语言一致
   await session.eval('localStorage.setItem("i18n_override_lang", ' + JSON.stringify(opts.lang) + ')')
+  // 主题偏好存在 localStorage，页面挂载时读取；导航前写好，出图就是目标主题
+  await session.eval('localStorage.setItem("copree-theme", ' + JSON.stringify(opts.theme) + ')')
 
   for (const shot of shots) {
     activeShot = shot

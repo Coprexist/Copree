@@ -29,7 +29,12 @@ node scripts/screenshot/run.mjs --only ui-components,ui-convlog
 
 # 自定义地址 / 输出目录
 node scripts/screenshot/run.mjs --url http://127.0.0.1:5227 --out docs/assets/screenshots
+
+# 夜间版（官网是暗色设计，默认输出到 docs/assets/screenshots/dark/）
+node scripts/screenshot/run.mjs --theme dark --out docs/assets/screenshots/dark
 ```
+
+日间版给 README 和 Markdown 阅读器，夜间版给官网；站点构建时优先取 `dark/` 下的同名图。
 
 JWT 密钥默认从 `docker exec ai_group_backend printenv JWT_SECRET_KEY` 读取，
 也可以直接用环境变量给：`JWT_SECRET=... node scripts/screenshot/run.mjs`。
@@ -39,7 +44,7 @@ JWT 密钥默认从 `docker exec ai_group_backend printenv JWT_SECRET_KEY` 读�
 | 位置 | 做法 |
 | --- | --- |
 | 人名 / 昵称 / 好友名 | 按值哈希稳定映射到虚构人名池，仓库里没有真实用户名对照表 |
-| 头像 | AI 用团队自绘头像，一个角色一张脸（`frontend/public/official-avatars/`，名字→文件见 `demo-data.mjs` 的 `AI_AVATARS`）；人类用户、群「自定义头像」用脚本现场生成的字母/方块图（SVG） |
+| 头像 | AI 用团队自绘头像，一个角色一张脸（`frontend/public/official-avatars/`，名字→文件见 `demo-data.mjs` 的 `AI_AVATARS`）；群头像只用应用内建的 default / members 两档，不另造图；人类用户用脚本现场生成的字母图（SVG） |
 | 群聊 / 私聊消息 | 整体换成 `demo-data.mjs` 里的演示对话，列表摘要也不保留原文 |
 | 邮箱 / GitHub / token | 统一替换为演示值 |
 | 世界对话与工具卡片 | 演示回合，含 `role=tool` 的工具卡片（列文件 / 读文件 / 编辑文件） |
@@ -75,8 +80,9 @@ JWT 密钥默认从 `docker exec ai_group_backend printenv JWT_SECRET_KEY` 读�
 
 One command renders every UI screenshot used by the README and docs. API
 responses are rewritten in the browser to the fixtures in `demo-data.mjs`;
-AI avatars are the team's own drawings in `docs/assets/brand/avatars/`, and
-human avatars are generated on the fly — **no database writes, no product
+AI avatars are the team's own drawings in `frontend/public/official-avatars/`,
+group avatars use the app's built-in default/members modes, and human avatars
+are generated on the fly — **no database writes, no product
 code changes, no third-party image assets**.
 
 ### Requirements
@@ -99,7 +105,13 @@ node scripts/screenshot/run.mjs --only ui-components,ui-convlog
 
 # custom target / output directory
 node scripts/screenshot/run.mjs --url http://127.0.0.1:5227 --out docs/assets/screenshots
+
+# dark variant (the site is dark-only; written to docs/assets/screenshots/dark/)
+node scripts/screenshot/run.mjs --theme dark --out docs/assets/screenshots/dark
 ```
+
+Light shots serve the README and Markdown readers; the dark set serves the site,
+which prefers the same-named file under `dark/` at build time.
 
 The JWT secret is read from `docker exec ai_group_backend printenv JWT_SECRET_KEY`
 unless `JWT_SECRET` is set in the environment.

@@ -31,9 +31,6 @@ export const DEFAULT_AVATAR_URL = '/api/fs/download-avatar/' + AI_AVATARS[DEFAUL
 /** 人类用户用脚本生成的字母头像：不引入任何第三方图片，避免版权/肖像权问题 */
 export const letterAvatar = (name) => '/api/fs/download-avatar/demo-avatar-' + encodeURIComponent(name) + '.png'
 
-/** 群「自定义头像」的演示图：同样是现场生成的方块图，理由同字母头像 */
-export const groupAvatarTile = (name) => '/api/fs/download-avatar/demo-group-' + encodeURIComponent(name) + '.png'
-
 export function avatarOf(name) {
   return AI_AVATARS[name] ? '/api/fs/download-avatar/' + AI_AVATARS[name] : letterAvatar(name)
 }
@@ -95,17 +92,17 @@ export const DEMO_GROUPS = [
     last_message_preview: '涵吾珑: 黄昏那版配色我调好了，来看看？',
     last_message_at: minutesAgo(2), member_count: 12, online_count: 5,
     avatar_mode: 'members', include_ai_in_avatar: true,
-    member_avatars: [avatarOf('涵吾珑'), avatarOf('拾光'), avatarOf('林晚'), avatarOf('柏舟')],
+    member_avatars: [avatarOf('涵吾珑'), avatarOf('拾光'), avatarOf('白露'), avatarOf('阿兰德')],
   },
   {
     id: 2, name: '枕流镇 · 冒险团', is_pinned: true, unread_count: 2, has_mention: true,
     last_message_preview: '拾光: 书店的门牌换好了，木头牌',
     last_message_at: minutesAgo(18), member_count: 8, online_count: 3,
-    avatar_mode: 'custom', avatar_url: groupAvatarTile('枕流镇'),
+    avatar_mode: 'default',
   },
   {
     id: 3, name: '世界开发组', is_pinned: false, unread_count: 0, has_mention: false,
-    last_message_preview: '柏舟: 新的世界模板推到市场了',
+    last_message_preview: '阿兰德: 新的世界模板推到市场了',
     last_message_at: minutesAgo(95), member_count: 6, online_count: 2,
     avatar_mode: 'default',
   },
@@ -114,12 +111,12 @@ export const DEMO_GROUPS = [
     last_message_preview: '青禾: 今晚十点继续，番茄钟走起',
     last_message_at: minutesAgo(60 * 26), member_count: 4, online_count: 1,
     avatar_mode: 'members', include_ai_in_avatar: true,
-    member_avatars: [avatarOf('青禾'), avatarOf('白露'), avatarOf('沈知'), avatarOf('朝雾')],
+    member_avatars: [avatarOf('青禾'), avatarOf('白露'), avatarOf('洛'), avatarOf('涵吾珑')],
   },
 ]
 
 const groupMsg = (id, who, content, minutes) => ({
-  id, group_id: 1, sender_type: who === '涵吾珑' || who === '拾光' ? 'agent' : 'human',
+  id, group_id: 1, sender_type: AI_AVATARS[who] ? 'agent' : 'human',
   sender_id: 20 + id, sender_name: who, sender_avatar_url: avatarOf(who),
   source_public_id: null, content, reply_to: null, attachments: null, created_at: minutesAgo(minutes),
 })
@@ -127,20 +124,21 @@ const groupMsg = (id, who, content, minutes) => ({
 /** /gm/{id}/messages 的演示对话：任意群都返回这一段，截图内容固定 */
 export const DEMO_GROUP_MESSAGES = [
   groupMsg(1, '涵吾珑', '我把首页改成了黄昏的色调，标题换成衬线字体了。', 46),
-  groupMsg(2, '林晚', '好看，但右边那块天气面板太亮了，跟背景打架。', 41),
+  groupMsg(2, '白露', '好看，但右边那块天气面板太亮了，跟背景打架。', 41),
   groupMsg(3, '涵吾珑', '确实。我压暗一点，再把描边换成半透明的。', 39),
   groupMsg(4, '拾光', '顺手把镇口的灯也调暖吧，晚上回来的村民看清楚路。', 33),
   groupMsg(5, '涵吾珑', '好，我先看一眼现在的样式表。', 31),
   groupMsg(6, '涵吾珑', '改完了：\n- 天气面板改用 `--panel-bg` 半透明底色\n- 夜间灯光加了 240ms 的暖色过渡\n- 标题字重从 700 降到 600，长句更好读', 8),
-  groupMsg(7, '林晚', '这版可以，先这样。', 3),
+  groupMsg(7, '白露', '这版可以，先这样。', 3),
 ]
 
 export const DEMO_MEMBERS = [
   { type: 'user', id: 1, name: '涵吾珑', state: 'online', role: 'owner', dnd_until: null },
   { type: 'agent', id: 21, name: '拾光', state: 'online', role: 'member', dnd_until: null },
   { type: 'agent', id: 22, name: '阿兰德', state: 'offline', role: 'member', dnd_until: null },
-  { type: 'user', id: 2, name: '林晚', state: 'online', role: 'member', dnd_until: null },
-  { type: 'user', id: 3, name: '柏舟', state: 'offline', role: 'member', dnd_until: null },
+  { type: 'agent', id: 23, name: '白露', state: 'online', role: 'member', dnd_until: null },
+  { type: 'agent', id: 24, name: '青禾', state: 'offline', role: 'member', dnd_until: null },
+  { type: 'agent', id: 25, name: '洛', state: 'online', role: 'member', dnd_until: null },
 ]
 
 export const DEMO_AGENTS = [
@@ -192,7 +190,7 @@ export const DEMO_MARKET_ITEMS = [
     sync_state: 'synced', slug: null,
   },
   {
-    id: 2, kind: 'world', title: '灰烬回廊', tags: ['解谜', '2D'], author_id: 2, author_name: '柏舟',
+    id: 2, kind: 'world', title: '灰烬回廊', tags: ['解谜', '2D'], author_id: 2, author_name: '阿兰德',
     description: '解谜世界：每一扇门都记得上一次被打开的时间，走错一步就要重新写信给它。',
     source_world_id: 102, source: 'local', github_path: null, package_size: 512000, downloads: 74,
     github_downloads: null, updated_at: minutesAgo(60 * 24 * 9), github_updated_at: null,
@@ -257,9 +255,9 @@ export const DEMO_USAGE_OVERVIEW = [
 /** /dm/sessions 的演示私聊列表（截图里不出现真实联系人与其消息摘要） */
 export const DEMO_DM_SESSIONS = [
   ['拾光', 'agent', '明天那格我补上了，读的是天气状态。', 5, 0, true],
-  ['林晚', 'user', '黄昏那版先这样，我晚点再看细节。', 22, 0, true],
+  ['白露', 'agent', '黄昏那版先这样，我晚点再看细节。', 22, 0, true],
   ['阿兰德', 'agent', '木料到了，镇口的灯明天能装。', 95, 1, false],
-  ['柏舟', 'user', '世界模板我推到市场了，你试试导入。', 60 * 26, 0, false],
+  ['青禾', 'agent', '世界模板我推到市场了，你试试导入。', 60 * 26, 0, false],
 ].map(([name, type, preview, minutes, unread, pinned], i) => ({
   session_id: 'demo-dm-' + (i + 1),
   partner: {

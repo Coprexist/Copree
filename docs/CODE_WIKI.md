@@ -92,54 +92,44 @@
 
 ### 3.1 架构分层图
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        用户浏览器 / 桌面端                         │
-├─────────────────────────────────────────────────────────────────┤
-│  React 19 Frontend                                             │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────────────┐ │
-│  │ ChatPage │ │ DMPage   │ │ AdminPage│ │ AgentsPage / ...   │ │
-│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └────────┬───────────┘ │
-│       └─────────────┴──────────┴──────────────────┘             │
-│                    │ useWebSocket / useWorldChat                │
-│                    └──────────────┬─────────────────────────┘  │
-├────────────────────────────────────┼─────────────────────────────┤
-│                    WebSocket / REST API                         │
-├────────────────────────────────────┼─────────────────────────────┤
-│  FastAPI Backend                   │                             │
-│  ┌────────────────────────────────┴───────────────────────────┐ │
-│  │ Routers (自动发现注册)                                      │ │
-│  │ chat.py / ws.py / agents.py / auth.py / dm.py / groups.py  │ │
-│  │ worlds.py / market.py / skills.py / admin.py / ...         │ │
-│  └──────────────────────────────┬─────────────────────────────┘ │
-│                                 │                               │
-│  ┌──────────────────────────────┴─────────────────────────────┐ │
-│  │ Services (业务逻辑层)                                       │ │
-│  │                                                             │ │
-│  │ ┌─────────┐ ┌─────────┐ ┌──────────┐ ┌───────────────────┐ │ │
-│  │ │  AI     │ │  Chat   │ │  Memory  │ │      Brain        │ │ │
-│  │ │ Module  │ │  Module │ │  System  │ │  (Thin Controller) │ │ │
-│  │ └────┬────┘ └────┬────┘ └────┬─────┘ └────────┬──────────┘ │ │
-│  │      │           │           │                 │             │ │
-│  │ ┌────┴───────────┴───────────┴─────────────────┴─────────┐ │ │
-│  │ │  World (群视界) / Skill Engine / Federation / Audit 等   │ │ │
-│  │ └────────────────────────────────────────────────────────┘ │ │
-│  │                                                             │ │
-│  │ ┌──────────────────────────────────────────────────────────┐ │ │
-│  │ │                  Tool Registry (工具注册中心)              │ │ │
-│  │ │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────┐  │ │ │
-│  │ │  │Chat/Social│ │File Ops │ │ Memory   │ │ Self Mgmt  │  │ │ │
-│  │ │  └──────────┘ └──────────┘ └──────────┘ └────────────┘  │ │ │
-│  │ └──────────────────────────────────────────────────────────┘ │ │
-│  └─────────────────────────────────────────────────────────────┘ │
-│                                 │                               │
-│  ┌─────────────────────────────┴──────────────────────────────┐ │
-│  │                    SQLAlchemy ORM (Models)                   │ │
-│  └─────────────────────────────┬──────────────────────────────┘ │
-│                                 │                               │
-├─────────────────────────────────┼───────────────────────────────┤
-│                    PostgreSQL + pgvector                         │
-└─────────────────────────────────────────────────────────────────┘
+```mermaid
+erDiagram
+    USER ||--o{ AGENT : "拥有（owner_id）"
+    USER ||--o{ GROUP_MEMBER : "加入"
+    USER ||--o{ FRIENDSHIP : "好友关系"
+    USER ||--o{ DM_SESSION : "发起私信"
+    USER ||--o{ API_KEY_POOL : "配置"
+    USER ||--o{ REDEMPTION_CODE : "兑换"
+    USER ||--o{ AUDIT_LOG : "操作留痕"
+    AGENT ||--o| AGENT_CONFIG : "配置"
+    AGENT ||--o{ AGENT_SKILL : "持有技能实例"
+    SKILL ||--o{ AGENT_SKILL : "被实例化"
+    AGENT ||--o{ AGENT_TRIGGER : "触发器"
+    AGENT ||--o| AGENT_STATE_CHAIN : "一条链（运行集合）"
+    AGENT ||--o{ AGENT_STATE_CHAIN_NODE : "每帧一个节点"
+    AGENT ||--o| AGENT_STATE_STACK : "历史遗留表（从未写入）"
+    AGENT ||--o{ AGENT_METRIC : "指标"
+    AGENT ||--o{ ALARM : "闹钟"
+    AGENT ||--o{ ROUGH_MEMORY : "粗记忆"
+    ROUGH_MEMORY ||--o{ DETAIL_MEMORY : "细记忆"
+    AGENT ||--o| PERSONALITY_ANCHOR : "人格锚点"
+    AGENT ||--o{ CONVERSATION_LOG : "对话日志"
+    GROUP ||--o{ GROUP_MEMBER : "成员"
+    GROUP ||--o{ MESSAGE : "消息"
+    GROUP ||--o{ GROUP_TYPE : "群类型（随世界打包）"
+    GROUP ||--o| WORLD : "绑定群视界"
+    DM_SESSION ||--o{ DM_MESSAGE : "消息"
+    WORLD ||--o{ WORLD_AI : "世界 AI"
+    WORLD ||--o| WORLD_CONFIG : "配置"
+    WORLD ||--o{ WORLD_SKILL : "世界技能"
+    WORLD ||--o{ WORLD_CHAT_MESSAGE : "群视界对话"
+    SYSTEM_SETTINGS {
+        int id PK "单例"
+    }
+    MARKET_ITEM {
+        int id PK "商城商品"
+    }
+
 ```
 
 ### 3.2 核心数据流
@@ -870,7 +860,7 @@ async def _handle_typing_indicator(...): ...
 
 | 目录 | 说明 |
 |------|------|
-| `services/agent/` | AI 代理服务（意愿计算、状态切换、工作区、状态栈） |
+| `services/agent/` | AI 代理服务（意愿计算、状态切换、工作区、状态栈/状态链） |
 | `services/agent/knowledge_service.py` | AI 知识库：正文经 `file_service` 写进 `data/agents/{id}/knowledge/`（登记 `files`，`file_list`/存储页可见），元数据落 `agent_knowledge`；索引与记忆索引同段注入；上传 / 移动 / 手写共用 `add_entry` / `move_entry` |
 | `services/content/` | 内容服务（文件/浏览器/对话日志/导出） |
 | `services/social/` | 社交服务（好友/搜索/DM 额度） |
@@ -946,7 +936,8 @@ class ToolRegistry:
 | `agent_skill.py` | `AgentSkill` | AI 技能实例 |
 | `agent_trigger.py` | `AgentTrigger` | AI 触发器 |
 | `agent_config.py` | `AgentConfig` | AI 配置 |
-| `agent_state_stack.py` | `AgentStateStack` | AI 状态栈 |
+| `agent_state_stack.py` | `AgentStateStack` | 历史遗留（从未写入；真实存储在 `agents.state_stack`） |
+| `agent_state_chain.py` | `AgentStateChain`, `AgentStateChainNode` | 状态链（运行集合）：一 AI 一条链 + 每帧一个节点 |
 | `agent_metrics.py` | `AgentMetrics` | AI 指标 |
 | `alarm.py` | `Alarm` | AI 闹钟 |
 | `system_settings.py` | `SystemSettings` | 系统设置 |
@@ -1325,7 +1316,8 @@ User (用户)
 │   ├── AgentSkill (AI 技能实例)
 │   │   └── Skill (技能定义)
 │   ├── AgentTrigger (AI 触发器)
-│   ├── AgentStateStack (状态栈)
+│   ├── AgentStateStack (状态栈，历史遗留)
+│   ├── AgentStateChain (状态链：链头 / 链尾 / 执行窗口) + AgentStateChainNode (链节点 → 帧 id)
 │   ├── AgentMetric (指标)
 │   ├── Alarm (闹钟)
 │   ├── RoughMemory → DetailMemory (双层记忆)

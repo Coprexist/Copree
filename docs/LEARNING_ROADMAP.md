@@ -3,6 +3,8 @@
 > 版本：v1.0.0 | 更新：2026-08-10
 > 本文档提供 Copree 项目的阶梯式学习路线，每个阶段都有明确的目标、必读文件和实践任务。
 > 配合 [CODE_WIKI.md](../docs/CODE_WIKI.md) 效果最佳。
+>
+> 文中出现的模块名以 **CODE_WIKI 为准**：重构期间有过多轮拆分与合并（例：`forgetting_mechanism` → `vector_pipeline` + `tidy_service`；`context_compression` → `context_compression_service`）。读不通时先查 CODE_WIKI，再判断是文档旧了还是代码变了。
 
 ---
 
@@ -309,15 +311,15 @@ flowchart TD
     EventType -->|alarm| AlarmEvent[闹钟事件]
     
     GroupEvent --> MaybeTrigger[_maybe_trigger_ai_reply]
-    MaybeTrigger --> CheckMention{检查@提及?}
+    MaybeTrigger --> CheckMention{"检查@提及?"}
     CheckMention -->|是| ForceReply[强制回复]
     CheckMention -->|否| Decide[decide_action]
     
     Decide --> Gate1{Gate1: 在线?}
-    Gate1 -->|离线且未@| Skip[跳过]
+    Gate1 -->|"离线且未@"| Skip[跳过]
     Gate1 --> Gate2{Gate2: 屏蔽/DND?}
     Gate2 -->|屏蔽| Skip
-    Gate2 -->|DND且非@| Skip
+    Gate2 -->|"DND且非@"| Skip
     Gate2 --> Gate3{Gate3: 意愿计算}
     Gate3 -->|意愿低| Skip
     Gate3 -->|意愿高| Execute[执行回复]
@@ -469,8 +471,8 @@ graph TD
     subgraph "记忆系统"
         MemorySvc[memory_service.py]
         VectorPipe[vector_pipeline.py]
-        Compress[context_compression.py]
-        Forget[forgetting_mechanism.py]
+        Compress[context_compression_service.py]
+        Forget[vector_pipeline.py]
     end
     
     subgraph "技能引擎"
@@ -526,7 +528,8 @@ graph TD
 |------|------|------|
 | [app/services/memory/memory_service.py](../backend/app/services/memory/memory_service.py) | 记忆检索主入口 | 全文 |
 | [app/services/memory/context_compression_service.py](../backend/app/services/memory/context_compression_service.py) | 上下文压缩 | 全文 |
-| [app/services/memory/forgetting_mechanism.py](../backend/app/services/memory/forgetting_mechanism.py) | 遗忘机制 | 全文 |
+| [app/services/memory/vector_pipeline.py](../backend/app/services/memory/vector_pipeline.py) | 向量记忆的衰减与清理 | 全文 |
+| [app/services/memory/tidy_service.py](../backend/app/services/memory/tidy_service.py) | 每日整理与低权值清理 | 全文 |
 
 #### 技能引擎
 
