@@ -25,6 +25,19 @@ class ContentRepository(Protocol):
         ...
 
 
+def as_content_repo(source) -> ContentRepository:
+    """会话或仓库 → 仓库（唯一转换处）。
+
+    `ContentRepository` 与 `AsyncSession` 的方法几乎完全重合，只差 `.session` 这一个属性：
+    绝大多数调用两种都能跑，只有在需要 SAVEPOINT、或要把底层会话交给别的模块的那一段会炸。
+    所以服务入口统一过一遍这里，调用方传哪一种都行——否则这类错误会藏在 `except` 里
+    （通道额度记账失败只打一行日志，账就一直停在 0，直到有人翻日志）。
+    """
+    if isinstance(source, AsyncSession):
+        return SQLAlchemyContentRepository(source)
+    return source
+
+
 class SQLAlchemyContentRepository:
     """SQLAlchemy 内容仓库实现。"""
 

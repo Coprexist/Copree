@@ -8,8 +8,10 @@ import logging
 from datetime import datetime, timezone
 from sqlalchemy import select, delete, func, text
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.models.conversation_log import ConversationLogConfig, ConversationLog
-from app.repositories.content_repo import ContentRepository
+from app.repositories.content_repo import ContentRepository, as_content_repo
 from app.utils.pure.cache_stats import cache_hit_rate_pct
 from app.utils.pure.conversation_log import (
     LogRetention, cap_per_state, plan_log_trim,
@@ -86,7 +88,7 @@ def _as_date(value: datetime | None):
 # ── 保存 ──
 
 async def save_conversation_log(
-    content_repo: ContentRepository,
+    content_repo: ContentRepository | AsyncSession,
     agent_id: int,
     messages: list[dict],
     conversation_type: str = "group",
@@ -101,7 +103,12 @@ async def save_conversation_log(
     """保存一次完整对话，自动清理超出限制的旧记录
 
     user_id：记账人（世界 AI 用量传世界主人；普通 AI 记录留空按 agent.owner_id 归属）。
+
+    第一参数收会话或内容仓库（as_content_repo 统一）：executor 那条最热的路直接传 session，
+    而通道额度要的 SAVEPOINT 只有仓库能给出底层会话——不统一就在这里炸，且被下面的
+    try/except 咽成一行日志。
     """
+    content_repo = as_content_repo(content_repo)
     try:
         log = ConversationLog(
             agent_id=agent_id,
