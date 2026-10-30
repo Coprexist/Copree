@@ -9,9 +9,24 @@ handle() 那层的 IO（受控 API / publish / 叫醒 AI）留给集成测试，
 import importlib.util
 from pathlib import Path
 
-BLOCK = Path("data/world_blocks/color-cards/main.py")
-if not BLOCK.is_file():
-    raise RuntimeError(f"找不到积木引擎：{BLOCK.resolve()}（请在仓库根目录或容器 /app 下运行）")
+def _block_path() -> Path:
+    """引擎在仓库根的 data/world_blocks/color-cards/main.py。
+
+    这个文件有三种跑法：仓库根（本地 run_without_pytest.py）、backend/（CI 里
+    cd backend 之后跑 pytest）、容器里的 /app。按 cwd 拼相对路径只有第一种成立，
+    CI 就是这么红的，所以改成从本文件位置逐级往上找——三种都成立。
+    """
+    here = Path(__file__).resolve()
+    for root in here.parents:
+        candidate = root / "data" / "world_blocks" / "color-cards" / "main.py"
+        if candidate.is_file():
+            return candidate
+    raise RuntimeError(
+        f"找不到积木引擎：从 {here} 往上逐级都没找到 data/world_blocks/color-cards/main.py"
+    )
+
+
+BLOCK = _block_path()
 
 _spec = importlib.util.spec_from_file_location("color_cards_main", BLOCK)
 blk = importlib.util.module_from_spec(_spec)
