@@ -4,6 +4,7 @@ import { useT } from '../i18n/I18nContext'
 import { fileDownloadUrl } from '../api/client'
 import { formatFileSize } from '../utils/format'
 import { isTextPreviewable, getCodeLang, isMarkdownFile, resolveMimeType, EXT_LANG_MAP } from '../utils/mime'
+import { PREVIEW_SANDBOX, buildPreviewDocument } from '../utils/previewSandbox'
 import MarkdownContent from './shared/MarkdownContent'
 import ForwardFileModal from './ForwardFileModal'
 import { Dialog, ResizeEdges } from './ui'
@@ -389,10 +390,10 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
             ) : isPDF || (isHtml && content && !showSource) ? (
               <iframe
                 src={isPDF ? dlUrl : undefined}
-                srcDoc={isHtml ? (content ?? undefined) : undefined}
+                srcDoc={isHtml ? buildPreviewDocument(content ?? '') : undefined}
                 className="w-full h-full flex-1 border-0 bg-white overflow-auto"
                 title={fileName}
-                sandbox={isHtml ? 'allow-scripts' : undefined}
+                sandbox={isHtml ? PREVIEW_SANDBOX : undefined}
               />
             ) : isRichText && showSource ? (
               <pre className="w-full p-4 md:p-5 m-0 text-xs leading-relaxed font-mono text-textPrimary whitespace-pre-wrap break-words bg-canvas">

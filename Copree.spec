@@ -11,7 +11,7 @@ a = Analysis(
     datas=[
         ('backend/app', 'app'),
         ('frontend/dist', 'frontend/dist'),
-        ('frontend/public/logo-transparent.ico', 'frontend/public'),
+        ('frontend/public/brand/coprexist-icon.ico', 'frontend/public/brand'),
     ] + collect_data_files('customtkinter')
       # tzdata 只有数据文件没有模块逻辑：Windows 上没有系统时区库，
       # zoneinfo 全靠它，漏了就是 ZoneInfoNotFoundError（私信触发回复时直接崩）
@@ -86,7 +86,7 @@ exe = EXE(
     strip=False,
     upx=True,
     console=False,
-    icon='frontend/public/logo-transparent.ico',
+    icon='frontend/public/brand/coprexist-icon.ico',
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
