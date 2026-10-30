@@ -46,18 +46,33 @@ class WriteDecisionSkill(ToolPlugin):
     description = rule_schema_desc()
     segment = "self_management"
     parameters: dict = {
-        "rule": {"type": "object", "description": "完整决策技能对象（见描述）"},
+        "rule": {"type": "object", "description": "完整决策代理规则（见描述）"},
+        "verify": {
+            "type": "array",
+            "items": {"type": "object"},
+            "description": (
+                "启用前检验样例（必填，正例 + 反例一起给）：每条 {event, content, sender_id?...}，"
+                'expect 默认 "hit"（该命中），反例写 "miss"（不该命中）；'
+                '形如 [{"content": "签到"}, {"content": "今天签到系统挂了", "expect": "miss"}]。'
+                "平台把每条都跑一遍，任何一条不符预期就拒绝落地，并指出第几条、为什么——"
+                "只给正例只证明了会命中，证明不了不误触。单条对象也照样收。"),
+        },
     }
-    required: list = ["rule"]
-    admin_description = "给 AI 配置一条决策技能（情景 + 动作 + 是否唤醒本体），同名覆盖，每个 AI 上限 20 条。"
+    required: list = ["rule", "verify"]
+    admin_description = "给 AI 配置一条决策代理（情景 + 动作 + 是否唤醒本体），同名覆盖，每个 AI 上限 20 条；启用前必须通过样例检验。"
     trigger_condition = "需要让 AI 自己处理某类消息时"
 
     async def execute(
         self, db: AsyncSession, agent_id: int, group_id: int | None,
         arguments: dict, context: dict,
     ) -> dict:
-        from app.services.world.decision_skill import save_decision_rule
+        from app.services.world.decision_skill import save_decision_rule, verify_before_save
         rule = arguments.get("rule") or {}
+        ok, err, preview = await verify_before_save(
+            db, "agent", agent_id, rule, arguments.get("verify") or {}, group_id=group_id)
+        if not ok:
+            return {"success": False, "error": err,
+                    "samples": preview.get("samples") or preview.get("checked")}
         ok, err = await save_decision_rule(db, "agent", agent_id, rule)
         if not ok:
             return {"success": False, "error": err}
@@ -123,12 +138,17 @@ async def handle_decision_tool(
         return {"success": False, "error": "参数解析失败"}
     from app.services.world.decision_skill import (
         get_decision_rules, save_decision_rule, delete_decision_rule, rule_brief,
+        verify_before_save,
     )
     if name == "list_decision_skills":
         rules = await get_decision_rules(db, kind, entity_id)
         return {"success": True, "rules": [rule_brief(r) for r in rules], "count": len(rules)}
     if name == "write_decision_skill":
         rule = args.get("rule") or {}
+        ok, err, _preview = await verify_before_save(
+            db, kind, entity_id, rule, args.get("verify") or {})
+        if not ok:
+            return {"success": False, "error": err, "samples": _preview.get("samples")}
         ok, err = await save_decision_rule(db, kind, entity_id, rule)
         return {"success": ok, "name": str(rule.get("name") or "").strip()} if ok else {"success": False, "error": err}
     if name == "delete_decision_skill":

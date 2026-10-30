@@ -51,12 +51,19 @@ AI 不该被每条消息唤醒。事件先过一层决策：**AI 自己写的规
 - `code` 与 `entry` **二选一**：沙箱的入口判定是 entry 优先，两个都给会跑 entry、`code` 静默失效，
   所以写入时就拒掉。入口文件本身抛异常时，回执与 `code` 模式逐字一致（同一个 runner 模板、
   同一条 `stderr` 末行）。
-- 试跑回显的 `wakes_owner` 与真跑口径对齐：脚本没跑成时它必须是 `true`——真跑的失败与 `notify`
-  无关，一律经 `failure_note` 交回本体；只照抄 `notify` 会出现「success=false + 不唤醒」的自相矛盾。
+- `on_error` 三档之一（默认 `wake`）：`wake` / `fallback_reply` / `silent`，其它值写入即拒。
+  `fallback_reply` 必须带 `error_reply`（脚本挂掉时代发的那句话，≤4000 字同 `reply`）。
+- 试跑回显的 `wakes_owner` 与真跑口径对齐：脚本没跑成且 `on_error=wake` 时它必须是 `true`
+  （失败与 `notify` 无关，一律经 `failure_note` 交回本体）；`fallback_reply`/`silent` 时是 `false`。
+  只照抄 `notify` 会出现「success=false + 不唤醒」的自相矛盾回显。
 - `silent` 是「不回应」的正式表达：命中即静默（不代发、不唤醒本体）。此前只能给 `reply_template`
   塞一句空话，或让 `run_script` 打印空 JSON 绕过去。
 - 关键词运算与阈值写入时校验（`utils/pure/conditions.py`）：`similar` 的关键词/阈值、
   正则的形状、条件树规模（8 层 / 64 节点）都当场说清——安静地不命中比报错难查得多。
+- 启用前检验 `verify` 必填，且收**数组**（正例 + 反例）：每条 `{event, content, ...}`，
+  `expect` 默认 `hit`（该命中），`miss` 是反例（不该命中）；单条对象按一条正例处理（旧写法照旧能用），
+  上限 8 条。平台把每条都跑一遍，任何一条不符预期就拒绝落地，并指出是第几条、为什么。
+  只验正例等于只证明了「会命中」，证明不了「不误触」——反例才是误触的守门人。
 - 工具描述与 schema 说明只有**一处**（`decision_skill.rule_schema_desc()`），
   平台工具与世界链路共用同一份文案，避免加情景时漏改一处。
 
@@ -73,8 +80,18 @@ AI 不该被每条消息唤醒。事件先过一层决策：**AI 自己写的规
 | 命中但**没办成** | `{hit: True, handled: False, name, result, note}` | 同上：事件交回本体，`note` 说清哪一步没成 |
 
 「没办成」= `do` 的返回里 `success=False`（脚本崩了、工具报错、脚本排队没轮上）。
-它**不**按"办完了"静默跳过：那样等于把这个事件吃掉——人还在等回应、申请还挂着，本体永远不知道。
-翻回 `handled=False` 就走原来的唤醒路径，由 `note` 说明是技能挂了，不是没人找它。
+去哪由规则自己的 `on_error` 定（分派只在 `_failure_outcome` 一处）：
+
+| `on_error` | 返回 | 真跑时会怎样 |
+|-------------|------|--------------|
+| `wake`（默认） | `{hit: True, handled: False, name, result, note}` | 翻回 `handled=False` 走原唤醒路径，`note` 说清是技能挂了 |
+| `fallback_reply` | `{hit: True, handled: True, reply, note: ""}` | 代发 `error_reply` 那句兜底话，**不唤醒**；账本另留一条 |
+| `silent` | `{hit: True, handled: True, reply: "", note: ""}` | 不代发、不唤醒，**只写一条账本通知** |
+
+默认之所以是 `wake`：把失败按"办完了"静默跳过，等于把这个事件吃掉——人还在等回应、申请还挂着，
+本体永远不知道。另两档是写规则的人自己选的取舍，但`silent` 不叫醒 ≠ 不知道，
+所以 `fallback_reply` / `silent` 都必定写账本（`silent_failure_note`，带 `on_error=` 口径便于回查）；
+群助手不是 agent 行、账本挂不到它名下，非 `wake` 档对它就是"不唤醒不代发 + 记日志"。
 
 `note` 文案有三处出口，都在 `decision_skill` 里各管一种情况：`notify_note`（要本体判断）、
 `failure_note`（没办成）、`engine_error_note`（判定出错）。群消息链路注入到 `build_messages` 之后，
@@ -121,10 +138,29 @@ AI 不该被每条消息唤醒。事件先过一层决策：**AI 自己写的规
 - `execute=false` 时 `run_script` 只回显不真跑：沙箱里置 `DRY_RUN=1`（`agent_sandbox.run_agent_code(dry_run=True)`），
   真跑也不落外部效果。
 - 试跑不落库、不代发、不唤醒——只回答“这条规则在这么一条事件上会怎么样”。
+- 命中后还会回显 `on_error`（失败时的去向）；`fallback_reply` 连 `error_reply` 一起回显，
+  免得等真挂了才知道这句话写没写。
 - 规则描述里教两种口诀（`rule_schema_desc()`）：整句才触发 `{"content_clean":"签到"}`；
   提到就触发且不通知你（慎用，可能误触）`{"content_clean_contains":"签到"}`。
 
-## 7. 工具与归属（决策四件套）
+## 7. 命中统计（stats）
+
+每条规则平台都记命中：`config._stats = {hit_count, first_hit_at, last_hit_at, recent[≤20]}`，
+`recent` 每条是 `{at, content, action, ok, handled}`（`content` 取 `content_clean`，截 60 字；
+`ok` = do 本身办成没有，`handled` = 这件事由程序接住了没有、没交回本体）。
+
+- 读法：`hit_count=0` 就是「这条从没触发过」——规则死了不用等某天发现，列表里直接能看见；
+  `recent` 是「最近到底命中过什么」，一直在误触能从那里认出来（比如条件用了 `_contains`，
+  recent 里就全是闲聊）。
+- 列表回显走 `rule_brief`：`stats` 只给最后 5 条 `recent`（20 条全量会把上下文撑满），
+  原始 `_stats` 键不回显。
+- 写入：`record_hit` 在 `run_decision_engine` 命中后记一次（含没办成的那次——统计读的是"动没动"，
+  不是成功率）。**不另开事务、不自己 commit**：写在调用方这段工作里随它落库；统计是旁路，
+  任何异常只记 debug，不影响消息本身。
+- 同名覆盖（`save_decision_rule`）把统计带到新规则上；AI 自己传进来的 `_stats` 不认——
+  否则它就能把「从没命中」改成命中过。
+
+## 8. 工具与归属（决策四件套）
 
 决策工具是**注册表里的普通平台工具**（`app/tools/decision.py` 的四个 `ToolPlugin`），归
 `self_management` 段。段不是标签：AI 系统提示的「技能背包」与管理员背包都遍历
@@ -146,7 +182,7 @@ AI 不该被每条消息唤醒。事件先过一层决策：**AI 自己写的规
 - **状态**：四件套只在 `active` 可用（`dnd` 时既看不了也改不了自己的规则）。要不要放进 `dnd`
   是产品口径，改的话只动 `states`。
 
-## 8. 触发链路上的位置
+## 9. 触发链路上的位置
 
 - **群消息**：决策层在 `mention_only` 拦截**之前**（AI 自写规则优先于平台默认兜底）。
 - **性能**：一条消息要给群里所有 AI 过一遍，规则按消息**批量预取**（`load_rules_map`，一条 in 查询），
@@ -154,7 +190,7 @@ AI 不该被每条消息唤醒。事件先过一层决策：**AI 自己写的规
   预取时把映射一并取出。
 - **不绑世界**：引擎不再要求 AI/群绑定世界。`world` 参数只服务群助手的 `call_tool`/`run_script`。
 
-## 9. 作用域（待落地）
+## 10. 作用域（待落地）
 
 技能挂在**实体**上（AI / 群助手），存储里没有群字段：现状是**一处配置、处处生效**——在哪个群 @ 它、
 说中关键词都会命中，`run_script` 的账本（AI 自己的文件空间）也共用同一份。要限定范围，现在只能靠条件
@@ -168,7 +204,7 @@ DSL 里的 `group_id`：由 AI 自己写，写漏了就是到处生效。
 
 原生作用域字段（引擎在命中前按帧 / 焦段过滤）尚未实现；在此之前 `group_id` 条件仍是唯一手段。
 
-## 10. 未落地
+## 11. 未落地
 
 | 情景 | 卡在哪 |
 |------|--------|
@@ -178,7 +214,7 @@ DSL 里的 `group_id`：由 AI 自己写，写漏了就是到处生效。
 > 日志或实际私信，取决于执行 do 之后两人是否已是好友（通过申请即成为好友，拒绝则发不出）。
 > 后者一律唤醒本体，唤醒链路见 `ai/alarm._process_world_event`。
 
-## 11. 验证
+## 12. 验证
 
 ```
 docker exec ai_group_backend bash -c 'export TEST_DATABASE_URL="${DATABASE_URL%/*}/${DATABASE_URL##*/}_test"; \
@@ -190,7 +226,12 @@ docker exec ai_group_backend bash -c 'export TEST_DATABASE_URL="${DATABASE_URL%/
 `silent`+`notify` 被拒、`notify=true` 带 note 继续唤醒、未知事件被拒、批量预取与逐个读同源、
 入群情景端到端代发、定时情景匹配、关键词三态（全等/相似/长度）与 `content_clean` 收令牌、
 相似阈值写错被拒、公共时间字段、`reply_template` 占位。
-本批新增：`test_a_reply_survives_a_trailing_log_line`（末行日志别把要说的话吃掉）、
+本批新增：`test_on_error_fallback_reply_speaks_instead_of_waking`（失败代发兜底话 + 账本留痕）、
+`test_on_error_silent_keeps_the_failure_in_the_ledger_not_in_the_wake_path`（不唤醒但账本必须有）、
+`test_on_error_only_accepts_the_three_modes`（三档校验 + fallback 必须带 error_reply）、
+`test_verify_demands_a_negative_sample_too`（启用前检验要正例 + 反例）、
+`test_hit_stats_say_which_rule_never_fires`（命中统计：`hit_count` / `recent` / `never_hit`）、
+`test_a_reply_survives_a_trailing_log_line`（末行日志别把要说的话吃掉）、
 `test_a_broken_script_hands_the_event_back_with_the_reason`（脚本崩了交回本体）、
 `test_a_script_that_prints_no_json_is_not_silence`（print 了却给不出 reply 算失败）、
 `test_engine_failure_says_so_instead_of_looking_like_a_miss`（判定出错不是“没命中”）；

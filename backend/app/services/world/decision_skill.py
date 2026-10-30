@@ -46,7 +46,18 @@ _MAX_REPLY_CHARS = 4000     # reply_template 代发文本上限（字符）
 _MAX_SCRIPT_CHARS = 50000   # run_script 脚本正文上限（字符）
 _BRIEF_CODE_CHARS = 1000    # 回显时脚本正文保留的长度，超出只给开头 + 全文长度
 
+# 命中统计（平台写、AI 只读）：存在规则 config 的 _stats 键里，跟着规则走，不需要新表。
+# 读法是「哪条一直在动、哪条从没动过」——没有它，线上命中/未命中都不留痕，规则死没死只能靠猜。
+_STATS_KEY = "_stats"
+_STATS_RECENT = 20          # 每条规则最近命中的保留条数（"一直在误触"靠它看出来）
+_STATS_PREVIEW = 60         # 命中日志里正文的截断长度
+_STATS_BRIEF_RECENT = 5     # 列表回显只给最后几条：20 条全量回显会把上下文撑满
+_VERIFY_MAX_SAMPLES = 8     # 一次启用前检验最多跑几条样例（几条正例 + 几条反例就够）
+
 _DO_ACTIONS = ("reply_template", "call_tool", "run_script", "silent")
+# do 没办成时谁接这件事：默认交回本体（不吞错），另外两档是写规则的人自己的偏好。
+# fallback_reply 需要 error_reply 文本；silent 与 fallback_reply 都必定写一条账本通知。
+_ON_ERROR = ("wake", "fallback_reply", "silent")
 
 # 预置情景：写错的 event 等于永远不触发，故当场拒绝并列出可选值（情景表见 docs/dev/decision_layer.md）
 SCENARIOS: dict[str, str] = {
@@ -64,7 +75,8 @@ def rule_schema_desc() -> str:
     events = "；".join(f"{name}（{fields}）" for name, fields in SCENARIOS.items())
     return (
         "配置你自己的决策技能：声明「遇到什么情景我干什么、是否必须唤醒我本体」。"
-        f"结构：{{name, when:{{event, conditions}}, do:{{action,...}}, notify}}。event 支持：{events}。"
+        f"结构：{{name, when:{{event, conditions}}, do:{{action,...}}, notify, on_error}}。"
+        f"event 支持：{events}。"
         "所有情景都能读到的公共字段：now（HH:MM）/ today / weekday / hour。"
         "触发条件两种最常用写法（content_clean = 去掉 @ 令牌后的正文）："
         "「整句才触发」= {\"content_clean\":\"签到\"}；"
@@ -76,6 +88,9 @@ def rule_schema_desc() -> str:
         "（op 可 eq/ne/contains/starts_with/matches/similar/gt/gte/lt/lte/in；similar 认错别字）；"
         "也可写 {\"content_clean\":{\"starts_with\":\"训练\"}}，一个字段挂多个运算 = 同时满足。"
         "并可 and/or/not 自由嵌套；拿不准先 test_decision_skill 试跑一条样例。"
+        "启用前检验 verify 建议给数组（正例 + 反例都要）：每条 {event, content}，"
+        "expect 默认 \"hit\"（该命中），反例写 \"miss\"（不该命中）——"
+        "平台全跑一遍，任何一条不符预期就拒绝落地；只验正例只证明会命中，证明不了不误触。"
         "do 四选一：reply_template（{action, reply} 固定回复，零成本；可用占位 "
         "{sender_name} {sender_id} {group_id} {content} {now}）/ call_tool（{action, name, arguments} 调平台工具）/ "
         "run_script（{action, code} 或 {action, entry} 沙箱脚本：在你自己的文件空间里跑，不能联网。"
@@ -85,9 +100,15 @@ def rule_schema_desc() -> str:
         "要说的话 print 成 JSON {\"reply\":\"...\"}）。列表里过长的正文只回显开头）/ "
         "silent（{action} 静默：这条消息不回、也不唤醒你本体，用来声明「这种消息不值得理」）。"
         "notify=true = 命中后仍唤醒本体（执行结果会作为一条系统提示给你）；false = 程序处理完即止。"
-        "脚本没跑成（报错/超时/工具失败）时不看 notify，一律把失败原因交回你本体——notify=false 挂了也会告诉你。"
+        "脚本没跑成（报错/超时/工具失败）时按 on_error 走三档："
+        "\"wake\"（默认）= 把失败原因交回你本体（notify=false 挂了也一样叫醒你，不吞错）；"
+        "\"fallback_reply\" = 代发 error_reply 里那句兜底话，不唤醒你；"
+        "\"silent\" = 不唤醒也不代发，只往账本记一条——不叫醒不等于不知道，下一轮你能看到。"
+        "fallback_reply 与 silent 只在 do 没办成时生效，成功时仍按 notify。"
         "未 @ 你的消息到不到得了你，取决于这个群/通道的消息覆盖面。"
-        "同名覆盖更新，上限 20 条。"
+        "每条规则平台都记命中统计（列表里 stats.hit_count / last_hit_at / recent，"
+        "最近 20 条命中）；hit_count=0 就是「这条从没触发过」，该去试跑里查条件了。"
+        "同名覆盖更新（命中统计会跟着保留），上限 20 条。"
     )
 
 
@@ -99,7 +120,8 @@ def test_rule_desc() -> str:
         "run_script 默认只回显不执行，execute=true 才真跑（脚本里能读到 DRY_RUN=1）。"
         "返回里的 ctx 就是脚本环境变量 DECISION_CTX 的全部字段。"
         "字段分两类：ctx/checked/reply/script(execute=true) 是真跑出来的，hit/call/script(execute=false) "
-        "只是规则回显（没执行）；would 是计划动作。wakes_owner 按真跑口径给（脚本没跑成也是 true）。"
+        "只是规则回显（没执行）；would 是计划动作，on_error 是这条规则失败时的去向（wake/fallback_reply/silent）。"
+        "wakes_owner 按真跑口径给，但 on_error=fallback_reply/silent 时脚本没跑成也不唤醒。"
     )
 
 
@@ -119,6 +141,15 @@ def validate_rule(rule: dict) -> tuple[bool, str]:
     conditions = when.get("conditions")
     if conditions is not None and not isinstance(conditions, dict):
         return False, "when.conditions 必须是条件对象"
+    on_error = str(rule.get("on_error") or "wake").strip()
+    if on_error not in _ON_ERROR:
+        return False, f"on_error 只能是 {_ON_ERROR} 之一（默认 wake）"
+    if on_error == "fallback_reply":
+        if not str(rule.get("error_reply") or "").strip():
+            return False, ("on_error=fallback_reply 需要 error_reply：脚本挂掉时代你说的一句话"
+                           '（如 "这次卡住了，等下再来找我"）')
+        if len(str(rule.get("error_reply"))) > _MAX_REPLY_CHARS:
+            return False, f"error_reply 过长（≤{_MAX_REPLY_CHARS} 字）"
     do = rule.get("do") or {}
     action = str(do.get("action") or "")
     if action not in _DO_ACTIONS:
@@ -167,11 +198,29 @@ def brief_do(do: dict) -> dict:
     return do
 
 
+def rule_stats(rule: dict) -> dict:
+    """规则的命中统计（平台写，AI 只读）。没有统计就是空 dict，别造一个假的 0 出来。"""
+    stats = (rule or {}).get(_STATS_KEY)
+    return dict(stats) if isinstance(stats, dict) else {}
+
+
 def rule_brief(rule: dict) -> dict:
-    """技能对象的回显摘要（list_decision_skills 用）"""
-    out = dict(rule or {})
+    """技能对象的回显摘要（list_decision_skills 用）。
+
+    统计挂到 stats 上给 AI 看：hit_count=0 说明这条从没触发过，recent 里是最近几条命中的正文，
+    "一直在误触"能从那里看出来。原始 config 里的 _stats 不直接回显（那是平台内部键）。
+    """
+    out = {key: value for key, value in dict(rule or {}).items() if key != _STATS_KEY}
     if isinstance(out.get("do"), dict):
         out["do"] = brief_do(out["do"])
+    stats = rule_stats(rule)
+    hits = int(stats.get("hit_count") or 0)
+    out["stats"] = {
+        "hit_count": hits,
+        "last_hit_at": str(stats.get("last_hit_at") or ""),
+        "recent": list(stats.get("recent") or [])[-_STATS_BRIEF_RECENT:],
+        "never_hit": hits == 0,
+    }
     return out
 
 
@@ -199,23 +248,32 @@ async def get_decision_rules(db, kind: str, entity_id: int) -> list[dict]:
     return []
 
 
+def _carry_stats(rule: dict, previous: dict | None) -> dict:
+    """同名覆盖时把命中统计带到新规则上：改一条条件不该让它的历史归零。"""
+    stats = rule_stats(previous or {})
+    return {**rule, _STATS_KEY: stats} if stats else dict(rule)
+
+
 async def save_decision_rule(db, kind: str, entity_id: int, rule: dict) -> tuple[bool, str]:
     """新增/更新（同名覆盖）一个决策技能。"""
     db = _ensure_repo(db)
     ok, err = validate_rule(rule)
     if not ok:
         return False, err
+    # 统计是平台写的：AI 自己带一份进来不认（否则自己就能把"从没命中"改成命中过）
+    rule = {key: value for key, value in dict(rule or {}).items() if key != _STATS_KEY}
     name = str(rule["name"]).strip()
     if kind == "group_assistant":
         from app.models.world import GroupAssistant
         ga = await db.get(GroupAssistant, entity_id)
         if ga is None:
             return False, "群助手不存在"
-        rules = list((ga.config or {}).get("decision_rules") or [])
-        rules = [r for r in rules if r.get("name") != name]
+        old_rules = list((ga.config or {}).get("decision_rules") or [])
+        previous = next((r for r in old_rules if r.get("name") == name), None)
+        rules = [r for r in old_rules if r.get("name") != name]
         if len(rules) >= _MAX_RULES:
             return False, f"决策技能已达上限（{_MAX_RULES} 条）"
-        rules.append(rule)
+        rules.append(_carry_stats(rule, previous))
         cfg = dict(ga.config or {})
         cfg["decision_rules"] = rules
         ga.config = cfg
@@ -232,7 +290,7 @@ async def save_decision_rule(db, kind: str, entity_id: int, rule: dict) -> tuple
             )
         )).scalar_one_or_none()
         if row is not None:
-            row.config = rule
+            row.config = _carry_stats(rule, row.config or {})
         else:
             count = (await db.execute(
                 select(AgentSkill).where(
@@ -280,8 +338,91 @@ async def delete_decision_rule(db, kind: str, entity_id: int, name: str) -> bool
 
 
 # ═══════════════════════════════════════════════════════════
-# 决策引擎：事件上下文 → 技能匹配
+# 命中统计：哪条一直在动、哪条从没动过
 # ═══════════════════════════════════════════════════════════
+
+def _bump_stats(old, entry: dict) -> dict:
+    """命中一次之后的统计对象（纯函数，读旧写新，唯一出处）。"""
+    stats = dict(old) if isinstance(old, dict) else {}
+    recent = [item for item in (stats.get("recent") or []) if isinstance(item, dict)]
+    recent.append(entry)
+    return {
+        "hit_count": int(stats.get("hit_count") or 0) + 1,
+        "first_hit_at": str(stats.get("first_hit_at") or entry.get("at") or ""),
+        "last_hit_at": str(entry.get("at") or ""),
+        "recent": recent[-_STATS_RECENT:],
+    }
+
+
+def _now_text() -> str:
+    """统计里的时间用本地时间：AI 读它的时候跟 now/today 那几个字段是同一套口径。"""
+    from datetime import datetime
+
+    from app.utils.pure.timeutil import get_zoneinfo
+    return datetime.now(get_zoneinfo(settings.display_timezone)).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _plain_session(db):
+    """仓库包装 → 底层会话（统计是旁路写，不能另开事务把调用方的半成品一起提交）。"""
+    return getattr(db, "session", None) or db
+
+
+async def _merge_stats(db, kind: str, entity_id: int, name: str, entry: dict) -> None:
+    """把一次命中并进规则 config 的 _stats。规则刚被删掉就安静返回。"""
+    session = _plain_session(db)
+    if session is None or not hasattr(session, "get"):
+        return
+    if kind == "agent":
+        from app.models.agent_skill import AgentSkill
+        from sqlalchemy import select
+        row = (await session.execute(select(AgentSkill).where(
+            AgentSkill.agent_id == entity_id,
+            AgentSkill.skill_type == "decision",
+            AgentSkill.name == name,
+        ))).scalar_one_or_none()
+        if row is None:
+            return
+        cfg = dict(row.config or {})
+        row.config = {**cfg, _STATS_KEY: _bump_stats(cfg.get(_STATS_KEY), entry)}
+        return
+    if kind == "group_assistant":
+        from app.models.world import GroupAssistant
+        ga = await session.get(GroupAssistant, entity_id)
+        if ga is None:
+            return
+        cfg = dict(ga.config or {})
+        rules = list(cfg.get("decision_rules") or [])
+        for item in rules:
+            if isinstance(item, dict) and str(item.get("name") or "") == name:
+                item[_STATS_KEY] = _bump_stats(item.get(_STATS_KEY), entry)
+        cfg["decision_rules"] = rules
+        ga.config = cfg
+
+
+async def record_hit(db, kind: str, entity_id: int, rule: dict, ctx: dict, result: dict, *,
+                     handled: bool | None = None) -> None:
+    """记一次命中（平台写、AI 只读）。
+
+    写在调用方这段工作里、不自己 commit：命中发生在消息链路里，那里的一次 commit 会把同一会话
+    里别人的半成品一起提交；工作出块时随它一起落库，回滚了就丢一次统计——统计是旁路，不能影响
+    消息本身。任何异常都只记 debug 日志。
+    """
+    name = str((rule or {}).get("name") or "")
+    if not name:
+        return
+    do = (rule or {}).get("do") or {}
+    entry = {
+        "at": _now_text(),
+        "content": str((ctx or {}).get("content_clean") or (ctx or {}).get("content") or "")[:_STATS_PREVIEW],
+        "action": str(do.get("action") or ""),
+        "ok": (result or {}).get("success") is not False,   # do 本身办成没有
+        "handled": handled,                                # 这件事由程序接住了吗（没交回本体）
+    }
+    try:
+        await _merge_stats(db, kind, entity_id, name, entry)
+    except Exception as e:  # noqa: BLE001 —— 统计是旁路，不能拖垮消息链路
+        logger.debug("决策技能命中统计写入失败（%s %s「%s」）: %s", kind, entity_id, name, e)
+
 
 async def run_decision_engine(
     db, kind: str, entity_id: int, world, event_type: str, ctx: dict,
@@ -307,10 +448,15 @@ async def run_decision_engine(
             return {"hit": False}
         do = rule.get("do") or {}
         result = await execute_do(db, world, do, ctx, kind=kind, entity_id=entity_id)
-        if result.get("success") is False:
-            # 没办成也要让本体知道：脚本崩了、工具报错、排队没轮到，都不能当成"办完了"咽下去
-            return {"hit": True, "handled": False, "name": str(rule.get("name") or ""),
-                    "result": result, "note": failure_note(rule, result)}
+        # 没办成时的去向由 on_error 定（唯一出处）：默认交回本体，不许当成"办完了"咽下去
+        outcome = (await _failure_outcome(db, kind, entity_id, rule, ctx, result)
+                   if result.get("success") is False else None)
+        # 命中即记一次（含没办成的那次）：统计读的是"哪条一直在动、哪条从没动过"，不是成功率
+        await record_hit(db, kind, entity_id, rule, ctx, result,
+                         handled=bool(outcome["handled"]) if outcome is not None
+                         else not bool(rule.get("notify")))
+        if outcome is not None:
+            return outcome
         if bool(rule.get("notify")):
             return {"hit": True, "handled": False, "name": str(rule.get("name") or ""),
                     "result": result, "note": notify_note(rule, result)}
@@ -443,6 +589,46 @@ def failure_note(rule: dict, result: dict) -> str:
     why = str((result or {}).get("error") or "没有返回可代发的内容")[:300]
     return (f"- 你的决策技能「{str((rule or {}).get('name') or '')}」命中了，但没办成：{why}。"
             "这件事还没有处理，你自己判断要不要接上（不想管也可以不管）。")
+
+
+def silent_failure_note(rule: dict, result: dict, mode: str) -> str:
+    """on_error 不是 wake 时记进账本的那句话（唯一出处）。
+
+    与 failure_note 的差别只在结尾：那条是"交给你接上"，这条要说明"为什么没吵醒你、事后怎么找"。
+    """
+    why = str((result or {}).get("error") or "没有返回可代发的内容")[:300]
+    said = "已经代你说了一句兜底话" if mode == "fallback_reply" else "这次没有代发任何内容"
+    return (f"- 你的决策技能「{str((rule or {}).get('name') or '')}」命中了，但没办成：{why}。"
+            f"按 on_error={mode} 没有唤醒你，{said}；这件事还没处理，能接上就接上。")
+
+
+async def _failure_outcome(db, kind: str, entity_id: int, rule: dict, ctx: dict, result: dict) -> dict:
+    """do 没办成之后谁接这件事 —— on_error 三档的唯一分派处。
+
+    wake（默认）：翻回 handled=False 走原唤醒路径，note 说清是技能挂了，不吞错。
+    fallback_reply：代发 error_reply，不唤醒；账本照样留一条（事情没办成，它该知道）。
+    silent：不唤醒也不代发，只留账本——"不叫醒我"不等于"我不知道"。
+
+    账本只对入驻 AI 有意义（群助手不是 agent 行，账本挂不到它名下），所以按 kind 收口：
+    群助手选非 wake 档时就只是"不唤醒、不代发"，失败原因仍进日志。
+    """
+    mode = str((rule or {}).get("on_error") or "wake").strip()
+    if mode not in _ON_ERROR:            # 校验期已经挡过；旧数据兜底按最安全的 wake 走
+        mode = "wake"
+    if mode == "wake":
+        return {"hit": True, "handled": False, "name": str(rule.get("name") or ""),
+                "result": result, "note": failure_note(rule, result)}
+    note = silent_failure_note(rule, result, mode)
+    if kind == "agent":
+        try:
+            await leave_ledger_notice(_plain_session(db), entity_id, (ctx or {}).get("group_id"), note)
+        except Exception as e:  # noqa: BLE001 —— 账本写不进去也不能把消息吃掉
+            logger.warning("决策技能失败通知写账本失败（agent %s）: %s", entity_id, e)
+    else:
+        logger.info("🎲 决策技能没办成（%s %s，on_error=%s），群助手无账本，只记日志: %s",
+                    kind, entity_id, mode, str((result or {}).get("error") or "")[:200])
+    reply = str((rule or {}).get("error_reply") or "") if mode == "fallback_reply" else ""
+    return {"hit": True, "handled": True, "reply": reply, "note": ""}
 
 
 def engine_error_note(exc: Exception) -> str:
@@ -706,28 +892,81 @@ def preview_sample_ctx(event_type: str, sample: dict, group_id: int | None = Non
 
 
 async def verify_before_save(
-    db, kind: str, entity_id: int, rule: dict, verify: dict, *,
+    db, kind: str, entity_id: int, rule: dict, verify: dict | list, *,
     group_id: int | None = None,
 ) -> tuple[bool, str, dict]:
-    """启用前检验：拿 AI 自己给的样例跑一次引擎，不命中就不许落地。
+    """启用前检验：拿 AI 自己给的样例跑一遍引擎，全部符合预期才许落地。
 
-    为什么必须有这一步：决策代理是「程序替它行动」的东西，写错了它自己也看不见——
-    规则不命中时没有任何反馈，只有某天它发现「我明明配了，为什么没动」。
-    样例由写规则的 AI 给（它最清楚想让它替什么），平台只负责跑一遍并如实回报。
+    为什么必须有这一步：决策代理是「程序替它行动」的东西，写错了它自己也看不见——规则不命中
+    时没有任何反馈，只有某天它发现「我明明配了，为什么没动」。样例由写规则的 AI 给（它最清楚
+    想让它替什么），平台只负责跑一遍并如实回报。
+
+    verify 收单条样例对象，也收数组（推荐）：每条形如
+    {"event": "group_message", "content": "签到", "expect": "hit"}；expect 默认 "hit"（应当命中），
+    "miss" 是反例（不该命中）。只验正例等于只证明了「会命中」，证明不了「不误触」。
     """
-    if not isinstance(verify, dict) or not verify:
-        return False, "缺 verify：要给出一条「这条代理将来会触发我」的检验样例（event + 样例消息/条件）", {}
-    out = await preview_decision(
-        db, kind, entity_id, None,
-        str(verify.get("event") or "group_message"), verify,
-        rule=rule, execute=False, group_id=group_id,
-    )
-    if not out.get("success", True):
-        return False, str(out.get("error") or "检验未能执行"), out
-    if not out.get("hit"):
-        return False, ("这条规则在你给的检验样例下不会触发——它不会替你处理消息，也不会唤醒你；"
-                       "请检查 when 条件与样例是否匹配"), out
-    return True, "", out
+    ok, err, samples = _normalize_verify_samples(verify)
+    if not ok:
+        return False, err, {}
+    rows: list[dict] = []
+    for index, item in enumerate(samples, 1):
+        sample, expect = item["sample"], item["expect"]
+        out = await preview_decision(
+            db, kind, entity_id, None, str(sample.get("event") or "group_message"),
+            sample, rule=rule, execute=False, group_id=group_id,
+        )
+        if not out.get("success", True):
+            return False, f"第 {index} 条样例没能执行：{out.get('error') or '未知原因'}", {"samples": rows}
+        hit = out.get("hit") is not None
+        rows.append({
+            "index": index,
+            "expect": expect,
+            "hit": hit,
+            "content": str(sample.get("content") or "")[:60],
+            "why": "" if hit else str(out.get("why") or ""),
+        })
+        if (expect == "hit") != hit:
+            return False, _sample_mismatch(index, expect, sample, out), {"samples": rows}
+    return True, "", {"samples": rows}
+
+
+def _normalize_verify_samples(verify) -> tuple[bool, str, list[dict]]:
+    """verify → 样例列表。单条对象按「一条正例」处理（旧写法照旧能用）。"""
+    items = verify if isinstance(verify, list) else [verify]
+    if not items:
+        return False, ('缺 verify：要给至少一条检验样例，形如 {"event": "group_message", "content": "签到"}；'
+                       '要证明不误触，再给一条反例 {"content": "今天训练了个模型", "expect": "miss"}'), []
+    if len(items) > _VERIFY_MAX_SAMPLES:
+        return False, f"verify 最多 {_VERIFY_MAX_SAMPLES} 条样例（正例几条 + 反例几条就够）", []
+    samples: list[dict] = []
+    for index, item in enumerate(items, 1):
+        if isinstance(item, dict) and len(item) == 1 and isinstance(next(iter(item.values())), list):
+            # {"samples": [...]} 这类包一层的写法：静默当成一条空样例等于让人以为通过了，
+            # 当场说清要的是顶层数组
+            return False, (f"verify 第 {index} 条是包了一层的写法（{list(item)[0]}: [...]），"
+                           "直接给顶层数组：[{\"content\": \"签到\"}, "
+                           "{\"content\": \"今天训练了个模型\", \"expect\": \"miss\"}]"), []
+        if not isinstance(item, dict) or not item:
+            return False, f"verify 第 {index} 条样例必须是对象（形如 {{...}}）", []
+        expect = str(item.get("expect") or "hit").strip().lower()
+        if expect not in ("hit", "miss"):
+            return False, f"verify 第 {index} 条样例的 expect 只能是 hit 或 miss，收到 {expect!r}", []
+        sample = {key: value for key, value in item.items() if key != "expect"}
+        sample.setdefault("event", "group_message")
+        samples.append({"sample": sample, "expect": expect})
+    return True, "", samples
+
+
+def _sample_mismatch(index: int, expect: str, sample: dict, out: dict) -> str:
+    """样例不符预期时给 AI 的那句话：哪条、为什么、怎么改。"""
+    content = str(sample.get("content") or "")
+    if expect == "hit":
+        why = str(out.get("why") or "条件不成立")
+        return (f"第 {index} 条样例（应当命中）没有命中：{why}。样例消息：{content!r}；"
+                "检查 when 条件与样例是否对得上（@ 令牌要用 content_clean 判）。")
+    name = str((out.get("hit") or {}).get("name") or "")
+    return (f"第 {index} 条反例（不该命中）却命中了规则「{name}」——这类消息会被程序吃掉：{content!r}。"
+            "把条件收紧（比如用 content_clean 判整句/开头，别用 _contains），再重新提交。")
 
 
 async def preview_decision(
@@ -781,6 +1020,10 @@ async def preview_decision(
     do = hit.get("do") or {}
     action = str(do.get("action") or "")
     out["hit"] = {"name": str(hit.get("name") or ""), "do": brief_do(do), "notify": bool(hit.get("notify"))}
+    # 失败时的去向也是"这条规则会怎么走"的一部分：试跑时一并回显，别等真挂了才知道
+    out["on_error"] = str(hit.get("on_error") or "wake")
+    if out["on_error"] == "fallback_reply":
+        out["error_reply"] = str(hit.get("error_reply") or "")
     out["wakes_owner"] = bool(hit.get("notify"))
     if action == "reply_template":
         out["would"], out["reply"] = "reply", render_reply_template(do.get("reply"), ctx).strip()
@@ -807,10 +1050,18 @@ async def preview_decision(
                                  ctx=ctx, dry_run=True))}
             out["reply"] = str(out["script"].get("reply") or "")
             if out["script"].get("success") is False:
-                # 真跑时失败与 notify 无关，一律交回本体（failure_note → 唤醒或账本）。
-                # 试跑若只照抄 notify，就会出现「脚本没跑成 + wakes_owner=false」的自相矛盾回显。
-                out["wakes_owner"] = True
-                out["why"] = "脚本没跑成；真跑时这件事会交回你（notify=false 也交）"
+                # 失败时的去向按 on_error 走（wake 才交回本体）。试跑若只照抄 notify，
+                # 就会出现「脚本没跑成 + wakes_owner=false」的自相矛盾回显。
+                if out["on_error"] == "wake":
+                    out["wakes_owner"] = True
+                    out["why"] = "脚本没跑成；真跑时这件事会交回你（notify=false 也交）"
+                elif out["on_error"] == "fallback_reply":
+                    out["wakes_owner"] = False
+                    out["why"] = (f"脚本没跑成；真跑时代发兜底话「{out.get('error_reply') or ''}」，"
+                                  "不唤醒你")
+                else:
+                    out["wakes_owner"] = False
+                    out["why"] = "脚本没跑成；真跑时不代发也不唤醒，只记进账本（下一轮你能看到）"
         else:
             out["script"] = {"executed": False, "note": "群助手的脚本请在真实事件上验证"}
     else:

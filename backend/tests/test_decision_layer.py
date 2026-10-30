@@ -578,3 +578,122 @@ def test_group_assistant_schemas_come_from_the_registry():
     assert set(defs) == set(DECISION_TOOL_NAMES)
     for name, d in defs.items():
         assert d == ToolRegistry.get_plugin(name).to_definition(), name
+
+
+async def test_verify_demands_a_negative_sample_too(migrated_db):
+    """启用前检验要正例 + 反例：只验正例只证明会命中，证明不了不误触"""
+    from app.database import async_session
+    from app.services.world.decision_skill import verify_before_save
+
+    rule = {
+        "name": "训练游玩",
+        "when": {"event": "group_message",
+                 "conditions": {"content_clean": {"matches": r"^(训练|游玩)\s"}}},
+        "do": {"action": "reply_template", "reply": "收到"}, "notify": False,
+    }
+    async with async_session() as db:
+        await _seed(db)
+        ok, err, out = await verify_before_save(db, "agent", 24, rule, [
+            {"content": "训练 一只小鲸鱼"},
+            {"content": "游玩 水母"},
+            {"content": "今天训练了个模型", "expect": "miss"},
+        ])
+        assert ok, (err, out)
+        assert [item["hit"] for item in out["samples"]] == [True, True, False], out["samples"]
+        # 反例写错（本该不命中却命中）必须拒绝，并指出是第几条
+        ok, err, _ = await verify_before_save(db, "agent", 24, rule, [
+            {"content": "训练 一只小鲸鱼", "expect": "miss"},
+        ])
+        assert not ok and "第 1 条" in err and "反例" in err, err
+
+
+async def test_hit_stats_say_which_rule_never_fires(migrated_db):
+    """命中统计：命中的有计数与最近正文，没命中的 never_hit——规则死没死不用靠猜"""
+    from app.database import async_session
+    from app.services.world.decision_skill import (
+        get_decision_rules, rule_brief, run_decision_engine,
+    )
+
+    async with async_session() as db:
+        await _seed(db)
+        ok, err = await _save(db, {
+            "name": "签到", "when": {"event": "group_message", "conditions": {"content_clean": "签到"}},
+            "do": {"action": "reply_template", "reply": "已记录"}, "notify": False,
+        })
+        assert ok, err
+        ok, err = await _save(db, {
+            "name": "从没命中", "when": {"event": "group_message", "conditions": {"content_clean": "游玩"}},
+            "do": {"action": "silent"}, "notify": False,
+        })
+        assert ok, err
+        dec = await run_decision_engine(db, "agent", 24, None, "group_message", _incoming("签到"))
+        assert dec["hit"] and dec["handled"], dec
+        brief = {item["name"]: item for item in map(rule_brief, await get_decision_rules(db, "agent", 24))}
+        assert brief["签到"]["stats"]["hit_count"] == 1, brief["签到"]
+        assert brief["签到"]["stats"]["recent"][-1]["content"] == "签到", brief["签到"]
+        assert brief["从没命中"]["stats"]["never_hit"] is True, brief["从没命中"]
+
+
+async def test_on_error_fallback_reply_speaks_instead_of_waking(migrated_db):
+    """on_error=fallback_reply：脚本挂掉时代发兜底话，不唤醒本体；账本照样留一条"""
+    from app.database import async_session
+    from app.services.history import history_service
+    from app.services.world.decision_skill import run_decision_engine
+
+    async with async_session() as db:
+        await _seed(db)
+        ok, err = await _save(db, {
+            "name": "记账", "when": {"event": "group_message"},
+            "do": {"action": "run_script", "code": "raise RuntimeError('台账坏了')"},
+            "notify": False, "on_error": "fallback_reply",
+            "error_reply": "这次卡住了，等下再来找我",
+        })
+        assert ok, err
+        dec = await run_decision_engine(db, "agent", 24, None, "group_message", _incoming())
+        assert dec["hit"] is True and dec["handled"] is True, dec
+        assert dec["reply"] == "这次卡住了，等下再来找我" and dec["note"] == "", dec
+        rows = await history_service.read(db, 24, "group:7")
+        assert any("没办成" in str(r.get("content")) and "fallback_reply" in str(r.get("content"))
+                   for r in rows), rows
+
+
+async def test_on_error_silent_keeps_the_failure_in_the_ledger_not_in_the_wake_path(migrated_db):
+    """on_error=silent：不唤醒也不代发——但账本里必须有一条，不叫醒 ≠ 不知道"""
+    from app.database import async_session
+    from app.services.history import history_service
+    from app.services.world.decision_skill import run_decision_engine
+
+    async with async_session() as db:
+        await _seed(db)
+        ok, err = await _save(db, {
+            "name": "记账", "when": {"event": "group_message"},
+            "do": {"action": "run_script", "code": "raise TimeoutError('超时了')"},
+            "notify": False, "on_error": "silent",
+        })
+        assert ok, err
+        dec = await run_decision_engine(db, "agent", 24, None, "group_message", _incoming())
+        assert dec["hit"] is True and dec["handled"] is True, dec
+        assert dec["reply"] == "" and dec["note"] == "", dec
+        rows = await history_service.read(db, 24, "group:7")
+        assert any("没办成" in str(r.get("content")) and "on_error=silent" in str(r.get("content"))
+                   for r in rows), rows
+
+
+def test_on_error_only_accepts_the_three_modes():
+    """on_error 校验：三档之外拒绝，fallback_reply 必须给 error_reply"""
+    from app.services.world.decision_skill import validate_rule
+
+    base = {"name": "x", "when": {"event": "group_message"},
+            "do": {"action": "silent"}, "notify": False}
+    ok, err = validate_rule({**base, "on_error": "wake"})
+    assert ok, err
+    ok, err = validate_rule({**base, "on_error": "silent"})
+    assert ok, err
+    ok, err = validate_rule({**base, "on_error": "shout"})
+    assert not ok and "on_error" in err, err
+    ok, err = validate_rule({**base, "on_error": "fallback_reply"})
+    assert not ok and "error_reply" in err, err
+    ok, err = validate_rule({**base, "on_error": "fallback_reply", "error_reply": "稍等"})
+    assert ok, err
+
+
