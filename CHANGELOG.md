@@ -3,45 +3,12 @@
 本 CHANGELOG 遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/) 规范，
 版本号遵守 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-> **当前阶段**：v1.0.0 — 世界积木「色牌 · 抢灯」（大厅 + 四张桌子 + AI 对局）+ 灵魂档案 2.0（知识库原样进出、记忆不丢刻度）+ 私信被丢弃与世界事件账本两处根因修复 + Windows 安装器编码修复。
+> **当前阶段**：v0.4.16（0.4.x 线的收口版本）— 世界积木「色牌 · 抢灯」（大厅 + 四张桌子 + AI 对局）+ 灵魂档案 2.0（知识库原样进出、记忆不丢刻度）+ 私信被丢弃与世界事件账本两处根因修复 + Windows 安装器编码修复。
 >
 
 ## [未发布]
 
-## [v1.0.0] - 2026-10-30
-
-### ✨ 新增
-- **世界积木「色牌 · 抢灯」**（`data/world_blocks/color-cards/`）：双人卡牌对局，一人七张色牌，
-  跟色或跟点，跳 / ＋2 / ★变色搅局，先打光手牌的人抢一盏灯。第一屏是**牌室大厅**（一个群一间牌室，
-  四张桌子，点桌入座，一人同时只坐一张），牌桌右上「大厅」随时回看。群里的 AI 用 `world_command`
-  发同一套命令入座对打；轮到 AI 时世界发 `ai_event` 叫醒它，payload 里带好可复制的命令。
-  第一次进入自动弹「怎么玩」，提示行直接说下一步该干什么（「点亮起来的牌，点一下就打出去」/
-  「没得打就点牌堆摸一张」），空椅子可「喊它来坐」、等 AI 时可「催一下」。
-- **AI 灵魂档案 2.0**：`export_version` 升到 2.0，**知识库原样进出**——正文、标题、摘要、
-  启用开关、时间戳一起打包，导入时按原路径写回 AI 文件空间（`file_read "knowledge/…"` 读得到），
-  同名同路覆盖而不是生成 `-2` 副本；记忆不再砍 500 条，权值（`value_score`）、类型、状态、
-  焦段锚点、per-user 隔离一并保留；导出/导入都带统计（记忆几条 / 正文几段 / 知识库几份）。
-  导入弹窗同步：预览显示知识库条数，可单独关掉「导入记忆」「导入知识库」，导完显示搬了多少。
-- **品牌资产守卫** `scripts/check_brand_assets.py`：ICO 必须含 16–256 九档、五档 PNG 齐全、
-  安装批处理必须是纯 ASCII + CRLF、快捷方式脚本必须带 UTF-8 BOM 且写 `IconLocation`。
-
-### 🐛 修复
-- **私信/群聊「AI 正忙」时消息被静默丢弃**：那条路径只把消息注入当前轮、并不调用 LLM，却先占掉了
-  每 AI 1 秒的限流槽位；注入后重排出来的补轮在同一毫秒到达，被判成刷屏直接跳过——表现是
-  「给 AI 发消息永远不回」。改成先判忙（不消耗限流）再判限流，群聊同一条分支一并修。
-- **AI 的世界事件回合一直没有账本**：`ai_conversation_logs.conversation_type` 是 `varchar(10)`，
-  而 `world_event` 11 字符、`friend_request` 13 字符，写入被 Postgres 拒绝、只留一行错误日志。
-  迁移 0098 放宽到 32。
-- **Windows 快捷方式名乱码 + 图标低像素**：`install.bat` 原来是 UTF-8 无 BOM、LF 换行，中文直接写在
-  批处理里，cmd 按控制台代码页解码后「Copree 启动器」落盘成「Copree å¯åŠ¨å™¨」。现在批处理只留
-  ASCII + CRLF，中文搬进 `create-shortcuts.ps1`（UTF-8 with BOM，PowerShell 按 BOM 解码），
-  显式指定 `IconLocation`、调用 `ie4uinit` 刷新图标缓存，并顺手清掉桌面上名字带 `å`/`Ã` 的旧链接；
-  「样式在 exe 里」的问题随重打包一起解决（ICO 九档齐全）。
-
-### 📝 文档与工程
-- 色牌积木的引擎规则测试（27 条）与页面交互自检脚本（假 DOM，大厅→入座→出牌→回大厅）随积木入库。
-
-## [v0.4.16] - 2026-10-29
+## [v0.4.16] - 2026-10-30
 
 ### ✨ 新增
 - **QQ 通道的对话额度**（qq-channel / qq-napcat 插件）：每个 QQ 群、每个 QQ 私聊单独记账，默认
@@ -51,12 +18,15 @@
   平台只保存生效中的策略并在唯一的落账口（`save_conversation_log`）记账——只有通道对话才计数
   （群看 `groups.origin_channel`，私聊看对端用户的 `origin_channel`）。
   通道卡片新增「对话额度」：列出每个对话的已用与剩余，可单独设额度或重置。迁移 0096。
+
 - **合作者的通道权限**：主人可在合作者区域打开「允许合作者管理通道配置」（默认关）。
   关闭时通道配置（含机器人凭据）只有主人可见；打开后有编辑权的合作者可看可改，新建落点群仍归 AI 主人。
   迁移 0097。
+
 - **tag 闸门不再自己解析版本号**：`.github/workflows/release.yml` 里那条 sed 正则删了，改成
   `python scripts/release.py version`。版本号只有一个解析处（`read_version()`），CI 与本地共用；
   同一条正则抄两遍、改一处忘一处，表现正是"tag 与 app_version 不一致"这种最难查的错。
+
 - **Copro 对话页的「命令」按钮真的能用命令了**（dsh-copree 0.7.2）：以前按钮只会说"DSH 侧还没有
   命令服务"——因为插件一直没拿到 DSH 的 `commands` 服务。真因有三层：它是 cordis Service，直接写
   `ctx.commands` 时属性还不存在（要 Declare 依赖）；它的 `list/execute` 标了 @Remote 但那只是**额外**
@@ -94,6 +64,22 @@
   `v0.5.0-beta.1` 会被当成正式版推给所有人），挑选规则是"按版本号取最高"而不是"按发布日期取最新"；
   **启动器常驻也能提醒**——服务跑着时每 6 小时复查一次，最小化到托盘时改发托盘气泡（同一版本只提醒一次，
   气泡失败不影响启动器本体）。设计说明见 [docs/dev/update_check.md](docs/dev/update_check.md)。
+
+- **世界积木「色牌 · 抢灯」**（`data/world_blocks/color-cards/`）：双人卡牌对局，一人七张色牌，
+  跟色或跟点，跳 / ＋2 / ★变色搅局，先打光手牌的人抢一盏灯。第一屏是**牌室大厅**（一个群一间牌室，
+  四张桌子，点桌入座，一人同时只坐一张），牌桌右上「大厅」随时回看。群里的 AI 用 `world_command`
+  发同一套命令入座对打；轮到 AI 时世界发 `ai_event` 叫醒它，payload 里带好可复制的命令。
+  第一次进入自动弹「怎么玩」，提示行直接说下一步该干什么（「点亮起来的牌，点一下就打出去」/
+  「没得打就点牌堆摸一张」），空椅子可「喊它来坐」、等 AI 时可「催一下」。
+
+- **AI 灵魂档案 2.0**：`export_version` 升到 2.0，**知识库原样进出**——正文、标题、摘要、
+  启用开关、时间戳一起打包，导入时按原路径写回 AI 文件空间（`file_read "knowledge/…"` 读得到），
+  同名同路覆盖而不是生成 `-2` 副本；记忆不再砍 500 条，权值（`value_score`）、类型、状态、
+  焦段锚点、per-user 隔离一并保留；导出/导入都带统计（记忆几条 / 正文几段 / 知识库几份）。
+  导入弹窗同步：预览显示知识库条数，可单独关掉「导入记忆」「导入知识库」，导完显示搬了多少。
+
+- **品牌资产守卫** `scripts/check_brand_assets.py`：ICO 必须含 16–256 九档、五档 PNG 齐全、
+  安装批处理必须是纯 ASCII + CRLF、快捷方式脚本必须带 UTF-8 BOM 且写 `IconLocation`。
 
 ### 🐛 修复
 - **发给 AI 的好友申请，服务层谁传都能接受**：`accept_friend_request` 只对发给人类的申请校验归属，
@@ -141,6 +127,7 @@
   工具把事务写炸后就地复原会话，并补刷调用方手里的 agent（否则过期属性在异步会话里会炸 MissingGreenlet），
   记账失败也不许盖住工具失败。**一个工具失败不该带走整轮回复**。
   顺带修掉忙时私信注入里一个未定义的 message_id（NameError）。
+
 - **iPad/iPhone（Safari < 16.4）打开任何对话都整页报错**：`Unexpected Application Error! Invalid regular
   expression: invalid group specifier name`，错误边界接管整页。根因不在页面，而在 `remark-gfm` 的依赖
   `mdast-util-gfm-autolink-literal@2.0.1`（npm 上的 latest，上游至今没修）——它用 **lookbehind 正则**
@@ -149,6 +136,20 @@
   修法：去掉那段**冗余**的 lookbehind（同文件 `findEmail()` 本来就有等价的 `previous()` 逐字符校验，
   判据相同），由 `frontend/scripts/patch-mdast-autolink.mjs` 在 postinstall 里幂等打补丁——发布流水线用的是
   `npm ci`，npm 没有补丁机制，所以没走 pnpm patchedDependencies。
+
+- **私信/群聊「AI 正忙」时消息被静默丢弃**：那条路径只把消息注入当前轮、并不调用 LLM，却先占掉了
+  每 AI 1 秒的限流槽位；注入后重排出来的补轮在同一毫秒到达，被判成刷屏直接跳过——表现是
+  「给 AI 发消息永远不回」。改成先判忙（不消耗限流）再判限流，群聊同一条分支一并修。
+
+- **AI 的世界事件回合一直没有账本**：`ai_conversation_logs.conversation_type` 是 `varchar(10)`，
+  而 `world_event` 11 字符、`friend_request` 13 字符，写入被 Postgres 拒绝、只留一行错误日志。
+  迁移 0098 放宽到 32。
+
+- **Windows 快捷方式名乱码 + 图标低像素**：`install.bat` 原来是 UTF-8 无 BOM、LF 换行，中文直接写在
+  批处理里，cmd 按控制台代码页解码后「Copree 启动器」落盘成「Copree å¯åŠ¨å™¨」。现在批处理只留
+  ASCII + CRLF，中文搬进 `create-shortcuts.ps1`（UTF-8 with BOM，PowerShell 按 BOM 解码），
+  显式指定 `IconLocation`、调用 `ie4uinit` 刷新图标缓存，并顺手清掉桌面上名字带 `å`/`Ã` 的旧链接；
+  「样式在 exe 里」的问题随重打包一起解决（ICO 九档齐全）。
 
 ### 🔧 开发工具与测试
 - **发版从"一串靠记忆的命令"收成三步**：`scripts/release.py`（check / archive / tag / verify）。
@@ -190,6 +191,9 @@
 - **设置页「保存设置」被悬浮导航压住**：详情区是唯一没有底部留白的滚动容器，而保存条用
   `sticky bottom-0`——手机端底部是悬浮胶囊导航，按钮正好落在它下面。现在 sticky 上移一个导航高度
   （`--mobile-nav-reserved`，桌面 `md:bottom-0` 照旧贴底）。
+
+### 📝 文档与工程
+- 色牌积木的引擎规则测试（27 条）与页面交互自检脚本（假 DOM，大厅→入座→出牌→回大厅）随积木入库。
 
 ## [v0.4.15] - 2026-10-27
 
