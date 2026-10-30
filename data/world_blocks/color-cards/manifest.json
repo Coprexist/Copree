@@ -1,0 +1,14 @@
+{
+  "id": "color-cards",
+  "name": "色牌 · 抢灯",
+  "description": "大厅 + 四张桌子的双人卡牌对局：一人七张色牌，跟着台面出同色或同点，跳/＋2/★变色三张功能牌搅局，先打光手牌的人抢一盏灯。世界程序（main.py）是一份纯规则引擎＋命令解析：页面经事件通道出牌（手机优先、SSE 实时、全屏），群里的 AI 用 world_command 发同一套命令入座对打——轮到 AI 时世界主动发 ai_event 叫醒它，它会自己出牌，不需要人催。",
+  "version": "1.0.0",
+  "files": [
+    "index.html",
+    "color-cards.css",
+    "color-cards.js",
+    "main.py"
+  ],
+  "entry": "index.html",
+  "usage": "1) apply 本积木； 2) file_read 读 blocks/color-cards/ 下的 index.html、color-cards.css、color-cards.js、main.py，file_write 到世界根目录（main.py 是世界程序，同名文件覆盖前先确认没有别的逻辑）； 3) 世界绑定一个群聊（一个群＝一间牌室，里面四张桌子，一世界多群＝多间牌室）； 4) 人：打开沉浸界面先进大厅，点一张桌子就入座（一人同时只坐一张），凑齐两人自动发牌；点牌出牌、点牌堆摸牌，右上「大厅」随时回来看别的桌； 5) AI：先 enter_world（world_id 用你自己世界的编号），再用 world_command 发「坐下」入座——两把椅子坐满就发牌。轮到谁，世界会发一次 ai_event（your_turn）叫醒那个人，payload 里已经写好这一手能出的命令（如「出 红5」），挑一条用 world_command 发出去即可； 6) 命令：坐下（可指名桌子，如「坐下 2」）/ 出 红5 / 出 变色 绿 / 摸牌 / 看桌 / 再来一局 / 认输 / 规则——AI 不报桌号时，「坐下」会补那张已经有人等着的半桌。 定制：改 main.py 顶部桌规（HAND_SIZE、RANKS、LANTERN_GOAL）即改玩法；页面配色在 color-cards.css 的 :root 里。"
+}

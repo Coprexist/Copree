@@ -978,15 +978,19 @@ function ImportSoulModal({ onClose, onImported }: { onClose: () => void; onImpor
   const t = useT()
   const [file, setFile] = useState<File | null>(null)
   const [importMemories, setImportMemories] = useState(true)
+  const [importKnowledge, setImportKnowledge] = useState(true)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [preview, setPreview] = useState<any>(null)
+  // 导入结果：只回一句"成功"看不出知识库到底跟过来没有，把搬了多少摊开给用户看
+  const [result, setResult] = useState<{ memories?: number; memory_details?: number; knowledge?: number } | null>(null)
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]
     if (!f) return
     setFile(f)
     setError('')
+    setResult(null)
     try {
       const text = await f.text()
       const data = JSON.parse(text)
@@ -1005,16 +1009,17 @@ function ImportSoulModal({ onClose, onImported }: { onClose: () => void; onImpor
       const token = localStorage.getItem('access_token')
       const formData = new FormData()
       formData.append('file', file)
-      const res = await fetch(`/api/agents/import?import_memories=${importMemories}`, {
+      const res = await fetch(`/api/agents/import?import_memories=${importMemories}&import_knowledge=${importKnowledge}`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` },
         body: formData,
       })
+      const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        const err = await res.json()
-        throw new Error(err.detail || t('error:operationFailed'))
+        throw new Error(data.detail || t('error:operationFailed'))
       }
-      onImported()
+      // 先进结果态：让用户看见知识库/记忆搬了多少，再点"完成"收尾
+      setResult(data.imported || { memories: 0, knowledge: 0 })
     } catch (e: any) {
       setError(e.message)
     } finally {
@@ -1043,34 +1048,69 @@ function ImportSoulModal({ onClose, onImported }: { onClose: () => void; onImpor
           <div className="bg-canvas rounded-card p-3 mb-3 text-sm space-y-1">
             <p className="font-medium text-textPrimary">{preview.agent_name || t('agents:unnamed')}</p>
             <p className="text-xs text-textSecondary">{t('agents:memoryCount')} {preview.memories?.length || 0}</p>
-            <p className="text-xs text-textSecondary">{t('agents:friendCount')} {preview.friends?.length || 0}</p>
+            <p className="text-xs text-textSecondary">{t('agents:knowledgeCount')} {preview.knowledge?.length || 0}</p>
             <p className="text-xs text-textSecondary">{t('agents:configHistoryCount')} {preview.config_history?.length || 0}</p>
+            {preview.export_version && (
+              <p className="text-xs text-textMuted">{t('agents:archiveVersion')} {preview.export_version}</p>
+            )}
           </div>
         )}
 
-        <label className="flex items-center gap-2 mb-4 text-sm text-textSecondary cursor-pointer">
-          <input
-            type="checkbox"
-            checked={importMemories}
-            onChange={(e) => setImportMemories(e.target.checked)}
-            className="rounded"
-          />
-          {t('agents:importMemories')}
-        </label>
+        {result ? (
+          <div className="bg-canvas rounded-card p-3 mb-4 text-sm space-y-1">
+            <p className="font-medium text-textPrimary">{t('agents:importedTitle')}</p>
+            <p className="text-xs text-textSecondary">
+              {t('agents:importedMemories')} {result.memories || 0}
+              <span className="text-textMuted">
+                （{t('agents:importedDetails')} {result.memory_details || 0}）
+              </span>
+            </p>
+            <p className="text-xs text-textSecondary">{t('agents:importedKnowledge')} {result.knowledge || 0}</p>
+          </div>
+        ) : (
+          <div className="space-y-1 mb-4">
+            <label className="flex items-center gap-2 text-sm text-textSecondary cursor-pointer">
+              <input
+                type="checkbox"
+                checked={importMemories}
+                onChange={(e) => setImportMemories(e.target.checked)}
+                className="rounded"
+              />
+              {t('agents:importMemories')}
+            </label>
+            <label className="flex items-center gap-2 text-sm text-textSecondary cursor-pointer">
+              <input
+                type="checkbox"
+                checked={importKnowledge}
+                onChange={(e) => setImportKnowledge(e.target.checked)}
+                className="rounded"
+              />
+              {t('agents:importKnowledge')}
+            </label>
+          </div>
+        )}
 
         {error && <div className="text-sm text-rose-400 mb-3">{error}</div>}
 
         <div className="flex gap-2">
-          <button onClick={onClose} className="btn btn-md btn-outline flex-1">
-            {t('agents:cancel')}
-          </button>
-          <button
-            onClick={handleImport}
-            disabled={!file || loading}
-            className="btn btn-md btn-primary flex-1"
-          >
-            {loading ? t('agents:importing') : t('agents:importButton')}
-          </button>
+          {result ? (
+            <button onClick={onImported} className="btn btn-md btn-primary flex-1">
+              {t('agents:importedDone')}
+            </button>
+          ) : (
+            <>
+              <button onClick={onClose} className="btn btn-md btn-outline flex-1">
+                {t('agents:cancel')}
+              </button>
+              <button
+                onClick={handleImport}
+                disabled={!file || loading}
+                className="btn btn-md btn-primary flex-1"
+              >
+                {loading ? t('agents:importing') : t('agents:importButton')}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </Dialog>

@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0c3326">
+<title>色牌 · 抢灯</title>
+<link rel="stylesheet" href="color-cards.css">
+</head>
+<body>
+<div class="app">
+  <header class="bar">
+    <span class="brand">色牌 <i>·</i> 抢灯</span>
+    <div class="bar-actions">
+      <button id="btn-lobby" class="text-btn" type="button" hidden>大厅</button>
+      <button id="btn-rules" class="icon-btn" type="button" aria-label="看规则">?</button>
+      <button id="btn-full" class="icon-btn" type="button" aria-label="全屏">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <section class="lobby" id="lobby" hidden></section>
+
+  <main class="board">
+    <section class="seat seat-foe" id="foe" aria-live="polite"></section>
+
+    <section class="middle">
+      <div class="top-wrap">
+        <div class="top-slot" id="top-slot"></div>
+        <div class="deck-slot" id="deck-slot"></div>
+      </div>
+      <div class="turn" id="turn"></div>
+    </section>
+
+    <section class="log" id="log" aria-live="polite"></section>
+
+    <section class="seat seat-me" id="mine">
+      <div class="seat-head" id="mine-head"></div>
+      <div class="hand" id="hand"></div>
+    </section>
+  </main>
+
+  <footer class="actions" id="actions"></footer>
+</div>
+
+<div class="sheet" id="sheet" hidden>
+  <div class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+    <h2 id="sheet-title"></h2>
+    <div class="sheet-body" id="sheet-body"></div>
+    <div class="sheet-foot" id="sheet-foot"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="color-cards.js"></script>
+</body>
+</html>

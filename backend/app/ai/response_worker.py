@@ -898,14 +898,11 @@ async def _maybe_trigger_ai_reply(
         agent.last_willingness_score = w_score
         agent.last_willingness_reason = decision.reason
 
-    # 4. 速率限制检查
-    if not _check_rate_limit(resolved_agent_id):
-        logger.info(f"AI {agent.name}(id={resolved_agent_id}) 速率限制，跳过")
-        return
-
-    # 4.5. 忙时中断注入（正常不会走到这里：同一个群的忙由上面的 claim 挡在注入那一支；
+    # 4. 忙时中断注入（正常不会走到这里：同一个群的忙由上面的 claim 挡在注入那一支；
     # 走到这儿的是"这个 AI 正在**别的会话**里跑一轮"，消息会按会话记进缓冲，
     # 等本会话下一轮再投出去——绝不拼进别的会话的上下文里，见 executor.conversation_of）
+    # 必须排在限流之前：注入不调用 LLM，却会占掉限流槽位；被注入的消息会在轮末原地重排
+    # （_requeue_leftover_interrupts），重排那一轮立刻到达，占过槽位就只剩「跳过」一条路。
     if await is_agent_running(agent.id):
         await add_pending_interrupt(agent.id, {
             "type": "user_message",
@@ -914,6 +911,11 @@ async def _maybe_trigger_ai_reply(
             "sender_id": sender_id,
         })
         logger.info(f"AI {agent.name}({agent.id}) 正忙，群聊中断消息已注入")
+        return
+
+    # 4.5. 速率限制检查（只挡真正要起一轮 LLM 的请求）
+    if not _check_rate_limit(resolved_agent_id):
+        logger.info(f"AI {agent.name}(id={resolved_agent_id}) 速率限制，跳过")
         return
 
     # 5. 获取 API 配置（v0.1.4: 公共辅助函数；v0.1.5: 四层优先链含池 Key）
@@ -1198,12 +1200,10 @@ async def _trigger_dm_ai_reply(
         logger.info(f"AI {agent_name}({agent_id}) 状态为 blocked，跳过 DM 回复")
         return
 
-    # 速率限制
-    if not _check_rate_limit(agent_id):
-        logger.info(f"AI {agent_name}({agent_id}) 速率限制，跳过 DM 回复")
-        return
-
     # ── 忙时中断注入 ──
+    # 顺序要紧：忙时注入这条路径不会调用 LLM，却会占掉限流槽位；消息注入后会在当前这一轮
+    # 结束时被重排成单独一轮（_requeue_leftover_dm_interrupts），那一轮往往在同一毫秒内到达，
+    # 于是被判成刷屏直接丢掉——表现出来就是「给 AI 发了私信，它永远不回」。
     if await is_agent_running(agent_id):
         await add_pending_interrupt(agent_id, {
             "type": "user_message",
@@ -1214,6 +1214,11 @@ async def _trigger_dm_ai_reply(
             "sender_name": await display_name(db, sender_id),
         })
         logger.info(f"AI {agent_name}({agent_id}) 正忙，DM 中断消息已注入")
+        return
+
+    # 速率限制（只挡真正要起一轮 LLM 的请求）
+    if not _check_rate_limit(agent_id):
+        logger.info(f"AI {agent_name}({agent_id}) 速率限制，跳过 DM 回复")
         return
 
     # 获取有效配置（v0.1.3: per-user 覆盖 — DM 场景 trigger_user_id=sender_id）

@@ -412,7 +412,7 @@ async def export_soul(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """导出 AI 灵魂档案（配置 + 历史 + 记忆 + 好友）"""
+    """导出 AI 灵魂档案（配置 + 配置历史 + 记忆 + 知识库正文）"""
     agent = await _require_agent_access(agent_id, current_user, db)
     try:
         data = await export_agent_soul(db, agent_id)
@@ -443,10 +443,15 @@ async def export_soul(
 async def import_soul(
     file: UploadFile = File(...),
     import_memories: bool = Query(True),
+    import_knowledge: bool = Query(True),
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """导入 AI 灵魂档案（JSON 文件）"""
+    """导入 AI 灵魂档案（JSON 文件）：配置 + 配置历史 + 记忆 + 知识库
+
+    返回新建 AI 的完整字段，外加 imported 统计——导完只说"成功"，
+    用户看不出知识库到底跟过来没有。
+    """
     from app.schemas.agent_export import AgentSoulArchive
 
     if not file.filename or not file.filename.endswith(".json"):
@@ -473,14 +478,15 @@ async def import_soul(
         )
 
     try:
-        agent = await import_agent_soul(
+        agent, stats = await import_agent_soul(
             db,
             data=data,
             owner_id=current_user["user_id"],
             import_memories=import_memories,
+            import_knowledge=import_knowledge,
             is_admin=current_user["role"] == "admin",
         )
-        return agent_to_dict(agent)
+        return {**agent_to_dict(agent), "imported": stats}
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 

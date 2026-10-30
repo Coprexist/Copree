@@ -148,6 +148,44 @@ async def add_entry(db, agent_id: int, *, title: str, summary: str = "",
     return _row(entry)
 
 
+async def restore_entry(db, agent_id: int, *, path: str, title: str, content: str,
+                        summary: str = "", enabled: bool = True,
+                        created_at=None, updated_at=None) -> dict:
+    """按原路径还原一份文档（导入灵魂档案专用）：路径原封不动，同名同路覆盖
+
+    与 add_entry 分开是因为两者要的东西不一样：add_entry 面向"用户新增一份资料"，
+    由标题推文件名、撞名加 -2；还原要的是**同一个路径**——索引里写的是
+    file_read "knowledge/xxx.md"，路径一变，读的人就扑空。
+    """
+    rel = _safe_rel(agent_id, path)
+    raw = _text_bytes(content)
+    await ai_write_file(db, agent_id, f"{KNOWLEDGE_DIR}/{rel}", content)
+
+    entry = (await db.execute(
+        select(AgentKnowledge).where(
+            AgentKnowledge.agent_id == int(agent_id),
+            AgentKnowledge.path == rel,
+        )
+    )).scalar_one_or_none()
+    if entry is None:
+        entry = AgentKnowledge(agent_id=int(agent_id), path=rel)
+        db.add(entry)
+    entry.title = (str(title or "").strip() or Path(rel).stem)[:120]
+    entry.summary = (str(summary or "").strip())[:1000]
+    entry.size = len(raw)
+    entry.enabled = bool(enabled)
+    # 时间戳能还原就还原：档案里的"什么时候放进来的"也是这份资料的一部分
+    if created_at is not None:
+        entry.created_at = created_at
+    if updated_at is not None:
+        entry.updated_at = updated_at
+
+    await db.flush()
+    await db.refresh(entry)
+    logger.info("📚 AI %s 知识库还原《%s》(%s，%s 字节)", agent_id, entry.title, rel, len(raw))
+    return _row(entry)
+
+
 # 上传的文本按这两种编码解：UTF-8（含 BOM）是主流，GB18030 兜住 Windows 中文环境存出来的文件
 UPLOAD_ENCODINGS = ("utf-8-sig", "gb18030")
 

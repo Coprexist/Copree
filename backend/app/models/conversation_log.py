@@ -50,7 +50,10 @@ class ConversationLog(Base):
     # 对话发生的上下文：群聊或私信
     group_id = Column(Integer, ForeignKey("groups.id"), nullable=True)
     session_id = Column(String(50), nullable=True)  # DM session_id
-    conversation_type = Column(String(10), nullable=False, default="group")  # group | dm
+    # group | dm | alarm | world_event | world | friend_request | creator
+    # 32 而不是 10：world_event(11) / friend_request(13) 都栽在这列上——超长时 Postgres 直接
+    # 报错，错误只落进日志，AI 那一轮的账本就静默丢了（见迁移 0098）
+    conversation_type = Column(String(32), nullable=False, default="group")
 
     # 完整的 messages 数组（JSONB）
     messages = Column(json_column(), nullable=False)

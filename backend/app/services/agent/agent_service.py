@@ -1132,19 +1132,58 @@ async def _calc_proactive_willingness(
     return calc_proactive_willingness(idle_seconds=idle_seconds, recent_count=recent_count)
 
 
+# 灵魂档案版本：2.0 起记忆保留权值/焦段等刻度、知识库连正文一起走
+SOUL_EXPORT_VERSION = "2.0"
+
+
+def _iso(value) -> str | None:
+    """时间字段：ORM 给 datetime，导入时手里的可能已经是字符串（回环导出/导入两用）"""
+    if value is None:
+        return None
+    return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+
+def _ts(value):
+    """解析档案里的时间戳；解析不了就当没给——一条脏数据不该废掉整份档案"""
+    from datetime import datetime
+
+    if value is None or value == "":
+        return None
+    if hasattr(value, "isoformat"):
+        return value
+    try:
+        return datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def _memory_details(entry: dict) -> list[dict]:
+    """兼容两种记忆形状：2.0 的 details 数组；1.0 的一条一个 content"""
+    details = entry.get("details")
+    if isinstance(details, list) and details:
+        return [d if isinstance(d, dict) else {"content": str(d)} for d in details]
+    return [{"content": entry.get("content") or "", "created_at": entry.get("created_at")}]
+
+
 async def export_agent_soul(
     db: AsyncSession,
     agent_id: int,
 ) -> dict:
-    """
-    导出 AI 灵魂档案：配置 + 历史 + 记忆
+    """导出 AI 灵魂档案：配置 + 配置历史 + 记忆 + 知识库
+
+    带出去的是数据本身，不是引用：
+    - 记忆连权值/类型/焦段一起走。只带 title + content 的话，导进新实例等于"内容还在、刻度全丢"，
+      检索排序会退化成按时间——AI 会像失忆后又重新认识了一遍这些人。
+    - 知识库连正文一起走。正文本来落在 AI 文件空间 knowledge/，不打包的话换实例后
+      file_read "knowledge/xxx.md" 会 404：索引里还写着有这份资料，读的时候扑空。
+    - 好友关系不打包：它挂在本实例 users 表的 id 上，换实例无法复现，硬带只会导入一堆指向陌生人的行。
     """
     db = _ensure_repo(db)
     from datetime import datetime, timezone as tz
 
     agent = (await get_agent(db, agent_id)).unwrap()
 
-    # 配置历史（最新 100 条）
+    # 配置历史（最新 100 条，按时间升序返回）
     history_result = await db.execute(
         select(AgentConfigHistory)
         .where(AgentConfigHistory.agent_id == agent_id)
@@ -1160,42 +1199,71 @@ async def export_agent_soul(
             "top_p": h.top_p,
             "presence_penalty": h.presence_penalty,
             "frequency_penalty": h.frequency_penalty,
-            "created_at": str(h.created_at) if h.created_at else None,
+            "created_at": _iso(h.created_at),
         }
-        for h in reversed(history)  # 按时间升序
+        for h in reversed(history)
     ]
 
-    # 记忆（最新 500 条 rough + detail）
-    rough_result = await db.execute(
+    # 记忆：全量（不截断），按时间升序——导入时的重放顺序与原来一致
+    rough_memories = (await db.execute(
         select(RoughMemory)
-        .where(
-            RoughMemory.owner_type == "ai",
-            RoughMemory.owner_id == agent_id,
-        )
-        .order_by(RoughMemory.created_at.desc())
-        .limit(500)
-    )
-    rough_memories = rough_result.scalars().all()
+        .where(RoughMemory.owner_type == "ai", RoughMemory.owner_id == agent_id)
+        .order_by(RoughMemory.created_at, RoughMemory.id)
+    )).scalars().all()
 
-    memories = []
-    for rm in rough_memories:
-        detail_result = await db.execute(
+    details_by_rough: dict[int, list[DetailMemory]] = {}
+    if rough_memories:
+        detail_rows = (await db.execute(
             select(DetailMemory)
-            .where(DetailMemory.rough_id == rm.id)
-            .order_by(DetailMemory.created_at.asc())
-        )
-        details = detail_result.scalars().all()
-        for d in details:
-            memories.append({
-                "title": rm.title,
-                "content": d.content,
-                "scope": rm.scope or "private",
-                "group_id": rm.group_id,
-                "created_at": str(d.created_at) if d.created_at else None,
-            })
+            .where(DetailMemory.rough_id.in_([rm.id for rm in rough_memories]))
+            .order_by(DetailMemory.created_at, DetailMemory.id)
+        )).scalars().all()
+        for d in detail_rows:
+            details_by_rough.setdefault(d.rough_id, []).append(d)
+
+    memories = [
+        {
+            "title": rm.title,
+            "scope": rm.scope or "private",
+            "group_id": rm.group_id,
+            "user_id": rm.user_id,
+            "value_score": rm.value_score,
+            "mem_type": rm.mem_type,
+            "status": rm.status,
+            "session_refs": rm.session_refs or [],
+            "session_foci": rm.session_foci or [],
+            "semantic_foci": rm.semantic_foci or [],
+            "last_touched_at": _iso(rm.last_touched_at),
+            "last_touched_call": rm.last_touched_call,
+            "created_at": _iso(rm.created_at),
+            # 一条 rough 下的多段正文原样保留成数组：拆成多条记忆会丢掉"这些是同一件事"的关系
+            "details": [
+                {"content": d.content, "created_at": _iso(d.created_at)}
+                for d in details_by_rough.get(rm.id, [])
+            ],
+        }
+        for rm in rough_memories
+    ]
+
+    # 知识库：元数据 + 正文（正文是文件，只有导出时读一次才知道它现在是什么）
+    from app.services.agent import knowledge_service
+
+    knowledge = []
+    for row in await knowledge_service.list_entries(db, agent_id):
+        doc = await knowledge_service.read_entry(db, agent_id, row["id"])
+        knowledge.append({
+            "title": row["title"],
+            "summary": row["summary"],
+            "path": row["path"],
+            "size": row["size"],
+            "enabled": row["enabled"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "content": doc.get("content", ""),
+        })
 
     return {
-        "export_version": "1.0",
+        "export_version": SOUL_EXPORT_VERSION,
         "exported_at": datetime.now(tz.utc).isoformat(),
         "agent_name": agent.name,
         "agent_config": {
@@ -1217,7 +1285,105 @@ async def export_agent_soul(
         },
         "config_history": config_history,
         "memories": memories,
+        "knowledge": knowledge,
     }
+
+
+async def _insert_soul_memories(db, agent_id: int, memories: list[dict]) -> dict:
+    """按原样重放记忆（rough + 它名下的每段正文）
+
+    记忆里的 group_id / user_id 是"原实例"的 id：换实例后可能指向不存在的行，
+    直接插会撞外键、整份档案都导不进来。所以先查一遍再落，落不下的置空并留痕。
+    """
+    from app.models.group import Group
+
+    group_ids = {m.get("group_id") for m in memories if m.get("group_id")}
+    user_ids = {m.get("user_id") for m in memories if m.get("user_id")}
+    known_groups = set((await db.execute(
+        select(Group.id).where(Group.id.in_(group_ids)))).scalars()) if group_ids else set()
+    known_users = set((await db.execute(
+        select(User.id).where(User.id.in_(user_ids)))).scalars()) if user_ids else set()
+
+    dropped_refs, detail_count = 0, 0
+    for m in memories:
+        if not isinstance(m, dict):
+            continue
+        gid = m.get("group_id")
+        uid = m.get("user_id")
+        if gid and gid not in known_groups:
+            gid, dropped_refs = None, dropped_refs + 1
+        if uid and uid not in known_users:
+            uid, dropped_refs = None, dropped_refs + 1
+
+        rm = RoughMemory(
+            owner_type="ai",
+            owner_id=agent_id,
+            title=(str(m.get("title") or "").strip() or "未命名记忆")[:200],
+            scope=m.get("scope") or "private",
+            group_id=gid,
+            user_id=uid,
+            value_score=m.get("value_score"),
+            mem_type=m.get("mem_type"),
+            status=m.get("status") or "active",
+            session_refs=list(m.get("session_refs") or []),
+            session_foci=list(m.get("session_foci") or []),
+            semantic_foci=list(m.get("semantic_foci") or []),
+            last_touched_at=_ts(m.get("last_touched_at")),
+            last_touched_call=m.get("last_touched_call"),
+            created_at=_ts(m.get("created_at")),
+        )
+        db.add(rm)
+        await db.flush()          # 正文要 rough_id
+
+        for detail in _memory_details(m):
+            content = detail.get("content")
+            if not isinstance(content, str) or not content:
+                continue
+            # 不生成 embedding：导入时逐条算向量既慢又要在导入链路上依赖 embedding 服务，
+            # 检索时缺向量的记忆会走文本通道，用的时候自然补上
+            db.add(DetailMemory(
+                rough_id=rm.id,
+                content=content,
+                created_at=_ts(detail.get("created_at")),
+            ))
+            detail_count += 1
+
+    if dropped_refs:
+        logger.warning("灵魂档案里有 %s 处群/用户引用在本实例不存在，已置空（不影响正文）", dropped_refs)
+    return {"memories": len(memories), "memory_details": detail_count, "dropped_refs": dropped_refs}
+
+
+async def _insert_soul_knowledge(db, agent_id: int, entries: list[dict]) -> dict:
+    """按原路径还原知识库：正文写回 AI 文件空间的 knowledge/，元数据落 agent_knowledge
+
+    路径原样是关键——换实例后索引里写的是 file_read "knowledge/xxx.md"，路径一变就读空。
+    restore_entry 同时负责「路径不能爬出 knowledge/」「同名同路覆盖而不是 -2 副本」。
+    """
+    from app.services.agent import knowledge_service
+
+    restored, skipped = 0, 0
+    for e in entries:
+        if not isinstance(e, dict):
+            skipped += 1
+            continue
+        path = str(e.get("path") or "").strip()
+        content = e.get("content")
+        if not path or not isinstance(content, str) or not content.strip():
+            logger.warning("灵魂档案里的知识库条目缺正文，跳过：%s", path or e.get("title"))
+            skipped += 1
+            continue
+        await knowledge_service.restore_entry(
+            db, agent_id,
+            path=path,
+            title=e.get("title") or "",
+            summary=e.get("summary") or "",
+            content=content,
+            enabled=e.get("enabled", True),
+            created_at=_ts(e.get("created_at")),
+            updated_at=_ts(e.get("updated_at")),
+        )
+        restored += 1
+    return {"knowledge": restored, "knowledge_skipped": skipped}
 
 
 async def import_agent_soul(
@@ -1225,11 +1391,13 @@ async def import_agent_soul(
     data: dict,
     owner_id: int,
     import_memories: bool = True,
+    import_knowledge: bool = True,
     is_admin: bool = False,
-) -> Agent:
-    """
-    从灵魂档案导入 AI。
-    创建新 Agent + 可选记忆导入。
+) -> tuple[Agent, dict]:
+    """从灵魂档案导入 AI：创建新 Agent + 重放配置历史 / 记忆 / 知识库。
+
+    返回 (agent, 统计)。统计给界面看"到底搬了多少东西"——导完只回一句"成功"，
+    用户没法判断知识库是不是真的跟过来了。
     """
     db = _ensure_repo(db)
     cfg = data.get("agent_config", {})
@@ -1285,35 +1453,21 @@ async def import_agent_soul(
             frequency_penalty=h.get("frequency_penalty", 0.5),
         ))
 
-    # 导入记忆（不生成 embedding，使用时自动生成）
+    stats = {"memories": 0, "memory_details": 0, "dropped_refs": 0,
+             "knowledge": 0, "knowledge_skipped": 0}
+
     if import_memories:
-        from app.services.memory.memory_service import auto_store_memory
+        stats.update(await _insert_soul_memories(db, agent.id, data.get("memories") or []))
 
-        memories = data.get("memories", [])
-        for m in memories[:500]:
-            # 直接插入，跳过 API 调用生成 embedding
-            rm = RoughMemory(
-                owner_type="ai",
-                owner_id=agent.id,
-                title=m.get("title", ""),
-                scope=m.get("scope", "private"),
-                group_id=m.get("group_id"),
-            )
-            db.add(rm)
-            await db.flush()
-
-            dm = DetailMemory(
-                rough_id=rm.id,
-                content=m.get("content", ""),
-            )
-            db.add(dm)
+    if import_knowledge:
+        merged = await _insert_soul_knowledge(db, agent.id, data.get("knowledge") or [])
+        stats.update(merged)
 
     logger.info(
-        f"导入灵魂档案成功: agent_id={agent.id}, name={name}, "
-        f"memories={len(data.get('memories', []))}, "
-        f"friends=0"
+        "导入灵魂档案成功: agent_id=%s, name=%s, 记忆 %s 条（正文 %s 段）、知识库 %s 份",
+        agent.id, name, stats["memories"], stats["memory_details"], stats["knowledge"],
     )
-    return agent
+    return agent, stats
 
 
 def agent_to_dict(agent: Agent) -> dict:
