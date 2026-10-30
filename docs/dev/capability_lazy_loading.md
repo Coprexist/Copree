@@ -77,7 +77,7 @@
 ### 与状态帧、触发组合规则的关系
 
 "锁"和触发规则里的"帧"都以 compact / clear 为参照点，但不是同一个容器：锁住的是**前缀字节**
-（`agents.cap_effective_versions` / `worlds.config`，键内含状态），帧是**会话状态容器**（`agents.state_stack` 栈顶帧：
+（`agents.cap_effective_versions` / `worlds.config`，键内含状态），帧是**会话状态容器**（`agents.state_stack` 里的当前帧 = 链尾：
 便签副本 + `tool_uses` / `delivered`）。解锁时锁**换新**（该状态的 effective 对齐 latest）、帧对象**不重建**但身上的
 触发规则状态**复位**（`reset_trigger_state`）；谁动谁不动只在 [帧、锁与重建点](./frame_lifecycle.md) 表里维护。
 

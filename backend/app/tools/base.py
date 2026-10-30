@@ -38,6 +38,19 @@ SKILL_SEGMENT_META: dict[str, dict] = {
         "admin_description": "控制 AI 的社交行为：群聊发言、私信、在线状态切换、免打扰模式。AI 收到消息或定时触发时自动调用这些工具与其他成员互动。",
         "trigger_conditions": ["收到@消息", "群内有新消息", "定时主动发言", "私信对话"],
         "icon": "messages-square",
+        # 要点：铁律与场景纪律。层级见 utils/pure/tool_catalog.NOTE_LEVELS，
+        # 值小者先渲染；预算不够时先砍 400。scenes 空 = 所有场景。
+        "usage_notes": [
+            (100, "自制策略等自动功能，在制定时原则上不可让所有事物都无法唤醒自己——"
+                  "否则你就再也醒不过来；设定勿扰时段这种自带时限的手段除外。"),
+            (100, "@你、私信、群公告永远穿透任何自动策略。"),
+            (200, "被消息唤醒后，先判断自己是否需要回复。不回复的话，建议定免打扰、屏蔽，"
+                  "或写一条自制策略（决策代理规则），以免被无需回复的消息反复唤醒。",
+             frozenset({"group_chat"})),
+            (300, "别在一条消息里连发三条以上；长内容先想清楚要说什么再发。"),
+            (200, "私信不经过群聊：对方收到的是私信。要在群里说话就用 send_message。",
+             frozenset({"dm"})),
+        ],
     },
     "file_operations": {
         "name": "文件操作",
@@ -45,6 +58,10 @@ SKILL_SEGMENT_META: dict[str, dict] = {
         "admin_description": "AI 的文件系统操作：读、写、列、删、分享文件，以及执行 OpenCLI 命令。AI 用它管理工作笔记、处理数据、协作共享资料。",
         "trigger_conditions": ["AI 需要持久化信息", "工具调用链中需要文件", "用户请求文件操作"],
         "icon": "folder",
+        "usage_notes": [
+            (300, "读文件先 file_grep 定位行号，再用 offset/limit 分页读，别整文件全读。"),
+            (300, "改文件用 file_edit 精确替换原文片段；整份重写用 file_write，两者别混用。"),
+        ],
     },
     "memory": {
         "name": "记忆系统",
@@ -52,6 +69,9 @@ SKILL_SEGMENT_META: dict[str, dict] = {
         "admin_description": "AI 的长期记忆系统：存储重要信息到向量数据库，检索相关记忆辅助决策。记忆按用户隔离，构成 AI 的「人生经历」。",
         "trigger_conditions": ["收到消息时自动检索", "AI 决定需要记住某事", "对话中出现可记忆信息"],
         "icon": "brain",
+        "usage_notes": [
+            (300, "记忆存的是长期事实与偏好，不是当轮推理；一次对话里别重复存同一件事。"),
+        ],
     },
     "group_management": {
         "name": "群聊管理",
@@ -73,6 +93,13 @@ SKILL_SEGMENT_META: dict[str, dict] = {
         "admin_description": "AI 的自主生命节律：设定闹钟到点自动唤醒、管理工作区任务和计划、压缩上下文释放空间。这是 AI 保持「活着」的核心机制。",
         "trigger_conditions": ["闹钟到期唤醒", "AI 需要定时行动", "上下文接近限制", "任务规划"],
         "icon": "clock",
+        "usage_notes": [
+            (200, "进世界用 enter_world，出来用 pop_state；世界里只有基础工具 + 该世界颁布的技能。",
+             frozenset({"world"})),
+            (200, "换任务用 push_state 记下在做什么，回原任务用 pop_state；同一会话只有一帧。",
+             frozenset({"group_chat", "dm"})),
+            (300, "上下文接近上限时用 compress_context，别等被平台强制压缩。"),
+        ],
     },
 }
 
@@ -106,6 +133,13 @@ class ToolPlugin:
     nullable: list[str] = []    # 可空参数列表
     admin_description: str = ""     # 给管理员/用户看的工具说明
     trigger_condition: str = ""     # 触发条件（单个，用于技能背包卡片内的工具标签）
+
+    # ── 要点（进"技能目录"的要点区，不是 schema）──
+    # 写「怎么用才对」：前置、顺序、陷阱。层级见 utils/pure/tool_catalog.NOTE_LEVELS
+    # （100 铁律 / 200 场景 / 300 用法 / 400 提示），值小者先渲染、预算不够先砍大的。
+    usage_notes: list[tuple[int, str]] = []
+    # 只在哪些场景出现（group_chat / dm / world）；空 = 所有场景
+    usage_scenes: frozenset[str] = frozenset()
 
     @classmethod
     def to_definition(cls) -> dict:
@@ -237,6 +271,32 @@ class ToolRegistry:
         return cls._segments
 
     @classmethod
+    def catalog_entries(cls) -> list[dict]:
+        """技能目录的条目：已按 (段序, 工具名) 排好，渲染端不再排序。
+
+        不缓存：插件可被 skill_bridge 在运行期注册/注销，缓存会留下已下线的工具。
+        """
+        from app.utils.pure.tool_catalog import segment_index
+
+        out = []
+        for p in cls._plugins.values():
+            seg_meta = SKILL_SEGMENT_META.get(p.segment, {})
+            out.append({
+                "name": p.name,
+                "segment": p.segment,
+                "segment_name": seg_meta.get("name", p.segment),
+                "segment_desc": seg_meta.get("description", ""),
+                "description": p.description,
+                "parameters": p.parameters,   # 参数名 → schema（不是整份 JSON Schema）
+                "required": p.required,
+                "usage_notes": list(p.usage_notes or ()),
+                "usage_scenes": p.usage_scenes,
+            })
+        # 段序 → 工具名字典序 → 声明序：全部是确定值，换插件加载顺序也不变
+        out.sort(key=lambda e: (segment_index(e["segment"]), e["name"]))
+        return out
+
+    @classmethod
     def _build_whitelist(cls) -> dict[str, list[str]]:
         """从插件自动构建状态白名单"""
         if cls._whitelist is None:
@@ -310,6 +370,30 @@ class ToolRegistry:
             logger.warning(f"工具 {tool_name} 失败后回滚会话失败: {e}")
 
     @classmethod
+    async def _record_call(
+        cls, db: AsyncSession, agent_id: int, tool_name: str,
+        elapsed: float, success: bool, context: dict | None,
+    ) -> None:
+        """工具调用的唯一记账点：进程内指标 + 持久化日聚合。
+
+        收口在这里而不是各调用点各写一次：调用点只会越来越多（群聊、决策代理代发、PTC 回桥），
+        分别打补丁必然有人漏维度。两路都按旁路处理——记账失败不许影响工具结果。
+        """
+        try:
+            from app.services.infrastructure.metrics_collector import metrics
+            await metrics.record_tool_call(tool_name, elapsed, success)
+        except Exception:
+            pass
+        try:
+            from app.services.infrastructure.tool_usage import record_tool_call
+            await record_tool_call(
+                db, agent_id, tool_name,
+                success=success, latency_seconds=elapsed, context=context,
+            )
+        except Exception as e:  # noqa: BLE001 —— 旁路，本就要"记账失败不影响工具结果"
+            logger.warning(f"工具 {tool_name} 记账失败: {e}")
+
+    @classmethod
     async def dispatch(
         cls, db: AsyncSession, agent_id: int, group_id: int | None,
         tool_name: str, arguments: dict, context: dict,
@@ -372,28 +456,37 @@ class ToolRegistry:
                 logger.warning(f"世界侧 skill 兜底执行失败 {tool_name}: {e}")
             return _build_tool_error(ToolErrorCode.UNKNOWN_TOOL, f"未知工具「{tool_name}」：没有此名称的工具")
 
+        # 状态闸：请求侧名单被锁之后，「给不给」与「能不能用」拆成了两件事——
+        # 状态只决定能不能执行，不再改 tools 数组（改了就是带 tools 的整段前缀 miss）。
+        # 从前这里没有校验，全靠"请求里没有这个工具"兜住权限，那是个隐性依赖。
+        agent_state = getattr((context or {}).get("_agent"), "state", None)
+        if agent_state is None:
+            try:
+                from app.models.agent import Agent as _Agent
+                agent_state = getattr(await db.get(_Agent, agent_id), "state", None)
+            except Exception:  # noqa: BLE001 —— 读不到就不拦，别把查询故障变成权限故障
+                agent_state = None
+        if agent_state and agent_state not in plugin.states:
+            from app.utils.pure.agent_state import state_denied_text
+            return _build_tool_error(
+                ToolErrorCode.INVALID_ARGS, state_denied_text(agent_state, tool_name))
+
         t0 = time.monotonic()
         try:
             result = await plugin.execute(db, agent_id, group_id, arguments, context)
         except Exception as e:
-            elapsed = time.monotonic() - t0
-            try:
-                from app.services.infrastructure.metrics_collector import metrics
-                await metrics.record_tool_call(tool_name, elapsed, False)
-            except Exception:
-                pass
-            # 工具把事务写炸了就先复原会话：否则这一轮后面每一次入库都会再抛一次
+            # 工具炸了不许把整轮带走：写库抛在 flush 上（唯一约束、类型、长度）之后，
+            # 会话会停在"必须先 rollback"的状态，此后连记账都要再抛一次，异常一路窜到
+            # 最外层——AI 这一轮的回复就这样静默消失了（日志里只剩一行 Session 已回滚）。
+            # 就地收拾干净：这个工具写下去的东西不要了，会话还能继续给 AI 用。
             await cls._recover_session(db, context, tool_name)
             logger.error(f"工具 {tool_name} 执行失败: {e}", exc_info=True)
+            await cls._record_call(db, agent_id, tool_name, time.monotonic() - t0, False, context)
             return _build_tool_error(ToolErrorCode.TOOL_EXEC_FAILED, f"执行失败：{e}")
 
         elapsed = time.monotonic() - t0
         is_success = not result.get("error", False)
-        try:
-            from app.services.infrastructure.metrics_collector import metrics
-            await metrics.record_tool_call(tool_name, elapsed, is_success)
-        except Exception:
-            pass
+        await cls._record_call(db, agent_id, tool_name, elapsed, is_success, context)
         try:
             from app.services.trigger.trigger_service import after_tool_result
             result = await after_tool_result(db, agent_id, tool_name, result)
