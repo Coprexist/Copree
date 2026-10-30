@@ -40,6 +40,22 @@ def get_zoneinfo(name: str) -> tzinfo:
         return timezone(_FALLBACK_OFFSET)
 
 
+def local_time_text(tz_name: str, now: datetime | None = None) -> str:
+    """人读的当前时间：「2026-10-30 14:51 Asia/Shanghai（周五）」。
+
+    模型的"现在几点"只有一个来源：提示词里这一行。各处自己拼（fmt 各写一遍、有的带星期有的不带）
+    迟早漂：线上出现过半夜给自己排的「夜里的心跳」在第二天下午 14:51 触发，那一轮提示词里
+    根本没有"现在"，模型只能拿账本里历史消息的时间戳当线索，于是照着任务里的"夜里"两个字回话。
+    """
+    tz = get_zoneinfo(tz_name)
+    moment = now or datetime.now(timezone.utc)
+    if moment.tzinfo is None:            # 库里读出来的无时区值一律按 UTC 解释
+        moment = moment.replace(tzinfo=timezone.utc)
+    local = moment.astimezone(tz)
+    name = getattr(tz, "key", None) or tz_name
+    return f"{local.strftime('%Y-%m-%d %H:%M')} {name}（{_WEEKDAYS[local.weekday()]}）"
+
+
 def utc_now() -> datetime:
     """当前时刻，无时区 UTC——落库的唯一入口。"""
     return datetime.now(timezone.utc).replace(tzinfo=None)

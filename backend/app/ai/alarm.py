@@ -14,7 +14,7 @@ from sqlalchemy import select, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import async_session
 from app.models.alarm import AgentAlarm
-from app.utils.pure.timeutil import utc_now
+from app.utils.pure.timeutil import as_utc, local_time_text, utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -325,6 +325,43 @@ async def _check_and_fire_alarms(db):
     await db.commit()
 
 
+def wake_message(alarm_id: int, task: str, now_text: str, written_at_text: str = "") -> str:
+    """闹钟唤醒的那条 user 消息（唯一出处）。
+
+    必须带「现在」：任务文本是当初写的，里面可能有「夜里/明早/今晚」这类相对说法。提示词里没有钟的
+    时候，模型只能拿账本里历史消息的时间戳当"现在"的线索——凌晨给自己排的「夜里的心跳」在第二天
+    下午 14:51 触发，它就会照着"夜里"两个字写回复。所以这里把两件事一起给：现在的时刻、这条计划
+    是什么时候写的，并明确「以现在为准」。
+    """
+    written = ""
+    if written_at_text:
+        written = (f"**这条计划是 {written_at_text} 写的**——任务里「夜里/明早/今晚」这类说法"
+                   f"以**现在**为准，别照着字面演。\n\n")
+    return (
+        f"⏰ **你被闹钟 #{alarm_id} 唤醒了。**\n\n"
+        f"**现在：** {now_text}\n\n"
+        f"{written}"
+        f"**你当初写的是：** {task}\n\n"
+        "请现在就开始执行这个任务。如果需要发消息、查记忆、执行命令等，直接调用相应的工具。\n\n"
+        "⚠️ **重要**：\n"
+        "- 如果任务已完成 → 干净利落地停止，不要为了「多说一句」而额外发言\n"
+        "- 如果情况已经变化、原任务不再合适 → 根据当前实际情况调整行动，做正确的事，而不是机械执行过期指令\n"
+        "- 如果你发现做完这个任务后有新的、更重要的事需要做 → 可以接着规划并执行\n"
+        "- 不要反复检查已完成的事情，不要为了确认而额外调用工具"
+    )
+
+
+def written_at_text(created_at, tz_name: str) -> str:
+    """这条计划是什么时候写的（本地时刻 + 大约多久之前）。读不到时间就返回空串。"""
+    if created_at is None:
+        return ""
+    created = as_utc(created_at)
+    if created is None:
+        return ""
+    hours = (datetime.now(timezone.utc) - created).total_seconds() / 3600
+    text = local_time_text(tz_name, created)
+    return f"{text}，约 {hours:.1f} 小时前" if 0 <= hours < 240 else text
+
 async def _process_alarm_event(db, event: dict):
     """
     处理闹钟事件：唤醒 AI 并让它执行预设任务。
@@ -459,22 +496,15 @@ async def _process_alarm_event(db, event: dict):
     if decision_note:
         system_prompt += "\n\n" + decision_note
 
+    from app.config import settings as _settings
     messages = [
         {"role": "system", "content": system_prompt},
-        {
-            "role": "user",
-            "content": (
-                f"⏰ **你被闹钟 #{alarm_id} 唤醒了。**\n\n"
-                f"这是你之前给自己排的计划，现在到点了。\n\n"
-                f"**你当初写的是：** {task}\n\n"
-                f"请现在就开始执行这个任务。如果需要发消息、查记忆、执行命令等，直接调用相应的工具。\n\n"
-                f"⚠️ **重要**：\n"
-                f"- 如果任务已完成 → 干净利落地停止，不要为了「多说一句」而额外发言\n"
-                f"- 如果情况已经变化、原任务不再合适 → 根据当前实际情况调整行动，做正确的事，而不是机械执行过期指令\n"
-                f"- 如果你发现做完这个任务后有新的、更重要的事需要做 → 可以接着规划并执行\n"
-                f"- 不要反复检查已完成的事情，不要为了确认而额外调用工具"
-            ),
-        },
+        {"role": "user", "content": wake_message(
+            alarm_id, task,
+            now_text=local_time_text(_settings.display_timezone),
+            written_at_text=written_at_text(getattr(alarm_row, "created_at", None),
+                                            _settings.display_timezone),
+        )},
     ]
 
     model = resolve_model(agent, provider_info=provider_info)

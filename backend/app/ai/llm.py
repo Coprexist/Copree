@@ -766,10 +766,15 @@ async def _emoji_packs_note(db) -> str:
 
 
 async def _build_tools_segment(db, agent, is_dm: bool = False) -> str:
-    """tools 段：技能背包视图——按 6 段分组展示，含段描述"""
+    """tools 段：技能目录 + 要点——告诉模型「有什么、怎么调、要注意什么」。
+
+    目录给全（每个可用工具一行，含最小调用形态），要点按层级与场景排；两者都不含 schema
+    （schema 在 tools 数组里，只在解锁点变）。渲染完全确定，避免前缀字节漂移。
+    """
     from app.services.tool_registry import get_allowed_tools
     from app.services.skill.skill_engine import _is_delay_reply_allowed
     from app.tools.base import SKILL_SEGMENT_META, ToolRegistry
+    from app.utils.pure.agent_state import state_label
 
     delay_allowed = await _is_delay_reply_allowed(db, agent)
     current_tools = get_allowed_tools(
@@ -783,6 +788,7 @@ async def _build_tools_segment(db, agent, is_dm: bool = False) -> str:
     from app.services.world.world_frame_service import active_world, frame_tool_gate
     gate = await frame_tool_gate(db, agent.id)
     frame_note = ""
+    world_id_now = None
     if gate is not None:
         current_tool_names &= gate
         world_id_now, _ = await active_world(db, agent.id)
@@ -790,38 +796,45 @@ async def _build_tools_segment(db, agent, is_dm: bool = False) -> str:
                       if world_id_now is not None
                       else f"（当前状态帧限定工具：{', '.join(sorted(gate))}）")
 
-    all_segments = ToolRegistry.get_segments()
+    # 场景决定要点里哪些「场景纪律」该出现（群聊/私信/世界），不影响权限
+    scene = "world" if world_id_now is not None else ("dm" if is_dm else "group_chat")
+
+    from app.utils.pure.tool_catalog import (
+        collect_notes, render_catalog, render_notes,
+    )
+
+    entries = ToolRegistry.catalog_entries()
+    # 要点支持两种写法：(层级, 正文) 或 (层级, 正文, {场景…})——后者只在该场景渲染
+    segment_notes = []
+    for key, meta in SKILL_SEGMENT_META.items():
+        for note in (meta.get("usage_notes") or ()):
+            level, text = note[0], note[1]
+            scenes = note[2] if len(note) > 2 else (meta.get("usage_scenes") or frozenset())
+            segment_notes.append({"segment": key, "level": level,
+                                  "notes": [text], "scenes": scenes})
 
     lines = [
-        "## 技能背包 · 当前可用工具",
-        f"你的状态：{agent.state}　可用工具：{len(current_tool_names)} 个{frame_note}",
-        "",
+        "## 技能目录",
+        f"你的状态：{state_label(agent.state)}　可用工具：{len(current_tool_names)} 个{frame_note}",
+        *render_catalog(entries, current_tool_names),
     ]
 
-    for seg_key, seg_info in all_segments.items():
-        seg_meta = SKILL_SEGMENT_META.get(seg_key, {})
-        seg_name = seg_meta.get("name", seg_key)
-        seg_desc = seg_meta.get("description", "")
-        all_tools_in_seg = [t["name"] for t in seg_info.get("tools", [])]
-        available = [t for t in all_tools_in_seg if t in current_tool_names]
-        unavailable_count = len(all_tools_in_seg) - len(available)
-
-        if not available:
-            continue  # 该段完全不可用，不展示
-
-        suffix = f"（另有 {unavailable_count} 个不可用）" if unavailable_count > 0 else ""
-        lines.append(f"📦 **{seg_name}** — {seg_desc}{suffix}")
-        lines.append(f"   {', '.join(available)}")
+    note_lines, dropped = render_notes(collect_notes(entries, segment_notes, scene=scene))
+    if note_lines:
         lines.append("")
+        lines.append("## 要点")
+        lines.extend(note_lines)
+        if dropped:
+            lines.append(f"（另有 {dropped} 条要点未列出，需要时调 list_available_skills）")
 
     emoji_note = await _emoji_packs_note(db)
     if emoji_note:
         lines.append("")
         lines.append(emoji_note)
 
+    lines.append("")
     lines.append(
-        "工具列表中不含的工具说明当前状态下不可用。如需查看全部能力（含不可用的），"
-        "调用 list_available_skills。"
+        "目录不含的工具说明它此刻不可用（状态或状态帧限定）；要看全部能力调 list_available_skills。"
     )
     return "\n".join(lines)
 
@@ -832,10 +845,13 @@ async def _build_current_context(
     is_federated: bool = False,
 ) -> str:
     """current_context 段：当前时间（v0.2.1 精简——会话标题已用统一格式）"""
-    tz = ZoneInfo(settings.display_timezone)
-    now = datetime.now(tz)
-    now_str = now.strftime(f"%Y-%m-%d %H:%M {tz.key}")
-    context = f"## 当前时间\n{now_str}\n"
+    from app.utils.pure.timeutil import local_time_text
+    context = f"## 当前时间\n{local_time_text(settings.display_timezone)}\n"
+    # 你的状态是「每轮读数」，和当前时间同档：放尾部按未命中计价，换来的是每轮都准。
+    # 它不进环境段（环境是会话级事实，锁在 message 0 里等解锁），因为状态变化频繁，
+    # 冻在前缀里会让 AI 一直按旧状态行事。
+    from app.utils.pure.agent_state import state_line
+    context += f"\n## 你的状态\n{state_line(getattr(agent, 'state', None))}\n"
     # 这三条曾经在这里各写一份（怎么发、思考看不见、支持 Markdown）：怎么发与"思考看不见"
     # 是锁定前缀里「认知模型」同一件事（消息只认工具），这里只留时间；Markdown 是能力声明，
     # 已挪进 core_identity 的消息格式段——尾部每轮按未命中计价，永不变的话别放这儿。
@@ -1496,9 +1512,8 @@ async def build_dm_messages(
     except Exception:
         pass
 
-    tz = ZoneInfo(settings.display_timezone)
-    now = datetime.now(tz)
-    now_str = now.strftime(f"%Y-%m-%d %H:%M {tz.key}")
+    from app.utils.pure.timeutil import local_time_text
+    now_str = local_time_text(settings.display_timezone)
 
     # ── DM 上下文段（精简：标题格式已承载会话信息，不再重复说教）──
     dm_context = (
