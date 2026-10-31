@@ -110,34 +110,63 @@ async def test_install_unwraps_single_top_dir():
         assert (target / "skill.json").is_file()
 
 
-async def test_unsafe_entries_are_skipped():
-    from app.services.plugin import catalog, store
+async def test_unsafe_entries_reject_the_whole_package():
+    """不安全条目一律整包拒绝，而不是"跳过继续装"。
 
-    with _Sandbox() as box:
-        data = _zip(
-            {
-                "plugin.json": _manifest(id="demo-safe"),
-                "ok.py": "print('ok')\n",
-                "../escape.py": "evil\n",
-                "/absolute.py": "evil\n",
-                ".hidden/secret.py": "evil\n",
-                "__pycache__/cached.pyc": "evil\n",
-                "run.sh": "rm -rf /\n",
-                "node_modules/x.js": "x\n",
-            },
-            symlink="link.py",
-        )
-        info = store.inspect_package(data)
-        assert sorted(info["files"]) == ["ok.py", "plugin.json"]
+    跳过会把插件装成缺文件的半成品：作者以为装好了、用户看到功能莫名缺失，
+    比"明确失败"更难查。所以这几种条目各自都要把包打回。
+    """
+    from app.services.plugin import store
 
-        store.install_package(data)
-        installed = sorted(
-            str(p.relative_to(catalog.USER_PLUGIN_DIR / "demo-safe")).replace("\\", "/")
-            for p in (catalog.USER_PLUGIN_DIR / "demo-safe").rglob("*") if p.is_file()
-        )
-        assert installed == ["ok.py", "plugin.json"]
-        # 越界条目也不能落在插件目录之外
-        assert not (catalog.USER_PLUGIN_DIR.parent / "escape.py").exists()
+    with _Sandbox():
+        bad_entries = {
+            "../escape.py": "evil\n",
+            "/absolute.py": "evil\n",
+            ".hidden/secret.py": "evil\n",
+            "__pycache__/cached.pyc": "evil\n",
+            "run.sh": "rm -rf /\n",
+            "node_modules/x.js": "x\n",
+        }
+        for name, content in bad_entries.items():
+            data = _zip({"plugin.json": _manifest(id="demo-safe"), "ok.py": "print('ok')\n", name: content})
+            try:
+                store.inspect_package(data)
+            except store.PackageError:
+                continue
+            raise AssertionError("不安全条目没有被打回: " + name)
+
+        # 符号链接同样拒绝（跳过会让插件指向包外路径）
+        data = _zip({"plugin.json": _manifest(id="demo-safe"), "ok.py": "print('ok')\n"}, symlink="link.py")
+        try:
+            store.inspect_package(data)
+        except store.PackageError:
+            pass
+        else:
+            raise AssertionError("含符号链接的包没有被打回")
+
+
+async def test_upgrade_refuses_downgrade_unless_allowed():
+    """版本规则：更高=升级、相同=修复安装、更低=降级需显式 allow_downgrade。"""
+    from app.services.plugin import store
+
+    def pkg(version: str) -> bytes:
+        return _zip({"plugin.json": _manifest(id="demo-ver", version=version), "ok.py": "print('ok')\n"})
+
+    with _Sandbox():
+        store.install_package(pkg("1.2.0"))
+        # 同版本：修复安装
+        store.install_package(pkg("1.2.0"), upgrade=True)
+        # 升级
+        store.install_package(pkg("1.3.0"), upgrade=True)
+        # 降级默认拒绝
+        try:
+            store.install_package(pkg("1.0.0"), upgrade=True)
+        except store.PackageError as e:
+            assert "降级" in str(e)
+        else:
+            raise AssertionError("降级没有被拒绝")
+        # 显式确认后允许
+        store.install_package(pkg("1.0.0"), upgrade=True, allow_downgrade=True)
 
 
 async def test_package_rejections():
