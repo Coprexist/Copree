@@ -22,6 +22,9 @@ AI_SKILLS_DIR = DATA_DIR / "world_ai_skills"
 # 用户安装的插件与安装包仓库（内置插件在 backend/plugins，不走这里）
 PLUGINS_DIR = DATA_DIR / "plugins"
 PLUGIN_PACKAGES_DIR = DATA_DIR / "plugin_packages"
+# 插件私有数据根：plugins/<id>/ 是代码（覆盖安装会被替换），插件自己的状态放这里。
+# 目录名 = 插件 id，由 plugins/<id>/plugin.py 自己决定写什么（B 站订阅就是这样存的）。
+PLUGIN_DATA_DIR = DATA_DIR / "plugin_data"
 # 世界商城：商品包
 MARKET_DIR = DATA_DIR / "market"
 # 备份、全局共享记忆、主题投票

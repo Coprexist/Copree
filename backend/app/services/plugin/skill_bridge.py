@@ -188,10 +188,14 @@ async def _reconcile_service_instances(plugin_id: str, db) -> None:
 
 
 async def _unload_plugin(plugin_id: str) -> None:
-    """完整卸载一个插件：服务 + 行为处理器 + 声明元数据。"""
+    """完整卸载一个插件：服务 + 行为处理器 + 声明元数据 + 自带工具。"""
     await _unload_service_plugin(plugin_id)
     _unload_behavior_plugin(plugin_id)
     _unregister_plugin_skills(plugin_id)
+    # 插件可以自带工具与技能段（plugin.py 里定义 ToolPlugin / register_segment）。
+    # 不回收的话，工具还留在注册表里、AI 还能调，而它依赖的服务已经停了。
+    from app.tools.base import ToolRegistry
+    ToolRegistry.unregister_owner(plugin_id)
     _loaded.pop(plugin_id, None)
 
 

@@ -104,6 +104,10 @@ SKILL_SEGMENT_META: dict[str, dict] = {
 }
 
 
+# 段 → 注册它的插件 id（内置段不登记）。卸载插件时按它回收自带的段。
+_SEGMENT_OWNERS: dict[str, str] = {}
+
+
 # ============================================================
 # 工具插件基类
 # ============================================================
@@ -140,6 +144,10 @@ class ToolPlugin:
     usage_notes: list[tuple[int, str]] = []
     # 只在哪些场景出现（group_chat / dm / world）；空 = 所有场景
     usage_scenes: frozenset[str] = frozenset()
+
+    # 来源插件 id：目录插件的 plugin.py 里定义的工具由加载器自动填（= 插件 id），
+    # 内置工具为空。卸载插件时据此精确回收，绝不误删同名的内置工具。
+    owner: str = ""
 
     @classmethod
     def to_definition(cls) -> dict:
@@ -205,6 +213,10 @@ class ToolRegistry:
     def register(cls, plugin_cls: type[ToolPlugin]) -> None:
         """注册一个工具插件（幂等：同名同类静默跳过）"""
         instance = plugin_cls()
+        if not instance.owner:
+            # 插件加载上下文里定义的工具自动挂到该插件名下（懒导入：api 会反向依赖技能引擎）
+            from app.services.plugin.api import get_current_plugin
+            instance.owner = get_current_plugin() or ""
         if instance.name in cls._plugins:
             existing = cls._plugins[instance.name]
             if isinstance(existing, plugin_cls):
@@ -217,6 +229,38 @@ class ToolRegistry:
             trigger_rules.register_plugin([{**r, "id": r.get("id") or f"{instance.name}.{i}"}
                                            for i, r in enumerate(instance.triggers)])
         logger.debug(f"工具已注册: {instance.name} (segment={instance.segment})")
+
+    @classmethod
+    def unregister_owner(cls, plugin_id: str) -> list[str]:
+        """回收某个插件注册的全部工具与技能段（卸载插件时调用）。
+
+        只按 owner 精确匹配：内置工具 owner 为空，永远不会被目录插件带走。
+        返回被摘掉的工具名，便于日志与测试断言。
+        """
+        dropped = [name for name, p in cls._plugins.items() if p.owner == plugin_id]
+        for name in dropped:
+            cls._plugins.pop(name, None)
+        for seg_key in [k for k, o in _SEGMENT_OWNERS.items() if o == plugin_id]:
+            _SEGMENT_OWNERS.pop(seg_key, None)
+            SKILL_SEGMENT_META.pop(seg_key, None)
+        cls._invalidate_cache()
+        if dropped:
+            logger.info("插件工具已回收: %s → %s", plugin_id, dropped)
+        return dropped
+
+    @classmethod
+    def register_segment(cls, key: str, meta: dict, owner: str | None = None) -> None:
+        """注册一个技能段（插件可自带段，不必改核心的 SKILL_SEGMENT_META 字面量）。
+
+        owner 与工具同一套归属规则：不传 = 跟随当前加载的插件。
+        """
+        if owner is None:
+            from app.services.plugin.api import get_current_plugin
+            owner = get_current_plugin()
+        SKILL_SEGMENT_META[key] = meta
+        if owner:
+            _SEGMENT_OWNERS[key] = owner
+        cls._invalidate_cache()
 
     @classmethod
     def _invalidate_cache(cls) -> None:
