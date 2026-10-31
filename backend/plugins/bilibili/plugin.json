@@ -1,0 +1,57 @@
+{
+  "id": "bilibili",
+  "name": "B 站",
+  "description": "把 AI 接进 B 站：AI 的创建者用手机扫码登录自己的 B 站账号，AI 就能查视频、看动态、订阅 UP 主并把更新推到群里。",
+  "category": "service",
+  "version": "1.0.0",
+  "author": "Copree",
+  "icon": "Play",
+  "default_enabled": true,
+  "channel": {
+    "kind": "bilibili",
+    "label": "B 站",
+    "label_en": "Bilibili",
+    "label_ja": "ビリビリ",
+    "desc": "一个 AI 一个 B 站账号：创建者扫码登录，AI 就能在对话里查 B 站，并把订阅的 UP 主更新推到群里。",
+    "desc_en": "One Bilibili account per AI: the creator scans a QR code, and the AI can look things up on Bilibili and push subscribed creator updates into Copree groups.",
+    "desc_ja": "AI ごとに1つの Bilibili アカウント。作成者が QR コードでログインすると、AI は Bilibili を調べたり、購読中の投稿をグループへ通知できるようになります。",
+    "pairing": false,
+    "supports_group": false,
+    "supports_files": false,
+    "limits": [
+      {
+        "text": "登录态就是你的 B 站账号：AI 能看到的和你登录后能看到的一样，凭证加密存库、接口不回显",
+        "text_en": "The login is your own Bilibili account: the AI can see what you see after logging in. Credentials are stored encrypted and never echoed back"
+      },
+      {
+        "text": "动态接口需要登录态（未登录时 B 站直接回风控/-412）；视频、热门、粉丝数、直播状态不需要登录",
+        "text_en": "Dynamic feed endpoints require a login session (without it Bilibili answers -412/anti-bot). Video info, popular list, follower counts and live status work without login"
+      },
+      {
+        "text": "订阅推送以群里某个 AI 的身份发出（AI 在哪个群，推送就署谁的名），一个群一个 AI，没有 AI 的群不推",
+        "text_en": "Subscription pushes are sent as an AI member of the target group; groups with no AI member are skipped"
+      },
+      {
+        "text": "扫码登录后请勿在别处重复登录同一账号的网页端后修改安全设置；登录失效时回到卡片重新扫码即可",
+        "text_en": "If the session expires, scan again from this card"
+      }
+    ],
+    "guide": [
+      {
+        "text": "保存配置：下面只需要选检查间隔，B 站账号还没登录也没关系",
+        "text_en": "Save the config first; the Bilibili account is not required yet",
+        "text_ja": "まず設定を保存します（Bilibili アカウントはまだ不要）"
+      },
+      {
+        "text": "卡片上会出现二维码：用手机 B 站 App 扫码确认登录",
+        "text_en": "A QR code appears on the card: scan and confirm with the Bilibili mobile app",
+        "text_ja": "カードに QR コードが表示されます：スマホの Bilibili アプリで読み取って承認"
+      },
+      {
+        "text": "登录成功后卡片显示 B 站昵称，AI 即可使用 B 站相关工具；订阅的 UP 主更新会推到群里",
+        "text_en": "Once logged in the card shows the nickname and the AI can use Bilibili tools",
+        "text_ja": "ログインするとニックネームが表示され、Bilibili ツールが使えるようになります"
+      }
+    ]
+  }
+}

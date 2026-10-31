@@ -31,6 +31,7 @@ SKIP_SUFFIXES = {".pyc", ".pyo", ".DS_Store"}
 # 这些是"随实例部署"的内置插件：它们本来就在主仓，发布到社区是为了
 # 非官方部署（旧版本、自建客户端）也能装上，所以 tier 用 verified（源码在我们仓里）。
 DEFAULT_IDS = [
+    "bilibili",
     "qq-channel",
     "qq-napcat",
     "emoji-qq",
