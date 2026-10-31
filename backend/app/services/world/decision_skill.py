@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 
 from app.config import settings
 from app.repositories.world_repo import SQLAlchemyWorldRepository
@@ -52,6 +53,11 @@ _STATS_KEY = "_stats"
 _STATS_RECENT = 20          # 每条规则最近命中的保留条数（"一直在误触"靠它看出来）
 _STATS_PREVIEW = 60         # 命中日志里正文的截断长度
 _STATS_BRIEF_RECENT = 5     # 列表回显只给最后几条：20 条全量回显会把上下文撑满
+# 没命中的样例（平台写、AI 只读）：从没命中过的规则最需要"为什么没中"，只有计数看不出差在哪。
+# 不采全部消息——没命中的消息是常态，每条都写一次库不值当，所以按间隔采样。
+_STATS_MISS_RECENT = 20     # 每条规则最近保留的未命中样例条数
+_STATS_MISS_BRIEF = 3       # 列表回显给几条（要看全的走 list_decision_skills 带 name）
+_MISS_MIN_INTERVAL = 10     # 同一条规则两次采样至少间隔（秒）：20 条约三分钟真实流量，又不会每条都写库
 _VERIFY_MAX_SAMPLES = 8     # 一次启用前检验最多跑几条样例（几条正例 + 几条反例就够）
 
 _DO_ACTIONS = ("reply_template", "call_tool", "run_script", "silent")
@@ -88,9 +94,12 @@ def rule_schema_desc() -> str:
         "（op 可 eq/ne/contains/starts_with/matches/similar/gt/gte/lt/lte/in；similar 认错别字）；"
         "也可写 {\"content_clean\":{\"starts_with\":\"训练\"}}，一个字段挂多个运算 = 同时满足。"
         "并可 and/or/not 自由嵌套；拿不准先 test_decision_skill 试跑一条样例。"
-        "启用前检验 verify 建议给数组（正例 + 反例都要）：每条 {event, content}，"
+        "启用前检验 verify 收数组（正例 + 反例都要）：每条 {event, content}，"
         "expect 默认 \"hit\"（该命中），反例写 \"miss\"（不该命中）——"
-        "平台全跑一遍，任何一条不符预期就拒绝落地；只验正例只证明会命中，证明不了不误触。"
+        "平台把每条都跑一遍，任何一条不符预期就拒绝落地并指出第几条、为什么；"
+        "只验正例只证明会命中，证明不了不误触。"
+        "写入成功后回 verify.summary 与每条样例的实际结果（如「3 条样例全部符合预期："
+        "2 条正例都命中、1 条反例都没被吃掉（都真跑过了）」）——没有这句话就说明样例没跑。"
         "do 四选一：reply_template（{action, reply} 固定回复，零成本；可用占位 "
         "{sender_name} {sender_id} {group_id} {content} {now}）/ call_tool（{action, name, arguments} 调平台工具）/ "
         "run_script（{action, code} 或 {action, entry} 沙箱脚本：在你自己的文件空间里跑，不能联网。"
@@ -106,8 +115,10 @@ def rule_schema_desc() -> str:
         "\"silent\" = 不唤醒也不代发，只往账本记一条——不叫醒不等于不知道，下一轮你能看到。"
         "fallback_reply 与 silent 只在 do 没办成时生效，成功时仍按 notify。"
         "未 @ 你的消息到不到得了你，取决于这个群/通道的消息覆盖面。"
-        "每条规则平台都记命中统计（列表里 stats.hit_count / last_hit_at / recent，"
-        "最近 20 条命中）；hit_count=0 就是「这条从没触发过」，该去试跑里查条件了。"
+        "每条规则平台都记统计（列表里 stats）：命中的给 hit_count / last_hit_at / recent（最近几条命中的正文），"
+        "hit_count=0 就是「这条从没触发过」；从没命中过的规则还会给 miss_samples——"
+        "最近几条过了这条规则却没命中的真实消息，外加没命中的原因（条件不成立 / 事件对不上 / 正则被拒等），"
+        "按它改条件比空想快。要把某条规则的全部未命中样例（最多 20 条）看全，用 list_decision_skills 带 name。"
         "同名覆盖更新（命中统计会跟着保留），上限 20 条。"
     )
 
@@ -220,8 +231,36 @@ def rule_brief(rule: dict) -> dict:
         "last_hit_at": str(stats.get("last_hit_at") or ""),
         "recent": list(stats.get("recent") or [])[-_STATS_BRIEF_RECENT:],
         "never_hit": hits == 0,
+        # 从没命中过才给「没中」的证据：这类规则光有 hit_count=0 看不出差在哪。
+        # 只给最后几条，看全量走 list_decision_skills 的 name 参数（stats_full）。
+        "miss_count": int(stats.get("miss_count") or 0),
+        "last_miss_at": str(stats.get("last_miss_at") or ""),
+        "miss_samples": _miss_brief(stats) if hits == 0 else [],
     }
     return out
+
+
+def _miss_brief(stats: dict, limit: int = _STATS_MISS_BRIEF) -> list[dict]:
+    """未命中样例的回显切片：只留 AI 用得上的三个字段（ts 是给采样节流看的，不外露）。"""
+    rows = [item for item in (stats.get("recent_miss") or []) if isinstance(item, dict)]
+    return [{"at": item.get("at") or "", "content": item.get("content") or "",
+             "why": item.get("why") or ""} for item in rows[-limit:]]
+
+
+def rule_stats_detail(rule: dict) -> dict:
+    """一条规则的完整统计（list_decision_skills 带 name 时用）：最多 20 条未命中样例全给。"""
+    stats = rule_stats(rule)
+    hits = int(stats.get("hit_count") or 0)
+    return {
+        "hit_count": hits,
+        "first_hit_at": str(stats.get("first_hit_at") or ""),
+        "last_hit_at": str(stats.get("last_hit_at") or ""),
+        "never_hit": hits == 0,
+        "recent": list(stats.get("recent") or [])[-_STATS_RECENT:],
+        "miss_count": int(stats.get("miss_count") or 0),
+        "last_miss_at": str(stats.get("last_miss_at") or ""),
+        "miss_samples": _miss_brief(stats, _STATS_MISS_RECENT),
+    }
 
 
 # ═══════════════════════════════════════════════════════════
@@ -249,8 +288,18 @@ async def get_decision_rules(db, kind: str, entity_id: int) -> list[dict]:
 
 
 def _carry_stats(rule: dict, previous: dict | None) -> dict:
-    """同名覆盖时把命中统计带到新规则上：改一条条件不该让它的历史归零。"""
+    """同名覆盖时把命中统计带到新规则上：改一条条件不该让它的历史归零。
+
+    但**未命中样例只在 when 没变时保留**：那些样例是"旧条件为什么不中"的证据，
+    条件一改就不描述现在这条规则了，留着比清掉更误导（命中计数照旧保留，它说的是
+    "这条规则动过没有"，与条件写法无关）。
+    """
     stats = rule_stats(previous or {})
+    if not stats:
+        return dict(rule)
+    if (previous or {}).get("when") != rule.get("when"):
+        stats = {key: value for key, value in stats.items()
+                 if key not in ("recent_miss", "miss_count", "last_miss_at", "last_miss_ts")}
     return {**rule, _STATS_KEY: stats} if stats else dict(rule)
 
 
@@ -367,8 +416,31 @@ def _plain_session(db):
     return getattr(db, "session", None) or db
 
 
-async def _merge_stats(db, kind: str, entity_id: int, name: str, entry: dict) -> None:
-    """把一次命中并进规则 config 的 _stats。规则刚被删掉就安静返回。"""
+# 进程内的采样节流（见 record_miss）：键是 (kind, entity_id, rule name)，值是上次写入的秒级时间
+_MISS_INMEM: dict[tuple, int] = {}
+
+
+def _bump_miss(old, entry: dict) -> dict:
+    """记一次「过了一遍但没命中」的样例（纯函数，读旧写新）。
+
+    只给从没命中过的规则采（判据在 record_miss）：这正是「规则写歪了，我只看得到一次都没中」
+    的时候，光有计数看不出差在哪，得把真消息和没中的原因一起留着。
+    """
+    stats = dict(old) if isinstance(old, dict) else {}
+    recent = [item for item in (stats.get("recent_miss") or []) if isinstance(item, dict)]
+    recent.append(entry)
+    return {
+        **stats,
+        "miss_count": int(stats.get("miss_count") or 0) + 1,
+        "last_miss_at": str(entry.get("at") or ""),
+        "last_miss_ts": int(entry.get("ts") or 0),
+        "recent_miss": recent[-_STATS_MISS_RECENT:],
+    }
+
+
+async def _merge_stats(db, kind: str, entity_id: int, name: str, entry: dict, *,
+                       mutate=_bump_stats) -> None:
+    """把一次统计（命中或未命中）并进规则 config 的 _stats。规则刚被删掉就安静返回。"""
     session = _plain_session(db)
     if session is None or not hasattr(session, "get"):
         return
@@ -383,7 +455,7 @@ async def _merge_stats(db, kind: str, entity_id: int, name: str, entry: dict) ->
         if row is None:
             return
         cfg = dict(row.config or {})
-        row.config = {**cfg, _STATS_KEY: _bump_stats(cfg.get(_STATS_KEY), entry)}
+        row.config = {**cfg, _STATS_KEY: mutate(cfg.get(_STATS_KEY), entry)}
         return
     if kind == "group_assistant":
         from app.models.world import GroupAssistant
@@ -394,7 +466,7 @@ async def _merge_stats(db, kind: str, entity_id: int, name: str, entry: dict) ->
         rules = list(cfg.get("decision_rules") or [])
         for item in rules:
             if isinstance(item, dict) and str(item.get("name") or "") == name:
-                item[_STATS_KEY] = _bump_stats(item.get(_STATS_KEY), entry)
+                item[_STATS_KEY] = mutate(item.get(_STATS_KEY), entry)
         cfg["decision_rules"] = rules
         ga.config = cfg
 
@@ -424,6 +496,73 @@ async def record_hit(db, kind: str, entity_id: int, rule: dict, ctx: dict, resul
         logger.debug("决策技能命中统计写入失败（%s %s「%s」）: %s", kind, entity_id, name, e)
 
 
+async def record_miss(db, kind: str, entity_id: int, rule: dict, ctx: dict, why: str) -> None:
+    """记一次「过了一遍但没命中」的样例（平台写、AI 只读）。
+
+    为什么只采从没命中过的规则：命中过的规则有 recent 可看（"最近到底命中了什么"），
+    从没命中的只有 hit_count=0 一个数字——规则写歪了连"差在哪"都无从查起，这才是真被咬到的场景。
+    为什么按间隔采样：没命中的消息是常态，每条都写一次库不值当；60 秒一条，20 条就是一小时的
+    真实流量，足够看出条件卡在哪。旁路，异常只记 debug。
+    """
+    name = str((rule or {}).get("name") or "")
+    if not name:
+        return
+    stats = rule_stats(rule)
+    if int(stats.get("hit_count") or 0) > 0:
+        return
+    content = str((ctx or {}).get("content_clean") or (ctx or {}).get("content") or "")
+    if not content.strip():
+        return
+    now = int(time.time())
+    if now - int(stats.get("last_miss_ts") or 0) < _MISS_MIN_INTERVAL:
+        return
+    # 批量链路会一次预取规则、跨很多条消息复用同一份内存副本（stats 是旧的），光看库里的
+    # last_miss_ts 挡不住"每条消息都写一次库"；进程内再挡一道，跨进程/重启由库里的那份兜底。
+    key = (kind, entity_id, name)
+    if now - int(_MISS_INMEM.get(key) or 0) < _MISS_MIN_INTERVAL:
+        return
+    cut = content[:_STATS_PREVIEW]
+    recent = [item for item in (stats.get("recent_miss") or []) if isinstance(item, dict)]
+    if recent and recent[-1].get("content") == cut:
+        return   # 同一条消息重放 / 刷屏：不留重复样本
+    entry = {
+        "at": _now_text(),
+        "ts": now,
+        "event": str((ctx or {}).get("event") or ""),
+        "content": cut,
+        "why": str(why or "")[:120],
+    }
+    try:
+        await _merge_stats(db, kind, entity_id, name, entry, mutate=_bump_miss)
+        if len(_MISS_INMEM) > 5000:      # 规整一下，别无限长
+            _MISS_INMEM.clear()
+        _MISS_INMEM[key] = now
+    except Exception as e:  # noqa: BLE001 —— 旁路，不能拖垮消息链路
+        logger.debug("决策技能未命中采样写入失败（%s %s「%s」）: %s", kind, entity_id, name, e)
+
+
+async def _sample_misses(db, kind: str, entity_id: int, rules: list[dict],
+                         event_type: str, ctx: dict) -> None:
+    """没有任何规则命中时，给"从没命中过"的规则各留一份证据：真消息 + 没中的原因。
+
+    原因走 explain_conditions 的同一套口径（与试跑回显的 why 是同一份文案）：
+    「是条件写歪了（conditions_false）」还是「这类消息压根不是这个情景」一眼能分开。
+    """
+    try:
+        for rule in rules or []:
+            when = (rule or {}).get("when") or {}
+            if str(when.get("event") or "") != event_type:
+                continue
+            if int(rule_stats(rule).get("hit_count") or 0) > 0:
+                continue
+            conditions = when.get("conditions")
+            _, reason = (True, "") if conditions is None else explain_conditions(conditions, ctx)
+            await record_miss(db, kind, entity_id, rule, ctx,
+                              _REASON_TEXT.get(reason, "条件不成立"))
+    except Exception as e:  # noqa: BLE001 —— 采样是旁路
+        logger.debug("决策技能未命中采样失败（%s %s）: %s", kind, entity_id, e)
+
+
 async def run_decision_engine(
     db, kind: str, entity_id: int, world, event_type: str, ctx: dict,
     *, rules: list[dict] | None = None,
@@ -445,6 +584,8 @@ async def run_decision_engine(
         ctx = {**local_time_fields(settings.display_timezone), **(ctx or {})}
         rule = find_hit(rules, event_type, ctx)
         if rule is None:
+            # 没命中时留证据：从没命中过的规则才有，够看出是条件写歪还是这类消息没来过
+            await _sample_misses(db, kind, entity_id, rules, event_type, ctx)
             return {"hit": False}
         do = rule.get("do") or {}
         result = await execute_do(db, world, do, ctx, kind=kind, entity_id=entity_id)
@@ -927,7 +1068,37 @@ async def verify_before_save(
         })
         if (expect == "hit") != hit:
             return False, _sample_mismatch(index, expect, sample, out), {"samples": rows}
-    return True, "", {"samples": rows}
+    return True, "", {"samples": rows, "summary": _verify_summary(rows), **_verify_counts(rows)}
+
+
+def _verify_counts(rows: list[dict]) -> dict:
+    """正例 / 反例各跑了几条、各自符不符合预期（写入回显与列表共用同一份口径）。"""
+    hits = sum(1 for row in rows if row.get("expect") == "hit")
+    misses = sum(1 for row in rows if row.get("expect") == "miss")
+    return {
+        "counts": {
+            "total": len(rows),
+            "positive": hits,
+            "negative": misses,
+            "positive_hit": sum(1 for row in rows if row.get("expect") == "hit" and row.get("hit")),
+            "negative_missed": sum(1 for row in rows if row.get("expect") == "miss"
+                                    and not row.get("hit")),
+        },
+    }
+
+
+def _verify_summary(rows: list[dict]) -> str:
+    """写规则成功后那句回显：只说结论，但结论要能让 AI 确认「反例真的跑了、真的没中」。
+
+    从前只回「成功」——它能确定格式被收下，确定不了反例有没有被执行；这跟不验几乎没有区别。
+    """
+    hits = sum(1 for row in rows if row.get("expect") == "hit")
+    misses = sum(1 for row in rows if row.get("expect") == "miss")
+    if not misses:
+        return (f"{len(rows)} 条样例全部符合预期：{hits} 条正例都命中"
+                "（没给反例——这只证明会命中，证明不了不误触，建议补一条 expect=miss）")
+    return (f"{len(rows)} 条样例全部符合预期：{hits} 条正例都命中、"
+            f"{misses} 条反例都没被吃掉（都真跑过了）")
 
 
 def _normalize_verify_samples(verify) -> tuple[bool, str, list[dict]]:

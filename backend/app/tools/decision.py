@@ -23,11 +23,33 @@ logger = logging.getLogger(__name__)
 from app.services.world.decision_skill import rule_schema_desc, test_rule_desc  # noqa: E402
 
 
+def _verified_blob(preview: dict) -> dict:
+    """写入成功后的 verify 回显（唯一出处，agent 与群助手两条路共用）。
+
+    从前只回 {"success": true, "name": ...}：AI 能确定样例格式被收下，确定不了反例真的跑了
+    ——「全都符合预期」这句话必须是跑完之后的结论，所以连每条样例的结果一起回。
+    """
+    rows = list((preview or {}).get("samples") or [])
+    return {
+        "verify": {
+            "summary": str((preview or {}).get("summary") or ""),
+            "counts": dict((preview or {}).get("counts") or {}),
+            "samples": rows,
+        },
+    }
+
+
 class ListDecisionSkills(ToolPlugin):
     name = "list_decision_skills"
-    description = "查看你自己的决策技能列表（什么情景由程序自动处理、什么情景才触发你本体）。"
+    description = ("查看你自己的决策技能列表（什么情景由程序自动处理、什么情景才触发你本体）。"
+                   "列表里每条带 stats：命中计数、最近命中的正文；从没命中过的规则还会给"
+                   "miss_samples（最近几条没命中的真实消息与原因）。要把某条规则的全部未命中样例"
+                   "看全，传 name。")
     segment = "self_management"
-    parameters: dict = {}
+    parameters: dict = {
+        "name": {"type": "string",
+                 "description": "可选：只看这一条规则，并给出它全部未命中样例（最多 20 条）"},
+    }
     required: list = []
     admin_description = "查看 AI 自配的决策技能：哪些情景由程序直接处理、哪些情景才唤醒本体。"
     trigger_condition = "需要核对 AI 的自动化规则时"
@@ -36,8 +58,16 @@ class ListDecisionSkills(ToolPlugin):
         self, db: AsyncSession, agent_id: int, group_id: int | None,
         arguments: dict, context: dict,
     ) -> dict:
-        from app.services.world.decision_skill import get_decision_rules, rule_brief
+        from app.services.world.decision_skill import get_decision_rules, rule_brief, rule_stats_detail
         rules = await get_decision_rules(db, "agent", agent_id)
+        name = str(arguments.get("name") or "").strip()
+        if name:
+            rule = next((r for r in rules if str(r.get("name") or "") == name), None)
+            if rule is None:
+                return {"success": False,
+                        "error": f"没有叫「{name}」的决策技能（用不带 name 的调用看列表）"}
+            return {"success": True, "rule": rule_brief(rule),
+                    "stats_full": rule_stats_detail(rule)}
         return {"success": True, "rules": [rule_brief(r) for r in rules], "count": len(rules)}
 
 
@@ -55,7 +85,9 @@ class WriteDecisionSkill(ToolPlugin):
                 'expect 默认 "hit"（该命中），反例写 "miss"（不该命中）；'
                 '形如 [{"content": "签到"}, {"content": "今天签到系统挂了", "expect": "miss"}]。'
                 "平台把每条都跑一遍，任何一条不符预期就拒绝落地，并指出第几条、为什么——"
-                "只给正例只证明了会命中，证明不了不误触。单条对象也照样收。"),
+                "只给正例只证明了会命中，证明不了不误触。单条对象也照样收。"
+                "写入成功后会回 verify.summary（如「3 条样例全部符合预期：2 条正例都命中、"
+                "1 条反例都没被吃掉（都真跑过了）」）与每条样例的实际结果。"),
         },
     }
     required: list = ["rule", "verify"]
@@ -76,7 +108,8 @@ class WriteDecisionSkill(ToolPlugin):
         ok, err = await save_decision_rule(db, "agent", agent_id, rule)
         if not ok:
             return {"success": False, "error": err}
-        return {"success": True, "name": str(rule.get("name") or "").strip()}
+        return {"success": True, "name": str(rule.get("name") or "").strip(),
+                **_verified_blob(preview)}
 
 
 class DeleteDecisionSkill(ToolPlugin):
@@ -141,7 +174,16 @@ async def handle_decision_tool(
         verify_before_save,
     )
     if name == "list_decision_skills":
+        from app.services.world.decision_skill import rule_stats_detail
         rules = await get_decision_rules(db, kind, entity_id)
+        only = str(args.get("name") or "").strip()
+        if only:
+            rule = next((r for r in rules if str(r.get("name") or "") == only), None)
+            if rule is None:
+                return {"success": False,
+                        "error": f"没有叫「{only}」的决策技能（用不带 name 的调用看列表）"}
+            return {"success": True, "rule": rule_brief(rule),
+                    "stats_full": rule_stats_detail(rule)}
         return {"success": True, "rules": [rule_brief(r) for r in rules], "count": len(rules)}
     if name == "write_decision_skill":
         rule = args.get("rule") or {}
@@ -150,7 +192,10 @@ async def handle_decision_tool(
         if not ok:
             return {"success": False, "error": err, "samples": _preview.get("samples")}
         ok, err = await save_decision_rule(db, kind, entity_id, rule)
-        return {"success": ok, "name": str(rule.get("name") or "").strip()} if ok else {"success": False, "error": err}
+        if not ok:
+            return {"success": False, "error": err}
+        return {"success": True, "name": str(rule.get("name") or "").strip(),
+                **_verified_blob(_preview)}
     if name == "delete_decision_skill":
         await delete_decision_rule(db, kind, entity_id, str(args.get("name") or ""))
         return {"success": True}

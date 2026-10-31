@@ -64,6 +64,12 @@ AI 不该被每条消息唤醒。事件先过一层决策：**AI 自己写的规
   `expect` 默认 `hit`（该命中），`miss` 是反例（不该命中）；单条对象按一条正例处理（旧写法照旧能用），
   上限 8 条。平台把每条都跑一遍，任何一条不符预期就拒绝落地，并指出是第几条、为什么。
   只验正例等于只证明了「会命中」，证明不了「不误触」——反例才是误触的守门人。
+- 写入成功不是光回一句「成功」：回执里带 `verify.summary`（如「2 条样例全部符合预期：1 条正例
+  都命中、1 条反例都没被吃掉（都真跑过了）」）、`verify.counts`（正例/反例各几条、各自过没过）
+  与每条样例的实际结果。**没有这句 summary 就等于样例没跑**——回执能确认「格式被收下」，
+  确认不了「反例真的被执行」，那和没验区别不大。没给反例时 summary 会直说「这只证明会命中，
+  证明不了不误触」。入口只有 `decision_skill._verify_summary` 一处，agent 与群助手两条路共用
+  （`app/tools/decision.py::_verified_blob`）。
 - 工具描述与 schema 说明只有**一处**（`decision_skill.rule_schema_desc()`），
   平台工具与世界链路共用同一份文案，避免加情景时漏改一处。
 
@@ -157,8 +163,20 @@ AI 不该被每条消息唤醒。事件先过一层决策：**AI 自己写的规
 - 写入：`record_hit` 在 `run_decision_engine` 命中后记一次（含没办成的那次——统计读的是"动没动"，
   不是成功率）。**不另开事务、不自己 commit**：写在调用方这段工作里随它落库；统计是旁路，
   任何异常只记 debug，不影响消息本身。
-- 同名覆盖（`save_decision_rule`）把统计带到新规则上；AI 自己传进来的 `_stats` 不认——
-  否则它就能把「从没命中」改成命中过。
+- **没命中也要留证据**（`recent_miss`，本轮新增）：只有 `hit_count=0` 的规则才采——
+  这类规则列表里只有一个「从没命中」，规则写歪了连差在哪都无从查起。每条样例是
+  `{at, event, content, why}`：`content` 是真实消息（`content_clean` 截 60 字），`why` 是这条规则
+  没中的原因（与试跑回显同一份文案：`conditions_false` 条件不成立 / `event_not_matching`
+  情景对不上 / 正则被拒…），按它改条件比空想快。上限 20 条。
+- 采样有节制：同一条规则**至少间隔 10 秒**采一条、同一条消息不重复记——没命中的消息是常态，
+  每条都写一次库不值当；20 条约三分钟真实流量，够看出条件卡在哪。写入路径与命中同一个
+  （`_merge_stats`，`mutate=_bump_miss`），同样不另开事务、异常只记 debug。
+- 回显：`rule_brief` 给 `stats.miss_count` / `last_miss_at` / `miss_samples`（最后 3 条）；
+  要看全量（最多 20 条）用 `list_decision_skills` 带 `name`，回 `stats_full`。
+- 同名覆盖（`save_decision_rule`）把统计带到新规则上；**但 `when` 变了会清掉 `recent_miss`**——
+  那些样例是「旧条件为什么不中」的证据，条件一改就不再描述现在这条规则，留着比清掉更误导
+  （命中计数照旧保留：它说的是「这条规则动过没有」，与条件写法无关）。AI 自己传进来的
+  `_stats` 不认——否则它就能把「从没命中」改成命中过。
 
 ## 8. 工具与归属（决策四件套）
 
@@ -234,6 +252,11 @@ docker exec ai_group_backend bash -c 'export TEST_DATABASE_URL="${DATABASE_URL%/
 `test_a_reply_survives_a_trailing_log_line`（末行日志别把要说的话吃掉）、
 `test_a_broken_script_hands_the_event_back_with_the_reason`（脚本崩了交回本体）、
 `test_a_script_that_prints_no_json_is_not_silence`（print 了却给不出 reply 算失败）、
-`test_engine_failure_says_so_instead_of_looking_like_a_miss`（判定出错不是“没命中”）；
+`test_engine_failure_says_so_instead_of_looking_like_a_miss`（判定出错不是“没命中”）、
+本轮新增：`test_write_reply_says_the_negative_sample_actually_ran`（写入回执必须说清正例/反例
+各跑了几条、都符合预期）、`test_never_hit_rule_keeps_the_messages_it_missed`（从没命中的规则
+留真实消息 + 原因，同一条消息不重复记）、`test_list_shows_all_miss_samples_for_one_rule`
+（带 name 的列表给全量未命中样例，节流时间戳不外露）、
+`test_editing_conditions_clears_stale_miss_samples`（改了条件就清掉旧样例）；
 另有 `test_sandbox_layers` 的 `test_same_agent_scripts_never_overlap` 与
 `test_script_that_never_gets_its_turn_fails_loudly`（per-agent 串行锁，见 `docs/dev/code_sandbox.md` §6）。

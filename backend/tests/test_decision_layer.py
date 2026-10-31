@@ -697,3 +697,103 @@ def test_on_error_only_accepts_the_three_modes():
     assert ok, err
 
 
+async def test_write_reply_says_the_negative_sample_actually_ran(migrated_db):
+    """写入回显不能只说「成功」：正例/反例各跑了几条、都符合预期，得直接告诉写规则的人"""
+    from app.database import async_session
+    from app.tools.decision import WriteDecisionSkill
+
+    rule = {
+        "name": "训练游玩",
+        "when": {"event": "group_message",
+                 "conditions": {"content_clean": {"matches": r"^(训练|游玩)\s"}}},
+        "do": {"action": "reply_template", "reply": "收到"}, "notify": False,
+    }
+    async with async_session() as db:
+        await _seed(db)
+        out = await WriteDecisionSkill().execute(db, 24, 7, {
+            "rule": rule,
+            "verify": [
+                {"content": "训练 一只小鲸鱼"},
+                {"content": "今天训练了个模型", "expect": "miss"},
+            ],
+        }, {})
+        assert out["success"], out
+        blob = out["verify"]
+        assert "2 条样例" in blob["summary"] and "反例" in blob["summary"], blob["summary"]
+        assert blob["counts"] == {"total": 2, "positive": 1, "negative": 1,
+                                  "positive_hit": 1, "negative_missed": 1}, blob["counts"]
+        assert [row["hit"] for row in blob["samples"]] == [True, False], blob["samples"]
+
+
+async def test_never_hit_rule_keeps_the_messages_it_missed(migrated_db):
+    """从没命中过的规则要留下「为什么没中」的证据，光有 hit_count=0 看不出差在哪"""
+    from app.database import async_session
+    from app.services.world.decision_skill import get_decision_rules, rule_brief, run_decision_engine
+
+    async with async_session() as db:
+        await _seed(db)
+        ok, err = await _save(db, {
+            "name": "签到·留证据", "when": {"event": "group_message",
+                                            "conditions": {"content_clean": "签到"}},
+            "do": {"action": "reply_template", "reply": "已记录"}, "notify": False,
+        })
+        assert ok, err
+        dec = await run_decision_engine(db, "agent", 24, None, "group_message",
+                                        _incoming("今天训练了个模型"))
+        assert dec["hit"] is False, dec
+        # 同一条消息再来一次：去重，不重复记
+        await run_decision_engine(db, "agent", 24, None, "group_message", _incoming("今天训练了个模型"))
+
+        stats = rule_brief((await get_decision_rules(db, "agent", 24))[0])["stats"]
+        assert stats["never_hit"] is True, stats
+        assert stats["miss_count"] == 1, stats
+        sample = stats["miss_samples"][0]
+        assert sample["content"] == "今天训练了个模型", sample
+        assert sample["why"], sample          # 条件不成立 / 事件对不上 / 正则被拒，总得说清哪一类
+        assert sample["at"], sample
+
+
+async def test_list_shows_all_miss_samples_for_one_rule(migrated_db):
+    """列表给最后几条，带 name 的调用要给全（最多 20 条），别让 AI 为了看全去翻库"""
+    from app.database import async_session
+    from app.tools.decision import ListDecisionSkills
+    from app.services.world.decision_skill import run_decision_engine
+
+    async with async_session() as db:
+        await _seed(db)
+        ok, err = await _save(db, {
+            "name": "签到·看全", "when": {"event": "group_message",
+                                          "conditions": {"content_clean": "签到"}},
+            "do": {"action": "silent"}, "notify": False,
+        })
+        assert ok, err
+        await run_decision_engine(db, "agent", 24, None, "group_message", _incoming("随便聊聊"))
+        out = await ListDecisionSkills().execute(db, 24, 7, {"name": "签到·看全"}, {})
+        assert out["success"], out
+        full = out["stats_full"]
+        assert full["never_hit"] is True and full["miss_samples"], full
+        assert "ts" not in full["miss_samples"][0], full["miss_samples"][0]   # 节流用的时间戳不外露
+        out = await ListDecisionSkills().execute(db, 24, 7, {"name": "没有这条"}, {})
+        assert out["success"] is False and "没有叫" in out["error"], out
+
+
+async def test_editing_conditions_clears_stale_miss_samples(migrated_db):
+    """条件一改，旧的未命中样例就不再描述现在这条规则——留着的误导比清掉大"""
+    from app.database import async_session
+    from app.services.world.decision_skill import get_decision_rules, rule_brief, run_decision_engine
+
+    async with async_session() as db:
+        await _seed(db)
+        base = {"name": "签到·改条件", "when": {"event": "group_message",
+                                                 "conditions": {"content_clean": "签到"}},
+                "do": {"action": "silent"}, "notify": False}
+        assert (await _save(db, base))[0]
+        await run_decision_engine(db, "agent", 24, None, "group_message", _incoming("随便聊聊"))
+        assert rule_brief((await get_decision_rules(db, "agent", 24))[0])["stats"]["miss_count"] == 1
+        changed = {**base, "when": {"event": "group_message",
+                                    "conditions": {"content_clean_contains": "签到"}}}
+        assert (await _save(db, changed))[0]
+        stats = rule_brief((await get_decision_rules(db, "agent", 24))[0])["stats"]
+        assert stats["miss_count"] == 0 and stats["miss_samples"] == [], stats
+
+
