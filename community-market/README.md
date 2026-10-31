@@ -17,17 +17,23 @@ README 里的目录表格由脚本生成，不手写——手写列表一定会�
 
 规则一句话：**源码在不在我们仓里，决定能不能给 verified 标**。
 
-**内置插件为什么也在这里**：内置插件随实例部署、开箱就在，但它们也走同一条发布链路进索引
-（tier: verified，source 指向主仓的 tag），这样非官方部署——旧版本实例、自建客户端、第三方托管——
-也能装上 QQ 通道这类能力。源码仍以主仓 `backend/plugins/<id>/` 为唯一真源，本仓 `verified/<id>/`
-是随 tag 同步的镜像；两边不一致时以主仓为准，重跑 `tools/publish_builtin.py` 即可。
+**内置插件为什么也在这里**：内置插件随实例部署、开箱就在，但它们也进索引（tier: verified），
+这样非官方部署——旧版本实例、自建客户端、第三方托管——也能装上 QQ 通道这类能力；
+插件被卸载/删掉后也能从商城装回来，不必等下一次发版。
+
+**单一真源：索引指过去，不复制过来。** 条目用 `source_path` 指向我们自家仓里的插件目录
+（如 `Coprexist/Copree@v0.4.16` + `backend/plugins/qq-channel`），本仓不再保存源码副本——
+复制品一定会和真源漂（主仓改一行，本仓的 `verified/` 就成了过期代码）。
+`verified` 的含义因此精确为：**源码在我们自己的仓里**（主仓 `backend/plugins/`，或本仓
+`verified/` 用于没有主仓可指的场景），并由我们审阅过。
+校验器会用 `--repo` 核对 `source_path` 真的指向一个存在的插件目录，且 manifest 与条目一致。
 
 发布内置插件（一条命令，可重复跑）：
 
 ~~~bash
 python3 tools/publish_builtin.py --plugins ../backend/plugins \
     --source Coprexist/Copree@v0.4.16
-python3 tools/verify.py --index index.json --readme README.md --render --dist dist
+python3 tools/verify.py --index index.json --readme README.md --render --dist dist --repo ..
 ~~~
 
 `dist/` 被 .gitignore 忽略，属于**发布资产**而非仓内容：打完包后把 `dist/*.zip` 传到
@@ -36,11 +42,11 @@ python3 tools/verify.py --index index.json --readme README.md --render --dist di
 ## 目录层级
 
 ~~~
-index.json                     唯一事实来源：id / 版本 / source / sha256 / 分类 / 层级 / 下架标记
+index.json                     唯一事实来源：id / 版本 / source(+source_path) / sha256 / 分类 / 层级 / 下架标记
 schema.json                    索引条目的 JSON Schema（编辑器提示 + CI 校验同一份契约）
 README.md                      人类可读目录（CATALOG 标记之间由 tools/verify.py 生成）
 tools/verify.py                校验器：索引层 + 制品层 + 目录生成，CI 与本地共用
-verified/<id>/                 我们审过的插件源码（只有它才配 tier: verified）
+verified/<id>/                 仅用于"没有主仓可指"的 verified 插件；内置插件走 source_path，不在这里副本
 .github/workflows/verify.yml   门禁：PR 与 main 上跑校验
 ~~~
 
@@ -72,11 +78,11 @@ verified/<id>/                 我们审过的插件源码（只有它才配 tie
 
 | 插件 | 类型 | 版本 | 信任层级 | 来源 |
 | --- | --- | --- | --- | --- |
-| QQ 表情 — QQ 经典表情的名字与写法（害羞、流泪、呲牙、强…）。AI 可以在消息里用 [表情:名字]，站内渲染成对应表情，QQ 侧收到的也是同一个表情。 | emojipack | 1.0.0 | 已验证 | Coprexist/Copree@v0.4.16 |
-| 关键词自动回复 — 行为插件示例：命中关键词时注入回复指令（声明与行为合一，一个 plugin.py 完成）。 | skill | 1.0.0 | 已验证 | Coprexist/Copree@v0.4.16 |
-| QQ 通道 — 把 Copree 的 AI 接入 QQ 群：被 @ 时唤醒，走官方 QQ 机器人 API（WebSocket 收事件 + REST 回消息） | service | 0.1.0 | 已验证 | Coprexist/Copree@v0.4.16 |
-| QQ 通道（NapCat / OneBot v11） — 把 AI 接进 QQ（非官方协议端 NapCat / OneBot v11）。注意：协议端违反 QQ 用户协议，有封号风险，建议只用自己的备用号、自担风险；对外提供服务请用官方 QQ 通道。 | service | 0.1.0 | 已验证 | Coprexist/Copree@v0.4.16 |
-| 写作工坊 — 提供「写作工坊」技能类型：结构化写作指导（选题、大纲、成稿、润色）。 | skill | 1.0.0 | 已验证 | Coprexist/Copree@v0.4.16 |
-| 极光青碧 — 青碧色系皮肤，清新自然，像极光下的森林。 | skin | 1.0.0 | 已验证 | Coprexist/Copree@v0.4.16 |
+| QQ 表情 — QQ 经典表情的名字与写法（害羞、流泪、呲牙、强…）。AI 可以在消息里用 [表情:名字]，站内渲染成对应表情，QQ 侧收到的也是同一个表情。 | emojipack | 1.0.0 | 已验证 | Coprexist/Copree@v0.4.16 · backend/plugins/emoji-qq |
+| 关键词自动回复 — 行为插件示例：命中关键词时注入回复指令（声明与行为合一，一个 plugin.py 完成）。 | skill | 1.0.0 | 已验证 | Coprexist/Copree@v0.4.16 · backend/plugins/keyword-autoreply |
+| QQ 通道 — 把 Copree 的 AI 接入 QQ 群：被 @ 时唤醒，走官方 QQ 机器人 API（WebSocket 收事件 + REST 回消息） | service | 0.1.0 | 已验证 | Coprexist/Copree@v0.4.16 · backend/plugins/qq-channel |
+| QQ 通道（NapCat / OneBot v11） — 把 AI 接进 QQ（非官方协议端 NapCat / OneBot v11）。注意：协议端违反 QQ 用户协议，有封号风险，建议只用自己的备用号、自担风险；对外提供服务请用官方 QQ 通道。 | service | 0.1.0 | 已验证 | Coprexist/Copree@v0.4.16 · backend/plugins/qq-napcat |
+| 写作工坊 — 提供「写作工坊」技能类型：结构化写作指导（选题、大纲、成稿、润色）。 | skill | 1.0.0 | 已验证 | Coprexist/Copree@v0.4.16 · backend/plugins/skill-writing-studio |
+| 极光青碧 — 青碧色系皮肤，清新自然，像极光下的森林。 | skin | 1.0.0 | 已验证 | Coprexist/Copree@v0.4.16 · backend/plugins/skin-aurora |
 
 <!-- CATALOG:END -->

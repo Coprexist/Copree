@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-10-31T15:13:21Z",
+  "updated_at": "2026-10-31T15:16:19Z",
   "packages": [
     {
       "id": "emoji-qq",
@@ -13,6 +13,7 @@
       "asset": "emoji-qq-1.0.0.zip",
       "sha256": "1da5dbe5f34e9c9d16dc9c7ae888cd7fdcdaadbd8e7aa4c517a640c821080bf0",
       "tier": "verified",
+      "source_path": "backend/plugins/emoji-qq",
       "reviewed_by": "Copree",
       "reviewed_at": "2026-10-31"
     },
@@ -27,6 +28,7 @@
       "asset": "keyword-autoreply-1.0.0.zip",
       "sha256": "40f8b62bada77160b812078d43d99db34a0d04d304b920442001d993fd8e1978",
       "tier": "verified",
+      "source_path": "backend/plugins/keyword-autoreply",
       "reviewed_by": "Copree",
       "reviewed_at": "2026-10-31"
     },
@@ -41,6 +43,7 @@
       "asset": "qq-channel-0.1.0.zip",
       "sha256": "e3e98f1102a217a6305cc3450f137261549d3a6d1d08f4c4833959ae01b2b3bf",
       "tier": "verified",
+      "source_path": "backend/plugins/qq-channel",
       "reviewed_by": "Copree",
       "reviewed_at": "2026-10-31",
       "channel_kind": "qq"
@@ -56,6 +59,7 @@
       "asset": "qq-napcat-0.1.0.zip",
       "sha256": "2b5596552c675564146c5f8517e533d7d39f66bd17e0938f4c03fb64329cdbd4",
       "tier": "verified",
+      "source_path": "backend/plugins/qq-napcat",
       "reviewed_by": "Copree",
       "reviewed_at": "2026-10-31",
       "channel_kind": "qq-napcat"
@@ -71,6 +75,7 @@
       "asset": "skill-writing-studio-1.0.0.zip",
       "sha256": "e4c708fc0a6d12002c0a23e744030b3ac2e7482b6aae0c6c9cec8650b5851fef",
       "tier": "verified",
+      "source_path": "backend/plugins/skill-writing-studio",
       "reviewed_by": "Copree",
       "reviewed_at": "2026-10-31"
     },
@@ -85,6 +90,7 @@
       "asset": "skin-aurora-1.0.0.zip",
       "sha256": "8386ee96016be0dfe7d95140e9fe6cc991066ffd3d0d510ef519a1527395fae4",
       "tier": "verified",
+      "source_path": "backend/plugins/skin-aurora",
       "reviewed_by": "Copree",
       "reviewed_at": "2026-10-31"
     }

@@ -20,6 +20,7 @@
           "author": { "type": "string", "maxLength": 80 },
           "version": { "type": "string", "pattern": "^[0-9]+[.][0-9]+[.][0-9]+" },
           "source": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+$" },
+          "source_path": { "type": "string", "pattern": "^[A-Za-z0-9_][A-Za-z0-9_./-]*$" },
           "asset": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+[.]zip$" },
           "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
           "tier": { "enum": ["verified", "community"] },

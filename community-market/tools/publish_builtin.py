@@ -19,7 +19,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import shutil
 import subprocess
 import sys
 import zipfile
@@ -39,15 +38,6 @@ DEFAULT_IDS = [
     "skin-aurora",
     "skill-writing-studio",
 ]
-
-
-def _copy_source(src: Path, dst: Path) -> None:
-    if dst.exists():
-        shutil.rmtree(dst)
-    shutil.copytree(
-        src, dst,
-        ignore=shutil.ignore_patterns(*SKIP_DIRS, *[f"*{s}" for s in SKIP_SUFFIXES]),
-    )
 
 
 def _build_zip(src: Path, out: Path) -> bytes:
@@ -74,7 +64,6 @@ def main() -> int:
     ap.add_argument("--plugins", required=True, help="主仓 backend/plugins 目录")
     ap.add_argument("--index", default="index.json")
     ap.add_argument("--dist", default="dist")
-    ap.add_argument("--verified", default="verified")
     ap.add_argument("--source", required=True, help="owner/repo@ref，ref 必须是 tag")
     ap.add_argument("--ids", nargs="*", default=DEFAULT_IDS)
     ap.add_argument("--reviewed-by", default="Copree")
@@ -83,7 +72,6 @@ def main() -> int:
     plugins_root = Path(args.plugins)
     index_path = Path(args.index)
     dist = Path(args.dist)
-    verified = Path(args.verified)
 
     data = json.loads(index_path.read_text(encoding="utf-8"))
     packages = {p["id"]: p for p in data.get("packages", [])}
@@ -96,11 +84,10 @@ def main() -> int:
             continue
         manifest = _manifest(src)
         version = str(manifest.get("version") or "1.0.0")
-        dst = verified / plugin_id
-        _copy_source(src, dst)
-
+        # 不再把源码复制进本仓：单一真源是主仓 backend/plugins/<id>/，
+        # 索引只记"哪个仓的哪个目录"（source_path），复制品会随主仓改动而漂。
         asset_name = f"{plugin_id}-{version}.zip"
-        raw = _build_zip(dst, dist / asset_name)
+        raw = _build_zip(src, dist / asset_name)
         sha = hashlib.sha256(raw).hexdigest()
 
         channel = manifest.get("channel") or {}
@@ -115,6 +102,7 @@ def main() -> int:
             "asset": asset_name,
             "sha256": sha,
             "tier": "verified",
+            "source_path": f"backend/plugins/{plugin_id}",
             "reviewed_by": args.reviewed_by,
             "reviewed_at": today,
         }

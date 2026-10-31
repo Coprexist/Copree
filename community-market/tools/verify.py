@@ -50,6 +50,9 @@ BANNED_PARTS = (".git", "__pycache__", ".venv", "node_modules", ".idea")
 SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,39}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+")
 SOURCE_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+$")
+# source_path：仓库里的子目录（如 backend/plugins/qq-channel）。有它就不必把源码复制进本仓，
+# 单一真源仍在作者/我们自己的仓里，索引只记"哪个仓的哪个目录"。
+PATH_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_./-]*$")
 ASSET_RE = re.compile(r"^[A-Za-z0-9_.-]+\.zip$")
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 # 外部身份类别（通道插件在 plugin.json 的 channel.kind 里声明）：短名，全局唯一，先到先得
@@ -101,6 +104,18 @@ def validate_index(data: dict) -> list:
             errors.append(where + " asset 必须是 zip 文件名（不含路径）")
         if not SHA_RE.match(str(pkg.get("sha256") or "")):
             errors.append(where + " sha256 必须是 64 位小写十六进制")
+
+        path = pkg.get("source_path")
+        if path is not None:
+            path = str(path)
+            if not PATH_RE.match(path):
+                errors.append(where + " source_path 必须是仓库内相对路径（如 backend/plugins/qq-channel）")
+            elif ".." in path.split("/"):
+                errors.append(where + " source_path 不许出现 ..")
+            elif not pkg.get("tier") == "verified":
+                # 指向自家仓里的目录 = 源码在我们手上，这是 verified 的定义；
+                # 引别人仓里的路径想拿 verified 标，等于替别人的代码背书。
+                errors.append(where + " source_path 要求 tier=verified（源码在我们自己的仓里）")
 
         tier = pkg.get("tier")
         if tier not in TIERS:
@@ -175,22 +190,57 @@ def check_artifact(pkg: dict, data: bytes) -> list:
                 errors.append(pid + ": plugin.json 解析失败 " + str(e))
                 manifest = None
             if isinstance(manifest, dict):
-                if manifest.get("id") != pid:
-                    errors.append(pid + ": plugin.json 的 id 与索引不一致（" + str(manifest.get("id")) + "）")
-                if not str(manifest.get("version") or "").startswith(pkg["version"]):
-                    errors.append(pid + ": plugin.json 的 version 与索引不一致（" + str(manifest.get("version")) + "）")
-                if manifest.get("category") and manifest["category"] != pkg["category"]:
-                    errors.append(pid + ": plugin.json 的 category 与索引不一致")
-                # 通道插件：包内声明的类别必须与索引一致；索引没写就等于放弃"类别唯一"的保护
-                block = manifest.get("channel")
-                declared = str((block or {}).get("kind") or "") if isinstance(block, dict) else ""
-                if declared and not pkg.get("channel_kind"):
-                    errors.append(pid + ": plugin.json 声明了 channel.kind，索引里必须写 channel_kind（类别唯一性靠索引守）")
-                elif declared and declared != pkg.get("channel_kind"):
-                    errors.append(pid + ": plugin.json 的 channel.kind 与索引 channel_kind 不一致（" + declared + "）")
-                elif pkg.get("channel_kind") and not declared:
-                    errors.append(pid + ": 索引写了 channel_kind，但 plugin.json 没有声明 channel.kind")
+                errors.extend(_check_manifest(pkg, manifest))
     return errors
+
+
+def _check_manifest(pkg: dict, manifest: dict) -> list:
+    """索引条目 vs plugin.json 的一致性。制品与源码目录两条路共用这一份判定。"""
+    pid = pkg["id"]
+    errors = []
+    if manifest.get("id") != pid:
+        errors.append(pid + ": plugin.json 的 id 与索引不一致（" + str(manifest.get("id")) + "）")
+    if not str(manifest.get("version") or "").startswith(pkg["version"]):
+        errors.append(pid + ": plugin.json 的 version 与索引不一致（" + str(manifest.get("version")) + "）")
+    if manifest.get("category") and manifest["category"] != pkg["category"]:
+        errors.append(pid + ": plugin.json 的 category 与索引不一致")
+    # 通道插件：声明的类别必须与索引一致；索引没写就等于放弃"类别唯一"的保护
+    block = manifest.get("channel")
+    declared = str((block or {}).get("kind") or "") if isinstance(block, dict) else ""
+    if declared and not pkg.get("channel_kind"):
+        errors.append(pid + ": plugin.json 声明了 channel.kind，索引里必须写 channel_kind（类别唯一性靠索引守）")
+    elif declared and declared != pkg.get("channel_kind"):
+        errors.append(pid + ": plugin.json 的 channel.kind 与索引 channel_kind 不一致（" + declared + "）")
+    elif pkg.get("channel_kind") and not declared:
+        errors.append(pid + ": 索引写了 channel_kind，但 plugin.json 没有声明 channel.kind")
+    return errors
+
+
+def check_source_dir(pkg: dict, repo_root: Path) -> list:
+    """源码目录校验：索引指向的那个子目录真实存在，且与条目一致。
+
+    这一步替代"把源码复制进本仓 verified/"——复制品一定会和真源漂，
+    而单一真源只需核对"指过去的那个目录对不对"。
+    """
+    pid = pkg["id"]
+    rel = str(pkg.get("source_path") or "")
+    if not rel:
+        return []
+    target = (repo_root / rel).resolve()
+    try:
+        target.relative_to(repo_root.resolve())
+    except ValueError:
+        return [pid + ": source_path 跑出了仓库根目录（" + rel + "）"]
+    manifest_file = target / "plugin.json"
+    if not manifest_file.is_file():
+        return [pid + ": source_path 下没有 plugin.json（" + rel + "）"]
+    try:
+        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+    except Exception as e:
+        return [pid + ": source_path 的 plugin.json 解析失败 " + str(e)]
+    if not isinstance(manifest, dict):
+        return [pid + ": source_path 的 plugin.json 不是对象"]
+    return _check_manifest(pkg, manifest)
 
 
 def fetch_asset(pkg: dict, token) -> bytes:
@@ -216,8 +266,11 @@ def render_catalog(packages: list) -> str:
         desc = (pkg.get("description") or "").strip().replace("|", "/")
         if desc:
             name += " — " + desc
+        origin = str(pkg.get("source", ""))
+        if pkg.get("source_path"):
+            origin += " · " + str(pkg["source_path"])
         lines.append("| " + name + " | " + str(pkg.get("category", "")) + " | " + str(pkg.get("version", ""))
-                     + " | " + tier_label + " | " + pkg.get("source", "") + " |")
+                     + " | " + tier_label + " | " + origin + " |")
     if len(lines) == 2:
         lines.append("| _暂无收录_ | | | | |")
     return "\n".join(lines)
@@ -242,6 +295,7 @@ def main() -> int:
     parser.add_argument("--readme", default="README.md")
     parser.add_argument("--online", action="store_true", help="下载 pinned 发布物核对 sha256")
     parser.add_argument("--dist", help="用本地目录里的 zip 核对 sha256（离线复现 CI）")
+    parser.add_argument("--repo", help="本地仓库根目录：核对 source_path 指向的源码目录（CI 里是检出目录）")
     parser.add_argument("--render", action="store_true", help="重新生成 README 目录")
     parser.add_argument("--check-render", action="store_true", help="目录过时即失败")
     args = parser.parse_args()
@@ -255,6 +309,17 @@ def main() -> int:
         return 1
     packages = data["packages"]
     print("索引校验通过：" + str(len(packages)) + " 个条目")
+
+    if args.repo:
+        repo_root = Path(args.repo)
+        for pkg in packages:
+            errors.extend(check_source_dir(pkg, repo_root))
+        if errors:
+            print("源码校验失败：")
+            for e in errors:
+                print("  - " + e)
+            return 1
+        print("源码校验通过：source_path 都指向真实存在的插件目录")
 
     if args.online or args.dist:
         token = os.environ.get("GITHUB_TOKEN")
