@@ -5,7 +5,7 @@ AI 对话日志服务
 import difflib
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, delete, func, text
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -566,6 +566,87 @@ async def get_user_agents_token_summary(
     result = await content_repo.execute(stmt, params)
     rows = result.mappings().all()
     return _with_cache_hit_rate([dict(r) for r in rows])
+
+
+async def get_usage_matrix(
+    content_repo: ContentRepository,
+    *,
+    user_id: int | None = None,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+    scope: str = "all",
+) -> dict:
+    """「每个 AI 每天花了多少」的一屏矩阵：行 = AI，列 = 日期。
+
+    和 overview/daily 两个接口的数据同源（usage_daily），只是换个摆法：
+    前者要回答问题「这个 AI 这几天花了多少」，得先选中 AI；矩阵回答的是
+    「这几天每个 AI 分别花了多少」，一眼看完，不用逐个点开。
+
+    user_id 传了就只看这个人的 AI（/me/usage）；后台看全站则不传。
+    """
+    where = ["1 = 1"]
+    params: dict = {}
+    if user_id is not None:
+        where.append("ag.owner_id = :user_id")
+        params["user_id"] = int(user_id)
+    if start_date:
+        where.append("ud.stat_date >= :start_date")
+        params["start_date"] = _as_date(start_date)
+    if end_date:
+        where.append("ud.stat_date <= :end_date")
+        params["end_date"] = _as_date(end_date)
+    clause = _scope_clause(scope)
+    if clause:
+        where.append(clause)
+
+    stmt = text(f"""
+        SELECT
+            ud.agent_id,
+            ag.name AS agent_name,
+            ud.stat_date AS stat_date,
+            CAST(COALESCE(SUM(ud.total_tokens), 0) AS BIGINT) AS total_tokens,
+            CAST(COALESCE(SUM(ud.api_calls), 0) AS BIGINT) AS api_calls
+        FROM usage_daily ud
+        JOIN agents ag ON ag.id = ud.agent_id
+        WHERE {' AND '.join(where)}
+        GROUP BY ud.agent_id, ag.name, ud.stat_date
+        ORDER BY ud.stat_date ASC
+    """)
+    result = await content_repo.execute(stmt, params)
+    rows = [dict(r) for r in result.mappings().all()]
+
+    # 日期轴：库里没有记号的日期也要占一列，否则"昨天没花钱"会在图上被压缩成不存在
+    day_keys: list[str] = []
+    if start_date and end_date:
+        cursor, last = _as_date(start_date), _as_date(end_date)
+        while cursor <= last:
+            day_keys.append(cursor.isoformat())
+            cursor += timedelta(days=1)
+    else:
+        day_keys = sorted({str(r["stat_date"]) for r in rows})
+
+    agents: dict[int, dict] = {}
+    for row in rows:
+        agent_id = int(row["agent_id"])
+        item = agents.setdefault(agent_id, {
+            "agent_id": agent_id,
+            "agent_name": row["agent_name"],
+            "total_tokens": 0,
+            "total_calls": 0,
+            "per_day": {},
+        })
+        tokens = int(row["total_tokens"] or 0)
+        calls = int(row["api_calls"] or 0)
+        item["total_tokens"] += tokens
+        item["total_calls"] += calls
+        item["per_day"][str(row["stat_date"])] = tokens
+
+    ordered = sorted(agents.values(), key=lambda a: a["total_tokens"], reverse=True)
+    return {
+        "dates": day_keys,
+        "agents": ordered,
+        "total_tokens": sum(a["total_tokens"] for a in ordered),
+    }
 
 
 async def get_agent_token_daily(

@@ -675,7 +675,7 @@ async def _view_one(
         from app.services.plugin import api as plugin_api
 
         definition = plugin_api.get_service_def(plugin_id)
-        hosted = await definition.cls.hosted_status() if definition else None
+        hosted = await definition.cls.hosted_status(agent_id=agent_id) if definition else None
         if hosted:
             detail = {"hosted_endpoint": hosted}
     else:

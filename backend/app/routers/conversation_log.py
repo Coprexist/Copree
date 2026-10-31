@@ -188,6 +188,26 @@ async def get_usage_overview(
     return await get_user_agents_token_summary(content_repo, current_user["user_id"], start_date, end_date)
 
 
+@router.get("/conversation-log/usage/matrix")
+async def get_usage_matrix_me(
+    days: int = Query(14, ge=1, le=90),
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    content_repo: ContentRepository = Depends(get_content_repo),
+):
+    """「每个 AI 每天花了多少」一屏看完：行 = 我的 AI，列 = 最近 N 天。
+
+    只统计当前用户名下的 AI（服务层按 agents.owner_id 过滤）。
+    """
+    from app.services.content.conversation_log_service import get_usage_matrix
+
+    end_date = datetime.now(tz.utc).replace(tzinfo=None)
+    start_date = end_date - timedelta(days=days - 1)
+    return await get_usage_matrix(
+        content_repo, user_id=current_user["user_id"], start_date=start_date, end_date=end_date,
+    )
+
+
 @router.get("/conversation-log/usage/agents/{agent_id}/daily")
 async def get_agent_daily_usage(
     agent_id: int,

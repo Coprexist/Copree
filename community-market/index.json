@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-10-31T15:20:41Z",
+  "updated_at": "2026-10-31T15:35:43Z",
   "packages": [
     {
       "id": "bilibili",
@@ -11,7 +11,7 @@
       "version": "1.0.0",
       "source": "Coprexist/Copree@v0.4.16",
       "asset": "bilibili-1.0.0.zip",
-      "sha256": "193c52af8e2212813438c2de09bd0e8a640801682c064dcb039149e7659c0613",
+      "sha256": "9a390900f818e6a175c8f899557df8bdeb011469867c999e967038ca050faf3b",
       "tier": "verified",
       "source_path": "backend/plugins/bilibili",
       "reviewed_by": "Copree",
@@ -73,7 +73,7 @@
       "version": "0.1.0",
       "source": "Coprexist/Copree@v0.4.16",
       "asset": "qq-napcat-0.1.0.zip",
-      "sha256": "e1030b4f7763ae342efea60fb969f4b1495c4c2349e331af46993f0f315d4edd",
+      "sha256": "2995cc6f71261beb63c202816c5caa38a64a862f15d7962e61ed2aa689aa9c36",
       "tier": "verified",
       "source_path": "backend/plugins/qq-napcat",
       "reviewed_by": "Copree",

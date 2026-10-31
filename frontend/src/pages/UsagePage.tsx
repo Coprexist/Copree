@@ -22,6 +22,19 @@ interface DailyPoint {
   cache_hit_rate_pct: number
 }
 
+/** 「每个 AI 每天」矩阵：行 = AI，列 = 日期 */
+interface UsageMatrix {
+  dates: string[]
+  agents: {
+    agent_id: number
+    agent_name: string
+    total_tokens: number
+    total_calls: number
+    per_day: Record<string, number>
+  }[]
+  total_tokens: number
+}
+
 interface AgentSummary {
   agent_id: number
   agent_name: string
@@ -44,7 +57,11 @@ export default function UsagePage() {
   const [dailyData, setDailyData] = useState<DailyPoint[]>([])
   const [loading, setLoading] = useState(true)
   const [chartLoading, setChartLoading] = useState(false)
+  const [matrix, setMatrix] = useState<UsageMatrix | null>(null)
   const isDark = useIsDark()
+  // 矩阵列数封顶 14：90 天 × N 个 AI 的表格在窄屏上没法看，
+  // 想看更长的区间就用下面的每日曲线（那是单 AI 的，可以横向滚动）
+  const matrixDays = Math.min(days, 14)
 
   // 加载概览
   useEffect(() => {
@@ -91,6 +108,13 @@ export default function UsagePage() {
       .catch(() => {})
       .finally(() => setChartLoading(false))
   }, [selectedAgent, days])
+
+  // 「每个 AI 每天」矩阵
+  useEffect(() => {
+    api.get<UsageMatrix>(`/conversation-log/usage/matrix?days=${matrixDays}`)
+      .then(r => setMatrix(r && Array.isArray(r.agents) ? r : null))
+      .catch(() => setMatrix(null))
+  }, [matrixDays])
 
   // 汇总
   const totalTokens = overview.reduce((s, a) => s + (a.total_tokens || 0), 0)
@@ -162,6 +186,60 @@ export default function UsagePage() {
           </div>
         )})}
       </div>
+
+      {/* 每个 AI 每天：一屏看完，不用逐个点开 */}
+      {matrix && matrix.agents.length > 0 && (
+        <div className="bg-surface rounded-dialog border border-border p-5">
+          <div className="flex items-baseline justify-between mb-1">
+            <h3 className="text-sm font-semibold text-textPrimary">{t('usage:matrixTitle')}</h3>
+            <span className="text-3xs text-textMuted">{t('usage:matrixHint')}</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-xs">
+              <thead>
+                <tr className="text-textMuted">
+                  <th className="text-left font-medium py-2 pr-3 sticky left-0 bg-surface">{t('usage:tableHeaderAI')}</th>
+                  {matrix.dates.map(d => (
+                    <th key={d} className="text-right font-medium py-2 px-2 whitespace-nowrap">{d.slice(5)}</th>
+                  ))}
+                  <th className="text-right font-medium py-2 pl-3">{t('usage:matrixRowTotal')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {matrix.agents.map(a => (
+                  <tr key={a.agent_id} className="border-t border-border/60">
+                    <td className="py-2 pr-3 text-textPrimary max-w-[160px] truncate sticky left-0 bg-surface" title={a.agent_name}>
+                      <button
+                        className={`text-left hover:text-primary-500 transition-colors ${selectedAgent === a.agent_id ? 'text-primary-500 font-medium' : ''}`}
+                        onClick={() => setSelectedAgent(a.agent_id)}
+                      >
+                        {a.agent_name}
+                      </button>
+                    </td>
+                    {matrix.dates.map(d => {
+                      const v = a.per_day[d] || 0
+                      return (
+                        <td key={d} className="py-2 px-2 text-right whitespace-nowrap">
+                          <button
+                            className={`tabular-nums hover:text-primary-500 transition-colors ${v ? 'text-textSecondary' : 'text-textMuted/50'}`}
+                            onClick={() => setSelectedAgent(a.agent_id)}
+                            title={`${a.agent_name} · ${d}`}
+                          >
+                            {v ? fmtTokenNum(v, lang) : '—'}
+                          </button>
+                        </td>
+                      )
+                    })}
+                    <td className="py-2 pl-3 text-right tabular-nums font-medium text-textPrimary">
+                      {fmtTokenNum(a.total_tokens, lang)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* AI 选择 + 图表 */}
       <div className="bg-surface rounded-dialog border border-border p-5">

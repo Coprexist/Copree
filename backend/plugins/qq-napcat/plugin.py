@@ -307,8 +307,11 @@ def _endpoint_schema() -> dict:
 )
 class QqNapcatPlugin(ServicePlugin):
     @classmethod
-    async def hosted_status(cls) -> dict[str, Any] | None:
-        """托管协议端时，实例还没建也要能告诉卡片"登录到哪一步了"（含登录二维码）"""
+    async def hosted_status(cls, *, agent_id: int | None = None) -> dict[str, Any] | None:
+        """托管协议端时，实例还没建也要能告诉卡片"登录到哪一步了"（含登录二维码）
+
+        NapCat 一个部署一份协议端，与是哪个 AI 无关，所以 agent_id 在这里用不到。
+        """
         return _hosted_login("", "")
 
     def __init__(self) -> None:

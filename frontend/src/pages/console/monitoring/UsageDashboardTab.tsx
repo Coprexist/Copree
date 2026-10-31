@@ -40,6 +40,19 @@ interface UserAgentRow {
   model?: string | null
 }
 
+/** 「每个 AI 每天」矩阵：行 = AI，列 = 日期（管理台按当前版面取数） */
+interface UsageMatrix {
+  dates: string[]
+  agents: {
+    agent_id: number
+    agent_name: string
+    total_tokens: number
+    total_calls: number
+    per_day: Record<string, number>
+  }[]
+  total_tokens: number
+}
+
 interface DailyPoint {
   date: string
   total_tokens: number
@@ -143,7 +156,10 @@ export default function UsageDashboardTab() {
   const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null)
   const [agentDaily, setAgentDaily] = useState<DailyPoint[]>([])
   const [agentDailyLoading, setAgentDailyLoading] = useState(false)
+  const [matrix, setMatrix] = useState<UsageMatrix | null>(null)
   const isDark = useIsDark()
+  // 矩阵列数封顶 14：管理台默认看 30 天，全铺出来读不了；要看长区间用下面的每日曲线
+  const matrixDays = Math.min(days, 14)
 
   const loadData = async (d: number) => {
     setLoading(true)
@@ -169,6 +185,15 @@ export default function UsageDashboardTab() {
   }
 
   useEffect(() => { loadData(days) }, [days])
+
+  // 矩阵跟当前版面走：居民看 agent_id>0，群视界是另一本账（这页的矩阵只覆盖居民 AI，
+  // 群视界的用量按世界记，没有"每个 AI 每天"这个维度）
+  useEffect(() => {
+    if (view !== 'residents') { setMatrix(null); return }
+    api.get<UsageMatrix>(`/admin/usage/matrix?days=${matrixDays}&scope=residents`)
+      .then(r => setMatrix(r && Array.isArray(r.agents) ? r : null))
+      .catch(() => setMatrix(null))
+  }, [matrixDays, view])
 
   const loadAgentDaily = async (agentId: number) => {
     setSelectedAgentId(agentId)
@@ -242,6 +267,59 @@ export default function UsageDashboardTab() {
           </button>
         ))}
       </div>
+
+      {matrix && matrix.agents.length > 0 && (
+        <div className="bg-surface rounded-dialog border border-border p-5">
+          <div className="flex items-baseline justify-between mb-1">
+            <h3 className="text-sm font-semibold text-textPrimary">{t('usage:matrixTitle')}</h3>
+            <span className="text-3xs text-textMuted">{t('usage:matrixHint')}</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-xs">
+              <thead>
+                <tr className="text-textMuted">
+                  <th className="text-left font-medium py-2 pr-3 sticky left-0 bg-surface">AI</th>
+                  {matrix.dates.map(d => (
+                    <th key={d} className="text-right font-medium py-2 px-2 whitespace-nowrap">{d.slice(5)}</th>
+                  ))}
+                  <th className="text-right font-medium py-2 pl-3">{t('usage:matrixRowTotal')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {matrix.agents.map(a => (
+                  <tr key={a.agent_id} className="border-t border-border/60">
+                    <td className="py-2 pr-3 max-w-[160px] truncate sticky left-0 bg-surface" title={a.agent_name}>
+                      <button
+                        className={`text-left hover:text-primary-500 transition-colors ${selectedAgentId === a.agent_id ? 'text-primary-500 font-medium' : ''}`}
+                        onClick={() => loadAgentDaily(a.agent_id)}
+                      >
+                        {a.agent_name}
+                      </button>
+                    </td>
+                    {matrix.dates.map(d => {
+                      const v = a.per_day[d] || 0
+                      return (
+                        <td key={d} className="py-2 px-2 text-right whitespace-nowrap">
+                          <button
+                            className={`tabular-nums hover:text-primary-500 transition-colors ${v ? 'text-textSecondary' : 'text-textMuted/50'}`}
+                            onClick={() => loadAgentDaily(a.agent_id)}
+                            title={`${a.agent_name} · ${d}`}
+                          >
+                            {v ? fmtTokenNum(v, lang) : '—'}
+                          </button>
+                        </td>
+                      )
+                    })}
+                    <td className="py-2 pl-3 text-right tabular-nums font-medium text-textPrimary">
+                      {fmtTokenNum(a.total_tokens, lang)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {loading ? (
         <div className="flex justify-center py-16"><Loader2 className="animate-spin" size={28} /></div>

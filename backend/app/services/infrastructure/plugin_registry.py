@@ -71,11 +71,14 @@ class ServicePlugin:
         return {"installed": False, "running": False}
 
     @classmethod
-    async def hosted_status(cls) -> dict[str, Any] | None:
+    async def hosted_status(cls, *, agent_id: int | None = None) -> dict[str, Any] | None:
         """平台托管这份服务时的状态；没有可托管的运行时状态就返回 None
 
         get_status() 得先有实例才能问，而"平台自带协议端的登录"发生在实例配置之前——
         卡片那时还没有实例，所以给平台留一个类方法问这一件事。
+
+        agent_id：这一页属于哪个 AI。多数通道（一个部署一份协议端）用不上它；
+        但"一个 AI 一个账号"的通道（如 B 站）要按 AI 生成登录二维码，没有它就只能干等用户先保存。
         """
         return None
 

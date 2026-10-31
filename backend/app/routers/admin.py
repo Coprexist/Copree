@@ -3028,6 +3028,24 @@ async def get_global_usage(
     return await get_admin_global_token_stats(SQLAlchemyContentRepository(db), start_date, end_date, scope)
 
 
+@router.get("/usage/matrix")
+async def get_usage_matrix_admin(
+    days: int = Query(14, ge=1, le=90),
+    user_id: int | None = Query(None, description="只看某个用户的 AI；不传 = 全站"),
+    scope: str = Query("all", pattern="^(all|residents|worlds)$"),
+    admin: dict = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """「每个 AI 每天花了多少」矩阵（管理台）：行 = AI，列 = 最近 N 天"""
+    from app.services.content.conversation_log_service import get_usage_matrix
+
+    end_date = datetime.now(tz.utc).replace(tzinfo=None)
+    start_date = end_date - timedelta(days=days - 1)
+    return await get_usage_matrix(
+        SQLAlchemyContentRepository(db), user_id=user_id, start_date=start_date, end_date=end_date, scope=scope,
+    )
+
+
 @router.get("/usage/by-user")
 async def get_usage_by_user(
     days: int = Query(30, ge=1, le=365),

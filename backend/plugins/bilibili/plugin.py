@@ -190,6 +190,47 @@ async def _qr_start(instance: str) -> dict:
     return session
 
 
+def _qr_png_b64(url: str) -> str:
+    """把登录链接画成二维码 PNG（base64）。
+
+    为什么 vendor 一个库：后端镜像里没有 qrcode，而容器/宿主都可能连不上 PyPI
+    （实测容器内 DNS 失败）。"装上就能扫码"不该以能不能联网装依赖为前提。
+    """
+    if not url:
+        return ""
+    try:
+        import base64
+        import io
+        import sys
+        from pathlib import Path
+
+        vendor = Path(__file__).resolve().parent / "_vendor"
+        if str(vendor) not in sys.path:
+            sys.path.insert(0, str(vendor))
+        import qrcode  # noqa: PLC0415 —— 只在真的要画码时导入
+        from PIL import Image, ImageDraw
+
+        qr = qrcode.QRCode(border=2, box_size=1, error_correction=qrcode.constants.ERROR_CORRECT_M)
+        qr.add_data(url)
+        qr.make(fit=True)
+        matrix = qr.get_matrix()
+        box, border = 6, 16
+        size = len(matrix) * box + border * 2
+        img = Image.new("RGB", (size, size), "white")
+        draw = ImageDraw.Draw(img)
+        for y, row in enumerate(matrix):
+            for x, dark in enumerate(row):
+                if dark:
+                    x0, y0 = border + x * box, border + y * box
+                    draw.rectangle([x0, y0, x0 + box - 1, y0 + box - 1], fill="black")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG", optimize=True)
+        return base64.b64encode(buf.getvalue()).decode()
+    except Exception as e:  # noqa: BLE001 —— 画不出码不该让整张卡片报错
+        logger.warning("B 站二维码渲染失败（%s），只回链接: %s", url[:40], e)
+        return ""
+
+
 _QR_STATE_TEXT = {
     0: "登录成功",
     86101: "等待扫码",
@@ -688,11 +729,22 @@ class BilibiliChannel(ServicePlugin):
                     session = await _qr_poll(instance)
                 elif session.get("state") == "expired" or time.time() - session.get("created", 0) > QR_TTL_SECONDS:
                     session = await _qr_start(instance)
+                qr_url = str(session.get("url") or "")
                 detail["login"] = {
                     "state": session.get("state"),
                     "text": session.get("state_text"),
-                    "qr_url": session.get("url"),
+                    "qr_url": qr_url,
                     "expires_in": max(0, int(QR_TTL_SECONDS - (time.time() - session.get("created", 0)))),
+                }
+                # 卡片真正渲染的是 hosted_endpoint（前端既有契约，QQ/NapCat 共用）。
+                # 只报 login 的话界面上一个码都没有——用户会问"哪里有码"。
+                detail["hosted_endpoint"] = {
+                    "held_by_platform": True,
+                    "logged_in": False,
+                    "bot_name": "",
+                    "qr_png": _qr_png_b64(qr_url),
+                    "qr_url": qr_url,
+                    "qr_at": int(session.get("created") or 0),
                 }
             except BiliError as e:
                 detail["login"] = {"state": "error", "text": str(e)}
@@ -707,11 +759,47 @@ class BilibiliChannel(ServicePlugin):
             return detail
 
         detail["state"] = "已登录"
-        detail["account"] = {
-            "uname": info.get("uname") or cfg.get("nickname") or "",
-            "mid": info.get("mid") or cfg.get("bili_mid"),
-        }
+        uname = info.get("uname") or cfg.get("nickname") or ""
+        detail["account"] = {"uname": uname, "mid": info.get("mid") or cfg.get("bili_mid")}
+        detail["hosted_endpoint"] = {"held_by_platform": True, "logged_in": True, "bot_name": uname}
         return detail
+
+    @classmethod
+    async def hosted_status(cls, *, agent_id: int | None = None) -> dict:
+        """实例还没建（配置还没保存）时也要出码：用户不该对着空表单猜"码在哪"。
+
+        二维码按实例生成（一个 AI 一个 B 站账号），所以这里用平台传进来的 agent_id 推实例名；
+        扫码成功后 Cookie 就写进该实例的配置——配置一旦存在，平台会自己把实例建起来，
+        卡片随后从 get_status()（已登录）接管。
+        """
+        if agent_id is None:
+            return {"held_by_platform": True, "logged_in": False, "bot_name": ""}
+        instance = _instance_of(agent_id)
+        cfg = await _instance_config(instance)
+        cookie = _cookie_of(cfg)
+        if cookie:
+            info = await _nav_cached(cookie)
+            if info.get("isLogin"):
+                return {
+                    "held_by_platform": True,
+                    "logged_in": True,
+                    "bot_name": info.get("uname") or cfg.get("nickname") or "",
+                }
+        try:
+            session = _qr_sessions.get(instance) or await _qr_start(instance)
+            if session.get("state") in ("pending", "scanned") or time.time() - session.get("created", 0) > QR_TTL_SECONDS:
+                session = await _qr_poll(instance) if session.get("state") in ("pending", "scanned") else await _qr_start(instance)
+            qr_url = str(session.get("url") or "")
+            return {
+                "held_by_platform": True,
+                "logged_in": session.get("state") == "done",
+                "bot_name": "",
+                "qr_png": _qr_png_b64(qr_url),
+                "qr_url": qr_url,
+                "qr_at": int(session.get("created") or 0),
+            }
+        except BiliError as e:
+            return {"held_by_platform": True, "logged_in": False, "bot_name": "", "error": str(e)[:120]}
 
     # ── 生命周期 ──
 
