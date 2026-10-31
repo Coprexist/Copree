@@ -8,6 +8,47 @@
 
 ## [未发布]
 
+### 🐛 修复
+- **同一句话被多台机器人各落一遍**：认亲（`_twin_message`）靠事务级咨询锁排队，锁的键却是
+  `通道:QQ群openid:正文`——同一个 QQ 群在每台机器人那里的 openid 不同，等于每台各锁各的，
+  并发送入时谁也看不见谁，同一条消息落了三四份（2026-10-31 真机）。键改成
+  `(通道, 落点群, 归一正文)`：落点群是平台侧概念，几台机器人的判断一致。
+- **引用/撤回拿错实例的通道标识**（HTTP 400 `40034138`「引用消息越权」）：腾讯按 appid 隔离
+  `group_openid` / `msg_id` / REFIDX，而合并成一条站内消息后只留了一份（先到先得）。新增
+  `message_channel_refs`（迁移 `0099`，`(message_id, instance, conversation)` 唯一），入站、认亲合并、
+  出站回写三处都按实例各存一份；出站引用/撤回只取**发送方自己那一份**，取不到就不引用。
+  老列 `channel_msg_id` / `channel_ref_idx` 降级为兼容值（先查新表，查不到才退回老列且必须同会话）。
+- **@ 机器人时它判成"没点我"、整轮沉默**：全量事件里 `is_you` 就是"这条点到了我"，旧代码却跳过它
+  （以为唤醒令牌会补），于是正文里留下别台渲染的影子 id（`<@!177>`）。现在 `is_you` 直接补自己的
+  `users.id`；合并时把本条事件点到的 AI 令牌补回合并后那一行；唤醒令牌去重。另一台机器人按
+  **agent 名**（= QQ 里的机器人昵称）认回真账号，认不出的才当外部成员建锚点。
+- **影子账号把 @ 永久带偏**：认不出自己人的年代给机器人建了 `鲸鱼娘 Deepseek#2` 这类外部锚点，
+  `external_identities` 里 `(实例, openid) → 影子` 一旦写下，之后 @ 它就一直解析到影子。
+  现在认回真身时顺手合并（`_adopt_bot_identity` → `merge_channel_accounts`），旧绑定收敛回本体；
+  存量用 `data/scripts/heal_channel_identities.py`（默认只报告，`--apply` 执行），判据缺一不可：
+  源账号 `external`、display_name 与 agent 名一字不差且该 agent 是 AI、**这个锚点从没说过话**。
+
+### ✨ 新增
+- **决策技能的启用前检验会回执"反例真的跑过了"**：写入成功不再只回 `success`，而是带
+  `verify.summary`（如「2 条样例全部符合预期：1 条正例都命中、1 条反例都没被吃掉（都真跑过了）」）、
+  `verify.counts` 与每条样例的实际结果；没给反例时明说"这只证明会命中，证明不了不误触"。
+  文案唯一出处 `_verify_summary`，agent 与群助手两条写入口共用。
+- **从没命中过的规则会留下"为什么没中"的证据**：`stats` 新增 `miss_count` / `last_miss_at` /
+  `miss_samples`（每条 `{at, event, content, why}`，`why` 与试跑同口径），只对 `hit_count=0` 的规则采样；
+  同一规则最少间隔 10 秒、同一正文不重复、进程内再挡一道。列表给最后 3 条，`list_decision_skills` 带 `name`
+  给全量（≤20 条）。改了 `when` 会清掉旧样例（那批证据描述的是旧条件），命中计数照旧保留。
+
+### 📝 文档与工程
+- **关键词搜聊天记录**：新工具 `search_messages`——按 `query` 搜**AI 自己在的**群与私信，
+  可带 `group_id` / `sender_id` / `days` / `limit`，回会话、消息 id、时间与命中片段（±24 字）。
+  此前只有"按会话读最近 N 条"（`read_conversation`）与"按 id 展开"（`expand_message`），
+  关键词检索是空的——用户说"你搜一下"时 AI 根本没有可调的工具。
+- 新增 [通道标识与多实例身份](docs/dev/channel_identity.md)：外部标识按实例隔离、`message_channel_refs` 模型、
+  合并锁键、@ 解析的三条事实来源、影子账号自愈与不变量清单；[通道插件开发](docs/plugin-dev/channel-plugins.md)
+  与[撤回](docs/dev/message_revoke.md)同步改写。决策层的 verify 回执、未命中样例与驱动口径写进
+  [决策层](docs/dev/decision_layer.md)。
+- 新增 [工具记录与"我搜过了"](docs/dev/tool_truthfulness.md)：判"搜过没有"的三处证据（派发日志 /
+  `tool_usage_daily` / 当轮 `tool_calls`），以及"账本没记 web_search 不等于没搜"的读法（搜索与回答可能不是同一轮）。
 ## [v0.4.16] - 2026-10-30
 
 ### ✨ 新增
