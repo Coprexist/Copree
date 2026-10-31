@@ -1669,7 +1669,18 @@ class QqChannelPlugin(ServicePlugin):
             .order_by(Message.id.desc())
             .limit(1)
         )).first()
-        return int(row[0]) if row else None
+        if row is not None:
+            return int(row[0])
+        # 退回老列：一条 QQ 群消息在别的实例下被引用时，那个 REFIDX 只存在对方那一侧
+        # （也可能来自分实例表之前的老数据）。引用对象按"哪个群里的哪条消息"认，
+        # 不按"哪台机器人先看到"——找不到就不引用，不猜。
+        legacy = (await db.execute(
+            select(Message.id)
+            .where(Message.group_id == group_id, Message.channel_ref_idx == ref_idx)
+            .order_by(Message.id.desc())
+            .limit(1)
+        )).first()
+        return int(legacy[0]) if legacy else None
 
     async def _fill_union(self, qq_group: str, author: dict) -> None:
         """按需把 union_openid 补进 author：事件里为空就走"获取群成员信息"，结果缓存一天。

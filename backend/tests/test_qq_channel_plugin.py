@@ -1210,6 +1210,46 @@ async def test_twin_merge_keeps_each_instances_own_channel_ids(migrated_db):
     finally:
         _cleanup(plugin_a)
         _cleanup(plugin_b)
+async def test_inbound_quote_resolves_a_ref_recorded_by_another_instance(migrated_db):
+    """引用的是别的实例发出去的那条：引用对象按群里的消息认，不按哪台先看到。
+
+    2026-10-31 真机：书爱引用鲸鱼娘那句「D老师好看这事我认」再 @ 她，站内却没记成引用——
+    被引用的那条是 agent-49 发出去的（REFIDX + 会话都在它那侧），这句话却从另一台机器人的
+    副本进来了，按 (实例, 会话) 精确匹配必然找不到。
+    """
+    from sqlalchemy import text
+
+    from app.chat.gm import send_gm_message
+    from app.database import async_session
+
+    await _seed()
+    plugin = await _make_plugin()
+    plugin._copree_group_id = GROUP_ID
+    try:
+        async with async_session() as db:
+            # 另一台实例发出去的消息：只有老列上的 REFIDX，本实例没有它的分实例行
+            await db.execute(text(
+                "INSERT INTO messages (group_id, sender_type, sender_id, content, channel_ref_idx, channel_origin) "
+                "VALUES (:g, 'ai', 3, 'D老师好看这事我认', 'REFIDX-OTHER', 'qq:bot-other:QQGROUP-BBB')"
+            ), {"g": GROUP_ID})
+            await db.commit()
+
+        await plugin._on_group_message({
+            **GROUP_EVENT, "id": "QUOTE-1", "content": "我说你羞涩了欸",
+            "message_type": 103,
+            "msg_elements": [{"message_type": 1, "content": "D老师好看这事我认"}],
+            "message_scene": {"source": "default", "ext": ["msg_idx=REFIDX-IN", "ref_msg_idx=REFIDX-OTHER"]},
+        })
+        async with async_session() as db:
+            row = (await db.execute(text(
+                "SELECT id, reply_to FROM messages WHERE group_id = :g ORDER BY id DESC LIMIT 1"
+            ), {"g": GROUP_ID})).first()
+            quoted = (await db.execute(text(
+                "SELECT id FROM messages WHERE channel_ref_idx = 'REFIDX-OTHER'"
+            ))).scalar()
+        assert row is not None and int(row[1] or 0) == int(quoted), row
+    finally:
+        _cleanup(plugin)
 async def test_quote_is_dropped_when_the_quoted_message_is_from_another_qq_group(migrated_db):
     """被引用的那条来自另一个 QQ 群时不许带引用：REFIDX 只在它自己那个群里有效。
 
