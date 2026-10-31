@@ -1,5 +1,92 @@
 {
   "version": 1,
-  "updated_at": "2026-09-25T00:00:00Z",
-  "packages": []
+  "updated_at": "2026-10-31T15:13:21Z",
+  "packages": [
+    {
+      "id": "emoji-qq",
+      "name": "QQ 表情",
+      "description": "QQ 经典表情的名字与写法（害羞、流泪、呲牙、强…）。AI 可以在消息里用 [表情:名字]，站内渲染成对应表情，QQ 侧收到的也是同一个表情。",
+      "category": "emojipack",
+      "author": "Copree",
+      "version": "1.0.0",
+      "source": "Coprexist/Copree@v0.4.16",
+      "asset": "emoji-qq-1.0.0.zip",
+      "sha256": "1da5dbe5f34e9c9d16dc9c7ae888cd7fdcdaadbd8e7aa4c517a640c821080bf0",
+      "tier": "verified",
+      "reviewed_by": "Copree",
+      "reviewed_at": "2026-10-31"
+    },
+    {
+      "id": "keyword-autoreply",
+      "name": "关键词自动回复",
+      "description": "行为插件示例：命中关键词时注入回复指令（声明与行为合一，一个 plugin.py 完成）。",
+      "category": "skill",
+      "author": "Copree",
+      "version": "1.0.0",
+      "source": "Coprexist/Copree@v0.4.16",
+      "asset": "keyword-autoreply-1.0.0.zip",
+      "sha256": "40f8b62bada77160b812078d43d99db34a0d04d304b920442001d993fd8e1978",
+      "tier": "verified",
+      "reviewed_by": "Copree",
+      "reviewed_at": "2026-10-31"
+    },
+    {
+      "id": "qq-channel",
+      "name": "QQ 通道",
+      "description": "把 Copree 的 AI 接入 QQ 群：被 @ 时唤醒，走官方 QQ 机器人 API（WebSocket 收事件 + REST 回消息）",
+      "category": "service",
+      "author": "Copree",
+      "version": "0.1.0",
+      "source": "Coprexist/Copree@v0.4.16",
+      "asset": "qq-channel-0.1.0.zip",
+      "sha256": "e3e98f1102a217a6305cc3450f137261549d3a6d1d08f4c4833959ae01b2b3bf",
+      "tier": "verified",
+      "reviewed_by": "Copree",
+      "reviewed_at": "2026-10-31",
+      "channel_kind": "qq"
+    },
+    {
+      "id": "qq-napcat",
+      "name": "QQ 通道（NapCat / OneBot v11）",
+      "description": "把 AI 接进 QQ（非官方协议端 NapCat / OneBot v11）。注意：协议端违反 QQ 用户协议，有封号风险，建议只用自己的备用号、自担风险；对外提供服务请用官方 QQ 通道。",
+      "category": "service",
+      "author": "Copree",
+      "version": "0.1.0",
+      "source": "Coprexist/Copree@v0.4.16",
+      "asset": "qq-napcat-0.1.0.zip",
+      "sha256": "2b5596552c675564146c5f8517e533d7d39f66bd17e0938f4c03fb64329cdbd4",
+      "tier": "verified",
+      "reviewed_by": "Copree",
+      "reviewed_at": "2026-10-31",
+      "channel_kind": "qq-napcat"
+    },
+    {
+      "id": "skill-writing-studio",
+      "name": "写作工坊",
+      "description": "提供「写作工坊」技能类型：结构化写作指导（选题、大纲、成稿、润色）。",
+      "category": "skill",
+      "author": "Copree",
+      "version": "1.0.0",
+      "source": "Coprexist/Copree@v0.4.16",
+      "asset": "skill-writing-studio-1.0.0.zip",
+      "sha256": "e4c708fc0a6d12002c0a23e744030b3ac2e7482b6aae0c6c9cec8650b5851fef",
+      "tier": "verified",
+      "reviewed_by": "Copree",
+      "reviewed_at": "2026-10-31"
+    },
+    {
+      "id": "skin-aurora",
+      "name": "极光青碧",
+      "description": "青碧色系皮肤，清新自然，像极光下的森林。",
+      "category": "skin",
+      "author": "Copree",
+      "version": "1.0.0",
+      "source": "Coprexist/Copree@v0.4.16",
+      "asset": "skin-aurora-1.0.0.zip",
+      "sha256": "8386ee96016be0dfe7d95140e9fe6cc991066ffd3d0d510ef519a1527395fae4",
+      "tier": "verified",
+      "reviewed_by": "Copree",
+      "reviewed_at": "2026-10-31"
+    }
+  ]
 }

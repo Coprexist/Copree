@@ -1,0 +1,26 @@
+{
+  "light": {
+    "primary_400": "#34D399",
+    "primary_500": "#10B981",
+    "primary_600": "#059669",
+    "accent_400": "#FBBF24",
+    "accent_500": "#D97706",
+    "mint_400": "#22C55E",
+    "mint_500": "#16A34A",
+    "rose_400": "#F87171",
+    "rose_500": "#EF4444",
+    "bubble": "#10B981"
+  },
+  "dark": {
+    "primary_400": "#34D399",
+    "primary_500": "#10B981",
+    "primary_600": "#047857",
+    "accent_400": "#FBBF24",
+    "accent_500": "#F59E0B",
+    "mint_400": "#4ADE80",
+    "mint_500": "#22C55E",
+    "rose_400": "#FB7185",
+    "rose_500": "#F43F5E",
+    "bubble": "#065F46"
+  }
+}

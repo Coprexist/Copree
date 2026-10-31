@@ -37,7 +37,9 @@ MAX_TOTAL_UNCOMPRESSED = 20 * 1024 * 1024
 MAX_ENTRIES = 500
 MAX_FILE_BYTES = 2 * 1024 * 1024
 
-CATEGORIES = {"skin", "skill", "world", "service", "other"}
+# emojipack 是真实存在的插件类别（表情资源包，plugin.json 里 emoji.json 载荷），
+# 少写它会让主仓的内置插件根本进不了索引——枚举跟着产品走，不跟着这里的历史走。
+CATEGORIES = {"skin", "skill", "world", "service", "emojipack", "other"}
 TIERS = {"verified", "community"}
 BANNED_SUFFIXES = (
     ".exe", ".dll", ".so", ".dylib", ".bin", ".msi", ".bat", ".cmd",
@@ -51,7 +53,9 @@ SOURCE_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+$")
 ASSET_RE = re.compile(r"^[A-Za-z0-9_.-]+\.zip$")
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 # 外部身份类别（通道插件在 plugin.json 的 channel.kind 里声明）：短名，全局唯一，先到先得
-KIND_RE = re.compile(r"^[a-z][a-z0-9_-]{2,31}$")
+# 2~32 位：官方 QQ 通道的 kind 就是 "qq"（两位），把下限定成 3 位等于
+# 让平台自己的通道进不了自己的索引。上限不变，防止拿长串占位。
+KIND_RE = re.compile(r"^[a-z][a-z0-9_-]{1,31}$")
 RESERVED_KINDS = {"federation", "local", "system"}
 
 README_BEGIN = "<!-- CATALOG:BEGIN -->"
@@ -112,7 +116,7 @@ def validate_index(data: dict) -> list:
         if kind is not None:
             kind = str(kind)
             if not KIND_RE.match(kind):
-                errors.append(where + " channel_kind 必须是小写短名（a-z0-9_-，3~32 位，字母开头）")
+                errors.append(where + " channel_kind 必须是小写短名（a-z0-9_-，2~32 位，字母开头）")
             elif kind in RESERVED_KINDS:
                 errors.append(where + " channel_kind「" + kind + "」是平台保留字")
             elif kind in kinds:

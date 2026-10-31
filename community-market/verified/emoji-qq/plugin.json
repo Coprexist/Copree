@@ -1,0 +1,10 @@
+{
+  "id": "emoji-qq",
+  "name": "QQ 表情",
+  "description": "QQ 经典表情的名字与写法（害羞、流泪、呲牙、强…）。AI 可以在消息里用 [表情:名字]，站内渲染成对应表情，QQ 侧收到的也是同一个表情。",
+  "category": "emojipack",
+  "version": "1.0.0",
+  "author": "Copree",
+  "icon": "Smile",
+  "default_enabled": true
+}

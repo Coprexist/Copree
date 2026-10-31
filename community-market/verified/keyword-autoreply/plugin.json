@@ -1,0 +1,10 @@
+{
+  "id": "keyword-autoreply",
+  "name": "关键词自动回复",
+  "description": "行为插件示例：命中关键词时注入回复指令（声明与行为合一，一个 plugin.py 完成）。",
+  "category": "skill",
+  "version": "1.0.0",
+  "author": "Copree",
+  "icon": "MessageSquareReply",
+  "default_enabled": true
+}

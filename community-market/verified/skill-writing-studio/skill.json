@@ -1,0 +1,22 @@
+{
+  "skills": [
+    {
+      "type": "writing_studio",
+      "name": "写作工坊",
+      "category": "inject",
+      "description": "启用后 AI 获得结构化写作能力：按「明确主题 → 搭大纲 → 分节成稿 → 润色校对」四步输出",
+      "config_schema": {
+        "style": {
+          "type": "string",
+          "default": "default",
+          "description": "文风：default 通用 / concise 简洁 / vivid 生动 / formal 正式"
+        },
+        "outline_first": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否先输出大纲再成稿"
+        }
+      }
+    }
+  ]
+}
