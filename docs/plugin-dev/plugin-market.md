@@ -27,10 +27,16 @@
 
 | 层级 | 源码在哪 | 门禁 | 界面标识 |
 | --- | --- | --- | --- |
-| 内置 | 主仓 backend/plugins/ | 我们自己审，随版本发布 | 内置 |
-| 已验证 verified | community-market/verified/<id>/ | 我们自己审源码与权限，索引留 reviewed_by / reviewed_at | 已验证 |
+| 内置 | 主仓 backend/plugins/ | 我们自己审，随版本发布 | 内置（同时进索引，见下） |
+| 已验证 verified | 我们自家仓里的源码：主仓 `backend/plugins/<id>/`（索引用 `source_path` 指过去）或本仓 `verified/<id>/` | 我们自己审源码与权限，索引留 reviewed_by / reviewed_at | 已验证 |
 | 社区 community | 作者自持仓库，索引只记 source + sha256 | CI 通过即收录 | 社区（CI 校验） |
 | 未收录 | 管理员上传的本地包（一期内容） | 无（管理员自己负责） | 未收录 |
+
+**内置插件也进索引**：它们在实例里开箱就在，但索引里仍有一条 `tier: verified` 的记录，
+用 `source_path` 指向主仓的插件目录（如 `backend/plugins/qq-channel`），不复制源码。
+这样非官方部署（旧版本、自建客户端、第三方托管）能装上，插件被卸载/删掉后也能从商城装回来
+——卸载只删 `data/plugins/<id>`，之后 `is_builtin()` 为假，商城安装不再被判成"撞内置"。
+复制源码进索引是本仓明确避免的做法：复制品一定和真源漂。
 
 规则一句话：**源码在不在我们仓里，决定能不能给 verified 标**。
 

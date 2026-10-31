@@ -5,8 +5,10 @@
 和社区层的区别只有一条：**源码在我们仓里**。
 
 - 社区层：作者自持仓库，索引只记 source: owner/repo@ref + sha256，CI 通过即收录，界面标「社区（CI 校验）」
-- verified：源码 PR 进本目录，审阅人在索引里留 reviewed_by / reviewed_at，界面标「已验证」
-- 内置：随实例部署，源码在 Copree 主仓 backend/plugins/，走版本发布，不在这个索引里
+- verified：源码在我们自己的仓里——**优先用 `source_path` 指向主仓 `backend/plugins/<id>/`**，
+  不复制进来；只有"没有主仓可指"的插件才放本目录。审阅人在索引里留 reviewed_by / reviewed_at，界面标「已验证」
+- 内置：随实例部署，源码在 Copree 主仓 backend/plugins/，**同时以 verified 条目进索引**
+  （`source_path` 指过去），这样删了能装回来、别的部署也能装
 
 审阅清单（每个 verified PR 都过一遍）：
 
