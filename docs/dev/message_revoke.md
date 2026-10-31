@@ -39,7 +39,7 @@
 | 列 | 用途 |
 |---|---|
 | `revoked_at` / `revoked_by` | 撤回时间与操作者（users.id），渲染层据此只给占位 |
-| `channel_msg_id` | 通道侧那条消息的 id：入站存事件 `d.id`，出站另开 session 回写发送响应里的 `id`（撤回要用） |
+| `channel_msg_id` | 通道侧那条消息的 id：入站存事件 `d.id`，出站另开 session 回写发送响应里的 `id`（撤回要用）。**多实例下它只是"先到那台"的兼容值**，真正撤回要按 `(消息, 实例, 会话)` 从 `message_channel_refs` 取本实例那一份，见 [通道标识与多实例身份](channel_identity.md) |
 | `channel_ref_idx` | 通道侧的引用索引（QQ 的 `msg_idx` / `ext_info.ref_idx`），精准引用用 |
 
 ## 接口与前端

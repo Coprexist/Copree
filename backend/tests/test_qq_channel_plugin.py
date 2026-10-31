@@ -1107,6 +1107,155 @@ async def test_outbound_reply_quotes_the_qq_message(migrated_db):
         assert outbound == ("fake", "REFIDX-OUT"), outbound
     finally:
         _cleanup(plugin)
+async def test_same_text_from_two_instances_still_merges_into_one_row(migrated_db):
+    """同一句人话被两台机器人并发送进来，只能落一条。
+
+    认亲是"先查后写"：事务级咨询锁的键必须与实例无关，否则每台各锁各的 key，
+    谁也没等谁，各查各的都查不到对方未提交的那条，同一句话就落好几遍
+    （2026-10-31 真机：群里同一条消息出现三份）。
+    """
+    from app.database import async_session
+
+    await _seed()
+    bot_a = await _make_plugin("bot-a")
+    bot_b = await _make_plugin("bot-b")
+    try:
+        await asyncio.gather(
+            bot_a._on_group_at({**GROUP_EVENT, "id": "DUP-1", "content": "同一句话先说一遍",
+                                "message_scene": {"source": "default", "ext": ["msg_idx=REFIDX-A"]}}),
+            bot_b._on_group_at({**GROUP_EVENT, "group_openid": "QQGROUP-BBB", "id": "DUP-2",
+                                "content": "同一句话先说一遍",
+                                "message_scene": {"source": "default", "ext": ["msg_idx=REFIDX-B"]}}),
+        )
+        async with async_session() as db:
+            total = (await db.execute(text(
+                "SELECT count(*) FROM messages WHERE group_id = :g"), {"g": GROUP_ID})).scalar()
+        assert total == 1, total
+    finally:
+        _cleanup(bot_a)
+        _cleanup(bot_b)
+
+
+async def test_merge_keeps_the_mentioned_instances_own_token(migrated_db):
+    """合并时把"点到了我"补回正文：另一台先落库、令牌是它渲染的，被 @ 的那台得看得见自己。
+
+    2026-10-31 真机：三台机器人各自落了一条，@ 鲸鱼娘 的那条正文里是别台补的影子 id，
+    她判定"没点我"，整轮沉默。
+    """
+    from app.database import async_session
+
+    await _seed()
+    bot_a = await _make_plugin("bot-a")
+    bot_b = await _make_plugin("bot-b")
+    try:
+        # 另一台先收到：@ 的是"另一个机器人"，它认不出，按外部人建了锚点
+        await bot_a._on_group_message({
+            **GROUP_EVENT, "id": "MENTION-1", "content": "你再发一下……",
+            "mentions": [{"id": "BOT-OPENID-W", "bot": True, "is_you": False,
+                          "username": "鲸鱼娘 Deepseek"}],
+        })
+        # 被 @ 的那台随后收到同一句：事件里 is_you=True，补的是它自己的账号
+        await bot_b._on_group_message({
+            **GROUP_EVENT, "group_openid": "QQGROUP-BBB", "id": "MENTION-2",
+            "content": "你再发一下……",
+            "mentions": [{"id": "SELF-OPENID", "bot": True, "is_you": True}],
+        })
+        rows = await _messages(GROUP_ID)
+        assert len(rows) == 1, rows
+        assert rows[0][2].startswith(f"<@!{AGENT_USER}>"), rows[0][2]
+    finally:
+        _cleanup(bot_a)
+        _cleanup(bot_b)
+async def test_twin_merge_keeps_each_instances_own_channel_ids(migrated_db):
+    """同一句话被两台机器人送进来只落一条，但**通道标识按实例各存一份**。
+
+    腾讯按机器人隔离通道 id：A 的 REFIDX 在 B 那里指向别的东西。合并消息时只留一份，
+    回话的人就会拿别人的索引去引用——2026-10-31 真机 40034138「引用消息越权」，整条发不出去。
+    """
+    from app.chat.gm import send_gm_message
+    from app.database import async_session
+
+    await _seed()
+    plugin_a = await _make_plugin("bot-a")
+    plugin_b = await _make_plugin("bot-b")
+    try:
+        for plugin, tag in ((plugin_a, "A"), (plugin_b, "B")):
+            await plugin._on_group_at({
+                **GROUP_EVENT, "id": f"Q-{tag}", "content": "今晚咱们谁先说",
+                "message_scene": {"source": "default", "ext": [f"msg_idx=REFIDX-{tag}"]},
+            })
+        async with async_session() as db:
+            total = (await db.execute(text(
+                "SELECT count(*) FROM messages WHERE group_id = :g"), {"g": GROUP_ID})).scalar()
+            refs = (await db.execute(text(
+                "SELECT r.instance, r.channel_ref_idx FROM message_channel_refs r "
+                "JOIN messages m ON m.id = r.message_id WHERE m.group_id = :g "
+                "ORDER BY r.instance"), {"g": GROUP_ID})).all()
+            merged = int((await db.execute(text(
+                "SELECT id FROM messages WHERE group_id = :g ORDER BY id DESC LIMIT 1"
+            ), {"g": GROUP_ID})).scalar())
+        assert total == 1, total          # 合并成一条，不重复冒泡
+        assert [tuple(r) for r in refs] == [("bot-a", "REFIDX-A"), ("bot-b", "REFIDX-B")], refs
+
+        # 让 bot-b 来发这条回复（bot-a 当作掉线）：引用必须是它自己的索引
+        plugin_a._task.cancel()
+        await asyncio.sleep(0)
+        plugin_b._client.sent.clear()
+        async with async_session() as db:
+            await send_gm_message(db, group_id=GROUP_ID, sender_type="ai", sender_id=AGENT_USER,
+                                  content="那我先说", reply_to=merged)
+            await db.commit()
+        await _wait_sent(plugin_b)
+        assert plugin_b._client.sent[-1]["reference"] == "REFIDX-B", plugin_b._client.sent[-1]
+    finally:
+        _cleanup(plugin_a)
+        _cleanup(plugin_b)
+async def test_quote_is_dropped_when_the_quoted_message_is_from_another_qq_group(migrated_db):
+    """被引用的那条来自另一个 QQ 群时不许带引用：REFIDX 只在它自己那个群里有效。
+
+    2026-10-31 真机：一个 Copree 群接了好几台机器人，各自的 QQ 群不同；一句话来自甲群、
+    出站路由却落在乙群，腾讯回「引用消息越权」(40034138) 把整条消息拒了——
+    用户看到的就是「鲸鱼娘发不出消息」。引用是锦上添花，宁可不带也不能发不出去。
+    """
+    from sqlalchemy import text
+
+    from app.chat.gm import send_gm_message
+    from app.database import async_session
+
+    await _seed()
+    plugin = await _make_plugin()
+    plugin._copree_group_id = GROUP_ID
+    try:
+        await plugin._on_group_at({
+            **GROUP_EVENT, "id": "Q-2", "content": "问题",
+            "message_scene": {"source": "default", "ext": ["msg_idx=REFIDX-FOREIGN"]},
+        })
+        async with async_session() as db:
+            inbound = (await db.execute(text(
+                "SELECT id FROM messages WHERE group_id = :g ORDER BY id DESC LIMIT 1"
+            ), {"g": GROUP_ID})).first()
+            assert inbound is not None
+            # 老列与按实例的表一起挪走：模拟"本实例在本会话里从没见过这条消息"，
+            # 它手里的 REFIDX 只属于另一个会话
+            await db.execute(text(
+                "UPDATE messages SET channel_origin = :o WHERE id = :i"
+            ), {"o": "qq:bot-a:ANOTHER-GROUP-OPENID", "i": int(inbound[0])})
+            await db.execute(text(
+                "DELETE FROM message_channel_refs WHERE message_id = :i"
+            ), {"i": int(inbound[0])})
+            await db.commit()
+
+        plugin._client.sent.clear()
+        async with async_session() as db:
+            await send_gm_message(db, group_id=GROUP_ID, sender_type="ai", sender_id=AGENT_USER,
+                                  content="回答", reply_to=int(inbound[0]))
+            await db.commit()
+        await _wait_sent(plugin)
+        sent = plugin._client.sent[-1]
+        assert sent["content"] == "回答", sent        # 消息本身必须发出去
+        assert sent["reference"] == "", sent          # 但不许带越权的引用
+    finally:
+        _cleanup(plugin)
 
 
 async def test_full_mode_materializes_mentioned_members(migrated_db):
@@ -1186,6 +1335,97 @@ async def test_mentioned_other_bot_resolves_to_its_real_account(migrated_db):
         _cleanup(bot_a)
 
 
+async def test_bot_mention_heals_the_stale_shadow_account(migrated_db):
+    """认回真身时把它在这个实例下的旧影子账号并进来：绑定收敛回本体，@ 不再指向假 id。
+
+    2026-10-31 真机：认不出自己人的年代留下了 (实例, openid) → external 账号的绑定，
+    之后 @ 这台机器人一直解析到影子身上，被 @ 的那台判成「没点我」。
+    """
+    from app.database import async_session
+
+    await _seed()
+    bot_a = await _make_plugin("bot-a")
+    try:
+        async with async_session() as db:
+            await db.execute(text(
+                "INSERT INTO users (id, username, password_hash, type) VALUES "
+                "(3, '鲸鱼娘 DSH', 'x', 'ai'), (30, '鲸鱼娘 Deepseek#2', 'x', 'external')"
+            ))
+            await db.execute(text(
+                "INSERT INTO agents (id, owner_id, name, user_id, discoverable) "
+                "VALUES (8, 1, '鲸鱼娘 Deepseek', 3, true)"
+            ))
+            await db.execute(text(
+                "INSERT INTO group_members (group_id, member_type, member_id, role) "
+                f"VALUES ({GROUP_ID}, 'ai', 3, 'member')"
+            ))
+            # 历史遗留：这台机器人的 openid 早先被绑成了影子账号
+            await db.execute(text(
+                "INSERT INTO external_identities (kind, owner_scope, origin, user_id, display_name) "
+                "VALUES ('qq', 'bot-a', 'BOT-OPENID-W', 30, '鲸鱼娘 Deepseek')"
+            ))
+            await db.commit()
+
+        await bot_a._on_group_message({
+            **GROUP_EVENT, "id": "HEAL-1", "content": "你再发一下……",
+            "mentions": [{"id": "BOT-OPENID-W", "bot": True, "is_you": False,
+                          "username": "鲸鱼娘 Deepseek"}],
+        })
+
+        rows = await _messages(GROUP_ID)
+        assert len(rows) == 1, rows
+        assert rows[0][2] == "<@!3> 你再发一下……", rows[0][2]   # 补的是本体 id
+        async with async_session() as db:
+            bound = (await db.execute(text(
+                "SELECT user_id FROM external_identities WHERE origin = 'BOT-OPENID-W'"
+            ))).scalar()
+            shadow_left = (await db.execute(text("SELECT count(*) FROM users WHERE id = 30"))).scalar()
+        assert bound == 3, bound          # 绑定已改指本体
+        assert shadow_left == 0, shadow_left   # 空壳已删
+    finally:
+        _cleanup(bot_a)
+async def test_bot_mention_by_agent_name_reaches_the_bot_itself(migrated_db):
+    """机器人的 QQ 昵称是 agent 名，可能与账号名不同：按成员名认不出来时按 agent 名再认一次。
+
+    2026-10-31 真机：agent「鲸鱼娘 Deepseek」/ 账号「鲸鱼娘 DSH」，@ 之后被当成外部人
+    建了个「鲸鱼娘 Deepseek#2」的影子账号，补出来的 <@!177> 那台机器人自己不认识，
+    于是它判定"没被点名"，整轮沉默。
+    """
+    from app.database import async_session
+
+    await _seed()
+    bot_a = await _make_plugin("bot-a")
+    try:
+        async with async_session() as db:
+            await db.execute(text(
+                "INSERT INTO users (id, username, password_hash, type) VALUES (3, '鲸鱼娘 DSH', 'x', 'ai')"
+            ))
+            await db.execute(text(
+                "INSERT INTO agents (id, owner_id, name, user_id, discoverable) "
+                "VALUES (8, 1, '鲸鱼娘 Deepseek', 3, true)"
+            ))
+            await db.execute(text(
+                "INSERT INTO group_members (group_id, member_type, member_id, role) "
+                f"VALUES ({GROUP_ID}, 'ai', 3, 'member')"
+            ))
+            await db.commit()
+
+        await bot_a._on_group_message({
+            **GROUP_EVENT, "id": "BOT-MENTION-2", "content": "你再发一下……",
+            "mentions": [{"id": "BOT-OPENID-WHALE", "bot": True, "is_you": False,
+                          "username": "鲸鱼娘 Deepseek"}],
+        })
+
+        rows = await _messages(GROUP_ID)
+        assert len(rows) == 1, rows
+        assert rows[0][2] == "<@!3> 你再发一下……", rows[0][2]
+        async with async_session() as db:
+            shadow = (await db.execute(text(
+                "SELECT count(*) FROM external_identities WHERE origin = 'BOT-OPENID-WHALE'"
+            ))).scalar()
+        assert shadow == 0, "认出是自己人了，不该再建影子账号"
+    finally:
+        _cleanup(bot_a)
 async def test_bot_mention_with_a_human_name_does_not_hit_that_human(migrated_db):
     """同名的真人不算"自己人"：昵称对上还得看这个成员本身是不是 AI
 

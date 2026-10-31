@@ -334,17 +334,20 @@ def _same_channel_text(left: Any, right: Any) -> bool:
     return len(cleaned) >= MIRROR_MIN_CHARS and cleaned == stripped(right)
 
 
-async def _serialize_same_text(db: Any, kind: str, origin: str, content: str) -> None:
-    """同一句人话的入站排队过：认亲是"先查后写"，两台机器人并行时谁也看不见谁
+async def _serialize_same_text(db: Any, kind: str, landing: int, content: str) -> None:
+    """同一句人话的入站排队过：认亲是"先查后写"，几台机器人并行时谁也看不见谁
 
     用事务级咨询锁（同一个库，跨进程也算）：正文摘掉令牌后求成一个键，先到的先落库，
-    后到的等它提交再扫——这样"同一句只落一条"才立得住。没有它，两台机器人各扫各的，
-    都查不到对方还没提交的那条，于是同一句话落两遍、同一个人各建一个账号
-    （2026-10-18 真机：群 #77 里两条一模一样的「怎么两个AI自己吵起来了」）。
+    后到的等它提交再扫——这样"同一句只落一条"才立得住。没有它，几台机器人各扫各的，
+    都查不到对方还没提交的那条，于是同一句话落好几遍、同一个人各建一个账号
+    （2026-10-18 真机：群 #77；2026-10-31 真机：同一条落三遍）。
+
+    键用**落点群**而不是 QQ 群 openid：同一个 QQ 群在每台机器人那里的 openid 不一样
+    （腾讯按 appid 隔离），拿它做键等于每台各锁各的，一点排队作用都没有。
     """
     from sqlalchemy import text as sa_text
 
-    key = f"{kind}:{origin}:{_MENTION_TOKEN_RE.sub('', str(content or '')).strip()[:120]}"
+    key = f"{kind}:{int(landing)}:{_MENTION_TOKEN_RE.sub('', str(content or '')).strip()[:120]}"
     await db.execute(sa_text("SELECT pg_advisory_xact_lock(hashtext(:key)::bigint)"), {"key": key})
 
 
@@ -1249,7 +1252,12 @@ class QqChannelPlugin(ServicePlugin):
                 for marker in (f"<@!{origin}>", f"<@{origin}>"):
                     content = content.replace(marker + " ", "").replace(marker, "")
                 if user.get("is_you"):
-                    continue                  # 我自己：唤醒令牌已经点名，不再补一个
+                    # 我自己：事件直接告诉我"这条点到了我"，用自己的账号 id 补令牌。
+                    # 从前这里直接跳过（以为唤醒令牌会补），全量模式里没有那一步，
+                    # 跳过就等于丢掉"点到我了"——合并时正文被别台渲染成影子 id，
+                    # 被 @ 的这台判成没点到自己，于是沉默（2026-10-31 真机）。
+                    tokens.append(mention_token(self._target_user_id))
+                    continue
                 if user.get("bot"):
                     # 另一个机器人：认得出是本群某个 AI 的真身，就补**它的真账号**。
                     # 为什么不照旧直接建外部锚点：QQ 按 appid 发 openid，那样认不出它其实
@@ -1260,10 +1268,15 @@ class QqChannelPlugin(ServicePlugin):
                     if user.get("is_you") is False:
                         uid = await self._mentioned_bot_member(db, str(user.get("username") or ""))
                         if uid:
+                            # 认回真身的同时把旧锚点并掉：绑定一旦指向影子，以后 @ 它
+                            # 就一直解析到影子身上（2026-10-31 真机），这里让它收敛回本体
+                            uid = await self._adopt_bot_identity(db, origin, uid)
                             tokens.append(mention_token(uid))
                             continue
                     # 认不出不是否决：它可能还没被列成 AI 成员（真实 QQ 小号接进来的机器人），
-                    # 也可能就是别家的机器人——那就照外部人走下面那条路，@ 了谁照样看得见。
+                    # 也可能就是别家的机器人——照外部人建锚点账号，@ 了谁照样看得见。
+                    # 本群自己的机器人不会走到这里：点到我时 is_you 给的是我的真账号，
+                    # 点到别台时按 agent 名（= 它在 QQ 里的昵称）认得出它的真账号。
                 ensured = await ensure_channel_user(
                     db, kind=self.channel_kind, owner_scope=self.instance, origin=origin,
                     display_name=str(user.get("username") or ""),
@@ -1277,6 +1290,42 @@ class QqChannelPlugin(ServicePlugin):
                 tokens.append(mention_token(uid))
             await db.commit()
         return ("".join(tokens) + " " + content) if tokens else content
+
+    async def _adopt_bot_identity(self, db: Any, origin: str, real_uid: int) -> int:
+        """把"这台机器人在本实例下的旧锚点"并进它的真身账号（自愈，幂等）。
+
+        影子账号是认不出"这是自己人"的年代留下的：一旦写下 (实例, openid) → external 账号，
+        以后 @ 它就一直解析到影子身上（2026-10-31：鲸鱼娘被 @ 到 #177，整轮沉默）。
+        认回真身的这一刻顺手合并——身份绑定改指本体、它说过的话跟着走、空壳删掉。
+        只并在源头是 external 的账号上：真人账号谁是谁只有本人能决定。
+        """
+        from sqlalchemy import select
+
+        from app.models.external import ExternalIdentity
+        from app.models.user import User
+        from app.services.plugin.channel_user import merge_channel_accounts
+
+        if not origin or not real_uid:
+            return int(real_uid)
+        row = (await db.execute(
+            select(ExternalIdentity).where(
+                ExternalIdentity.kind == self.channel_kind,
+                ExternalIdentity.owner_scope == self.instance,
+                ExternalIdentity.origin == str(origin),
+            )
+        )).scalars().first()
+        if row is None or int(row.user_id or 0) in (0, int(real_uid)):
+            return int(real_uid)
+        shadow = await db.get(User, int(row.user_id))
+        if shadow is None or str(shadow.type or "") != "external":
+            return int(real_uid)
+        merged = await merge_channel_accounts(db, from_id=int(shadow.id), to_id=int(real_uid))
+        if merged:
+            logger.info(
+                f"通道身份自愈[{self.instance}]：影子账号 #{shadow.id}「{shadow.username}」"
+                f"并入 #{int(real_uid)}（openid …{str(origin)[-6:]}）"
+            )
+        return int(real_uid)
 
     async def _mentioned_bot_member(self, db: Any, name: str) -> int:
         """被 @ 的机器人是不是本群某个 AI 的真身 → 它的 Copree 账号 id（不是就是 0）
@@ -1297,19 +1346,35 @@ class QqChannelPlugin(ServicePlugin):
         from sqlalchemy import select
 
         from app.chat.gm import resolve_member_ids
+        from app.models.agent import Agent as AgentModel
         from app.models.group import GroupMember
 
         uid = (await resolve_member_ids(db, gid)).get(name)
-        if not uid:
-            return 0
-        is_ai = (await db.execute(
-            select(GroupMember.member_id).where(
+        if uid:
+            is_ai = (await db.execute(
+                select(GroupMember.member_id).where(
+                    GroupMember.group_id == gid,
+                    GroupMember.member_type == "ai",
+                    GroupMember.member_id == int(uid),
+                )
+            )).first()
+            if is_ai:
+                return int(uid)
+        # 机器人那个昵称是**agent 名**，不是 users.username：两者不同时（2026-10-31 真机：
+        # agent「鲸鱼娘 Deepseek」/ 账号「鲸鱼娘 DSH」）按成员名认不出来，@ 就被当成外部人
+        # 造了个「鲸鱼娘 Deepseek#2」的影子账号，被 @ 的那台自己不认识这个 id，就此沉默。
+        # 所以再按 agent 名认一遍，仍然要求这个成员本身是群的 AI 成员。
+        row = (await db.execute(
+            select(GroupMember.member_id)
+            .join(AgentModel, AgentModel.user_id == GroupMember.member_id)
+            .where(
                 GroupMember.group_id == gid,
                 GroupMember.member_type == "ai",
-                GroupMember.member_id == int(uid),
+                AgentModel.name == name,
             )
+            .limit(1)
         )).first()
-        return int(uid) if is_ai else 0
+        return int(row[0]) if row else 0
 
     def _with_mention_prefix(self, content: str) -> str:
         """两边语义对齐：QQ 里 @机器人 = 在 Copree 里 @这个 AI（群自己的唤醒规则仍然生效）。
@@ -1320,6 +1385,8 @@ class QqChannelPlugin(ServicePlugin):
         from app.utils.text import mention_token
 
         prefix = mention_token(self._target_user_id) if self._target_user_id else f"@{self._target_agent}"
+        if prefix in str(content or ""):
+            return str(content)     # 全量事件里已经按 is_you 补过，别补第二个
         return f"{prefix} {content}"
 
     def _note_route(self, qq_group: str, landing: int, msg_id: str, *, full: bool,
@@ -1574,23 +1641,31 @@ class QqChannelPlugin(ServicePlugin):
                 parts.append(f"[文件] {(att or {}).get('filename') or ''}".strip())
         return " ".join(parts).strip()
 
-    @staticmethod
-    async def _resolve_quoted(db: Any, group_id: int, ref_idx: str) -> int | None:
+    async def _resolve_quoted(self, db: Any, group_id: int, conversation: str,
+                             ref_idx: str) -> int | None:
         """按 REFIDX 找回被引用的那条站内消息（找不到就返回 None）。
 
-        收：入站把它自己的 msg_idx 写在 channel_ref_idx 上；发：出站把 ext_info.ref_idx 写在
-        同一个字段上——两边是同一个索引体系，所以一条 where 就够（AI 自己的消息被引用也认得出）。
-        找不到只有一种情形：那条消息机器人没在线、压根没进过站内；此时宁可不引用，也不猜一个 id。
+        REFIDX 是**按机器人实例隔离**的：同一个 QQ 群里，A 机器人看到的索引在 B 机器人那里
+        指向别的东西，甚至根本不存在。所以这里必须按 (实例, 会话) 限定（见 message_channel_refs），
+        否则会把别台机器人的索引错认成自己的引用对象。
+        找不到只有两种情形：那条消息机器人没在线、压根没进过站内；或者它来自别的实例。
+        此时宁可不引用，也不猜一个 id。
         """
         if not ref_idx:
             return None
         from sqlalchemy import select
 
-        from app.models.message import Message
+        from app.models.message import Message, MessageChannelRef
 
         row = (await db.execute(
             select(Message.id)
-            .where(Message.group_id == group_id, Message.channel_ref_idx == ref_idx)
+            .join(MessageChannelRef, MessageChannelRef.message_id == Message.id)
+            .where(
+                Message.group_id == group_id,
+                MessageChannelRef.instance == self.instance,
+                MessageChannelRef.conversation == conversation,
+                MessageChannelRef.channel_ref_idx == ref_idx,
+            )
             .order_by(Message.id.desc())
             .limit(1)
         )).first()
@@ -1820,11 +1895,24 @@ class QqChannelPlugin(ServicePlugin):
                 return None
             # 两台机器人同时收到同一句：先按这句排队（见 _serialize_same_text），
             # 否则两边都查不到对方尚未提交的那条，各落一条、各建一个账号
-            await _serialize_same_text(db, self.channel_kind, qq_group, content)
+            await _serialize_same_text(db, self.channel_kind, group_id, content)
             twin = await self._twin_message(db, group_id, qq_group, author, content)
             if twin is not None:
                 # 另一台机器人已经落下这一条：捆绑身份、不再建第二条（见 _adopt_twin）
                 sender_id, peer_name = await self._adopt_twin(db, twin, author)
+                # 合并的是"那句话"，不是"点到了谁"：本条事件点到的那个 AI 的令牌得补回
+                # 合并后那一行。否则被 @ 的那台看到的是别台渲染的正文（里面只有别人的
+                # 影子 id），判定成没点到自己（2026-10-31 真机：鲸鱼娘 @ 后沉默）。
+                from app.utils.text import mention_token
+                mine = mention_token(self._target_user_id) if self._target_user_id else ""
+                if mine and mine in content and mine not in str(twin.content or ""):
+                    twin.content = f"{mine} {twin.content}"
+                # 合并的是"消息"，不是"通道标识"：这句话在本机器人这里有自己的 id 与 REFIDX，
+                # 单独记一份（见 message_channel_refs），否则回话时会拿别人的索引去引用
+                await self._record_channel_ref(
+                    db, int(twin.id), qq_group,
+                    channel_id=channel_msg_id, ref_idx=channel_ref_idx,
+                )
                 await db.commit()
                 return sender_id, peer_name, int(twin.id)
             ensured = await self._ensure_qq_user(db, author, join_group=group_id)
@@ -1832,7 +1920,7 @@ class QqChannelPlugin(ServicePlugin):
                 return None
             sender_id, peer_name = ensured
             await self._sync_group_name(db, group_id, qq_facts)
-            reply_to = await self._resolve_quoted(db, group_id, quote_ref)
+            reply_to = await self._resolve_quoted(db, group_id, qq_group, quote_ref)
             message = await send_gm_message(
                 db,
                 group_id=group_id,
@@ -1852,6 +1940,10 @@ class QqChannelPlugin(ServicePlugin):
             # 这条来自哪个 QQ 群：出站（含别的实例）靠它把回复送回同一个群
             message.channel_origin = format_channel_origin(self.channel_kind, self.instance, qq_group)
             await db.flush()
+            await self._record_channel_ref(
+                db, int(message.id), qq_group,
+                channel_id=channel_msg_id, ref_idx=channel_ref_idx,
+            )
             # 序列化一次，两处共用：AI 成员（fanout）和群里的人（broadcast）
             msg_data = await message_view(db, message)
             await fanout_group_message(db, group_id, message, content, msg_data)
@@ -2257,7 +2349,7 @@ class QqChannelPlugin(ServicePlugin):
                 # 翻不成真 @ 也要照发：这条回复本身比 @ 的成色重要
                 logger.warning(f"QQ 群 @ 映射失败，按原文发送：{type(e).__name__}: {e}")
         text = await self._emoji_to_chars(text)
-        reference_id = await self._reply_reference(reply_to, kind)
+        reference_id = await self._reply_reference(reply_to, kind, route)
         return lambda: self._post_reply(route, kind, text, reference_id, message_id)
 
     async def _send_reply(self, route: dict, text: str, kind: str, *, link_mentions: bool = False,
@@ -2393,19 +2485,99 @@ class QqChannelPlugin(ServicePlugin):
         # 兼容写法只可能来自历史消息，原样发出会显示成一串中文括号，去掉
         return catalog.EMOJI_LEGACY_RE.sub("", text)
 
-    async def _reply_reference(self, reply_to: int | None, kind: str) -> str:
+    async def _reply_reference(self, reply_to: int | None, kind: str, route: dict | None = None) -> str:
         """AI 的回复若 reply_to 指向一条 QQ 来消息，就取出它的 REFIDX 做精准引用。
 
         只对群消息做（官方 c2c 的引用字段没有实测过，宁可不发也不发错）。
+
+        **REFIDX 只在它自己那个 QQ 群里有效**：拿 A 群的索引去 B 群引用，腾讯回
+        「引用消息越权」(40034138) 并整条拒发——2026-10-31 群里就是这么丢消息的：
+        一句话来自甲群，出站路由却选了乙群（该 Copree 群接了好几台机器人，各自连着
+        不同的 QQ 群），于是引用越权、整条发不出去。所以只在被引用那条与出站路由是
+        **同一个 QQ 会话**时才带引用，否则宁可不引用：引用是锦上添花，发不出去才是事故。
         """
         if not reply_to or kind != "group" or not self._quote_replies:
             return ""
+        target = str((route or {}).get("qq") or "")
+        if not target:
+            return ""
+        from sqlalchemy import select
+
         from app.database import async_session
-        from app.models.message import Message
+        from app.models.message import Message, MessageChannelRef
 
         async with async_session() as db:
+            # 正路：这条消息在**本实例、本会话**上的 REFIDX（合并过的消息每台机器人各有一份）
+            own = (await db.execute(
+                select(MessageChannelRef.channel_ref_idx).where(
+                    MessageChannelRef.message_id == int(reply_to),
+                    MessageChannelRef.instance == self.instance,
+                    MessageChannelRef.conversation == target,
+                )
+            )).scalars().first()
+            if own:
+                return str(own)
+            # 退回老列：只有"这条本来就是本实例收下来的"才敢信它（迁移前的老数据没有分实例的表）
             row = await db.get(Message, int(reply_to))
-        return str(getattr(row, "channel_ref_idx", "") or "") if row is not None else ""
+            if row is None:
+                return ""
+            ref = str(getattr(row, "channel_ref_idx", "") or "")
+            origin = parse_channel_origin(self.channel_kind, getattr(row, "channel_origin", None))
+        return ref if ref and origin is not None and origin[1] == target else ""
+
+    async def _channel_id_for(self, message: Any, conversation: str) -> str:
+        """撤回要用的那条 id：按 (消息, 本实例, 会话) 取；没有就退回老列（仅当是同会话的）。"""
+        from sqlalchemy import select
+
+        from app.database import async_session
+        from app.models.message import MessageChannelRef
+
+        async with async_session() as db:
+            own = (await db.execute(
+                select(MessageChannelRef.channel_msg_id).where(
+                    MessageChannelRef.message_id == int(getattr(message, "id", 0) or 0),
+                    MessageChannelRef.instance == self.instance,
+                    MessageChannelRef.conversation == conversation,
+                )
+            )).scalars().first()
+        if own:
+            return str(own)
+        legacy = str(getattr(message, "channel_msg_id", "") or "")
+        origin = parse_channel_origin(self.channel_kind, getattr(message, "channel_origin", None))
+        return legacy if legacy and origin is not None and origin[1] == conversation else ""
+
+    async def _record_channel_ref(self, db: Any, message_id: int, conversation: str, *,
+                                  channel_id: str = "", ref_idx: str = "") -> None:
+        """给这条站内消息记下**本实例**这一侧的通道标识（唯一写入口，入站与出站都走它）。
+
+        同一条消息在不同机器人那里是不同的 id / REFIDX（腾讯按机器人隔离），所以按
+        (message_id, instance, conversation) 一份份存；只留着空值就别建行。
+        """
+        if not conversation or not (channel_id or ref_idx):
+            return
+        from sqlalchemy import select
+
+        from app.models.message import MessageChannelRef
+
+        row = (await db.execute(
+            select(MessageChannelRef).where(
+                MessageChannelRef.message_id == int(message_id),
+                MessageChannelRef.instance == self.instance,
+                MessageChannelRef.conversation == str(conversation),
+            )
+        )).scalars().first()
+        if row is None:
+            db.add(MessageChannelRef(
+                message_id=int(message_id), instance=self.instance,
+                conversation=str(conversation),
+                channel_msg_id=channel_id or None, channel_ref_idx=ref_idx or None,
+            ))
+        else:
+            # 只补空的那一格：同一侧重复推送时不要来回覆盖已有值
+            if channel_id and not row.channel_msg_id:
+                row.channel_msg_id = channel_id
+            if ref_idx and not row.channel_ref_idx:
+                row.channel_ref_idx = ref_idx
 
     async def _remember_channel_ids(self, kind: str, message_id: int | None, *,
                                     channel_id: str = "", ref_idx: str = "",
@@ -2421,6 +2593,7 @@ class QqChannelPlugin(ServicePlugin):
         from app.models.message import Message
 
         model = Message if kind == "group" else DMMessage
+        parsed = parse_channel_origin(self.channel_kind, origin)
         try:
             async with async_session() as db:
                 row = await db.get(model, int(message_id))
@@ -2431,6 +2604,12 @@ class QqChannelPlugin(ServicePlugin):
                         row.channel_ref_idx = ref_idx
                     if origin and hasattr(row, "channel_origin") and not row.channel_origin:
                         row.channel_origin = origin
+                    # 老列是"先到先得"的兼容字段；真正的对号入座在这里按实例记
+                    if kind == "group" and parsed is not None:
+                        await self._record_channel_ref(
+                            db, int(message_id), parsed[1],
+                            channel_id=channel_id, ref_idx=ref_idx,
+                        )
                     await db.commit()
         except Exception as e:
             # 记不住不影响这条消息本身，只是撤回/引用会不可用
@@ -2441,13 +2620,15 @@ class QqChannelPlugin(ServicePlugin):
 
         撤不掉就**如实回报**：调用方要把"站内已撤、QQ 撤不掉"告诉用户，别假装成功。
         """
-        channel_id = str(getattr(message, "channel_msg_id", "") or "")
         origin = await self._message_origin(db, message)
         if origin is not None and origin[0] != self.instance:
             return None                   # 这条不是我们发出去的，撤回也不归我们
         route = self._route_for_outbound(group_id, origin[1] if origin else "")
-        if not channel_id or not route:
+        if not route:
             return None                       # 这条没经通道，或我们没记住它的通道 id
+        channel_id = await self._channel_id_for(message, str(route.get("qq") or ""))
+        if not channel_id:
+            return None
         client = self._client
         if client is None or not self._task or self._task.done():
             return {"channel": self.key, "ok": False, "reason": "通道没在运行"}

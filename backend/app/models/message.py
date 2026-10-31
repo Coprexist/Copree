@@ -3,7 +3,7 @@
 """
 from sqlalchemy import (
     Column, Integer, String, Boolean, Text, DateTime, ForeignKey, func,
-    CheckConstraint, Index,
+    CheckConstraint, Index, UniqueConstraint,
 )
 from app.config import settings
 from app.db_providers import vector_column, json_column
@@ -48,6 +48,38 @@ class Message(Base):
             "sender_type IN ('human', 'ai', 'assistant')",
             name="ck_message_sender_type",
         ),
+    )
+
+
+class MessageChannelRef(Base):
+    """一条站内消息在**某个通道实例**上的标识：同一句话在多台机器人眼里是不同的 id。
+
+    为什么必须按实例存：一个 Copree 群可以被好几台机器人接着，它们各自连着自己的 QQ 群，
+    而**同一个群在每台机器人那里的 group_openid / msg_id / REFIDX 都是各自一套**（腾讯按机器人
+    隔离）。合并逻辑把"同一句话"收成一条站内消息之后只留一份通道 id，就成了"拿 A 的索引去 B
+    的群里引用/撤回"——2026-10-31 真机：40034138「引用消息越权」，整条消息发不出去。
+
+    读法：要引用/撤回时按 (message_id, instance, conversation) 取**发送方自己那一份**；
+    取不到就不引用（宁可不引用，也不能用别的机器人的索引）。
+    """
+    __tablename__ = "message_channel_refs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    message_id = Column(Integer, ForeignKey("messages.id", ondelete="CASCADE"), nullable=False)
+    # 通道实例名（qq-channel 的 instance，如 agent-49）
+    instance = Column(String(64), nullable=False)
+    # 该实例看到的会话：QQ 群 openid / 用户 openid
+    conversation = Column(String(200), nullable=False)
+    # 本实例这一侧的 msg_id（撤回用；被动回复也用它）
+    channel_msg_id = Column(Text, nullable=True)
+    # 本实例这一侧的 REFIDX（引用用）
+    channel_ref_idx = Column(Text, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("message_id", "instance", "conversation",
+                         name="uq_message_channel_ref"),
+        Index("ix_message_channel_refs_message", "message_id"),
     )
 
 
