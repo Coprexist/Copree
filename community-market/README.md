@@ -30,6 +30,9 @@ python3 tools/publish_builtin.py --plugins ../backend/plugins \
 python3 tools/verify.py --index index.json --readme README.md --render --dist dist
 ~~~
 
+`dist/` 被 .gitignore 忽略，属于**发布资产**而非仓内容：打完包后把 `dist/*.zip` 传到
+对应 tag 的 Release（CI 的 `--online` 模式据此下载核对 sha256；本地核对用 `--dist`）。
+
 ## 目录层级
 
 ~~~
