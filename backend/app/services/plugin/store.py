@@ -22,6 +22,7 @@ import hashlib
 import io
 import json
 import logging
+import re
 import shutil
 import uuid
 import zipfile
@@ -41,6 +42,7 @@ MAX_PACKAGE_BYTES = 5 * 1024 * 1024            # 单个安装包上限
 MAX_TOTAL_UNCOMPRESSED = 20 * 1024 * 1024      # 解压后总体积上限（防 zip 炸弹）
 MAX_ENTRIES = 500                              # 条目数上限
 MAX_FILE_BYTES = 2 * 1024 * 1024               # 单文件上限
+MAX_COMPRESSION_RATIO = 200                    # 解压/压缩 比值上限（防压缩炸弹）
 
 CATEGORIES = ("skin", "skill", "emojipack", "world", "service", "other")
 
@@ -125,15 +127,24 @@ def _read_zip(zip_bytes: bytes) -> tuple[dict, str, list[tuple[str, zipfile.ZipI
         if total > MAX_TOTAL_UNCOMPRESSED:
             raise PackageError("解压后体积过大：" + str(total // 1024 // 1024) + "MB")
 
+        # 压缩比：只限"解压后 20MB"挡不住 5MB→20MB 的极端压缩比（四两拨千斤的炸弹），
+        # 再加一道比值上限。小包不设限，避免正常的小体积高压缩（JSON/皮肤）被误杀。
+        compressed = sum(max(i.compress_size, 1) for i in infos)
+        if total > 4 * 1024 * 1024 and total / compressed > MAX_COMPRESSION_RATIO:
+            raise PackageError(
+                "安装包压缩比异常：" + str(total // 1024) + "KB / " + str(compressed // 1024)
+                + "KB（上限 " + str(MAX_COMPRESSION_RATIO) + ":1）"
+            )
+
         usable: list[tuple[str, zipfile.ZipInfo]] = []
         for info in infos:
             name = info.filename.replace("\\", "/")
+            # 不安全条目一律整包拒绝，不是"跳过"：跳过会把插件装成缺文件的半成品，
+            # 作者看到"装好了"、用户看到莫名其妙的功能缺失，比明确失败更难查。
             if _is_symlink(info):
-                logger.warning("安装包内含符号链接，已跳过：%s", name)
-                continue
+                raise PackageError("安装包含符号链接：" + name + "（插件不许链接到包外路径）")
             if not _member_ok(name):
-                logger.warning("安装包内含不安全条目，已跳过：%s", name)
-                continue
+                raise PackageError("安装包含不允许的条目：" + name)
             if info.file_size > MAX_FILE_BYTES:
                 raise PackageError("包内单文件过大：" + name)
             usable.append((name, info))
@@ -238,7 +249,26 @@ def save_package(file_name: str, data: bytes) -> dict[str, Any]:
     return _decorate(info, safe_name)
 
 
-def install_package(zip_bytes: bytes, *, upgrade: bool = False) -> dict[str, Any]:
+_VERSION_RE = re.compile(r"^[0-9]+[.][0-9]+[.][0-9]+")
+
+
+def _version_key(version: str) -> tuple[int, int, int]:
+    """版本比较用：只比前三段数字，非数字段按 0（"1.2.3-beta" 视同 1.2.3）
+
+    不引第三方版本库：插件版本号自身就有 x.y.z 约束，多一种解析规则只会多一处不一致。
+    """
+    parts: list[int] = []
+    for chunk in str(version or "").split(".")[:3]:
+        digits = "".join(c for c in chunk if c.isdigit())
+        parts.append(int(digits) if digits else 0)
+    while len(parts) < 3:
+        parts.append(0)
+    return (parts[0], parts[1], parts[2])
+
+
+def install_package(
+    zip_bytes: bytes, *, upgrade: bool = False, allow_downgrade: bool = False,
+) -> dict[str, Any]:
     """安装 / 更新：解到临时目录 → 原子替换 → 清掉旧版本。
 
     覆盖安装走「临时目录 + 替换」，任何一步失败都保留原目录，不会留下半个插件。
@@ -250,9 +280,22 @@ def install_package(zip_bytes: bytes, *, upgrade: bool = False) -> dict[str, Any
     if is_builtin(plugin_id):
         raise PackageError("「" + plugin_id + "」是内置插件，不能被用户包覆盖（换个 id，或直接改内置目录）")
 
+    if not _VERSION_RE.match(str(manifest.get("version") or "")):
+        raise PackageError("plugin.json 的 version 必须是 x.y.z 形式（当前：" + str(manifest.get("version")) + "）")
+
     target = catalog.USER_PLUGIN_DIR / plugin_id
+    current = _installed_version(plugin_id)
     if target.exists() and not upgrade:
-        raise PackageError("「" + manifest["name"] + "」已安装（" + str(_installed_version(plugin_id)) + "），请用更新")
+        raise PackageError("「" + manifest["name"] + "」已安装（" + str(current) + "），请用更新")
+    # 版本规则（下载/安装共用一套，别在界面层各写一遍）：
+    #   更高 → 升级；相同 → 修复安装（重装同一版本是正常需求，不是错误）；更低 → 降级，必须显式确认
+    if target.exists() and upgrade and current:
+        new_key, old_key = _version_key(manifest["version"]), _version_key(current)
+        if new_key < old_key and not allow_downgrade:
+            raise PackageError(
+                "「" + manifest["name"] + "」已安装更新版本 " + str(current)
+                + "，拒绝降级到 " + str(manifest["version"]) + "；确实要降级请显式确认"
+            )
 
     catalog.USER_PLUGIN_DIR.mkdir(parents=True, exist_ok=True)
     staging = catalog.USER_PLUGIN_DIR / (".staging-" + plugin_id + "-" + uuid.uuid4().hex[:8])

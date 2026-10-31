@@ -387,17 +387,24 @@ async def upload_store_package(
 async def install_store_package(
     file_name: str,
     upgrade: bool = Query(False),
+    allow_downgrade: bool = Query(False),
     _admin: dict = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """安装 / 更新：包 → DATA_DIR/plugins/<id> → DB → 运行时"""
+    """安装 / 更新：包 → DATA_DIR/plugins/<id> → DB → 运行时
+
+    allow_downgrade 只在管理员明确要退回旧版时才传：默认拒绝降级，免得一次误点
+    把线上插件退回有问题的版本。
+    """
     from app.services.plugin import store
 
     path = (store.PACKAGE_DIR / file_name).resolve()
     if store.PACKAGE_DIR.resolve() not in path.parents or not path.is_file():
         raise HTTPException(404, f"安装包不存在: {file_name}")
     try:
-        result = store.install_package(path.read_bytes(), upgrade=upgrade)
+        result = store.install_package(
+            path.read_bytes(), upgrade=upgrade, allow_downgrade=allow_downgrade,
+        )
     except store.PackageError as e:
         raise HTTPException(400, str(e))
     changed = await _after_store_change(db, result["manifest"]["id"])
