@@ -484,19 +484,26 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
       )}
 
       {/* 子项：一个 AI 接了几条通道就有几个（几条由插件声明，不是写死的） */}
+      {/* 下划线页签：和管理台/世界设计页的页签同一套视觉（选中 = 主色 + 2px 下划线），
+          药丸底衬在卡片里会显得多一层容器，反倒比内容更抢眼 */}
       {views.length > 1 && (
-        <div className="flex items-center gap-1 bg-elevated rounded-control p-0.5 w-fit flex-wrap">
-          {views.map(v => (
-            <button
-              key={v.plugin_id}
-              onClick={() => { setActiveId(v.plugin_id); setMsg(null) }}
-              className={'flex items-center gap-1.5 text-2xs px-3 py-1.5 rounded-control transition-colors ' +
-                (v.plugin_id === view.plugin_id ? 'bg-surface text-textPrimary shadow-sm' : 'text-textSecondary hover:text-textPrimary')}
-            >
-              <span className={'w-1.5 h-1.5 rounded-full shrink-0 ' + DOT[statusOf(v)]} />
-              {pick(lang, v.label, v.label_en, v.label_ja)}
-            </button>
-          ))}
+        <div className="flex items-center gap-5 border-b border-border overflow-x-auto">
+          {views.map(v => {
+            const active = v.plugin_id === view.plugin_id
+            return (
+              <button
+                key={v.plugin_id}
+                onClick={() => { setActiveId(v.plugin_id); setMsg(null) }}
+                className={'relative flex items-center gap-1.5 text-xs pb-2 -mb-px whitespace-nowrap border-b-2 transition-colors ' +
+                  (active
+                    ? 'text-primary-600 dark:text-primary-300 border-primary-400'
+                    : 'text-textSecondary hover:text-textPrimary border-transparent')}
+              >
+                <span className={'w-1.5 h-1.5 rounded-full shrink-0 ' + DOT[statusOf(v)]} />
+                {pick(lang, v.label, v.label_en, v.label_ja)}
+              </button>
+            )
+          })}
         </div>
       )}
 
