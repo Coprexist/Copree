@@ -26,7 +26,7 @@ async def _main(from_id: int, to_id: int, apply: bool) -> int:
 
     from app.database import async_session
     from app.models.user import User
-    from app.services.plugin.channel_user import merge_channel_accounts
+    from app.services.channel.anchor import merge_channel_accounts
 
     async with async_session() as db:
         users = (await db.execute(select(User).where(User.id.in_([from_id, to_id])))).scalars().all()

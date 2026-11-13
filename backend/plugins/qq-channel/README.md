@@ -14,7 +14,9 @@
 
 - **网络出站**：api.sgroup.qq.com（REST 发消息）、WebSocket 长连（收事件）
 - **读写**：插件配置（plugin_configs，AppSecret 加密存储，接口只回「已填」）
-- **可写数据**：Cppree 的消息表与成员表（通道的职责就是让外部消息落进群）
+- **可写数据**：Copree 的消息表与成员表（通道的职责就是让外部消息落进群）
+  插件自己的目录里只有代码与 manifest（入口 `plugin.py`，装配；收发与身份在 `inbound.py` /
+  `outbound.py` / `identity.py`，常量在 `common.py`）
 
 不读写插件目录以外的文件，不落盘明文凭据。
 

@@ -24,21 +24,150 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import hashlib
 import logging
 import os
 import re
 import time
 from collections import OrderedDict, deque
-from pathlib import Path
 from typing import Any
 
 import httpx
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.services.plugin.api import ServicePlugin, service
 from app.services.plugin.tasks import PluginTasks
+from app.utils.pure.qr import png_b64
 from app.utils.text import check_mention
+from .accounts import load_account, save_account
+from .panel import entry as _panel_entry, rewrite as _panel_rewrite
 
 logger = logging.getLogger(__name__)
+
+
+# ── 协议端控制面（NapCat WebUI） ───────────────────────────────────────
+# 登录到哪一步、重新要一张码、重启协议端进程，都走它的 HTTP 接口。不读协议端的
+# 磁盘目录：多实例时每个实例的 cache 目录各不相同，读文件既要知道路径也要猜时序，
+# 而接口直接给答案。
+_WEBUI_TOKEN_SALT = ".napcat"
+
+
+class NapCatWebUIError(RuntimeError):
+    """协议端控制面调用失败（连不上、鉴权不过、接口报错）"""
+
+
+class NapCatWebUI:
+    def __init__(self, base_url: str, token: str, *, timeout: float = 8.0) -> None:
+        self.base = (base_url or "").rstrip("/")
+        self._token = token or ""
+        self._timeout = timeout
+        self._credential = ""
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.base and self._token)
+
+    def _token_hash(self) -> str:
+        return hashlib.sha256((self._token + _WEBUI_TOKEN_SALT).encode()).hexdigest()
+
+    async def _login(self, client: httpx.AsyncClient) -> str:
+        if not self.configured:
+            raise NapCatWebUIError("协议端控制面地址或 token 未配置")
+        try:
+            res = await client.post("/api/auth/login", json={"hash": self._token_hash(), "totpCode": ""})
+        except httpx.HTTPError as e:
+            raise NapCatWebUIError(f"连不上协议端控制面（{self.base}）：{e}") from e
+        body = _webui_body(res)
+        credential = str(body.get("Credential") or "") if isinstance(body, dict) else ""
+        if not credential:
+            raise NapCatWebUIError(f"协议端鉴权失败：{_webui_message(res)}")
+        self._credential = credential
+        return credential
+
+    async def _post(self, path: str, payload: dict | None = None):
+        """POST 一个控制面接口，返回 data 段；凭证失效时重换一次再试"""
+        if not self.configured:
+            raise NapCatWebUIError("协议端控制面地址或 token 未配置")
+        async with httpx.AsyncClient(base_url=self.base, timeout=self._timeout) as client:
+            for attempt in (0, 1):
+                credential = self._credential or await self._login(client)
+                try:
+                    res = await client.post(path, json=payload or {},
+                                            headers={"Authorization": f"Bearer {credential}"})
+                except httpx.HTTPError as e:
+                    raise NapCatWebUIError(f"调用协议端失败（{path}）：{e}") from e
+                if _webui_code(res) == 0:
+                    return _webui_body(res)
+                # 只有凭证过期值得重换一次；真正的业务失败直接抛给调用方
+                if attempt == 0 and _webui_needs_relogin(res):
+                    self._credential = ""
+                    continue
+                raise NapCatWebUIError(_webui_message(res) or f"协议端返回异常（{path}）")
+        raise NapCatWebUIError("协议端鉴权反复失败")
+
+    async def auth_headers(self) -> dict[str, str]:
+        """给反代用的鉴权头：没换过凭证就先换一次"""
+        if not self._credential:
+            async with httpx.AsyncClient(base_url=self.base, timeout=self._timeout) as client:
+                await self._login(client)
+        return {"Authorization": f"Bearer {self._credential}"}
+
+    async def status(self) -> dict:
+        data = await self._post("/api/QQLogin/CheckLoginStatus")
+        return data if isinstance(data, dict) else {}
+
+    async def refresh_qr(self) -> str:
+        data = await self._post("/api/QQLogin/RefreshQRcode")
+        url = str(data.get("qrcodeurl") or "") if isinstance(data, dict) else ""
+        if url:
+            return url
+        restarting = bool(data.get("restarting")) if isinstance(data, dict) else False
+        raise NapCatWebUIError("协议端正在重启，稍后再取一次" if restarting else "协议端没有返回登录码")
+
+    async def login_info(self) -> dict:
+        data = await self._post("/api/QQLogin/GetQQLoginInfo")
+        return data if isinstance(data, dict) else {}
+
+    async def quick_login(self, uin: str) -> None:
+        """让客户端用本地保存的登录态恢复这个号（被顶下线后的一键拉起）"""
+        await self._post("/api/QQLogin/SetQuickLogin", {"uin": str(uin)})
+
+
+def _webui_code(res: httpx.Response) -> int:
+    try:
+        payload = res.json()
+    except ValueError:
+        return -1
+    if isinstance(payload, dict) and "code" in payload:
+        try:
+            return int(payload.get("code") or 0)
+        except (TypeError, ValueError):
+            return -1
+    return 0 if res.status_code < 400 else -1
+
+
+def _webui_body(res: httpx.Response):
+    try:
+        payload = res.json()
+    except ValueError:
+        return None
+    return payload.get("data") if isinstance(payload, dict) else payload
+
+
+def _webui_message(res: httpx.Response) -> str:
+    try:
+        payload = res.json()
+    except ValueError:
+        return f"HTTP {res.status_code}"
+    return str(payload.get("message") or "") if isinstance(payload, dict) else f"HTTP {res.status_code}"
+
+
+def _webui_needs_relogin(res: httpx.Response) -> bool:
+    if res.status_code in (401, 403):
+        return True
+    message = _webui_message(res).lower()
+    return "token" in message and "empty" in message
+
 
 # 重连退避：上限 60s（与官方通道同款），连上并稳定这么久之后才重置
 BACKOFF_MAX = 60.0
@@ -160,76 +289,178 @@ class NapCatClient:
         return await self._post("send_private_msg", {"user_id": int(user_id), "message": message})
 
 
-# 协议端由谁提供，字段就由谁填：平台自带协议端（compose 的 napcat profile）时后端会注入
-# 这两个环境变量，声明里就把地址与 token 标成 managed（卡片不显示、也不算"还缺什么"）。
-_HOSTED_WS_URL = os.environ.get("NAPCAT_WS_URL", "").strip()
-_HOSTED_TOKEN = os.environ.get("NAPCAT_TOKEN", "").strip()
-# 托管时 NapCat 的 cache 目录也挂给后端：它把登录二维码写在那儿，
-# 于是"扫码"这一步能直接画在我们自己的卡片上，用户不用再去别处找入口
-_HOSTED_CACHE = os.environ.get("NAPCAT_CACHE", "").strip()
+# 部署方自带协议端时，这三项只是新建实例时的默认值，不是全局覆盖：
+# 两个 AI 各连一个 NapCat 时，各改各的，互不影响。留空＝让用户自己填。
+_DEFAULT_WS_URL = os.environ.get("NAPCAT_WS_URL", "").strip()
+_DEFAULT_WEBUI_URL = os.environ.get("NAPCAT_WEBUI_URL", "").strip()
+_DEFAULT_WEBUI_TOKEN = os.environ.get("NAPCAT_WEBUI_TOKEN", "").strip()
+_DEFAULT_WS_TOKEN = os.environ.get("NAPCAT_TOKEN", "").strip()
+
+# 腾讯签发的扫码 ticket 有效期约 122 秒。协议端自己会轮转，但卡片上的倒计时必须从
+# "我们确实刚要了一张"那一刻起算 —— 所以时间戳记在"要码"这个动作里，而不是从文件
+# 年龄或协议端状态里反推（那两种算法都会把上一张码的年龄算进来）。
+QR_TTL = 122
+
+# 每一张码的出生时间，按协议端地址分开记：多实例时各算各的倒计时。
+# 只放内存——最坏情况是重启后让用户再点一次"获取二维码"，不值得为此落库。
+_QR_ISSUED: dict[str, tuple[str, float]] = {}
 
 
-def _qr_url_from_log() -> str:
-    """从协议端日志里抓最新的「二维码解码URL」（= 二维码里装的那条授权链接）
+def _qr_state(issued_at: float | None, now: float) -> tuple[str, int]:
+    """这张码还能不能扫，顺带给出剩余秒数
 
-    电脑上没有扫码条件时，用户要的是这条链接（发到手机打开即可授权）。
-    NapCat 只把它打到 stdout，所以 compose 用 tee 把输出也落一份到挂载目录供这里读。
+    live     还能扫（剩余秒数交给前端倒计时）
+    expired  已经过了有效期，等用户点"刷新二维码"重新要一张
     """
-    if not _HOSTED_CACHE:
-        return ""
-    log = Path(_HOSTED_CACHE) / "napcat.log"
+    if not issued_at:
+        return "expired", 0
+    left = int(QR_TTL - max(0.0, now - issued_at))
+    return ("live", left) if left > 0 else ("expired", 0)
+
+
+def _qr_client(base_url: str = "", token: str = "") -> NapCatWebUI:
+    """按调用方给的地址建一个控制面客户端；空值退回部署默认的协议端"""
+    return NapCatWebUI(base_url or _DEFAULT_WEBUI_URL, token or _DEFAULT_WEBUI_TOKEN)
+
+
+async def _account_of(client: NapCatWebUI) -> dict[str, Any]:
+    """协议端现在挂的是哪个号（问不到就当不知道，不影响别的状态）"""
     try:
-        with log.open("r", encoding="utf-8", errors="ignore") as fh:
-            # 日志不大（几百 KB），但也没必要全读：只扫尾部，够找到最后一条码
-            fh.seek(0, 2)
-            fh.seek(max(0, fh.tell() - 64 * 1024))
-            text = fh.read()
-    except OSError:
-        return ""
-    found = re.findall(r"https://txz\.qq\.com/p\?[^\s\u001b]+", text)
-    return found[-1] if found else ""
+        raw = await client.login_info()
+    except NapCatWebUIError:
+        return {}
+    return {
+        "uin": str(raw.get("uin") or "").strip(),
+        "nick": str(raw.get("nick") or "").strip(),
+        "avatar": str(raw.get("avatarUrl") or "").strip(),
+    }
 
 
-def _hosted_login(self_id: str, bot_name: str) -> dict[str, Any] | None:
-    """托管协议端的登录进度：没登录就把二维码（png，几百字节）一并报给卡片"""
-    if not _HOSTED_WS_URL:
+async def _login_progress(
+    client: NapCatWebUI, *, self_id: str = "", bot_name: str = "", instance: str = ""
+) -> dict[str, Any] | None:
+    """协议端的登录进度：登没登进去、卡在哪一步、挂的是哪个号、手上有没有能扫的码
+
+    码本身不主动要——默认只是"把已经发出去的那张报出来"，让用户点击时再申请新的一张，
+    这样倒计时永远从点击那一刻算起。
+    """
+    if not client.configured:
         return None
+    try:
+        state = await client.status()
+    except NapCatWebUIError as e:
+        return {"held_by_platform": True, "logged_in": False, "bot_name": bot_name or self_id,
+                "login_error": str(e)}
+    logged_in = bool(state.get("isLogin"))
     info: dict[str, Any] = {
         "held_by_platform": True,
-        "logged_in": bool(self_id),
-        "bot_name": bot_name or self_id or "",
+        "logged_in": logged_in,
+        "bot_name": bot_name or self_id,
+        "login_phase": str(state.get("loginPhase") or ""),
     }
-    if info["logged_in"]:
+    if logged_in:
+        account = await _account_of(client)
+        info["qq_uin"] = account.get("uin") or ""
+        info["qq_nick"] = account.get("nick") or ""
+        if account.get("avatar"):
+            info["qq_avatar"] = account["avatar"]
+        # 登进去了但 isOffline：号还在，只是连不上服务器（被顶/网络断）
+        info["online"] = not bool(state.get("isOffline"))
+        if not info["bot_name"]:
+            info["bot_name"] = info["qq_nick"] or info["qq_uin"]
+        try:
+            await save_account(instance, account)
+        except SQLAlchemyError as e:   # 记账号失败不该把登录状态页弄挂；代码错误仍要炸出来
+            logger.warning(f"记下登录账号失败（不影响登录）: {e}")
+        issued = _QR_ISSUED.pop(client.base, None)
+        if issued:
+            info["qr_url"] = issued[0]
         return info
-    qr = Path(_HOSTED_CACHE) / "qrcode.png" if _HOSTED_CACHE else None
-    if qr is not None and qr.is_file():
-        info["qr_png"] = base64.b64encode(qr.read_bytes()).decode()
-        info["qr_at"] = int(qr.stat().st_mtime)
-    info["qr_url"] = _qr_url_from_log()
+    # 没登进去：号也可能还记着（被顶下线），报出来页面才画得出"是谁掉线了"
+    known = await load_account(instance)
+    info["qq_uin"] = known.get("uin") or ""
+    info["qq_nick"] = known.get("nick") or ""
+    if known.get("avatar"):
+        info["qq_avatar"] = known["avatar"]
+    cached = _QR_ISSUED.get(client.base)
+    if not cached:
+        # 还没人点过"获取二维码"：只报状态，不给码
+        return info
+    url, issued_at = cached
+    status_code, left = _qr_state(issued_at, time.time())
+    info["qr_state"] = status_code
+    info["qr_expires_in"] = left
+    info["qr_url"] = url
+    if status_code == "live":
+        png = png_b64(url)
+        if png:
+            info["qr_png"] = png
+            info["qr_at"] = int(issued_at)
     return info
 
 
-def _hosted(spec: dict, value: str) -> dict:
-    """平台托管这份值时，字段就地变成 managed（值由平台写进实例配置）"""
-    return {**spec, "managed": True, "default": value} if value else spec
+async def _request_qr(client: NapCatWebUI) -> dict[str, Any]:
+    """向协议端要一张新的登录码，并记下它的出生时间"""
+    url = await client.refresh_qr()
+    issued_at = time.time()
+    _QR_ISSUED[client.base] = (url, issued_at)
+    return {
+        "qr_url": url,
+        "qr_png": png_b64(url),
+        "qr_expires_in": QR_TTL,
+        "qr_at": int(issued_at),
+    }
 
 
 def _endpoint_schema() -> dict:
+    """协议端怎么连
+
+    一个协议端对应一个 QQ 号，所以这些字段属于实例：两个 AI 各接一个协议端时，
+    各填各的地址与 token，互不覆盖。部署方配了默认值就预填，用户可以改。
+    """
     return {
-        "ws_url": _hosted({
+        "ws_url": {
+            "section": _SEC_CONNECT,
             "type": "string", "title": "NapCat WebSocket 地址", "required": True,
             "title_en": "NapCat WebSocket URL", "title_ja": "NapCat WebSocket アドレス",
-            "description": "NapCat 的正向 WebSocket 地址，如 ws://127.0.0.1:3000",
-            "description_en": "The forward WebSocket URL of NapCat, e.g. ws://127.0.0.1:3000",
-            "description_ja": "NapCat の順方向 WebSocket アドレス（例 ws://127.0.0.1:3000）",
-        }, _HOSTED_WS_URL),
-        "access_token": _hosted({
+            "default": _DEFAULT_WS_URL or None,
+            "description": "NapCat 的正向 WebSocket 地址，如 ws://napcat:3000；一个协议端一个地址",
+            "description_en": "The forward WebSocket URL of NapCat, e.g. ws://napcat:3000 - one endpoint per URL",
+            "description_ja": "NapCat の順方向 WebSocket アドレス（例 ws://napcat:3000）。プロトコル端末ごとに 1 つ",
+        },
+        "access_token": {
+            "section": _SEC_CONNECT,
             "type": "string", "title": "AccessToken", "secret": True,
+            "default": _DEFAULT_WS_TOKEN or None,
             "description": "NapCat 配置里的 access_token，没设就留空；只在这里填，加密落库、接口不回显",
             "description_en": "The access_token configured in NapCat; leave empty if unset; stored encrypted and never echoed back",
             "description_ja": "NapCat 側の access_token。未設定なら空欄。ここにのみ入力し、暗号化して保存します",
-        }, _HOSTED_TOKEN),
+        },
+        "webui_url": {
+            "section": _SEC_CONNECT,
+            "type": "string", "title": "协议端控制台地址", "required": True,
+            "title_en": "Protocol console URL", "title_ja": "プロトコル端末コンソール",
+            "default": _DEFAULT_WEBUI_URL or None,
+            "description": "协议端 WebUI 地址，如 http://napcat:6099；扫码登录和登录状态都走它",
+            "description_en": "The endpoint WebUI URL, e.g. http://napcat:6099 - QR sign-in and login state go through it",
+            "description_ja": "プロトコル端末の WebUI アドレス（例 http://napcat:6099）。QR ログインと状態取得に使います",
+        },
+        "webui_token": {
+            "section": _SEC_CONNECT,
+            "type": "string", "title": "协议端控制台 Token", "secret": True,
+            "default": _DEFAULT_WEBUI_TOKEN or None,
+            "description": "协议端 WebUI 的 token（webui.json 里的那个）；同样加密落库、不回显",
+            "description_en": "The protocol endpoint WebUI token (from webui.json); stored encrypted and never echoed back",
+            "description_ja": "プロトコル端末 WebUI の token（webui.json の値）。暗号化して保存し、返しません",
+        },
     }
+
+
+# 设置项分块（平台按 section 把字段归到同一块里；块头由组内成员声明，这里只写一次）
+_SEC_CONNECT = {"key": "connect", "title": "接入", "title_en": "Connection", "title_ja": "接続"}
+_SEC_REPLY = {"key": "reply", "title": "回复", "title_en": "Replies", "title_ja": "返信"}
+_SEC_QUOTA = {"key": "quota", "title": "对话额度", "title_en": "Conversation budget", "title_ja": "会話ごとの上限"}
+_SEC_DM = {"key": "dm", "title": "私聊", "title_en": "Direct messages", "title_ja": "ダイレクトメッセージ"}
 
 
 @service(
@@ -238,7 +469,69 @@ def _endpoint_schema() -> dict:
     multi_instance=True,
     config_schema={
         **_endpoint_schema(),
+        "quota_reset_enabled": {
+            "section": _SEC_QUOTA,
+            "type": "boolean", "title": "额度自动重置", "default": False,
+            "inline": {
+                "key": "quota_reset",
+                "label": "额度自动重置",
+                "label_en": "Budget reset",
+                "label_ja": "上限の自動リセット",
+                "hint": "开启后按「多久 + 几点」换窗口：新窗口从 0 开始算，旧窗口的数留在账里；"
+                        "关着就一直累计，直到手动重置。窗口是算出来的，不需要定时任务，重启也不丢账。",
+                "hint_en": "When on, the window rolls over per the period/time on the right: a new window "
+                           "starts from zero and old numbers stay on record. When off it accumulates until "
+                           "you reset manually. Windows are computed, so restarts change nothing.",
+                "hint_ja": "オンにすると右の周期・時刻で窓が切り替わり、新しい窓は 0 から数えます（旧い数は記録に残ります）。"
+                           "オフなら手動リセットまで累積します。窓は計算で決まるため再起動しても失いません。",
+            },
+            "title_en": "Reset the budget automatically",
+            "title_ja": "上限を自動でリセット",
+            "description": "开启后按下面的周期与时间点「换窗口」：新窗口从 0 开始算，旧窗口的数留在账里。"
+                           "窗口是算出来的，不需要定时任务，重启也不丢账；关着就一直累计，直到手动重置。",
+            "description_en": "When on, the budget window rolls over at the period/time below: a new window "
+                              "starts from zero and the old numbers stay on record. Windows are computed, "
+                              "not scheduled, so restarts change nothing; when off it accumulates until you "
+                              "reset manually.",
+            "description_ja": "オンにすると下の周期と時刻で窓が切り替わり、新しい窓は 0 から数えます（旧い数は記録として残ります）。"
+                              "窓は計算で決まるため再起動しても失いません。オフなら手動リセットまで累積します。",
+        },
+        "quota_reset_period": {
+            "section": _SEC_QUOTA,
+            "type": "string", "title": "多久重置一次", "default": "day",
+            "inline": {"key": "quota_reset"},
+            "show_if": {"field": "quota_reset_enabled", "equals": "true"},
+            "title_en": "How often to reset", "title_ja": "リセットの間隔",
+            "description": "每天 / 每 2 天 / 每周都以周一为基准；每小时只认「几点重置」里的分钟。",
+            "description_en": "Daily, every 2 days and weekly are anchored on Monday; hourly only uses the "
+                              "minute of the reset time.",
+            "description_ja": "毎日・2 日ごと・毎週は月曜基準です。毎時は「リセット時刻」の分だけを使います。",
+            "options": [
+                {"value": "hour", "label": "每小时", "label_en": "Every hour", "label_ja": "1 時間ごと"},
+                {"value": "day", "label": "每天", "label_en": "Every day", "label_ja": "毎日"},
+                {"value": "2days", "label": "每 2 天", "label_en": "Every 2 days", "label_ja": "2 日ごと"},
+                {"value": "week", "label": "每周（周一）", "label_en": "Every week (Monday)",
+                 "label_ja": "毎週（月曜）"},
+            ],
+        },
+        "quota_reset_anchor": {
+            "section": _SEC_QUOTA,
+            "type": "string", "title": "几点重置（HH:MM）", "default": "00:00",
+            "inline": {"key": "quota_reset"},
+            "title_en": "Reset at (HH:MM)", "title_ja": "リセット時刻（HH:MM）",
+            "show_if": [
+                {"field": "quota_reset_enabled", "equals": "true"},
+                {"field": "quota_reset_period", "in": ["day", "2days", "week"]},
+            ],
+            "description": "只在「每天 / 每 2 天 / 每周」时用得上（按小时是整点换窗口）。"
+                           "按平台展示时区解释，每周固定以周一为基准。",
+            "description_en": "Only used for daily / every 2 days / weekly (hourly rolls over on the hour). "
+                              "Interpreted in the platform display timezone; weekly is anchored on Monday.",
+            "description_ja": "「毎日 / 2 日ごと / 毎週」のときだけ使います（毎時は正時に切り替わります）。"
+                              "プラットフォームの表示タイムゾーンで解釈し、毎週は月曜基準です。",
+        },
         "quota_meter_mode": {
+            "section": _SEC_QUOTA,
             "type": "string", "title": "对话额度按什么算",
             "title_en": "How conversation budget is metered",
             "title_ja": "会話ごとの上限をどう数えるか",
@@ -259,6 +552,7 @@ def _endpoint_schema() -> dict:
             ],
         },
         "quota_limit_tokens": {
+            "section": _SEC_QUOTA,
             "type": "string", "title": "每个对话的默认额度（token）",
             "title_en": "Default budget per conversation (tokens)",
             "title_ja": "会話ごとの既定上限（トークン）",
@@ -268,6 +562,7 @@ def _endpoint_schema() -> dict:
             "default": "1000000",
         },
         "quota_blocked_reply": {
+            "section": _SEC_QUOTA,
             "type": "boolean", "title": "额度用完后自动回一句", "default": True,
             "title_en": "Reply automatically when the budget is used up",
             "title_ja": "上限に達したら自動で返信する",
@@ -276,6 +571,7 @@ def _endpoint_schema() -> dict:
             "description_ja": "既定でオン：ブロック時に 10 分に 1 回まで説明を返します。",
         },
         "quota_blocked_reply_text": {
+            "section": _SEC_QUOTA,
             "type": "string", "title": "自动回复内容",
             "title_en": "Auto reply text", "title_ja": "自動返信の文面",
             "description": "留空 = 平台默认的官方口吻那一句。",
@@ -285,6 +581,10 @@ def _endpoint_schema() -> dict:
         "target_agent": {
             "type": "string", "title": "这个通道接哪个 AI", "required": True, "managed": True,
             "description": "由平台按「这个 AI 的页面」自动填，不需要手工填；群里 @机器人 就等于在群里 @它",
+        },
+        "target_agent_id": {
+            "type": "string", "title": "AI 的 id", "managed": True,
+            "description": "平台填。认人按 id，名字只用来显示：AI 改名不影响通道",
         },
         "copree_group_id": {
             "type": "string", "title": "接入的 Copree 群 ID", "required": True,
@@ -299,6 +599,7 @@ def _endpoint_schema() -> dict:
             "description_ja": "QQグループ番号をカンマ区切り。空欄＝制限なし",
         },
         "dm_policy": {
+            "section": _SEC_DM,
             "type": "string", "title": "私聊策略（pairing / owner / open / off）",
             "description": "默认 pairing：陌生人私聊只会收到一个配对码，批准之后才能跟 AI 说话；"
                            "owner 只认已配对的人（陌生人静默忽略）；open 谁都能聊；off 关闭私聊",
@@ -308,11 +609,91 @@ def _endpoint_schema() -> dict:
 class QqNapcatPlugin(ServicePlugin):
     @classmethod
     async def hosted_status(cls, *, agent_id: int | None = None) -> dict[str, Any] | None:
-        """托管协议端时，实例还没建也要能告诉卡片"登录到哪一步了"（含登录二维码）
+        """实例还没建时，告诉卡片"部署默认那个协议端登录到哪一步了"
 
-        NapCat 一个部署一份协议端，与是哪个 AI 无关，所以 agent_id 在这里用不到。
+        这一步只服务"用户还没保存配置"的卡片：那时没有实例，也就谈不上"你的协议端"，
+        只能问部署方预置的那一个。实例一旦存在，状态由实例自己报（见 get_status）。
         """
-        return _hosted_login("", "")
+        return await _login_progress(_qr_client())
+
+    async def _webui(self) -> NapCatWebUI:
+        """本实例的控制面客户端
+
+        运行中直接用 start() 读到的地址；还没跑起来（刚保存配置、起失败）就读已保存的配置——
+        卡片扫码、"我的"页看账号，都发生在实例没跑起来的时候。
+        """
+        if self._panel is not None:
+            return self._panel
+        url, token = self._webui_url, self._webui_token
+        if not url and not token:
+            cfg = await self.config()
+            url = str(cfg.get("webui_url") or "").strip()
+            token = str(cfg.get("webui_token") or "").strip()
+        self._panel = _qr_client(url, token)
+        return self._panel
+
+    async def panel_client(self) -> NapCatWebUI:
+        """"打开协议端控制台"用的客户端：反代拿它的地址与鉴权头"""
+        return await self._webui()
+
+    def panel_entry(self, ticket: str) -> str:
+        """控制台入口（相对平台反代基路径）：NapCat WebUI 在 webui/ 下"""
+        return _panel_entry(ticket)
+
+    def panel_rewrite(self, text: str, base: str) -> str:
+        """把 WebUI 页面里的绝对路径补上反代基路径（平台只管转发，改写口径在这里）"""
+        return _panel_rewrite(text, base)
+
+    async def login_account(self) -> dict[str, Any]:
+        """我的页要的账号视图：这个实例现在挂的是哪个号（从没挂过就都是空）"""
+        info = await _login_progress(
+            await self._webui(), self_id=self.self_id, instance=self.instance
+        ) or {}
+        return {
+            "uin": info.get("qq_uin") or "",
+            "nick": info.get("qq_nick") or "",
+            "avatar": info.get("qq_avatar") or "",
+            "logged_in": bool(info.get("logged_in")),
+            "online": bool(info.get("online")),
+        }
+
+    async def request_login_qr(self) -> dict[str, Any]:
+        """卡片上的"获取登录二维码"：向本实例自己的协议端要一张新的码"""
+        return await _request_qr(await self._webui())
+
+    async def quick_login(self) -> dict[str, Any]:
+        """一键拉起上次扫过码的号
+
+        先让协议端用本地保存的登录态恢复；腾讯那边已经作废（别处登录过、太久没上）
+        就当场要一张新码——前端还是同一个按钮，用户不必知道这次走的是哪条路。
+        """
+        client = await self._webui()
+        uin = str((await load_account(self.instance)).get("uin") or "").strip()
+        if uin:
+            try:
+                await client.quick_login(uin)
+            except NapCatWebUIError as e:
+                logger.info(f"快登 {uin} 失败，改发新码：{e}")
+            else:
+                # 协议端是异步登录：等它登进去再回话，别让页面报个假成功
+                for _ in range(6):
+                    await asyncio.sleep(0.5)
+                    try:
+                        state = await client.status()
+                    except NapCatWebUIError:
+                        break
+                    if state.get("isLogin"):
+                        return {"logged_in": True, "qq_uin": uin}
+        return {"logged_in": False, **await _request_qr(client)}
+
+    @classmethod
+    async def refresh_login_qr(cls, *, agent_id: int | None = None) -> dict[str, Any]:
+        """向协议端要一张新的登录码
+
+        走"要一张新的"而不是"把现有的拿出来"：倒计时要能从用户点击这一刻算起，
+        拿旧码只能猜它还剩几秒。
+        """
+        return await _request_qr(_qr_client())
 
     def __init__(self) -> None:
         self._task: asyncio.Task | None = None
@@ -321,6 +702,9 @@ class QqNapcatPlugin(ServicePlugin):
         self._ws_url = ""
         self._http_base = ""
         self._access_token = ""
+        self._webui_url = ""
+        self._webui_token = ""
+        self._panel: NapCatWebUI | None = None
         self._copree_group_id = 0
         self._target_agent = ""
         self._target_agent_id = 0
@@ -374,18 +758,23 @@ class QqNapcatPlugin(ServicePlugin):
             "dm_replies_sent": self.dm_replies,
             "uptime_seconds": int(time.time() - self.started_at) if self.started_at else 0,
             "last_error": self.last_error,
-            "hosted_endpoint": _hosted_login(self.self_id, ""),
+            "hosted_endpoint": await _login_progress(
+                await self._webui(), self_id=self.self_id, instance=self.instance
+            ),
         }
 
     async def start(self) -> bool:
+        self._panel = None          # 端点可能变了：控制面客户端按新配置重建
         cfg = await self.config()
         ws_url = str(cfg.get("ws_url") or "").strip()
-        agent = str(cfg.get("target_agent") or "").strip()
+        webui_url = str(cfg.get("webui_url") or "").strip()
+        webui_token = str(cfg.get("webui_token") or "").strip()
+        agent_id = str(cfg.get("target_agent_id") or "").strip()
         group_raw = str(cfg.get("copree_group_id") or "").strip()
         missing = [
             label for label, value in (
                 ("NapCat WebSocket 地址", ws_url),
-                ("AI 名字", agent),
+                ("AI", agent_id),
                 ("Copree 群 ID", group_raw),
             ) if not value
         ]
@@ -402,7 +791,7 @@ class QqNapcatPlugin(ServicePlugin):
             return False
 
         try:
-            await self._bind_target(agent)
+            await self._bind_target(agent_id)
         except Exception as e:
             # 起不来要给出人话原因：管理页会把它显示在状态里
             self.last_error = str(e)
@@ -412,6 +801,9 @@ class QqNapcatPlugin(ServicePlugin):
         self._ws_url = ws_url
         self._http_base = _http_base(ws_url)
         self._access_token = str(cfg.get("access_token") or "").strip()
+        # 控制面地址留空时退回部署默认的那一个：单协议端部署不用填
+        self._webui_url = webui_url
+        self._webui_token = webui_token
         self._allow = _split_list(cfg.get("qq_group_allowlist"))
         self._dm_policy = (str(cfg.get("dm_policy") or "pairing").strip().lower() or "pairing")
         await self._quota_gate().sync_policy(cfg)
@@ -460,39 +852,21 @@ class QqNapcatPlugin(ServicePlugin):
         logger.info(f"QQ 通道(NapCat)[{self.instance}] 已停止")
         return True
 
-    async def _bind_target(self, agent_name: str) -> None:
-        """认下"这个通道背后是哪个 AI"：优先在绑定的群里找，其次全局找同名 agent。
+    async def _bind_target(self, agent_id: str) -> None:
+        """认下"这个通道背后是哪个 AI"：只按 id 认，名字只是显示。
 
-        两边共用一个字段：群里 @ 的是它、私聊聊的也是它 —— 不存在"群一个 AI、私聊另一个"。
+        两边共用一个身份：群里 @ 的是它、私聊聊的也是它 —— 不存在"群一个 AI、私聊另一个"。
         """
-        from sqlalchemy import select
-
         from app.database import async_session
-        from app.models.agent import Agent
-        from app.models.group import GroupMember
+        from app.services.plugin.target_agent import bind, remember
 
         async with async_session() as db:
-            if self._copree_group_id:
-                row = (await db.execute(
-                    select(Agent.id, Agent.user_id, Agent.name)
-                    .join(GroupMember, (GroupMember.member_type == "ai") & (GroupMember.member_id == Agent.user_id))
-                    .where(GroupMember.group_id == self._copree_group_id, Agent.name == agent_name)
-                )).first()
-            else:
-                rows = (await db.execute(
-                    select(Agent.id, Agent.user_id, Agent.name).where(Agent.name == agent_name)
-                )).all()
-                if len(rows) > 1:
-                    raise ValueError(f"有多个 AI 叫「{agent_name}」，请填 Copree 群 ID 以确定是哪一个")
-                row = rows[0] if rows else None
-
-        if row is None:
-            scope = f"Copree 群 #{self._copree_group_id}" if self._copree_group_id else "全站"
-            raise ValueError(f"{scope}里找不到名叫「{agent_name}」的 AI")
-        self._target_agent = str(row[2])
-        self._target_agent_id = int(row[0])
-        self._target_user_id = int(row[1])
+            bound = await bind(db, agent_id=agent_id, group_id=self._copree_group_id)
+        self._target_agent = bound.name
+        self._target_agent_id = bound.agent_id
+        self._target_user_id = bound.user_id
         self._quota = None
+        await remember(self.id, self.instance, bound)
 
     # ── WebSocket 连接（含重连） ────────────────────────────────
     async def _supervise(self) -> None:
@@ -672,18 +1046,18 @@ class QqNapcatPlugin(ServicePlugin):
             return True
 
         from app.database import async_session
-        from app.services.plugin import pairing
+        from app.services.channel import identity
 
         async with async_session() as db:
-            status = await pairing.status_of(
+            status = await identity.status_of(
                 db, kind=self.channel_kind, owner_scope=self.instance, origin=user_id
             )
-            if status == pairing.APPROVED:
+            if status == identity.APPROVED:
                 return True
-            if status == pairing.BLOCKED or self._dm_policy == "owner":
+            if status == identity.BLOCKED or self._dm_policy == "owner":
                 logger.info(f"QQ 私聊被挡下（{status or '未配对'}）：QQ {user_id}")
                 return False
-            row = await pairing.upsert_pending(
+            row = await identity.upsert_pending(
                 db, kind=self.channel_kind, owner_scope=self.instance, origin=user_id,
                 display_name=str(sender.get("card") or sender.get("nickname") or ""),
             )
@@ -704,7 +1078,7 @@ class QqNapcatPlugin(ServicePlugin):
             if self._client is not None:
                 await self._client.send_private_msg(
                     int(user_id),
-                    pairing.pairing_reply(code, "QQ 通道（NapCat）"),
+                    identity.pairing_reply(code, "QQ 通道（NapCat）"),
                 )
             logger.info(f"QQ 陌生人私聊 → 已下发配对码（QQ {user_id}，昵称 {row.display_name or '?'}）")
         except Exception as e:
@@ -751,7 +1125,7 @@ class QqNapcatPlugin(ServicePlugin):
             wake_group_ai,
         )
         from app.database import async_session
-        from app.services.plugin.channel_user import ensure_channel_user
+        from app.services.channel.anchor import ensure_channel_user
 
         async with async_session() as db:
             if not await self._quota_gate().admit(
@@ -803,7 +1177,7 @@ class QqNapcatPlugin(ServicePlugin):
         from app.chat.dm import get_or_create_dm_session, send_dm_message
         from app.chat.dm_delivery import fanout_dm_message, forward_dm_federated, wake_dm_ai
         from app.database import async_session
-        from app.services.plugin.channel_user import ensure_channel_user
+        from app.services.channel.anchor import ensure_channel_user
 
         async with async_session() as db:
             ensured = await ensure_channel_user(
@@ -880,14 +1254,14 @@ class QqNapcatPlugin(ServicePlugin):
 
         from app.database import async_session
         from app.models.user import User
-        from app.services.plugin.channel_user import channel_contacts
+        from app.services.channel import identity
         from app.utils.text import iter_mention_ids, render_mentions
 
         ids = iter_mention_ids(text)
         if not ids:
             return text
         async with async_session() as db:
-            contacts = await channel_contacts(
+            contacts = await identity.contacts(
                 db, kind=self.channel_kind, owner_scope=self.instance, user_ids=ids,
             )
             unknown = [uid for uid in ids if uid not in contacts]

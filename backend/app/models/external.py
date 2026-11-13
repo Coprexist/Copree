@@ -8,6 +8,9 @@
   统一到这里之后，QQ / 联邦 / 以后任何通道都只是「一行外部身份」，各带归属与放行状态。
 - 外部身份不记账、不挂记忆、不占 users.id。它只回答三件事：
   这是谁（display_name）、从哪来（kind + owner_scope + origin）、放不放行（status）。
+
+这张表归平台、所有通道共用（kind 是分区键）：卸载某个通道插件之后行还在，重装时同一个人
+接回原来那个锚点账号。插件读写只经 app/services/channel/{identity,anchor}.py，不直接查表。
 """
 from datetime import datetime
 
@@ -42,7 +45,7 @@ class ExternalIdentity(Base):
     # 跨应用统一 ID（QQ 的 union_openid，官方说明"可能为空"）：同一个开发者名下的多个机器人
     # 靠它认出"这是同一个人"，否则同一个人在每个机器人眼里各是一个 openid、各占一行
     union_id = Column(String(200), nullable=True, comment="跨应用统一标识（QQ 是 union_openid）")
-    # 这个地址对应的本地锚点账号（见 services/plugin/channel_user）：@ 翻译、发消息都靠它，
+    # 这个地址对应的本地锚点账号（见 services/channel/anchor）：@ 翻译、发消息都靠它，
     # 同一 union 的多个地址共用同一个锚点，所以这里不做唯一约束
     user_id = Column(
         Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True,

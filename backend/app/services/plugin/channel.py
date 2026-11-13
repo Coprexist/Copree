@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.plugin import catalog
 from app.services.plugin import config as plugin_config
-from app.services.plugin import pairing
+from app.services.channel import identity
 from app.services.plugin import runtime_control
 from app.services.plugin.runtime_control import StartFailed, UnknownInstance
 
@@ -520,7 +520,6 @@ async def channel_rules(db: AsyncSession, group_id: int, *, served: list | None 
             found_channels.append(found)
     if not found_channels:
         return ""
-    kinds = [c["kind"] for c in found_channels]
     labels = "、".join(c["label"] for c in found_channels)
     lines = [
         "",
@@ -528,25 +527,13 @@ async def channel_rules(db: AsyncSession, group_id: int, *, served: list | None 
         "## 这个群接进了外部聊天软件（" + labels + "）",
         "- 群里你只能**被动回复**：别人 @ 你（或回复你）时才轮到你说话；不要承诺「我待会儿在群里发」「稍后提醒你」这类主动开口。",
     ]
-    if "qq" in kinds:
-        lines.append(
-            "- 官方 QQ 机器人：腾讯自 2025-04-21 起下线了主动推送；**QQ侧来的一条消息你最多只能回 5 句**"
-            "（群 5 分钟、私聊 60 分钟内有效，超时或超数都发不出去）。"
-        )
-        lines.append(
-            "- 官方机器人私聊**可以**主动发消息，但每天每个用户最多 2 条：留给要紧的提醒，别用来说废话。"
-        )
-        lines.append("- 你写的 Markdown 会尽量按富文本发（机器人没开通 Markdown 权限时平台会自动降级成纯文本）。")
-        lines.append("- **QQ 用户看不到 Copree 侧（此侧）的 ID**。")
-        lines.append(
-            "- **撤回不同步**：QQ 里别人撤回的消息我们收不到通知，你上下文里那条还在（就当它发生过）；"
-            "反过来你在站内撤回（2 分钟内）我们会请 QQ 一起撤，超时就只有站内撤掉。"
-        )
-    if "qq-napcat" in kinds:
-        lines.append(
-            "- NapCat 通道用的是真 QQ 号（协议端）：没有上面那些接口窗口限制，但同样别刷屏，"
-            "并且富文本能不能渲染取决于 QQ 客户端。"
-        )
+    # 通道自己的规矩由插件在 manifest 里声明（channel.prompt_rules），平台只负责拼进去：
+    # 同一个事实写两遍，改一边另一边就漂（limits 是给人看的版本，这里是给 AI 的版本）
+    for found in found_channels:
+        for rule in found.get("prompt_rules") or []:
+            text = str(rule.get("text") or "").strip()
+            if text and text not in lines:
+                lines.append(text)
     if not await files_supported(db, group_id, served=served):
         lines.append(
             f"- **发不了文件**（{labels} 侧）：这条通道没有接收附件的出口，send_file 只会留在站内，"
@@ -665,7 +652,7 @@ async def _view_one(
     instance = instance_of(agent_id)
     masked = await plugin_config.mask_config(plugin_id, instance, db=db)
     schema = await plugin_config.get_schema(plugin_id)
-    rows = await pairing.list_rows(db, kind=declared_channel["kind"], owner_scope=instance)
+    rows = await identity.list_rows(db, kind=declared_channel["kind"], owner_scope=instance)
     plugin = get_by_owner(plugin_id, instance)
     running = False
     detail: dict = {}
@@ -694,7 +681,7 @@ async def _view_one(
         )
     ]
     # 已批准的那位：外部通道一侧一人一实例，卡片上只展示一个"当前放行的人"
-    owner_row = next((r for r in rows if r.status == pairing.APPROVED), None)
+    owner_row = next((r for r in rows if r.status == identity.APPROVED), None)
     return {
         "plugin_id": plugin_id,
         "kind": declared_channel["kind"],
@@ -728,15 +715,15 @@ async def _view_one(
         } or None,
         "pending": [
             {"id": r.id, "origin": r.origin, "nickname": r.display_name, "code": r.code, "created_at": r.created_at}
-            for r in rows if r.status == pairing.PENDING
+            for r in rows if r.status == identity.PENDING
         ],
         "approved": [
             {"id": r.id, "origin": r.origin, "nickname": r.display_name, "approved_at": r.approved_at}
-            for r in rows if r.status == pairing.APPROVED
+            for r in rows if r.status == identity.APPROVED
         ],
         "blocked": [
             {"id": r.id, "origin": r.origin, "nickname": r.display_name}
-            for r in rows if r.status == pairing.BLOCKED
+            for r in rows if r.status == identity.BLOCKED
         ],
         # 前端下拉用：能接的 Copree 群（你管的 + 这个 AI 已经在里面的）
         "group_options": group_options,
@@ -764,6 +751,11 @@ async def save(
     # 配合 set_config 的"空串=清除"语义，会把已存的机密抹掉。
 
     payload = dict(values)
+    # 认人用 id、名字只用来显示：名字是用户随时能改的内容，拿它当绑定主键，
+    # AI 一改名通道下次启动就"找不到这个 AI"（2026-11-02 线上，见 services/plugin/target_agent.py）。
+    # 只在插件声明了这个字段时才写：自带 schema 的三方通道没有它，硬塞会被当成未知配置项。
+    if "target_agent_id" in (await plugin_config.get_schema(plugin_id) or {}):
+        payload["target_agent_id"] = str(agent_id)
     payload["target_agent"] = target_agent_name
 
     # 接了群就必须是"你管的"群：否则外部消息会落进别人的群。选中之后平台把这个 AI 加进去
@@ -834,9 +826,105 @@ async def self_test(*, plugin_id: str, agent_id: int) -> dict[str, Any]:
     return result
 
 
+async def refresh_login_qr(*, plugin_id: str, agent_id: int) -> dict[str, Any]:
+    """重新要一张登录二维码
+
+    卡片在"还没保存配置"时也要能扫码，所以实例不存在时退回插件声明的默认协议端；
+    实例一旦存在，就用它自己的地址——两个 AI 各接一个协议端时不会串。
+    """
+    from app.services.infrastructure.plugin_registry import get_by_owner
+    from app.services.plugin import api as plugin_api
+
+    declared(plugin_id)
+    plugin = get_by_owner(plugin_id, instance_of(agent_id))
+    if plugin is not None:
+        request = getattr(plugin, "request_login_qr", None)
+        if request is None:
+            raise NoSelfTest(f"{plugin.display_name()} 没有扫码登录")
+        return await request()
+    definition = plugin_api.get_service_def(plugin_id)
+    refresh = getattr(definition.cls, "refresh_login_qr", None) if definition else None
+    if refresh is None:
+        raise NoSelfTest(f"{plugin_id} 没有扫码登录")
+    return await refresh(agent_id=agent_id)
+
+
+async def relogin(*, plugin_id: str, agent_id: int) -> dict[str, Any]:
+    """重新登录：先让协议端用本地登录态把上次那个号拉回来，拉不回来再发一张新码
+
+    与 refresh_login_qr 的区别是"能不能不扫码"：卡片上的入口要一张能扫的码，
+    我的页上的"重新登录"要的是点一下就回来，扫不回来才让用户扫。
+    """
+    from app.services.infrastructure.plugin_registry import get_by_owner
+
+    declared(plugin_id)
+    plugin = get_by_owner(plugin_id, instance_of(agent_id))
+    if plugin is None:
+        raise NoSelfTest("这个 AI 还没配置通道")
+    quick = getattr(plugin, "quick_login", None)
+    if not callable(quick):
+        raise NoSelfTest(f"{plugin.display_name()} 没有可拉起的登录态")
+    return await quick()
+
+
+async def accounts(db: AsyncSession, user_id: int) -> list[dict[str, Any]]:
+    """我名下各 AI 在通道侧挂的是哪个号
+
+    只问**已经配过**的实例：没配过通道的 AI 不该为了"看一眼"就去连协议端。
+    通道自己翻译成平台词汇（uin/nick/avatar），这里不认谁的字段名。
+    """
+    from sqlalchemy import select
+
+    from app.models.agent import Agent
+    from app.services.infrastructure.plugin_registry import get_by_owner
+
+    mine = {
+        int(row.id): row
+        for row in (await db.execute(
+            select(Agent.id, Agent.name, Agent.avatar_url).where(Agent.owner_id == user_id)
+        )).all()
+    }
+    if not mine:
+        return []
+    out: list[dict[str, Any]] = []
+    for ch in all_declared():
+        for instance in await plugin_config.list_instances(ch["plugin_id"], db=db):
+            agent_id = agent_id_of(instance)
+            agent = mine.get(agent_id) if agent_id else None
+            if agent is None:
+                continue          # 别人的 AI，或不是按 AI 建的实例（管理台那份）
+            plugin = get_by_owner(ch["plugin_id"], instance)
+            probe = getattr(plugin, "login_account", None)
+            if not callable(probe):
+                continue
+            try:
+                info = await probe()
+            except Exception as e:      # 一条通道问不到，不该让整页空着
+                logger.warning(f"{ch['plugin_id']}[{instance}] 读登录账号失败: {e}")
+                continue
+            if not info:
+                continue          # 通道不接受问"现在挂的是谁"，那就是不该出现在这一页
+            # 没登过（uin 为空）也列出来：用户配了通道却没扫码，页面要看得见"还没登录"
+
+            out.append({
+                "agent_id": agent_id,
+                "agent_name": agent.name,
+                "agent_avatar": agent.avatar_url,
+                "plugin_id": ch["plugin_id"],
+                "instance": instance,
+                "label": ch["label"],
+                "uin": info.get("uin") or "",
+                "nick": info.get("nick") or "",
+                "avatar": info.get("avatar") or "",
+                "logged_in": bool(info.get("logged_in")),
+                "online": bool(info.get("online")),
+            })
+    return out
+
+
 async def approve(db: AsyncSession, *, plugin_id: str, agent_id: int, pairing_id: int | None = None, code: str | None = None) -> dict:
     ch = declared(plugin_id)
-    row = await pairing.approve(
+    row = await identity.approve(
         db, kind=ch["kind"], owner_scope=instance_of(agent_id), pairing_id=pairing_id, code=code
     )
     return {"origin": row.origin, "nickname": row.display_name, "status": row.status}
@@ -845,8 +933,8 @@ async def approve(db: AsyncSession, *, plugin_id: str, agent_id: int, pairing_id
 async def block_pairing(db: AsyncSession, *, plugin_id: str, agent_id: int, origin: str) -> bool:
     """拉黑一个人（界面上的"不再回话，也不再发配对码"）"""
     ch = declared(plugin_id)
-    row = await pairing.set_status(
-        db, kind=ch["kind"], owner_scope=instance_of(agent_id), origin=origin, status=pairing.BLOCKED,
+    row = await identity.set_status(
+        db, kind=ch["kind"], owner_scope=instance_of(agent_id), origin=origin, status=identity.BLOCKED,
     )
     return row is not None
 
@@ -854,4 +942,4 @@ async def block_pairing(db: AsyncSession, *, plugin_id: str, agent_id: int, orig
 async def forget_pairing(db: AsyncSession, *, plugin_id: str, agent_id: int, origin: str) -> bool:
     """解除配对：对方重新变回陌生人，下次私聊重新领码"""
     ch = declared(plugin_id)
-    return await pairing.forget(db, kind=ch["kind"], owner_scope=instance_of(agent_id), origin=origin)
+    return await identity.forget(db, kind=ch["kind"], owner_scope=instance_of(agent_id), origin=origin)

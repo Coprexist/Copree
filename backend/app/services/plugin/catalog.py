@@ -205,6 +205,9 @@ def channels() -> list[dict[str, Any]]:
             # 能力与限制：同样是插件自己的知识（腾讯下线主动推送、私聊额度、封号风险…），
             # 卡片直接照着显示，平台不替它总结
             "limits": [x for x in (block.get("limits") if isinstance(block.get("limits"), list) else []) if isinstance(x, dict) and x.get("text")],
+            # 给 AI 看的规矩（进锁定前缀，见 channel.channel_rules）：同样由插件声明，
+            # 平台只负责把它拼进上下文——「腾讯下线主动推送」这类事实不该在平台代码里再写一遍
+            "prompt_rules": [x for x in (block.get("prompt_rules") if isinstance(block.get("prompt_rules"), list) else []) if isinstance(x, dict) and str(x.get("text") or "").strip()],
             "pairing": bool(block.get("pairing", False)),
             "supports_group": bool(block.get("supports_group", False)),
             # 出站能不能带附件：这是**通道实现**的能力（不是腾讯的限制），由插件自己声明

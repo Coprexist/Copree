@@ -5,6 +5,7 @@ QQ 事件 → Copree（与网页端同一条投递链路）→ AI 回复 → 回
 """
 import asyncio
 import importlib.util
+import json
 from pathlib import Path
 
 from sqlalchemy import text
@@ -14,18 +15,32 @@ GROUP_ID = 5
 GROUP_OWNER, AGENT_USER = 1, 2
 
 
-def _load_plugin_module():
-    """按插件的加载方式导入（set_current_plugin 让 @service 认得 owner）"""
-    from app.services.plugin import api
+def _gateway_module():
+    """连接层模块：可调常量（退避、抖动）在它那儿，plugin 只是再导出。"""
+    import importlib
 
-    spec = importlib.util.spec_from_file_location("_test_qq_channel", str(PLUGIN_PATH))
-    module = importlib.util.module_from_spec(spec)
+    return importlib.import_module("copree_plugins.qq-channel.gateway")
+
+
+def _plugin_module(suffix: str):
+    """插件包里的子模块：拆成多文件之后，常量与纯函数按归属去对应的文件里拿。"""
+    import importlib
+
+    return importlib.import_module(f"copree_plugins.qq-channel.{suffix}")
+
+
+def _load_plugin_module():
+    """按生产同样的方式导入插件包（set_current_plugin 让 @service 认得 owner）。
+
+    插件目录是包：入口之外的文件用相对导入，和产线一致；每次重导入保证用例之间不串味。
+    """
+    from app.services.plugin import api, packages
+
     api.set_current_plugin("qq-channel")
     try:
-        spec.loader.exec_module(module)
+        return packages.load("qq-channel", PLUGIN_PATH.parent)
     finally:
         api.set_current_plugin(None)
-    return module
 
 
 class FakeClient:
@@ -597,7 +612,7 @@ async def test_body_format_pins_private_chat_too(migrated_db):
 async def test_dm_pairing_gate_then_approved(migrated_db):
     """默认 pairing：陌生人私聊不进 AI，只领一个配对码；主人批准之后才放行"""
     from app.database import async_session
-    from app.services.plugin import pairing
+    from app.services.channel import identity
 
     await _seed()
     plugin = await _make_plugin()
@@ -622,7 +637,7 @@ async def test_dm_pairing_gate_then_approved(migrated_db):
 
         # 主人批准 → 再私聊就进 AI
         async with async_session() as db:
-            await pairing.approve(db, kind="qq", owner_scope="bot-a", code=row[3])
+            await identity.approve(db, kind="qq", owner_scope="bot-a", code=row[3])
         plugin._client.sent.clear()
         await plugin._on_c2c({**DM_EVENT, "id": "DMMSG-2"})
         async with async_session() as db:
@@ -659,9 +674,11 @@ async def test_multi_instance_one_per_config(migrated_db):
         async with async_session() as db:
             db.add(Plugin(id="qq-channel", name="QQ 通道", category="service", enabled=True, builtin=True))
             await db.commit()
-            await set_config("qq-channel", {"app_id": "111", "client_secret": "s1", "target_agent": "浮生"},
+            await set_config("qq-channel", {"app_id": "111", "client_secret": "s1",
+                                            "target_agent_id": "7", "target_agent": "浮生"},
                              "bot-a", db=db)
-            await set_config("qq-channel", {"app_id": "222", "client_secret": "s2", "target_agent": "浮生"},
+            await set_config("qq-channel", {"app_id": "222", "client_secret": "s2",
+                                            "target_agent_id": "7", "target_agent": "浮生"},
                              "bot-b", db=db)
             await skill_bridge.apply_skill_plugins(db)
 
@@ -1588,6 +1605,51 @@ async def test_full_mode_raw_mentions_do_not_reach_the_ai(migrated_db):
         _cleanup(plugin)
 
 
+async def test_full_mode_mention_adopts_the_same_person_across_bots(migrated_db):
+    """同一个人在不同机器人下是不同 openid：第一次 @ 到时按同名并回已有账号。
+
+    QQ 的 openid 按应用发；不认亲就会在同一个群里出现「周庶人」「周庶人#2」。
+    窄口径：只在地址第一次出现、新账号还没说过话、群里同名外部账号恰好一个时合并。
+    """
+    from app.database import async_session
+    from app.models.group import GroupMember
+    from app.models.user import User
+
+    await _seed()
+    plugin = await _make_plugin()
+    plugin._copree_group_id = GROUP_ID
+    try:
+        async with async_session() as db:
+            person = User(username="小红", password_hash="x", type="external", origin_channel="qq")
+            db.add(person)
+            await db.flush()
+            existing_id = int(person.id)
+            db.add(GroupMember(group_id=GROUP_ID, member_type="human",
+                               member_id=existing_id, role="member"))
+            await db.commit()
+
+        await plugin._on_group_message({
+            **GROUP_EVENT, "id": "ADOPT-1",
+            "content": "欢迎 <@OPENID-OTHER-BOT> 喵",
+            "mentions": [{"id": "OPENID-OTHER-BOT", "username": "小红"}],
+        })
+        rows = await _messages(GROUP_ID)
+        stored = rows[0][2]
+        assert f"<@!{existing_id}>" in stored, stored      # 令牌指向已有账号
+
+        async with async_session() as db:
+            names = (await db.execute(text(
+                "SELECT username FROM users WHERE username LIKE '小红%'"
+            ))).scalars().all()
+            identities = (await db.execute(text(
+                "SELECT count(*) FROM external_identities WHERE user_id = :u"
+            ), {"u": existing_id})).scalar()
+        assert names == ["小红"], names                   # 没有多出「小红#2」
+        assert int(identities) == 1, identities
+    finally:
+        _cleanup(plugin)
+
+
 async def test_full_mode_event_completes_the_truncated_text(migrated_db):
     """同一条消息的两个事件：@模式先到（正文在"@其他成员"处断了），全量事件后到就把正文补上。"""
     await _seed()
@@ -1926,11 +1988,12 @@ async def test_ai_message_quoted_in_qq_resolves_too(migrated_db):
 
 def test_recall_period_boundaries():
     """召回周期就是官方那四段：当天 / 1-3 天 / 3-7 天 / 7-30 天，边界取上界"""
-    module = _load_plugin_module()
-    assert [module.recall_period(d) for d in (0.0, 0.9, 1.0, 2.9, 3.0, 6.9, 7.0, 29.9)] == \
+    _load_plugin_module()
+    fmt = _plugin_module("format")
+    assert [fmt.recall_period(d) for d in (0.0, 0.9, 1.0, 2.9, 3.0, 6.9, 7.0, 29.9)] == \
         [0, 0, 1, 1, 2, 2, 3, 3]
-    assert module.recall_period(30.0) is None
-    assert module.recall_period(999.0) is None
+    assert fmt.recall_period(30.0) is None
+    assert fmt.recall_period(999.0) is None
 
 
 async def test_group_reply_after_window_fails_loudly(migrated_db):
@@ -2080,7 +2143,8 @@ async def test_merged_group_replies_only_through_the_owning_bot(migrated_db):
 async def test_union_openid_binds_one_account_across_bots(migrated_db):
     """两台机器人认到同一个 union → 一个本地账号；两边的地址各留一份（@ 他要用各自那份）"""
     from app.database import async_session
-    from app.services.plugin.channel_user import channel_contacts, ensure_channel_user
+    from app.services.channel import identity
+    from app.services.channel.anchor import ensure_channel_user
 
     await _seed()
     async with async_session() as db:
@@ -2096,10 +2160,10 @@ async def test_union_openid_binds_one_account_across_bots(migrated_db):
     assert first[0] == second[0], f"同一个 union 应该只占一个账号：{first} {second}"
 
     async with async_session() as db:
-        assert await channel_contacts(db, kind="qq", owner_scope="bot-a", user_ids=[first[0]]) == {
+        assert await identity.contacts(db, kind="qq", owner_scope="bot-a", user_ids=[first[0]]) == {
             first[0]: "OPENID-A",
         }
-        assert await channel_contacts(db, kind="qq", owner_scope="bot-b", user_ids=[first[0]]) == {
+        assert await identity.contacts(db, kind="qq", owner_scope="bot-b", user_ids=[first[0]]) == {
             first[0]: "OPENID-B",
         }
 
@@ -2165,6 +2229,33 @@ async def test_same_qq_message_with_mention_lands_once_across_two_bots(migrated_
     finally:
         _cleanup(bot_a)
         _cleanup(bot_b)
+
+async def test_short_message_from_two_bots_lands_once(migrated_db):
+    """单字（"！"）也要认亲：短句没有令牌可比，改按「同一个人 + 同一句」判。
+
+    几台机器人接同一个群，同一条 QQ 消息每台都会收到；太短的正文以前直接不认，
+    于是一个人发一个"！"群里就多出四条。
+    """
+    from app.database import async_session
+
+    await _seed()
+    bot_a = await _make_plugin("bot-a")
+    bot_b = await _make_plugin("bot-b")
+    bot_b._target_agent = "绵绵"
+    bot_b._target_user_id = AGENT_USER + 1
+    try:
+        event = dict(GROUP_EVENT, content="！")
+        await bot_a._on_group_at(dict(event, id="SHORT-A", group_openid="QQGROUP-A"))
+        await bot_b._on_group_at(dict(event, id="SHORT-B", group_openid="QQGROUP-B"))
+        async with async_session() as db:
+            rows = (await db.execute(text(
+                "SELECT id, content FROM messages WHERE group_id = :g"
+            ), {"g": GROUP_ID})).all()
+        assert len(rows) == 1, f"同一个人的同一句短消息只该落一条：{rows}"
+    finally:
+        _cleanup(bot_a)
+        _cleanup(bot_b)
+
 
 async def test_one_bot_sends_when_two_serve_the_same_group(migrated_db):
     """两台机器人接同一个 Copree 群：AI 自己起的话头（没有来源可认）只由一台发出去
@@ -2276,7 +2367,8 @@ async def test_unreachable_notices_back_off_exponentially(migrated_db):
     plugin._notify_owner = _capture
     route = {"qq": "QQGROUP-AAA", "copree_group_id": GROUP_ID, "msg_id": "MSG-1", "seq": 0}
     key = plugin._notice_key("group", route)
-    base, cap = module.UNREACHABLE_NOTICE_BASE, module.UNREACHABLE_NOTICE_MAX
+    common = _plugin_module("common")
+    base, cap = common.UNREACHABLE_NOTICE_BASE, common.UNREACHABLE_NOTICE_MAX
     try:
         await plugin._report_unreachable("group", route, "这个群还没有被动回复凭据")
         await plugin._report_unreachable("group", route, "这个群还没有被动回复凭据")
@@ -2310,17 +2402,18 @@ async def test_unreachable_notices_back_off_exponentially(migrated_db):
 
 def test_split_message_prefers_paragraph_breaks():
     """长文按段拆：优先空行、其次单行，都不够长才硬切，而且每段都不超限"""
-    module = _load_plugin_module()
+    _load_plugin_module()
+    fmt = _plugin_module("format")
     text = "\n\n".join(["甲" * 40, "乙" * 40, "丙" * 40])
-    pieces = module.split_message(text, 50)
+    pieces = fmt.split_message(text, 50)
     assert len(pieces) == 3, pieces
     assert all(len(p) <= 50 for p in pieces), pieces
     assert pieces[0] == "甲" * 40, pieces[0]
 
     long_line = "丁" * 130                      # 没有换行可断 → 硬切
-    pieces = module.split_message(long_line, 50)
+    pieces = fmt.split_message(long_line, 50)
     assert [len(p) for p in pieces] == [50, 50, 30], pieces
-    assert module.split_message("", 50) == []
+    assert fmt.split_message("", 50) == []
 
 
 async def test_long_reply_is_split_not_truncated(migrated_db):
@@ -2609,5 +2702,149 @@ async def test_twin_adoption_merges_the_later_account_into_the_earlier_one(migra
     finally:
         _cleanup(bot_a)
         _cleanup(bot_b)
+
+
+async def test_gateway_session_change_reconnects_without_backoff():
+    """op7/op9 换会话按"立刻重连"处理，不进退避。
+
+    退避只在连接真出错时才有意义；换会话是 token 到期的例行动作，按故障退避会一路
+    涨到 BACKOFF_MAX，于是每小时都留一段收不到消息的空窗（实测 60 秒）。
+    """
+    module = _load_plugin_module()
+    channel = object.__new__(module.QqChannelPlugin)
+    channel.instance = "agent-test"
+    channel.connected = False
+    channel.last_error = ""
+
+    dropped = []
+
+    class FakeClient:
+        def forget_token(self):
+            dropped.append(True)
+
+    channel._client = FakeClient()
+    channel._session_id, channel._seq = "SESSION-1", 9
+    calls = []
+    gateway = _gateway_module()
+    faults = [gateway._InvalidSession(), gateway._GatewayRestart(), gateway._GatewayRestart()]
+
+    async def fake_connect():
+        calls.append(asyncio.get_running_loop().time())
+        if faults:
+            raise faults.pop(0)
+        raise asyncio.CancelledError()
+
+    async def run():
+        channel._connect_once = fake_connect
+        try:
+            await module.QqChannelPlugin._supervise(channel)
+        except asyncio.CancelledError:
+            pass
+
+    gateway = _gateway_module()
+    original = gateway.RECONNECT_PAUSE
+    gateway.RECONNECT_PAUSE = 0.01          # 不真等 1 秒；抖动按比例缩到 0~0.01
+    try:
+        await run()
+    finally:
+        gateway.RECONNECT_PAUSE = original
+
+    assert len(calls) == 4, f"三次换会话各该重连一次：{len(calls)}"
+    gaps = [b - a for a, b in zip(calls, calls[1:])]
+    assert all(gap < 0.2 for gap in gaps), f"换会话不该越等越久：{gaps}"
+    assert max(gaps) - min(gaps) < 0.05, f"停顿应当是平的，不能逐次翻倍：{gaps}"
+    assert dropped == [True], f"会话失效只该丢一次 token：{dropped}"
+    assert channel.connected is False
+    # op9 之后旧会话不能再续，否则会拿着一个已失效的 session_id 反复被拒
+    assert (channel._session_id, channel._seq) == ("", 0), "会话失效要清掉续接凭据"
+
+
+async def test_reconnect_resumes_the_session_before_identify():
+    """有会话就先 op6 续接，网关会把断线期间漏掉的事件补发一遍；没有才 op2 重新鉴权。"""
+    module = _load_plugin_module()
+    channel = object.__new__(module.QqChannelPlugin)
+    channel.instance = "agent-test"
+
+    class FakeClient:
+        async def token(self):
+            return "TOKEN"
+
+    class FakeWs:
+        def __init__(self):
+            self.sent = []
+
+        async def send(self, raw):
+            self.sent.append(json.loads(raw))
+
+    channel._client = FakeClient()
+
+    resumed = FakeWs()
+    channel._session_id, channel._seq = "SESSION-1", 7
+    await module.QqChannelPlugin._open_session(channel, resumed)
+    assert resumed.sent == [{
+        "op": _gateway_module().OP_RESUME,
+        "d": {"token": "QQBot TOKEN", "session_id": "SESSION-1", "seq": 7},
+    }]
+
+    fresh = FakeWs()
+    channel._session_id = ""
+    await module.QqChannelPlugin._open_session(channel, fresh)
+    gateway = _gateway_module()
+    assert fresh.sent[0]["op"] == gateway.OP_IDENTIFY, "没有会话时走重新鉴权"
+    assert fresh.sent[0]["d"]["intents"] == gateway.INTENTS
+
+
+async def test_closed_before_the_session_is_established_restarts_identify():
+    """续接被静默拒绝（连上但没到 RESUMED）时不能拿着死会话空转：清会话、退避一次、下一轮重新鉴权。"""
+    module = _load_plugin_module()
+    channel = object.__new__(module.QqChannelPlugin)
+    channel.instance = "agent-test"
+    channel.connected = False
+    channel.last_error = ""
+    channel._client = None
+    channel._session_id, channel._seq = "STALE-SESSION", 11
+
+    calls = []
+
+    async def fake_connect():
+        calls.append(1)
+        if len(calls) == 1:
+            return False               # 连上但没建立会话
+        raise asyncio.CancelledError()
+
+    async def run():
+        channel._connect_once = fake_connect
+        try:
+            await module.QqChannelPlugin._supervise(channel)
+        except asyncio.CancelledError:
+            pass
+
+    gateway = _gateway_module()
+    original = gateway.BACKOFF_START
+    gateway.BACKOFF_START = 0.01
+    try:
+        await run()
+    finally:
+        gateway.BACKOFF_START = original
+
+    assert len(calls) == 2, f"该重试一次：{len(calls)}"
+    assert (channel._session_id, channel._seq) == ("", 0), "死会话要清掉，下一轮重新鉴权"
+
+
+async def test_ready_remembers_the_session_for_resume():
+    """READY 里的 session_id 是续接的唯一凭据：没记住就等于每次都重新鉴权、断线必丢消息。"""
+    module = _load_plugin_module()
+    channel = object.__new__(module.QqChannelPlugin)
+    channel.instance = "agent-test"
+    channel.bot_name = ""
+    channel.connected = False
+    channel._session_id = ""
+
+    await module.QqChannelPlugin._on_event(
+        channel, "READY", {"session_id": "SESSION-2", "user": {"username": "大肥鱼"}})
+
+    assert channel._session_id == "SESSION-2"
+    assert channel.connected is True
+    assert channel.bot_name == "大肥鱼"
 
 

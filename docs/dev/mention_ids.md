@@ -4,8 +4,14 @@
 
 ## 一句话
 
-**存储与 AI 上下文里，@ 一律是 id（`<@!id>`）；名字只在给人看的地方现算。**
+**存储里 @ 一律是 id（`<@!id>`）；名字只在使用时现算——给人看的界面、导出，以及 AI 读到的那一份。**
 与 QQ 的内联 @ 同形，所以同一条正文在通道出口只是"换个壳里的 id"。
+
+> 2026-11-01 补充：原先"名字只在给人看的地方现算"没覆盖 AI，群里有人 @ 别人时
+> AI 收到的是裸令牌 `<@!213> 为什么不跟…`，只能反问"213 是哪位"。
+> 现在 **AI 侧读到的是 `<@!id>（显示名）`**——id 原样留在前面（身份），名字只是注脚；
+> 注脚名超过 15 字截断成「前 15 字…」（群昵称常有一长串，整段进上下文只挤占正文）；
+> 查不到名字就只留 `<@!id>`。存储、唤醒判定、通道出口一律只看 id，不受注脚影响。
 
 ## 为什么（旧的病根）
 
@@ -41,6 +47,10 @@ id 唯一且稳定，这些问题一次性消失；通道出口拿到 id 也能�
 4. **展示** —— 前端 `frontend/src/utils/mentions.ts:renderMentions`（ChatView 消息正文与引用预览）；
    后端"顺手给人看"的地方（会话列表预览、聊天记录导出）用
    `message_serializer.mention_names`（一次查全用到的 id）+ `text.render_mention_names`。
+   **AI 上下文走的是"id + 注脚"**：`sync_group_history` 按批查一次名字表，`gm_message_entry`
+   用 `text.render_mention_with_names` 渲染成 `<@!id>（显示名）`；`expand_message`
+   展开旧消息时同样现算。注脚不参与任何解析：`iter_mention_ids` / `mentions_user` /
+   通道出口都只认令牌本身，AI 照抄前半段就还是 @ 同一个人。
 
 ## 名字给人看时取哪一份
 
@@ -58,10 +68,10 @@ id 唯一且稳定，这些问题一次性消失；通道出口拿到 id 也能�
 
 ## 通道出口
 
-`app/services/plugin/channel_user.py`：
+`app/services/channel/anchor.py` 与 `identity.py`：
 
-- `anchor_email(kind, origin)` —— 通道身份锚点邮箱的唯一拼法（建号与反查都走它）；
-- `channel_contacts(db, kind, owner_scope)` —— "这条通道上认得的本地账号 → openid"。
+- `anchor.anchor_email(kind, origin)` —— 通道身份锚点邮箱的唯一拼法（建号与反查都走它）；
+- `identity.contacts(db, kind, owner_scope, user_ids=…)` —— "这条通道上认得的本地账号 → openid"。
 
 QQ 插件把 `<@!id>` 翻成 `<@!openid>`，NapCat 翻成 `[CQ:at,qq=…]`；
 **认不出的退成 `@名字`**（令牌原样发到通道侧只会是乱码）。查库放在后台发送任务里，不拖慢发消息。
@@ -83,7 +93,7 @@ QQ 插件把 `<@!id>` 翻成 `<@!openid>`，NapCat 翻成 `[CQ:at,qq=…]`；
 
 判据是**入站事件类型**（路由里记 `at_event`），不是"这条有没有点名"——两种事件都可能点名，
 差别只在腾讯认不认这条是被 @ 进来的；
-见 `backend/plugins/qq-channel/plugin.py` 的 `_handle_group_message` / `_outbound_sink`。
+见 `backend/plugins/qq-channel/inbound.py` 的 `_handle_group_message` / `outbound.py` 的 `_outbound_sink`。
 
 ## 全量模式（开了「接收所有消息」）
 

@@ -29,7 +29,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from app.paths import PLUGIN_PACKAGES_DIR
+from app.paths import PLUGIN_DATA_DIR, PLUGIN_PACKAGES_DIR
 from app.services.plugin import catalog
 
 logger = logging.getLogger(__name__)
@@ -322,8 +322,13 @@ def install_package(
     return {**info, "file_name": "", "installed": True, "installed_version": manifest["version"], "updatable": False, "builtin_conflict": False}
 
 
-def uninstall_plugin(plugin_id: str) -> None:
-    """卸载用户插件：只删数据根 plugins/ 下的目录，内置插件一律不动"""
+def uninstall_plugin(plugin_id: str, *, purge_data: bool = False) -> None:
+    """卸载用户插件：只删数据根 plugins/ 下的目录，内置插件一律不动。
+
+    数据默认**保留**（库里那张表由调用方按 purge_data 决定；文件目录在这里一起办）：
+    插件的表和 plugin_data/<id>/ 是用户的资产，重装后能直接接着用；
+    只有管理员明确说"一并删掉"才清。
+    """
     if not _slug_ok(plugin_id):
         raise PackageError("插件 id 不合法：" + plugin_id)
     if is_builtin(plugin_id):
@@ -335,7 +340,12 @@ def uninstall_plugin(plugin_id: str) -> None:
     if not target.is_dir():
         raise PackageError("插件未安装：" + plugin_id)
     shutil.rmtree(target)
-    logger.info("插件已卸载：%s", plugin_id)
+    logger.info("插件已卸载：%s（数据%s）", plugin_id, "一并删除" if purge_data else "保留")
+    if purge_data:
+        data_dir = Path(PLUGIN_DATA_DIR) / plugin_id
+        if data_dir.is_dir():
+            shutil.rmtree(data_dir, ignore_errors=True)
+            logger.info("插件数据目录已删除：%s", data_dir)
 
 
 def delete_package(file_name: str) -> None:

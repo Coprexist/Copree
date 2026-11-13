@@ -1,11 +1,20 @@
-"""通道外部身份 + 配对 —— 陌生私聊先领配对码，主人批准后才放行
+"""通道身份目录 —— 平台给所有通道的一张表（external_identities）
 
-对齐 OpenClaw 的 DM pairing（docs/channels/pairing.md）：默认不处理陌生人的消息，
-只回一个短码；批准权在主人手里。区别只是「批准」这一步搬到了 Copree 界面上。
+一行 = 某个通道上的某个人：从哪来（kind + owner_scope + origin）、是谁（display_name /
+avatar_url / union_id）、接本实例哪个账号（user_id）、放不放行（status + code）。
 
-这一行数据住在 external_identities（取舍见 app/models/external.py）：
-「这个外部身份是谁」和「放不放行」本来就是同一行，所以原来单开的 channel_pairings
-并了进去，不再有两张表描述同一个人。
+为什么这张表归平台、不归任何一个插件：
+- 读它的是平台自己：通道卡片要列出待批 / 已放行 / 拉黑名单，批准、拉黑、解除配对都在
+  平台上做；插件卸载之后这张表也还在，重装时同一个人接回原来那个账号，不会在群里变
+  成两个"同一个人"。
+- 每行的 user_id 指向 users 里的锚点账号（见 anchor.py），消息、群成员、私信会话都挂
+  users.id：表跟着插件走就是把"谁是谁"切成两半，卸载清数据之后消息仍指向那个锚点。
+- kind 是分区键，不是所有权：新通道只是多一个 kind（manifest 的 channel.kind），联邦
+  和以后任何来源都落同一张表，平台也只有一套放行规则。
+
+插件侧只经这里读写，不直接查这张表（表结构、放行状态机、锚点建号与合并都属于平台契约）。
+对应 OpenClaw 的 DM pairing（docs/channels/pairing.md）：默认不处理陌生人的消息，只回
+一个短码，批准权在主人手里；区别只是「批准」这一步搬到了 Copree 界面上。
 
 键是 (kind, owner_scope, origin)：
 - kind        来源类别，由插件自己在 manifest 里声明（plugin.json 的 channel.kind，如 "qq"）
@@ -21,7 +30,7 @@ from __future__ import annotations
 
 import logging
 import secrets
-from datetime import datetime
+from typing import Iterable
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -86,6 +95,59 @@ async def status_of(db: AsyncSession, *, kind: str, owner_scope: str, origin: st
     return (await db.execute(
         select(ExternalIdentity.status).where(*_conds(kind, owner_scope, origin))
     )).scalar_one_or_none()
+
+
+async def has(db: AsyncSession, *, kind: str, owner_scope: str, origin: str) -> bool:
+    """这个地址以前出现过没有
+
+    只取 id 不取整行：调用方要的是"第一次见"这一个判断（第一次才尝试同名认亲），
+    老地址每次都重新认亲会把已经稳定的人再算一遍。
+    """
+    return (await db.execute(
+        select(ExternalIdentity.id).where(*_conds(kind, owner_scope, origin)).limit(1)
+    )).first() is not None
+
+
+async def user_id_of(db: AsyncSession, *, kind: str, owner_scope: str, origin: str) -> int:
+    """这个地址接的本地账号 id；没这一行、或还没接上，都是 0"""
+    value = (await db.execute(
+        select(ExternalIdentity.user_id).where(*_conds(kind, owner_scope, origin))
+    )).scalar_one_or_none()
+    return int(value or 0)
+
+
+async def union_id_of(db: AsyncSession, *, kind: str, owner_scope: str, origin: str) -> str:
+    """这个地址记下的跨应用统一标识；没记过就是空串"""
+    value = (await db.execute(
+        select(ExternalIdentity.union_id).where(*_conds(kind, owner_scope, origin))
+    )).scalar_one_or_none()
+    return str(value or "")
+
+
+async def contacts(
+    db: AsyncSession, *, kind: str, owner_scope: str, user_ids: Iterable[int]
+) -> dict[int, str]:
+    """这批本地账号里哪些在这条通道上有号：users.id → 通道侧标识（QQ 是 openid）
+
+    出站要把 <@!平台id> 翻成通道侧的真 @（QQ 官方的 <@!openid>、NapCat 的 [CQ:at,qq=…]），
+    靠的就是这张表：只有走过这条通道的人，在那条通道上才有 id 可 @。
+
+    只查调用方点名的那几个 id：一次回复里 @ 的人通常 1-3 个，而通道身份会随配对人数一直涨，
+    按通道全表拉出来再在 Python 里筛是拿 O(通道历史) 换 O(@数)。
+    一次 where 就够：身份行直接记着锚点账号（user_id），(kind, owner_scope) 限定"哪台
+    机器人"，所以同一个 QQ 号接了两个实例时，只有走过**这个实例**的那条地址算数。
+    """
+    ids = sorted({int(uid) for uid in user_ids if uid})
+    if not ids:
+        return {}
+    rows = (await db.execute(
+        select(ExternalIdentity.user_id, ExternalIdentity.origin).where(
+            ExternalIdentity.kind == kind,
+            ExternalIdentity.owner_scope == owner_scope,
+            ExternalIdentity.user_id.in_(ids),
+        )
+    )).all()
+    return {int(uid): str(origin) for uid, origin in rows if uid is not None}
 
 
 async def upsert_pending(

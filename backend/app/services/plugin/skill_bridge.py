@@ -17,7 +17,6 @@
 """
 from __future__ import annotations
 
-import importlib.util
 import logging
 from pathlib import Path
 from typing import Any
@@ -52,27 +51,33 @@ _from_plugins: dict[str, set[str]] = {}
 _loaded: dict[str, str] = {}
 
 
-def _load_plugin_code(plugin_id: str, plugin_dir: Path) -> bool:
-    """导入插件目录的 plugin.py：@skill / @service 装饰器在导入时完成注册。
+def _py_entry(manifest: dict) -> str:
+    """manifest 的 entry 是**载荷文件**（skin.json / skill.json / emoji.json…）。
+
+    只有 .py 才是代码入口；载荷文件不是 Python 模块，别拿它当包入口。
+    """
+    entry = str(manifest.get("entry") or "")
+    return entry if entry.endswith(".py") else ""
+
+
+def _load_plugin_code(plugin_id: str, plugin_dir: Path, entry: str = "") -> bool:
+    """导入插件目录的入口文件：@skill / @service 装饰器在导入时完成注册。
+
+    目录由 services/plugin/packages 按包导入（`copree_plugins.<id>`），所以入口之外的
+    文件可以用相对导入取用（`from .gateway import QqClient`）。只写一个入口文件的老插件
+    行为不变——没有相对导入就不会去找子模块。
 
     owner 通过 api.set_current_plugin 注入。加载后清空上下文，防止模块顶层误注册。
-    返回是否真的导入了（没有 plugin.py = 纯声明式插件）。
+    返回是否真的导入了（没有入口文件 = 纯声明式插件）。
     """
-    from app.services.plugin import api
+    from app.services.plugin import api, packages
 
-    handlers_file = plugin_dir / "plugin.py"
-    if not handlers_file.exists():
-        return False
-    spec = importlib.util.spec_from_file_location(
-        f"_aisc_plugin_{plugin_id}", str(handlers_file)
-    )
-    if spec is None or spec.loader is None:
-        logger.warning(f"插件代码加载失败（无法创建模块）: {plugin_id}")
-        return False
-    module = importlib.util.module_from_spec(spec)
     try:
         api.set_current_plugin(plugin_id)
-        spec.loader.exec_module(module)
+        packages.load(plugin_id, Path(plugin_dir), entry or packages.DEFAULT_ENTRY)
+    except FileNotFoundError:
+        logger.warning(f"插件代码加载失败（入口文件不存在）: {plugin_id}")
+        return False
     except Exception as e:
         logger.warning(f"插件代码加载异常: {plugin_id}: {e}")
         return False
@@ -194,8 +199,10 @@ async def _unload_plugin(plugin_id: str) -> None:
     _unregister_plugin_skills(plugin_id)
     # 插件可以自带工具与技能段（plugin.py 里定义 ToolPlugin / register_segment）。
     # 不回收的话，工具还留在注册表里、AI 还能调，而它依赖的服务已经停了。
+    from app.services.plugin import packages
     from app.tools.base import ToolRegistry
     ToolRegistry.unregister_owner(plugin_id)
+    packages.forget(plugin_id)
     _loaded.pop(plugin_id, None)
 
 
@@ -213,7 +220,7 @@ def ensure_declared(plugin_id: str) -> bool:
     manifest = scan_disk().get(plugin_id)
     if not manifest:
         return False
-    if _load_plugin_code(plugin_id, Path(manifest["_dir"])):
+    if _load_plugin_code(plugin_id, Path(manifest["_dir"]), _py_entry(manifest)):
         _loaded[plugin_id] = str(manifest.get("category") or "service")
         return True
     return False
@@ -265,14 +272,14 @@ async def apply_skill_plugins(db, *, force: bool = False) -> None:
         if category == "service":
             # 声明只在导入时产生一次；实例每次都要跟配置对齐（配置可能刚改过）
             if plugin_id not in _loaded:
-                if not _load_plugin_code(plugin_id, Path(manifest["_dir"])):
+                if not _load_plugin_code(plugin_id, Path(manifest["_dir"]), _py_entry(manifest)):
                     continue
                 _loaded[plugin_id] = category
             await _reconcile_service_instances(plugin_id, db)
             continue
         if plugin_id in _loaded and not force:
             continue  # 幂等：已加载且仍启用，不重复导入（会顶掉行为处理器）
-        if _load_plugin_code(plugin_id, Path(manifest["_dir"])):
+        if _load_plugin_code(plugin_id, Path(manifest["_dir"]), _py_entry(manifest)):
             _loaded[plugin_id] = category
         defs = get_skill_defs(manifest)
         if defs:

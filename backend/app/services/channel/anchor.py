@@ -1,13 +1,15 @@
-"""外部通道的本地锚点账号 —— 每个通道入站时都要做的同一件事
+"""通道锚点账号 —— 外部身份在 users 里的那个本地影子
 
-为什么收成一处：官方 QQ、NapCat、以后的微信通道各自写一份"先在 users 里找个锚点、
-再更新 external_identities"的逻辑，两份代码一旦漂移，同一个人在不同通道下就会被差别
-对待（昵称补写、撞名后缀、群成员身份各写各的）。这里只回答一个问题：
-这条外部身份对应本地 users.id 是哪一个。
+身份那一行（谁、从哪来、放不放行）在 identity.py；本文件只回答一个问题：这条外部身份
+对应的本地 users.id 是哪一个，以及两个锚点账号怎么并成一个。
 
 为什么还要锚点账号（而不是直接用 external_identities.id）：消息、私信会话、群成员
 目前还只能挂 users.id；等它们都改成引用外部身份之后，这个锚点就该消失
 （取舍见 app/models/external.py）。
+
+为什么要收成一处：官方 QQ、NapCat、以后的微信通道各自写一份"先在 users 里找个锚点、
+再更新身份行"的逻辑，两份代码一旦漂移，同一个人在不同通道下就会被差别对待
+（昵称补写、撞名后缀、群成员身份各写各的）。
 
 同一个人在两台机器人下各有一个 openid（QQ 按 appid 分配），于是各有各的锚点账号；
 把它们并到一个账号上的两处就在本文件：ensure_channel_user（认亲之后别再分家）与
@@ -17,7 +19,7 @@ from __future__ import annotations
 
 import logging
 import secrets
-from typing import Any, Iterable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -29,36 +31,6 @@ def _anchor_suffix(kind: str) -> str:
 def anchor_email(kind: str, origin: str) -> str:
     """通道身份的锚点邮箱（users.email）：建号与反查都只认这一处拼法"""
     return f"{origin}{_anchor_suffix(kind)}"
-
-
-async def channel_contacts(
-    db: Any, *, kind: str, owner_scope: str, user_ids: Iterable[int]
-) -> dict[int, str]:
-    """这批本地账号里哪些在这条通道上有号：users.id → 通道侧标识（QQ 是 openid）
-
-    出站要把 <@!平台id> 翻成通道侧的真 @（QQ 官方的 <@!openid>、NapCat 的 [CQ:at,qq=…]），
-    靠的就是这张表：只有走过这条通道的人，在那条通道上才有 id 可 @。
-
-     只查调用方点名的那几个 id：一次回复里 @ 的人通常 1-3 个，而通道身份会随配对人数一直涨，
-    按通道全表拉出来再在 Python 里筛是拿 O(通道历史) 换 O(@数)。
-    一次 where 就够：外部身份那一行直接记着锚点账号（user_id），而 (kind, owner_scope)
-    限定"哪台机器人"，所以同一个 QQ 号接了两个实例时，只有走过**这个实例**的那条地址算数。
-    """
-    ids = sorted({int(uid) for uid in user_ids})
-    if not ids:
-        return {}
-    from sqlalchemy import select
-
-    from app.models.external import ExternalIdentity
-
-    rows = (await db.execute(
-        select(ExternalIdentity.user_id, ExternalIdentity.origin).where(
-            ExternalIdentity.kind == kind,
-            ExternalIdentity.owner_scope == owner_scope,
-            ExternalIdentity.user_id.in_(ids),
-        )
-    )).all()
-    return {int(uid): str(origin) for uid, origin in rows if uid is not None}
 
 
 def _same_nickname(current: Any, desired: str) -> bool:
@@ -125,7 +97,7 @@ async def ensure_channel_user(
     from app.models.external import ExternalIdentity
     from app.models.group import GroupMember
     from app.models.user import User
-    from app.services.plugin import pairing
+    from app.services.channel import identity
     from app.utils.auth import hash_password
 
     origin = str(origin or "").strip()
@@ -139,13 +111,13 @@ async def ensure_channel_user(
     nickname = raw_name[:40]
     union_id = str(union_id or "").strip()
 
-    identity = await pairing.ensure(
+    record = await identity.ensure(
         db, kind=kind, owner_scope=owner_scope, origin=origin,
         display_name=raw_name, commit=False,
     )
     anchor = anchor_email(kind, origin)
 
-    row = (await db.get(User, int(identity.user_id))) if identity.user_id else None
+    row = (await db.get(User, int(record.user_id))) if record.user_id else None
     if row is None:
         # 没绑过：同一个 union 的兄弟 + 这个 openid 以前留下的锚点，谁最早谁是正主
         siblings = []
@@ -219,12 +191,12 @@ async def ensure_channel_user(
             logger.warning(f"外部通道账号改名撞车，保留原名 {old_name}（{kind} …{origin[-6:]}）")
 
     # 身份行是这个地址的唯一事实：指回最终定下的那个账号（认亲定了别人就照认亲的来）
-    if not raw_name and not str(identity.display_name or ""):
-        identity.display_name = str(row.username or "")
-    if union_id and identity.union_id != union_id:
-        identity.union_id = union_id
-    if int(identity.user_id or 0) != int(row.id):
-        identity.user_id = int(row.id)
+    if not raw_name and not str(record.display_name or ""):
+        record.display_name = str(row.username or "")
+    if union_id and record.union_id != union_id:
+        record.union_id = union_id
+    if int(record.user_id or 0) != int(row.id):
+        record.user_id = int(row.id)
 
     if join_group:
         member = (await db.execute(

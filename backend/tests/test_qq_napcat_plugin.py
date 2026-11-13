@@ -24,17 +24,14 @@ QQ_DM_USER = 30001
 
 
 def _load_plugin_module():
-    """按插件的加载方式导入（set_current_plugin 让 @service 认得 owner）"""
-    from app.services.plugin import api
+    """按生产同样的方式导入插件包（set_current_plugin 让 @service 认得 owner）。"""
+    from app.services.plugin import api, packages
 
-    spec = importlib.util.spec_from_file_location("_test_qq_napcat", str(PLUGIN_PATH))
-    module = importlib.util.module_from_spec(spec)
     api.set_current_plugin("qq-napcat")
     try:
-        spec.loader.exec_module(module)
+        return packages.load("qq-napcat", PLUGIN_PATH.parent)
     finally:
         api.set_current_plugin(None)
-    return module
 
 
 class FakeClient:
@@ -57,8 +54,18 @@ class FakeClient:
         self.closed = True
 
 
+async def _ensure_schema():
+    """插件表按生产路径建好：用例不该依赖别的文件碰巧先跑过"""
+    from app.services.plugin import storage
+
+    result = await storage.ensure("qq-napcat", MANIFEST_PATH.parent)
+    assert result["error"] is None
+
+
 async def _seed():
     from app.database import async_session
+
+    await _ensure_schema()
 
     async with async_session() as db:
         from db_reset import clear
@@ -241,7 +248,7 @@ async def test_group_allowlist_blocks_other_groups(migrated_db):
 async def test_private_pairing_gate_then_approved(migrated_db):
     """默认 pairing：陌生人私聊不进 AI，只领一个配对码；主人批准之后才放行"""
     from app.database import async_session
-    from app.services.plugin import pairing
+    from app.services.channel import identity
 
     await _seed()
     plugin = await _make_plugin()
@@ -267,7 +274,7 @@ async def test_private_pairing_gate_then_approved(migrated_db):
 
         # 主人批准 → 再私聊就进 AI
         async with async_session() as db:
-            await pairing.approve(db, kind="qq-napcat", owner_scope="bot-a", code=row[3])
+            await identity.approve(db, kind="qq-napcat", owner_scope="bot-a", code=row[3])
         plugin._client.sent.clear()
         await plugin._on_payload({**DM_EVENT, "message_id": 8002})
         async with async_session() as db:
@@ -315,7 +322,7 @@ async def test_outbound_mentions_become_cq_at(migrated_db):
     """出站把 <@!平台id> 翻成 [CQ:at,qq=<QQ号>]：走过这条通道的人才有号可 @，认不出的退名字。"""
     from app.chat.gm import send_gm_message
     from app.database import async_session
-    from app.services.plugin.channel_user import ensure_channel_user
+    from app.services.channel.anchor import ensure_channel_user
 
     await _seed()
     plugin = await _make_plugin()
@@ -364,6 +371,7 @@ async def test_only_target_ai_group_reply_is_forwarded(migrated_db):
 
 async def test_lifecycle_records_self_id(migrated_db):
     """lifecycle 事件里的 self_id 就是机器人自己的 QQ 号，@ 判定要靠它"""
+    await _ensure_schema()
     module = _load_plugin_module()
     plugin = module.QqNapcatPlugin()
     plugin.id = "qq-napcat"
@@ -425,8 +433,10 @@ async def test_multi_instance_one_channel_per_ai(migrated_db):
     async with async_session() as db:
         db.add(Plugin(id="qq-napcat", name="QQ 通道（NapCat）", category="service", enabled=True, builtin=True))
         await db.commit()
-        await set_config("qq-napcat", {"ws_url": "ws://ai-a.invalid:3000", "copree_group_id": "11", "target_agent": "浮生"}, "agent-11", db=db)
-        await set_config("qq-napcat", {"ws_url": "ws://ai-b.invalid:3000", "copree_group_id": "12", "target_agent": "小满"}, "agent-12", db=db)
+        await set_config("qq-napcat", {"ws_url": "ws://ai-a.invalid:3000", "copree_group_id": "11",
+                                       "target_agent_id": "7", "target_agent": "浮生"}, "agent-11", db=db)
+        await set_config("qq-napcat", {"ws_url": "ws://ai-b.invalid:3000", "copree_group_id": "12",
+                                       "target_agent_id": "7", "target_agent": "小满"}, "agent-12", db=db)
         await skill_bridge.apply_skill_plugins(db)
 
         a = PluginRegistry.get("qq-napcat:agent-11")
@@ -585,10 +595,11 @@ async def test_typed_name_is_not_mentioned_twice(migrated_db):
         _cleanup(plugin)
 
 
-async def test_channel_contacts_only_looks_up_asked_ids(migrated_db):
+async def test_contacts_only_look_up_asked_ids(migrated_db):
     """@ 映射只查被点名的 id，且仍只认走过**这个实例**的身份"""
     from app.database import async_session
-    from app.services.plugin.channel_user import channel_contacts, ensure_channel_user
+    from app.services.channel import identity
+    from app.services.channel.anchor import ensure_channel_user
 
     await _seed()
     async with async_session() as db:
@@ -602,7 +613,7 @@ async def test_channel_contacts_only_looks_up_asked_ids(migrated_db):
         )
         await db.commit()
     async with async_session() as db:
-        contacts = await channel_contacts(
+        contacts = await identity.contacts(
             db, kind="qq-napcat", owner_scope="bot-a",
             user_ids=[mine[0], other[0], 999999],
         )

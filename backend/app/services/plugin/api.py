@@ -52,7 +52,9 @@ owner 由 skill_bridge 在加载时通过 set_current_plugin() 注入：装饰�
 """
 from __future__ import annotations
 
+import contextlib
 import logging
+from contextvars import ContextVar
 from typing import Any, Callable
 
 from dataclasses import dataclass
@@ -67,19 +69,37 @@ from app.utils.pure.skill_registry import SkillRegistry
 
 logger = logging.getLogger(__name__)
 
-# 当前正在被 skill_bridge 加载的插件 id（装饰器执行时读取，作为 owner）
-_current_plugin: str | None = None
+# 当前插件 id：加载期由 skill_bridge 设置（装饰器据此认领 owner），运行期由平台在
+# 工具分发 / 服务生命周期上再放一次（插件运行时要调用插件公共接口时必须知道"我是谁"）。
+# 用 ContextVar 而不是模块全局：同一进程里多个工具/服务并发执行，全局变量一撞就串号。
+_current_plugin: ContextVar[str | None] = ContextVar("aisc_current_plugin", default=None)
 
 
 def set_current_plugin(plugin_id: str | None) -> None:
     """skill_bridge 加载 plugin.py 前设置、加载后清空。"""
-    global _current_plugin
-    _current_plugin = plugin_id
+    _current_plugin.set(plugin_id)
 
 
 def get_current_plugin() -> str | None:
-    """当前加载上下文（测试与调试用）。"""
-    return _current_plugin
+    """当前插件上下文（加载期 / 工具分发 / 服务生命周期三种时候有值）。"""
+    return _current_plugin.get()
+
+
+@contextlib.contextmanager
+def plugin_context(plugin_id: str | None):
+    """运行期把"我是哪个插件"放回上下文。
+
+    加载期之外（工具执行、服务 start/stop/get_status）平台用它在调用点包一层，
+    插件因此可以在运行期调用 `api.enter_frame` 这类需要身份接口。
+    """
+    if not plugin_id:
+        yield
+        return
+    token = _current_plugin.set(plugin_id)
+    try:
+        yield
+    finally:
+        _current_plugin.reset(token)
 
 
 def skill(
@@ -99,11 +119,11 @@ def skill(
     """
     if category not in ("action", "inject"):
         raise ValueError(
-            f"插件技能类别必须是 action 或 inject，收到 {category!r}（插件 {_current_plugin}）"
+            f"插件技能类别必须是 action 或 inject，收到 {category!r}（插件 {get_current_plugin()}）"
         )
 
     def wrapper(func: Callable) -> Callable:
-        owner = _current_plugin  # skill_bridge 加载时注入；None = 非插件上下文
+        owner = get_current_plugin()  # skill_bridge 加载时注入；None = 非插件上下文
         SkillRegistry.register(
             type_name=type,
             name=name[:60],
@@ -164,7 +184,7 @@ def service(
     :param multi_instance: 一个插件多份配置（每个实例一份，独立启停）
     """
     def wrapper(cls: type[ServicePlugin]) -> type[ServicePlugin]:
-        plugin_id = _current_plugin or getattr(cls, "id", "") or cls.__name__.lower()
+        plugin_id = get_current_plugin() or getattr(cls, "id", "") or cls.__name__.lower()
         _service_defs[plugin_id] = ServiceDef(
             plugin_id=plugin_id,
             cls=cls,
@@ -210,16 +230,92 @@ async def report_notice(
     )])
 
 
+async def notify_agent(
+    agent_id: int,
+    text: str,
+    *,
+    ref: str = "",
+    context: dict | None = None,
+    context_ref: str = "",
+    transient: bool = True,
+    db=None,
+) -> bool:
+    """给某个 AI 留一条账本通知 —— 插件的一步入口（`report_notice` 之上的省事版）。
+
+    插件只用说三件事：**谁**（agent_id）、**在哪**（context 或 context_ref）、**说了什么**（text）。
+    开会话、查 agent、拼会话键、提交都由这里做——这些以前每个调用点各抄一遍
+    （bilibili 抄了两遍、qq-channel 和帧预算各一遍）。
+
+    - `context` 收工具 `execute()` 拿到的那个 dict（带 `group_id` / `session_id`）：
+      有 `session_id` 就是那段私信，否则是 `group:<id>`。要更明确就传 `context_ref`，它优先。
+    - 返回 True = 真写进去了。把"推进游标 / 记已读"绑在这个返回值上，
+      就能保证「标成已读的东西一定还能翻到」。
+    - `db` 不传：自己开会话、自己提交；传了：只写不提交（与 `report_notice` 同口径，
+      让调用方把这条通知和自己那笔写放同一个事务）。
+
+    条目长什么样（kind / `drop_on_unlock` / `seen`）仍由平台定，见 `report_notice`。
+    """
+    from sqlalchemy import select
+
+    from app.database import async_session
+    from app.models.agent import Agent
+    from app.services.history.context_sync import context_ref as _context_ref
+
+    body = (text or "").strip()
+    if not body or not agent_id:
+        return False
+    where = context_ref or _context_ref(
+        session_id=(context or {}).get("session_id") or None,
+        group_id=(context or {}).get("group_id"),
+    )
+
+    async def _write(session) -> bool:
+        agent = (await session.execute(
+            select(Agent).where(Agent.id == int(agent_id))
+        )).scalars().first()
+        if agent is None:
+            return False
+        await report_notice(session, agent, where, body, ref=ref, transient=transient)
+        return True
+
+    if db is not None:
+        return await _write(db)
+    async with async_session() as session:
+        wrote = await _write(session)
+        await session.commit()
+    return wrote
+
+
+# 插件帧：声明与创建自己的状态帧（契约与边界见 docs/plugin-dev/plugin-frames.md）。
+# 放在这里统一导出，插件只认 api 这一个入口，不直接 import services 内部实现。
+from app.services.plugin.frames import (  # noqa: E402
+    FrameError,
+    declared_frames,
+    enter_frame,
+    leave_frame,
+    list_frames,
+    update_frame,
+)
+
+
 __all__ = [
     "skill",
     "service",
     "report_notice",
+    "notify_agent",
     "ServicePlugin",
     "ServiceDef",
     "get_service_def",
     "drop_service_def",
     "set_current_plugin",
     "get_current_plugin",
+    "plugin_context",
     "ENV_TEXT_KEY",
     "ENV_PUBLIC_KEYS",
+    "enter_frame",
+    "update_frame",
+    "leave_frame",
+    "list_frames",
+    "declared_frames",
+    "FrameError",
 ]

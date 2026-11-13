@@ -1,7 +1,8 @@
 # 给自己的 AI 接一个外部通道（QQ / NapCat）
 
 > 状态：已实现（最近更新 v0.4.10，2026-09-26）。入口在「我的 AI → 设置 → 通道」，页面里按通道分子项（有几条由插件声明）。
-> 相关代码：app/routers/channels.py、app/services/plugin/{channel,pairing,runtime_control,channel_user}.py、
+> 相关代码：app/routers/channels.py、app/services/plugin/{channel,runtime_control}.py、
+> app/services/channel/{identity,anchor}.py（通道身份目录与锚点账号）、
 > app/chat/outbound.py（出口注册表）、app/chat/revoke.py（撤回）、
 > backend/plugins/qq-channel/（官方）、backend/plugins/qq-napcat/（协议端）、
 > frontend/src/components/channels/{ChannelCard,ChannelModal}.tsx
@@ -34,7 +35,7 @@ app/chat/group_delivery.py 与 dm_delivery.py，和网页端完全同路。
 外部身份**不建在主站的 users 表里**：不占用户号、不进用户统计、搜不到也加不了好友。
 但通道里的人说话会落一个"锚点账号"（`email = <origin>@<kind>.bridge`），消息、群成员、
 私信会话都挂在它上面；他以后自己注册了 Copree 账号，才用 `bound_user_id` 把两边绑起来。
-锚点邮箱的拼法只有一处：`services/plugin/channel_user.anchor_email()`。
+锚点邮箱的拼法只有一处：`app/services/channel/anchor.py` 的 `anchor_email()`。
 
 **同一个人在多个机器人眼里是多个 origin**（QQ 的 openid 按机器人加密，官方只有 `union_openid`
 是"跨应用统一"且可能为空），所以外部身份那一行还记两样东西：`union_id`（跨应用标识）与
@@ -64,7 +65,7 @@ app/chat/group_delivery.py 与 dm_delivery.py，和网页端完全同路。
 策略四档：pairing（默认）/ owner（只认已配对，陌生人静默）/ open（谁都能聊）/ off（私聊关闭）。
 群里被 @ 不受私聊策略影响，另有 QQ 群白名单。
 
-配对提示文案在两条通道共用一份：`services/plugin/pairing.pairing_reply(code, card)`。
+配对提示文案在两条通道共用一份：`app/services/channel/identity.py` 的 `pairing_reply(code, card)`。
 
 ## 4. 归属与实例
 
@@ -80,7 +81,7 @@ app/chat/group_delivery.py 与 dm_delivery.py，和网页端完全同路。
 | 方法 | 路径 | 作用 |
 | --- | --- | --- |
 | GET | /me/agents/{id}/channels | 这个 AI 的全部通道视图：插件 id / 类别 / 三语名称 / schema / 已填值 / 机密"填没填" / 运行态 / 待批已批名单 |
-| PUT | /me/agents/{id}/channels/{plugin_id} | 保存配置（target_agent 由路径上的 AI 决定，用户传什么都不算）并启动 |
+| PUT | /me/agents/{id}/channels/{plugin_id} | 保存配置（接哪个 AI 由路径决定：平台写 `target_agent_id`，用户传什么都不算）并启动 |
 | POST | /me/agents/{id}/channels/{plugin_id}/landing-group | 不接回现有群，改在 Copree 新建一个落点群 |
 | POST | /me/agents/{id}/channels/{plugin_id}/start \| stop | 启停（与管理台共用 runtime_control） |
 | POST | /me/agents/{id}/channels/{plugin_id}/self-test | **通道自测**：在真实出口上发一条测试消息，回显通道侧原始响应 |

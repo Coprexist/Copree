@@ -48,7 +48,7 @@
 字段（两站同一套服务，存储各自适配）：
 
 - `id` / `owner`（agent 或 world）/ `context_ref`（群、私信、世界会话）/ `seq`
-- `kind`（message / gap / tool / note / notice / suggestion / summary …）
+- `kind`（message / gap / tool / note / notice / suggestion / summary / memory / experience …）
 - `actor`（我 / 用户 / 外界）/ `content`（**渲染好的最终字节**）/ `ref`（message_id、tool_call_id 等）
 - `created_at` / `flags`（可压、已撤下…）
 
@@ -67,6 +67,25 @@
 - **一次性事件一律落成条目**：便签投递、便签撤下（原文保留 + "不要再执行"）、能力变更通知、好友申请、建议回复。
   - 便签从此**没有** `retired` / `notified` 标记，也**不再每轮对账**——投递就是写一条，撤下就是再写一条。
   - 建议回复条目化后，UI 的建议按钮**从条目读**，`ui.suggestions` 退场（避免两份真相）。
+- **同一句话不落第二遍**：`tool`（`[本轮工具]` 总账）与 `notice`（能力变更、模式切换这类平台通知）
+  落账前先跟「同 `kind`、同 `ref` 的上一条」逐字节比，一样就不再落（`context_sync._fold_repeats`
+  → `history_service.last_of`，纯逻辑在 `pure/history.fold_repeats`）。压缩时事件条目**原样搬运**、
+  折不掉，所以这类重复只增不减：线上单段会话里同一条工具总账积了 59 条、`channel_mode` 通知同 ref 积了 9 条。
+  判据只在**写入侧**——账本只追加，回头清理等于改中段，把它后面的前缀缓存全废。
+  `message` / `gap` / `handoff` 这类重复就是内容真的重复，不许折。
+
+### 4.2 附件怎么进上下文
+
+附件（图片 / 文件）走两层，收口都在渲染层（\`app/utils/multimodal.py\`）：
+
+- **标记**：账本条目里铺一行 \`[图片]\` / \`[文件] 名（大小）\`——群聊与私信同一口径
+  （\`gm_message_entry\` / \`dm_message_entry\`）。这是"这条消息带了个文件"的长期记录，便宜、每轮可见。
+- **内容**：只有**最新一条用户消息**带真实内容——图片走多模态 parts；文本文件（\`text/*\`、
+  \`.md/.txt/.json\`…）读进正文 \`[文件内容] …（前 3000 字）\`，超过 64 KB 只留名字与"太大没有内联"。
+  历史消息两者都不带（同 §2 判据 3：字节稳、token 省）。旧消息要读内容靠 \`expand_message\` 现场展开
+  （它会把附件名与文本内容一起给）。
+
+这两层缺一不可：只有标记时 AI 会说"我只看到文件名"；只有内容时历史里又会凭空多出大段字节。
 
 ### 4.1 轮内注入：账本之外的「临时读数」
 
@@ -124,6 +143,33 @@ messages、**不落库**、随轮消失（决策技能那条没人被唤醒时�
 - **跨轮不回传 `reasoning_content`**（改用上面那条简要系统消息）；**轮内**仍按 DeepSeek 官方要求完整回传。
 - **两站**：主站复用现有 `end_turn`（`app/tools/self_management/end_turn.py`）；世界 AI 新增同名工具，并把现有"强制收尾轮"（`world_chat_service.py` 的 finalize 分支）并进同一条路径；模型忘了给决定就按默认（不保留），没给 `key_note` 就用正文当"干了什么"，**永不空**。
 - **写入条件**：以"真发出去了 / 工具成功"为准；失败只记"没做完"。
+
+### 5.1 key_note 的另一半：经历行（2026-11-01）
+
+`key_note` 不只写给同一段对话里的下一轮，还写进 `agent_experiences`（`source=key_note`）：
+换到别的群、别的私信，那边的自己能想起「我在那儿干过什么」。这是「人格漂移」问题的正面解——
+自我经历的连续性不该只活在当下这个场景。
+
+- **写入**：轮末封存时 `key_note` 非空就写一行，不等场景收口；场景收口时若这一场一行都没有、
+  但账本里有 `[本轮工具]`，用工具总账补一行（`source=tool_ledger`）。AI 也能用
+  `note_experience` 主动写（`source=ai`）。
+- **场景 = 帧**：`scene_key` 取当前帧（当前帧）的 `context_ref`，不是会话键。群聊/私信帧与
+  会话键同值；**插件帧**（`<plugin_id>:...`）是自己的一段，在帧里干的事落在帧上，切回群时
+  照样投得到——所有帧都自动有这个基础能力，插件不需要另开口子。
+- **归属**：`owner_type + owner_id`（主站 `ai` / 世界 `world_ai`），主站 AI 与世界 AI 共用
+  这一张表与同一套读写。
+- **读取**：账本条目 `ref=exp:<id>`，投递去重；`drop_on_unlock` 让它在解锁时离场，
+  于是「compact 之后不算投过」是免费的。两条投递路径共用这本账：
+  切场第一轮补「刚离开那一场」的最新几行；常规轮按最近消息关键词召回，命不中就不投。
+- **世界侧**（没有账本）：投递标记记在被投会话的 `world.config.sessions[key].experience_seen`
+  里——进过这个会话就不再投，换会话重新可投；写入用这一轮的工具总账
+  （`experience/world_experience.py`），AI 也能用世界的 `note_experience` 工具主动写。
+- **不投本场的行**：本场产出的经历本来就在它的上下文里，再「想起」一次是噪声。
+- **额度**：记忆与经历各自封顶，合起来还有总闸（`memory_inject_max` / `experience_inject_max` /
+  `inject_max_total`，默认 5 / 5 / 7），三个数都在 runtime 配置里。
+- **原文尾巴跟着收窄**：`frame_tail` 默认 2 轮 / 400 字（原 4 / 1200），那一场干过什么交给经历行；
+  两个数进 runtime 配置（`handoff_tail_exchanges` / `handoff_tail_chars`）。
+  代价是「约定/暗号」的原文保底变薄，由 `key_note` 与 `cross_state_note` 承担。
 
 ## 6. 压缩
 
@@ -242,7 +288,7 @@ messages、**不落库**、随轮消失（决策技能那条没人被唤醒时�
 
 ## 10. 迁移
 
-- **老会话**：状态栈（`agents.state_stack`）与群视界历史（`world_chat_messages`）**一次性拆进历史**；老会话在新结构下重新拼一次（一次性重建，不额外付缓存代价）。
+- **老会话**：状态链（`agents.state_stack`）与群视界历史（`world_chat_messages`）**一次性拆进历史**；老会话在新结构下重新拼一次（一次性重建，不额外付缓存代价）。
 - **投递一条变更通知**告知 AI"上下文组织方式变了"（复用现有懒通知/能力变更通知通道）。
 - 新会话直接按新结构走。
 
@@ -298,6 +344,7 @@ messages、**不落库**、随轮消失（决策技能那条没人被唤醒时�
   `make_entry` / `gap_text` / `gap_entry` / `is_compressible` / `entries_to_messages`。
   `gap_text` 是**唯一文案来源**（主站群聊截断提示将来也读它，避免两处各写一遍）。
 - **服务** `app/services/history/history_service.py`：`append`（统一分配 seq，批次顺序即传入顺序，
+  **2026-11-07 起 seq 由数据库发号**，见 §13「第六批」——别再改回 `MAX(seq)+1`），
   **缺口事件与它那批消息必须同一次 append**）/ `read(since_seq=…)`（compact 边界锚点）/
   `count` / `last_seq` / `clear`（解锁重写——只许解锁点调）。
 - **测试** `tests/test_history_entries.py`（6 条：缺口文案唯一来源、投影、事件不可压、
@@ -378,6 +425,15 @@ messages、**不落库**、随轮消失（决策技能那条没人被唤醒时�
 - **只写了文字、没调发送工具的轮次**：轮末不代发，写一条 `note`（`history.unsent_text_entry`，
   正文 + 平台当时的提醒）交给下一个自己。正文可能是它给自己记的过程，也可能是准备发给另一个会话的
   话——平台分不清"这句是给谁的"，代发就是替它说错人（2026-10-18 定）。
+  - **认领范围（2026-11-06 修）**：只要这一轮写过纯文字、且一条消息都没发出去，**任何出口**
+    （end_turn、intent=end_turn、轮次用尽、中断）封存时都写这一条。此前只有「提醒后仍只返回文字」
+    那一个分支传了参，模型第一轮纯文字、第二轮改调 end_turn 收尾时，那句正文只活在当轮 `messages` 里，
+    轮末无人认领就消失了，下一个自己根本不知道说过。
+  - **本轮发过消息就不写**：`send_gm`/`send_dm` 成功（`_has_sent_message`）时那句话要么已被改写成
+    工具发出、要么被弃，再留一条「没发出去的话」会让下一轮照着又发一遍。
+  - **不代发的原因**：是怕给其他对话发消息却没有调用工具导致泄漏。这可能会导致因为模型的专注问题等
+    消耗多余的 token，但是能保证特殊情况下的隐私泄漏问题不出现。未来或将加上默认文字输出处理方式
+    选择功能，可选是静默保留还是直接发出。
   （便签投递与撤下通知本来就是同款待遇，见 b-3b）。
 - `context_ref(*, group_id=None, session_id=None)`：会话键**唯一来源**（群 `group:{id}` / 私信 `session_id`），
   关键字参数逼调用点说清在哪个会话。
@@ -416,7 +472,9 @@ messages、**不落库**、随轮消失（决策技能那条没人被唤醒时�
 ### 第四批 d：解锁清单即契约（已完成 2026-09-25）
 
 - `context_unlock.UNLOCK_STEPS`（2026-10-05 从 `executor` 迁到 `services/history/context_unlock.py`；数据，不是散在函数体里的调用）：`rewrite_history` / `clear_note_copies` /
-  `apply_pending_config` / `apply_pending_changes` / `apply_environment`；`unlock_context` 按清单顺序执行并返回实际执行的步骤名。**各步参照点目前不统一**：`rewrite_history` / `clear_note_copies` / `reset_trigger_state` 按当前会话，`apply_pending_changes` 写的是 agent 级 `cap_effective_versions`——一个会话 compact 会让别的会话也换前缀字节（待修，见[能力懒加载](./capability_lazy_loading.md)「待修：effective 的粒度与解锁点不一致」）。
+  `apply_pending_config` / `apply_pending_changes` / `apply_environment` / `reset_frame_roster`；
+  `unlock_context` 按清单顺序执行并返回实际执行的步骤名。最后一步把「你手上有哪些帧」的清单作废，
+  下一次请求按此刻的帧集合重算一份（清单是快照，增删只补账本条目，见 [帧的生命周期](./frame_lifecycle.md)）。**各步参照点目前不统一**：`rewrite_history` / `clear_note_copies` / `reset_trigger_state` 按当前会话，`apply_pending_changes` 写的是 agent 级 `cap_effective_versions`——一个会话 compact 会让别的会话也换前缀字节（待修，见[能力懒加载](./capability_lazy_loading.md)「待修：effective 的粒度与解锁点不一致」）。
 - 任何一步抛异常都记 `logger.exception`（哪步挂的 + 前面做完了什么）再往上抛——静默半解锁正是便签那次的病根。
 - 测试 `tests/test_unlock_steps.py`：① 清单 == 约定集合（改清单必须改测试）；
   ② 真跑 `_unlock_context`（真库草稿会话）断言执行步骤 == 清单且账本真被重写成摘要在前。
@@ -462,7 +520,7 @@ messages、**不落库**、随轮消失（决策技能那条没人被唤醒时�
 - **「当轮注入区」整个取消**：`dynamic_readings` 这个「system 段之后、历史之前」的插槽里当时只剩技能注入一项，
   而它自己的注释写着该沉尾部（检索词是最近 5 条消息）——代码与注释相反，技能激活/失效那一轮仍会把后面整段历史
   打掉。现在 `message 0` 之后**直接就是历史**：开头只留 `[system_prompt]`（身份/人格/规矩/工具/记忆索引，
-  全部走版本链冻结），技能、任务、状态栈摘要、当前时间一律**尾部读数**，记忆与计划走**账本条目**。
+  全部走版本链冻结），技能、任务、状态链摘要、当前时间一律**尾部读数**，记忆与计划走**账本条目**。
   规矩一句话：**开头每个字节只许随「配置/能力版本」变，任何随对话/时间变的东西不许进开头**。
   **实测**（真机日志 9878→9880，同一 AI 同一群）：`messages[0]` 4894 字符逐字节相同，相邻两次请求的首个
   不同下标是 225/227（总长 233/239）——差异只落在最后 8 条本轮消息处，`cached_tokens` 27,264 / 29,069 = prompt 的 94%。
@@ -569,7 +627,7 @@ messages、**不落库**、随轮消失（决策技能那条没人被唤醒时�
 4. **展示**：前端 `utils/mentions.ts` 把 `<@!id>` 换成当前名字（改名自动跟着变），ChatView 传成员表；
    认不出的 id 原样留着（不编名字、也不新增文案）。旧消息不做迁移。
 
-**通道出口真 @**：`channel_contacts`（`channel_user.py`，锚点邮箱约定收进 `anchor_email`）给出
+**通道出口真 @**：`contacts`（`app/services/channel/identity.py`，锚点邮箱约定在 `anchor.py` 的 `anchor_email`）给出
 "这条通道上认得的本地账号 → openid"；QQ 官方发 `<@!openid>`、NapCat 发 `[CQ:at,qq=…]`；
 认不出的退 `@名字`（令牌原样发出去只会是乱码）。查库放在后台任务里，不拖慢发消息。
 真机实测（2026-09-25 用户截图）：正文里的 `<@!openid>` 在群里渲染成**可点**的 @。
@@ -643,6 +701,32 @@ messages、**不落库**、随轮消失（决策技能那条没人被唤醒时�
 - **取消路径的现场**：13:51:27 的消息撞上 13:51:38 的重启，那一轮被 cancel 且当时进程里还是旧代码
   （取消收尾尚未加载），DB 里一条痕迹都没有——正是本条要堵的路径。
 
+### 第六批：seq 由数据库发号 + 事务不跨外部 I/O（已完成 2026-11-07，重启后生效）
+
+**事故**：2026-11-07 00:12（CST）群 81 冻结 12 小时。`pg_stat_activity` 里两个会话互等：
+回合事务（`idle in transaction`，已把新消息写进账本但没提交）在等工具返回；工具自己开的
+第二个会话在等它提交——`INSERT INTO agent_history_entries` 卡在唯一索引上，没有超时。
+
+**根因**：seq 用 `SELECT MAX(seq)+1` 分配，看不见别的事务**还没提交**的行。回合先把消息写进
+账本（seq 275，未提交），插件的 `bili_inbox` 自己开会话同样算到 275，撞唯一索引后就**原地等**
+先到那笔提交；而先到那笔正等着工具返回 → 闭环。
+
+**改法**（根治，不留兼容分支）：
+
+1. **发号交给数据库**：新表 `agent_history_seq(agent_id, context_ref) → last_seq`（迁移 `0107`）；
+   `history_service._reserve` 用一条 `INSERT ... ON CONFLICT DO UPDATE ... RETURNING` 把这一批要用的
+   区间一次领走，领到多少号只取决于谁先领，与别的事务可不可见无关。首写按账本现有 `MAX(seq)`
+   自播种，所以**迁移不回填**、老库第一次 append 自动接上。`clear()` 在同一笔事务里清掉计数，
+   解锁重写后仍从 1 开始（§6 的重排语义不变）。
+2. **事务不跨外部 I/O**：`executor._tool_call_loop` 在**调模型前**、**派发每个工具前**先
+   `db.commit()`。带着未提交的写去等网络，等于把行锁抵押给一个可能正等着我们返回的调用。
+3. **等锁有上限**：`app/database.py` 给 PG 引擎设 `lock_timeout=15s`。日后再出现长事务持锁，
+   等的一方 15 秒拿到可读的报错，而不是把整条后台队列一起冻住。
+
+**测试** `tests/test_history_seq.py`（3 条：重叠的写者各领各的号、`clear` 后从 1 重排、
+老库首写接上原序号）。`test_round_closing` 的两条断言按 `ledger_worthy_tools` 的口径校正
+（成功的读类工具不进账本）。
+
 ### 待落地
 
 **本轮已完成（2026-09-26）**：① 通道文案（`live_mention_rule` 讲清「@其他成员的内容不转发」，`channel_rules` 讲清「撤回不同步」等固定限制）；
@@ -676,4 +760,4 @@ QQ 入站把正文里的原始提及 `<@openid>` 摘掉（曾漏进正文，AI �
 7. **第三批**：世界 AI（新增同名 `end_turn` + 现有强制收尾轮并入 + 历史走同一套服务）。
 8. **第四批**：两级压缩（确定性修剪器 + 摘要模板：关键想法 / 必留项 / 裁剪优先级）+
    用 `cached_tokens` 标定三档数值 + 图片不降级。
-9. **第五批**：老会话迁移（状态栈 + 群视界历史一次性拆进历史 + 投递变更通知）+ 全量验证与文档收尾。
+9. **第五批**：老会话迁移（状态链 + 群视界历史一次性拆进历史 + 投递变更通知）+ 全量验证与文档收尾。

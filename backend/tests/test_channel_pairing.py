@@ -67,7 +67,14 @@ class _FakePluginDir:
             "id": "qq-channel", "name": "QQ 通道", "category": "service",
             "version": "0.0.1", "default_enabled": True,
             # 通道由 manifest 声明：没有 channel 块就不算通道（catalog.channels() 只认这个）
-            "channel": {"kind": "qq", "label": "QQ", "pairing": True, "supports_group": True},
+            # 给 AI 的规矩由插件声明（channel.prompt_rules），平台只拼进上下文
+            "channel": {
+                "kind": "qq", "label": "QQ", "pairing": True, "supports_group": True,
+                "prompt_rules": [{
+                    "text": "官方接口限制：2025-04-21 起没有主动推送，单条消息最多回 5 句，"
+                            "每天每个用户最多 2 条；撤回不同步。",
+                }],
+            },
         }, ensure_ascii=False), encoding="utf-8")
         (d / "plugin.py").write_text(FAKE_PLUGIN, encoding="utf-8")
 
@@ -113,56 +120,56 @@ async def _seed(db) -> tuple[int, int, int]:
 
 async def test_pairing_lifecycle(migrated_db):
     from app.database import async_session
-    from app.services.plugin import pairing
+    from app.services.channel import identity
 
     async with async_session() as db:
         from db_reset import clear
         await clear(db, "external_identities")
         await db.commit()
 
-        row = await pairing.upsert_pending(
+        row = await identity.upsert_pending(
             db, kind="qq", owner_scope="agent-1", origin="openid-aaa", display_name="小明"
         )
         assert row.status == "pending" and len(row.code) == 6
-        assert await pairing.status_of(db, kind="qq", owner_scope="agent-1", origin="openid-aaa") == "pending"
+        assert await identity.status_of(db, kind="qq", owner_scope="agent-1", origin="openid-aaa") == "pending"
 
         # 同一个人反复私聊：复用同一个码，不会刷出一串不同的码
-        again = await pairing.upsert_pending(
+        again = await identity.upsert_pending(
             db, kind="qq", owner_scope="agent-1", origin="openid-aaa", display_name="小明"
         )
         assert again.id == row.id and again.code == row.code
 
         # 配对其他实例/其他机器人互相独立
-        other = await pairing.upsert_pending(
+        other = await identity.upsert_pending(
             db, kind="qq", owner_scope="agent-2", origin="openid-aaa"
         )
         assert other.owner_scope == "agent-2" and other.code != "" 
 
         # 用户把码抄回来批准（大小写、空格都容忍）
-        approved = await pairing.approve(
+        approved = await identity.approve(
             db, kind="qq", owner_scope="agent-1", code=" " + row.code.lower() + " "
         )
         assert approved.status == "approved" and approved.approved_at is not None
 
         # 抄错码：报错而不是静默批准
         try:
-            await pairing.approve(db, kind="qq", owner_scope="agent-1", code="XXXXXX")
+            await identity.approve(db, kind="qq", owner_scope="agent-1", code="XXXXXX")
             raise AssertionError("错码必须被拒绝")
         except ValueError:
             pass
 
         # 拉黑之后不许批准；解除之后回到陌生人
-        await pairing.upsert_pending(db, kind="qq", owner_scope="agent-1", origin="openid-bbb")
-        await pairing.set_status(db, kind="qq", owner_scope="agent-1", origin="openid-bbb", status="blocked")
+        await identity.upsert_pending(db, kind="qq", owner_scope="agent-1", origin="openid-bbb")
+        await identity.set_status(db, kind="qq", owner_scope="agent-1", origin="openid-bbb", status="blocked")
         try:
-            await pairing.approve(db, kind="qq", owner_scope="agent-1", origin="openid-bbb")
+            await identity.approve(db, kind="qq", owner_scope="agent-1", origin="openid-bbb")
             raise AssertionError("拉黑的人不该被批准")
         except ValueError:
             pass
-        assert await pairing.forget(db, kind="qq", owner_scope="agent-1", origin="openid-bbb") is True
-        assert await pairing.status_of(db, kind="qq", owner_scope="agent-1", origin="openid-bbb") is None
+        assert await identity.forget(db, kind="qq", owner_scope="agent-1", origin="openid-bbb") is True
+        assert await identity.status_of(db, kind="qq", owner_scope="agent-1", origin="openid-bbb") is None
 
-        rows = await pairing.list_rows(db, kind="qq", owner_scope="agent-1")
+        rows = await identity.list_rows(db, kind="qq", owner_scope="agent-1")
         assert [r.origin for r in rows] == ["openid-aaa"]
 
 
@@ -751,7 +758,7 @@ async def test_anchor_nickname_does_not_churn_or_die_on_conflict(migrated_db):
     IntegrityError 把整条入站消息带走（那台机器人因此没有被动回复凭据，AI 的回话被跳过）。
     """
     from app.database import async_session
-    from app.services.plugin.channel_user import ensure_channel_user
+    from app.services.channel.anchor import ensure_channel_user
 
     async with async_session() as db:
         first = await ensure_channel_user(
@@ -776,7 +783,7 @@ async def test_anchor_nickname_does_not_churn_or_die_on_conflict(migrated_db):
     assert again[1] == second[1], (again, second)
 
     # 真撞车（另一个人在同一个瞬间占了候选名）：保留原名，绝不抛出去把这条消息带崩
-    import app.services.plugin.channel_user as cu
+    import app.services.channel.anchor as cu
 
     async def _taken(db_, desired, fallback, *, exclude_id=0):
         return "小明"
@@ -800,8 +807,8 @@ async def test_bound_address_does_not_reopen_its_own_anchor(migrated_db):
     各自的锚点账号，群里于是有两个 AN，AI 一人一半地跟他说话。
     """
     from app.database import async_session
-    from app.services.plugin import pairing
-    from app.services.plugin.channel_user import ensure_channel_user
+    from app.services.channel import identity
+    from app.services.channel.anchor import ensure_channel_user
 
     # 同一个进程里前面用例留下的账号还在：这里的地址与昵称都取得跟它们不撞
     async with async_session() as db:
@@ -810,11 +817,11 @@ async def test_bound_address_does_not_reopen_its_own_anchor(migrated_db):
             origin_channel="qq", commit=False,
         )
         # 认亲：另一台机器人看到的地址接到先来的那个账号上（插件的 _adopt_twin 干的就是这一步）
-        identity = await pairing.ensure(
+        record = await identity.ensure(
             db, kind="qq", owner_scope="bot-b", origin="BIND-ONLY-B", display_name="认亲小明",
             commit=False,
         )
-        identity.user_id = first[0]
+        record.user_id = first[0]
         await db.commit()
 
     async with async_session() as db:
@@ -839,7 +846,7 @@ async def test_merging_anchor_accounts_moves_history(migrated_db):
     from app.database import async_session
     from app.models.dm import DMMessage, DMSession
     from app.models.user import User
-    from app.services.plugin.channel_user import ensure_channel_user, merge_channel_accounts
+    from app.services.channel.anchor import ensure_channel_user, merge_channel_accounts
 
     async with async_session() as db:
         early = await ensure_channel_user(

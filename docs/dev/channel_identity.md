@@ -4,8 +4,8 @@
 它们各自连着自己的通道会话（QQ 群 / 用户 openid）。这带来一组只在多实例下才暴露的问题：
 **外部平台按机器人隔离的标识，在平台侧被当成了一份。**
 
-本文记的是这一层的模型、不变量与修法；具体代码在 `backend/plugins/qq-channel/plugin.py`，
-数据在 `message_channel_refs`（迁移 `0099`）。
+本文记的是这一层的模型、不变量与修法；具体代码在 `backend/plugins/qq-channel/identity.py`
+（入站侧的点名物化与认亲）与 `inbound.py`（引用解析），数据在 `message_channel_refs`（迁移 `0099`）。
 
 ## 1. 外部标识是按实例隔离的
 
@@ -69,7 +69,7 @@
 代码侧现在做两件事：
 
 1. 认回真身的那一刻顺手合并：`_adopt_bot_identity` 调
-   `channel_user.merge_channel_accounts(from=影子, to=AI 账号)`，绑定改指本体、它说过的话跟着走、
+   `channel/anchor.merge_channel_accounts(from=影子, to=AI 账号)`，绑定改指本体、它说过的话跟着走、
    空壳删掉。幂等——合并之后条件不再成立；
 2. 存量一次性收敛：`data/scripts/heal_channel_identities.py`（默认只报告，`--apply` 执行）。
    判据缺一不可：源账号 `type='external'`、`display_name` 与某个 agent 名一字不差且该 agent 的账号是 AI、

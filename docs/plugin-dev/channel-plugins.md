@@ -3,8 +3,9 @@
 > 状态：外部身份层、出站出口、**通道自测**、**@ 提及出站翻译**、**撤回联动**均已实现（最近更新 v0.4.10，2026-09-26）；
 > 消息 / 私信会话 / 群成员改为直接引用外部身份是下一阶段（见 §7）。
 > 参考实现：`backend/plugins/qq-channel/`（官方 QQ 机器人，生产在用）。
-> 相关代码：`app/models/external.py`、`app/services/plugin/pairing.py`、`app/services/plugin/channel.py`、
-> `app/services/plugin/catalog.py`、`app/chat/{gm,dm,group_delivery,dm_delivery,outbound}.py`
+> 相关代码：`app/models/external.py`、`app/services/channel/{identity,anchor}.py`（身份目录与锚点账号）、
+> `app/services/plugin/channel.py`、`app/services/plugin/catalog.py`、
+> `app/chat/{gm,dm,group_delivery,dm_delivery,outbound}.py`
 
 ## 0. 职责怎么分
 
@@ -12,6 +13,9 @@
 Copree 管三件事：**这个外部的人是谁**、**放不放行**、**消息怎么进 AI**。
 
 两者对接的地方只有一张表：`external_identities`（一行 = 某个通道上的某个人）。
+这张表归平台、且是所有通道共用的一张（QQ 官方 / NapCat / 以后任何来源各是一个 `kind`）：
+一行还挂着平台侧的锚点账号、放行状态与跨应用认亲，插件卸载重装之后同一个人接回原账号
+靠的就是它。插件读写只经 `app/services/channel/{identity,anchor}.py`，不直接查表。
 
 ## 1. 身份分两个世界
 
@@ -73,7 +77,11 @@ Copree 管三件事：**这个外部的人是谁**、**放不放行**、**消息
 
 1. 字段用 `title` / `description` 写文案（中文），要三语再加 `title_en` / `title_ja`、
    `description_en` / `description_ja`；`secret: true` 走密码框且接口不回显。
-2. `target_agent` 由平台按路径上的 AI 自动填（`managed: true`），插件不要指望用户手填。
+2. `target_agent_id` 与 `target_agent` 由平台按路径上的 AI 自动填（`managed: true`），插件不要指望用户手填。
+   **认人只用 `target_agent_id`**：`target_agent` 是名字，用户随时能改（2026-11-02 线上：
+   QQ 通道按名字在群里找 AI，改名后 `start()` 失败、整条通道静默不启动），只能当显示用的标签。
+   插件没声明 `target_agent_id` 时平台不会写它（自带 schema 的三方通道照旧），
+   [target_agent.py](../../backend/app/services/plugin/target_agent.py) 是内置通道共用的解析入口。
    平台**托管**的字段统一用 `managed: true` + `default: <平台给的值>` 声明：卡片不显示、不算"还缺什么"，
    保存时由 `plugin/config.py` 的 `managed_values()` 覆盖写入（客户端传什么都不算）。
    NapCat 插件就是例子：平台自带协议端（`NAPCAT_WS_URL` / `NAPCAT_TOKEN` 环境变量，见
@@ -118,7 +126,8 @@ NapCat 插件的实现就是例子：平台托管时从 `NAPCAT_CACHE` 读 NapCa
 
 ## 3. 运行时：注册与放行
 
-`app/services/plugin/pairing.py` 是这一层唯一的入口（键就是上面那个三元组）：
+`app/services/channel/identity.py` 是这一层唯一的入口（键就是上面那个三元组）；插件只调它，
+不直接查 `external_identities` —— 表结构与放行状态机是平台契约，不是某个插件的私有数据：
 
 | 函数 | 用途 |
 | --- | --- |
@@ -141,7 +150,7 @@ await pairing.ensure(db, kind=kind, owner_scope=self.instance, origin=openid,
 
 ## 4. 消息怎么进 Copree（照抄 QQ 插件的两段）
 
-**群消息**（`backend/plugins/qq-channel/plugin.py` 的 `_deliver_to_group`）：
+**群消息**（`backend/plugins/qq-channel/inbound.py` 的 `_handle_group_message` → `outbound.py` 的 `_deliver_to_group`）：
 
 ```python
 message = await send_gm_message(db, group_id=落地群, sender_type="human",
@@ -248,7 +257,7 @@ REFIDX 都不同。所以消息行上那一列只能表达"先到的那台"，�
 平台内统一用 `<@!users.id>`（见 [@ 提及统一用 id](../dev/mention_ids.md)）。插件要做两件事：
 
 1. **出站翻译**：把 `<@!id>` 换成通道侧的写法（QQ 官方 `<@!openid>`、NapCat `[CQ:at,qq=…]`）。
-   用 `services/plugin/channel_user.channel_contacts(db, kind=…, owner_scope=…)` 拿
+   用 `app/services/channel/identity.py` 的 `contacts(db, kind=…, owner_scope=…)` 拿
    "这条通道上认得的本地账号 → 通道标识"；**认不出的退成 `@名字`**（令牌原样发出去只会是乱码）。
    查库放在后台发送任务里，别拖慢发消息。
    两条平台差异（QQ 官方实测）：**消息类型决定内联 @ 认不认**（Markdown 认、纯文本不认，后者退名字）；
@@ -258,7 +267,7 @@ REFIDX 都不同。所以消息行上那一列只能表达"先到的那台"，�
    `text.mention_token(self._target_user_id)`（拿不到 user_id 才退回 `@名字`），
    让群自己的唤醒规则照常生效。
 
-锚点邮箱的拼法只有一处：`channel_user.anchor_email(kind, origin)`（建号与反查都走它）。
+锚点邮箱的拼法只有一处：`app/services/channel/anchor.py` 的 `anchor_email(kind, origin)`（建号与反查都走它）。
 
 ## 4.3 通道自测（可选，但强烈建议）
 
@@ -327,8 +336,11 @@ class MyChannelPlugin(ServicePlugin):
 1. **唯一写入口**：环境只能由一个地方改，改的时候顺手置脏 / 写新版本。散着改，漏一处就是**静默失真**——AI 心里的环境和实际不符，比不通知更糟。
 2. **快照 / 脏标记挂在会话帧上**，不挂 agent 全局：A 群的变化不能跑去通知 B 群。
 3. **通知落成账本条目**（紧跟历史，不进静态前缀），投递与清脏同事务。
-4. **通知走公共面，别自己拼条目**：`await api.report_notice(db, agent, context_ref, text, ref=…,`
-   `transient=…)`——插件只说「哪段会话、说了什么、是不是投一次就够」。`transient=True` 就是
+4. **通知走公共面，别自己拼条目**：默认用一步入口
+   `await api.notify_agent(agent_id, text, context=ctx, ref=…, transient=…)`——开会话、查 agent、
+   拼会话键、提交都由它做，返回 True 就是真写进去了（据此决定要不要推进自己的游标）。
+   已经拿着 `db`、要跟自己那笔写同事务时，才退回 `api.report_notice(db, agent, context_ref, text,`
+   `ref=…, transient=…)`（只写不提交）。插件只说「哪段会话、说了什么、是不是投一次就够」。`transient=True` 就是
    「已读才能删」：平台在请求真的发出去（LLM 响应回来）时打 `seen`，解锁重写时见过的才离场，
    没投出去的原样搬进新账本（不会在 AI 看见之前被压掉）；`transient=False` 是原样保留
    （如 QQ 通道模式通知，幂等锚点写在 `ref` 上）。`flags` 是平台语义位、插件不碰——这也是 JS
@@ -404,6 +416,29 @@ class MyChannelPlugin(ServicePlugin):
 `human`/`ai`，插一条"系统"会被约束拒掉，冒充人说话又会惊动群里的 AI）。同一个目标的提示按
 **指数回避**：5 分钟起逐次翻倍，封顶 5 天一条；哪次真发出去了就清零，下次再失败从 5 分钟重新
 起算（`_report_unreachable`、`UNREACHABLE_NOTICE_BASE` / `UNREACHABLE_NOTICE_MAX`）。
+
+## 4.7 控制台反代（可选）
+
+有的通道自带一个运维面板（NapCat 的 WebUI 能换号、改 WS、装插件）。这种面板不该暴露到公网，
+也不该让每个用户手里攥一份面板 token；平台的 `app/routers/channel_panel.py` 把它挂在
+`/channels/{plugin_id}/panel/{instance}/...` 下，用户只拿到一条带票据的路径。
+
+平台不知道这个面板长什么样，三个钩子都由插件给（都是插件实例上的方法，加一条通道不需要改
+平台代码）：
+
+| 钩子 | 必填 | 干什么 |
+| --- | --- | --- |
+| `async panel_client()` | 是 | 面板基地址与鉴权：`.base`、`.configured`、`async auth_headers()` |
+| `panel_entry(ticket) -> str` | 是 | 票据落地路径，相对反代基路径（NapCat 是 `webui/?t=...`） |
+| `panel_rewrite(text, base) -> str` | 否 | 文本（HTML/CSS）里的绝对路径补上 `base`；不想改就返回原样，平台透传 |
+
+没有 `panel_client` / `panel_entry` 的通道，`POST /me/agents/{agent_id}/channels/{plugin_id}/panel`
+直接 404，卡片上也就没有"打开控制台"这个按钮。票据按 `(plugin_id, instance)` 签——换条通道或
+换个实例都不认；验完换成 Path 限定在基路径下的 HttpOnly cookie，之后浏览器自动带上。
+
+写适配时记三件事：**只该看见面板根之下的路径**（`..` 段平台会拒）；**文本之外的响应
+（图片、字体、SSE）原样流过去**，改写里别碰字节；**WebSocket 升级不通**（`upgrade` 是被剥掉的
+逐跳头），面板的实时更新得走 SSE 或轮询——NapCat WebUI 用的就是 SSE。
 
 ## 5. 信任边界（写清楚，别误会）
 
