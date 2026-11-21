@@ -25,7 +25,7 @@ class ChannelTokenPolicy(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     agent_id = Column(Integer, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
     # 通道种类来自插件 manifest 的 channel.kind（qq / napcat / …），不是一个平台常量表
-    channel_kind = Column(String(20), nullable=False, default="qq")
+    channel_kind = Column(String(20), nullable=False)
     # total = 全部 token（含缓存命中）；billable = 只算未命中的输入 + 输出
     meter_mode = Column(String(10), nullable=False, default="billable",
                         comment="计费口径：total（全部 token）| billable（未命中输入 + 输出）")
@@ -35,6 +35,11 @@ class ChannelTokenPolicy(Base):
                                    comment="超限后自动回一句话（默认开）")
     blocked_reply_text = Column(Text, nullable=True,
                                 comment="自动回复正文；NULL = 平台默认的官方口吻那一句")
+    # 自动重置：空 = 不重置；hour/day/2days/week 按「窗口」算账（见 pure.channel_token.window_start）
+    reset_period = Column(String(10), nullable=False, default="", server_default="",
+                          comment="自动重置周期：空|hour|day|2days|week")
+    reset_anchor = Column(String(5), nullable=False, default="00:00", server_default="00:00",
+                          comment="重置锚点 HH:MM（按平台展示时区解释）")
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
@@ -49,7 +54,7 @@ class ChannelConversationUsage(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     agent_id = Column(Integer, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
-    channel_kind = Column(String(20), nullable=False, default="qq")
+    channel_kind = Column(String(20), nullable=False)
     # group:<Copro 群 id> / dm:<私信会话 id>：额度是"这个对话"的账，与 QQ 侧 openid 解耦，
     # 换绑、改名都不该把它清零（键的构造见 utils/pure/channel_token.conversation_key）
     conversation = Column(String(120), nullable=False)
@@ -66,6 +71,10 @@ class ChannelConversationUsage(Base):
     # 两个计数器都留着：用户换口径时不丢历史，随时可以换回去继续看
     used_total = Column(BigInteger, nullable=False, default=0, comment="按 total 口径累计")
     used_billable = Column(BigInteger, nullable=False, default=0, comment="按 billable 口径累计")
+
+    # 当前记账窗口的起点（UTC naive）：自动重置时，窗口变了就当这一行的用量是 0。
+    # 存起点而不是"下次重置时间"：同一套算术对自然日/周/每 2 天都成立。
+    window_start = Column(DateTime, nullable=True, comment="当前窗口起点；NULL = 未启用/未记过")
 
     # 超限自动回复的节流时间：空 = 这个对话还没被提醒过
     blocked_notice_at = Column(DateTime, nullable=True)

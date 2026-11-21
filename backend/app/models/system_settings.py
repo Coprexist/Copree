@@ -18,7 +18,7 @@ class SystemSettings(Base):
 
     orphan_retention_days = Column(Integer, default=7, comment="孤儿文件宽限期（天），到期自动物理删除")
 
-    default_file_quota_mb = Column(Integer, default=100, comment="新用户默认文件存储配额（MB）")
+    default_file_quota_mb = Column(Integer, default=100, comment="新用户默认存储上限值（MB）；写「我的文件」时按它硬拦（§6.1）")
     default_concurrent_ai_limit = Column(Integer, default=DEFAULT_CONCURRENT_AI_LIMIT, comment="新建群聊默认 AI 并发数")
 
     system_prompt_overrides = Column(json_column(), nullable=True, comment="系统提示词覆盖（管理员自定义 core_identity/protocols 等段）")
@@ -50,6 +50,14 @@ class SystemSettings(Base):
     world_preset_suggestions = Column(json_column(), nullable=True, comment="世界 AI 建议问题预设（「你可以问」按钮，无对话历史/兜底时展示）")
     market_config = Column(json_column(), nullable=True, comment="世界商城配置：github_repo/github_token/auto_sync_enabled")
 
+
+    # 容量策略：管理员给的两条线（0 = 没设，容量准入走默认算法）
+    # 口径是"这个服务占多少内存"（容器 cgroup 用量，含子进程），不是单进程 RSS——
+    # 管理员看 docker stats 是多少，这里就该是多少。
+    memory_daily_target_mb = Column(Integer, default=0, server_default="0",
+                                    comment="日常内存占用目标（MB，0=未设）")
+    memory_limit_mb = Column(Integer, default=0, server_default="0",
+                             comment="内存占用上限（MB，0=未设）")
 
     # 每日数据库备份（管理员开关 + 保留份数，超出自动清除）
     daily_backup_enabled = Column(Boolean, default=False, comment="每日自动备份开关（管理员控制，默认关）")

@@ -9,7 +9,8 @@ from app.models.message import Message, GroupMessageEmbedding, PendingMessage
 from app.models.memory import RoughMemory, DetailMemory
 from app.models.vector_request import VectorAccelerationRequest
 from app.models.file import FileMetadata, FileReference, FileCollaborator
-from app.models.redemption import RedemptionCode
+from app.models.redemption import RedemptionCode, RedemptionRecord
+from app.models.plugin_migration import PluginMigration
 from app.models.system_log import SystemLog
 from app.models.summary_cache import UnreadSummaryCache
 from app.models.friendship import Friendship, FriendshipRequest
@@ -45,10 +46,14 @@ from app.models.plugin import Plugin, UserPluginPref
 from app.models.agent_skill_relation import AgentSkillRelation
 from app.models.alarm import AgentAlarm
 from app.models.structured_record import StructuredRecord
+from app.models.agent_experience import AgentExperience
 from app.models.workspace import AgentWorkspace
 from app.models.study_record import StudyRecord
 from app.models.study_setting import StudySetting
 from app.models.agent_creation import AgentCreationDraft
+from app.models.proxy_judgement import ProxyJudgement
+from app.models.agent_emoji_pack import AgentEmojiPack
+from app.models.agent_voice import AgentVoiceConfig
 from app.models.world import (World, WorldBinding, WorldAgent, WorldChatMessage, WorldAI, WorldAIMemory, WorldStructuredRecord, WorldLLMUsage, WorldMarketItem, GroupAssistant, WorldData)
 
 __all__ = [
@@ -77,6 +82,8 @@ __all__ = [
     "FileReference",
     "FileCollaborator",
     "RedemptionCode",
+    "RedemptionRecord",
+    "PluginMigration",
     "SystemLog",
     "Friendship",
     "FriendshipRequest",
@@ -111,6 +118,7 @@ __all__ = [
     "AgentSkillRelation",
     "AgentAlarm",
     "StructuredRecord",
+    "AgentExperience",
     "AgentWorkspace",
     "World",
     "WorldBinding",
@@ -123,6 +131,9 @@ __all__ = [
     "GroupAssistant",
     "WorldData",
     "AgentCreationDraft",
+    "ProxyJudgement",
+    "AgentEmojiPack",
+    "AgentVoiceConfig",
     "AgentKnowledge",
     "UserGroupPreference",
     "UserDMPreference",

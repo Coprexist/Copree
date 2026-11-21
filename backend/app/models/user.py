@@ -57,9 +57,11 @@ class User(Base):
     # AI 包断额度（创建 AI 时一次性支付 api_credit_cost，该 AI 后续调用全免）
     agent_bundle_credit = Column(Integer, default=0)
 
-    # 文件存储配额（MB）— 总配额 = 基数(default) + 加成(兑换码)
+    # 文件存储上限值（MB）— 上限 = 基数(default) + 加成(兑换码)，写入时**真的拦截**（§6.1）
+    # 量的只是「我的文件」：users/{uid}/files 那一栏，对话里产生的附件不占它（§3.1）。
+    # 默认 100 是历史值，不能改——改了等于升级即改变拦截线（docs/dev/message_storage_and_cleanup.md §1.1）
     file_quota_mb = Column(Integer, default=100)
-    file_quota_bonus_mb = Column(Integer, default=0, comment="兑换码累积的额外配额")
+    file_quota_bonus_mb = Column(Integer, default=0, comment="兑换码累积的额外上限值（已并入 file_quota_mb，仅作流水记录）")
 
     # 语言偏好（zh / en）
     language = Column(String(10), default="zh")

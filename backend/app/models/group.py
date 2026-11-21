@@ -41,6 +41,12 @@ class Group(Base):
                                comment="加群是否自动通过；关＝需要群主/管理员审批")
     approve_invites = Column(Boolean, nullable=False, default=False, server_default=text("false"),
                              comment="群成员邀请是否需要审批；群主/管理员的邀请免审")
+    # 决策代理（门卫）在本群的规矩：群主/管理员写，代理判定时随上下文带上。
+    # 与 AI 帧上的 proxy_rules 分工：这条是「这个群的标准」，那条是某只 AI 自己的补充
+    proxy_rules = Column(Text, nullable=True, comment="决策代理在本群的规矩（群主/管理员写）")
+    # 是否让居民 AI 的决策代理读本群公告：公告可能只想给人看，关掉后代理上下文里不带它
+    proxy_announcement = Column(Boolean, nullable=False, default=True, server_default=text("true"),
+                                comment="是否把本群公告给决策代理看")
     # 群名由外部通道维护：打开后通道拉到群名就对齐（一个 AI 接多个 QQ 群时靠它分辨"哪个是哪个"）
     name_from_channel = Column(Boolean, nullable=False, default=False, server_default=text("false"),
                                comment="群名跟随外部通道的群名")

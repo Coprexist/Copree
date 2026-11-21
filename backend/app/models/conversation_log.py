@@ -72,4 +72,9 @@ class ConversationLog(Base):
     # 裁剪按它分桶（每段状态各留几条）、列表按它归堆；空串 = 那轮没注入状态摘要。
     state_key = Column(String(128), nullable=True, index=True)
 
+    # 这行从哪来：call = 一次真的模型调用；switch = 离开一个状态帧时把那段落下来的一条。
+    # 切换行不是调用（没有结局、不算 token、不花额度），列表与详情靠这一列区分。
+    origin = Column(String(16), nullable=False, server_default="call", default="call",
+                    comment="call = 一次模型调用；switch = 离开状态帧时落的那一段")
+
     created_at = Column(DateTime, server_default=func.now(), index=True)

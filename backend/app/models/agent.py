@@ -45,6 +45,11 @@ class Agent(Base):
     # get_allowed_tools(状态/开关) 每轮现算的，状态一变 tools 数组就变，整段前缀 miss。
     # 解锁点（compact/clear）清空重算，见 capability_versioning.clear_frozen_allowed
     cap_effective_allowed = Column(json_column(), default=dict, comment="锁定态工具名单（{状态}|allowed → [工具名]，compact 时清空重算）")
+    # 锁定态的前缀文本快照：锁的若是"输入"（版本号、工具名单），渲染代码一改照样漂字节；
+    # 锁"输出"才不靠自觉——首见把渲染结果整段钉下来，之后每轮直接用这份字节，
+    # 目录/表情包/索引怎么变都进不了活跃会话。解锁点（compact/clear）清空重算，
+    # 变更走【能力变更通知】账本条目。见 capability_versioning.freeze_prefix
+    cap_effective_prefix = Column(json_column(), default=dict, comment="锁定态前缀文本快照（{会话键}|prefix → {text, hash}，compact 时清空重算）")
     current_temperature = Column(Float)
     current_top_p = Column(Float)
     current_presence_penalty = Column(Float)
@@ -101,8 +106,9 @@ class Agent(Base):
 
     # 对话结束时是否强制要求 AI 设定闹钟（数字生命档默认开启，防止"睡死"）
     force_alarm_on_end = Column(Boolean, default=False)
-    # 把计划与闹钟投进上下文（计划板的显示开关）。存量 AI 一律关：打开会改变它们每轮的提示词与花费
-    plan_injection_enabled = Column(Boolean, default=False, comment="把计划与闹钟投进上下文")
+    # 把计划与闹钟投进上下文（计划板的显示开关）。默认开：解锁点之后 AI 得知道「自己还有哪些闹钟」，
+    # 跟帧清单同一个理由。代价不随轮数涨——没有闹钟行的 AI 在查一次表就返回，板子没变也不落条目。
+    plan_injection_enabled = Column(Boolean, default=True, comment="把计划与闹钟投进上下文")
 
     # AI 最多可设多少个活跃闹钟（心跳节奏的边界）
     max_alarms = Column(Integer, default=10)
@@ -124,6 +130,10 @@ class Agent(Base):
     # 通道配置（机器人凭据）对合作者是否开放：默认否，由主人在合作者区域决定
     collaborators_manage_channels = Column(Boolean, default=False,
                                            comment="是否允许合作者查看并编辑此 AI 的通道配置")
+
+    # 表情包开关（这个 AI 能用哪些包发图）对合作者是否开放：同样是主人决定
+    collaborators_manage_emoji = Column(Boolean, default=False,
+                                        comment="是否允许合作者改此 AI 的表情包开关")
 
     # ── 对话权限与限额 (v0.1.8) ──
     allow_others_chat = Column(Boolean, default=True, comment="是否允许非主人触发此 AI 对话")
@@ -170,7 +180,7 @@ class Agent(Base):
     # API Token（供外部调用该 AI）
     api_token = Column(String(64))
 
-    # 状态栈 — AI 跨任务上下文追踪（v0.2.1）
+    # 状态链 — AI 跨任务上下文追踪（v0.2.1）
     # JSONB 数组，每个元素 {id, type, context_ref, why, doing, todo, plan, journal, created_at, status}
     state_stack = Column(json_column(), default=list)
 
@@ -188,7 +198,7 @@ class Agent(Base):
     # 预置的「所有聊天」由 utils/pure/focus.py 兜底注入，不占存量数据
     foci = Column(json_column(), default=list)
 
-    # 状态栈摘要长度上限（默认 500，AI 配置页可改；最新帧必保完整）
+    # 状态链摘要长度上限（默认 500，AI 配置页可改；最新帧必保完整）
     state_stack_max_chars = Column(Integer, default=500)
     # 帧容量：存储帧数超过它，就把最久没被激活的帧挂起待交接（他交接完才删记录）。
     # NULL/0 = 用默认值；AI 可自配
@@ -314,3 +324,24 @@ class AgentHistoryEntry(Base):
         UniqueConstraint("agent_id", "context_ref", "seq", name="uq_agent_history_seq"),
         Index("ix_agent_history_ctx_seq", "agent_id", "context_ref", "seq"),
     )
+
+
+class AgentHistorySeq(Base):
+    """账本 seq 的发放计数：每个会话一行。
+
+    为什么不是 `SELECT MAX(seq)+1`：同一段会话有两个写者时，彼此看不见对方**还没提交**的行，
+    会算出同一个号，于是后到的 INSERT 撞唯一索引、一直等在先到的那笔事务后面。而先到的那笔
+    如果正等着后到的返回（回合里调插件工具就是这种形状），两边就互等到天荒地老——
+    2026-11-07 群 81 因此冻结 12 小时，整条后台队列跟着停。
+
+    现在号由数据库一次性领走（`history_service._reserve`：INSERT ... ON CONFLICT DO UPDATE
+    ... RETURNING），领到的区间只属于自己，写多少条、提不提交都不会撞。首次写入时按账本
+    现有的 MAX(seq) 自播种，所以迁移不需要回填、老库也接得上。
+
+    解锁重写（clear）连这个计数一起清掉，重写后的账本仍然从 1 开始。
+    """
+    __tablename__ = "agent_history_seq"
+
+    agent_id = Column(Integer, ForeignKey("agents.id", ondelete="CASCADE"), primary_key=True)
+    context_ref = Column(String(64), primary_key=True, comment="会话标识：group:{id} / dm:{session}")
+    last_seq = Column(Integer, nullable=False, default=0, comment="已经发到第几号（下一批从这里往后领）")

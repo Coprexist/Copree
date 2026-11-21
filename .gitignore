@@ -104,3 +104,6 @@ PENTEST-*.md
 # （exe 由 CI 的 desktop-news-build.yml 产出并直接上传，不落仓库）
 tools/**/*.zip
 
+
+# Cloudflare wrangler 本地缓存（只在本地跑过 pages 预览才有）
+.wrangler/

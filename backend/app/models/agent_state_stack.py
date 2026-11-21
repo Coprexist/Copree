@@ -1,5 +1,5 @@
 """
-状态栈模型 — 历史遗留，**不是真实存储**
+状态链模型 — 历史遗留，**不是真实存储**
 
 真实存储是 `agents.state_stack`（JSON 数组）与运行链 `agent_state_chain`（迁移 0094），
 见 docs/dev/frame_lifecycle.md。这张表建过但从未写入（0 行），保留只为不打断老迁移链。
