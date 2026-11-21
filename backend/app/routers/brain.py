@@ -3,7 +3,7 @@
 
 端点：
   GET  /brain/health              获取 AI 健康状态（全部或指定）
-  GET  /brain/state/{agent_id}    获取 AI 状态栈
+  GET  /brain/state/{agent_id}    获取 AI 状态链
   POST /brain/heartbeat/{agent_id} 手动触发心跳
   POST /brain/switch-state/{agent_id} 切换 AI 状态
   GET  /brain/personality/{agent_id} 获取人格锚点（只读）
@@ -73,7 +73,7 @@ async def brain_health(
 
 
 # ═══════════════════════════════════════════════════════════════
-# 状态栈
+# 状态链
 # ═══════════════════════════════════════════════════════════════
 
 @router.get("/state/{agent_id}")
@@ -81,7 +81,7 @@ async def brain_state(
     agent: dict = Depends(_require_agent),
     db: AsyncSession = Depends(get_db),
 ):
-    """获取 AI 状态栈"""
+    """获取 AI 状态链"""
     from app.services.brain.state_stack_manager import state_stack_manager
 
     stack = await state_stack_manager.get_state_stack(db, agent.id)

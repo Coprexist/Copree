@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 class ForgetMemory(ToolPlugin):
     name = "forget_memory"
+    persistent_effect = True   # 写进持久状态：结果要进账本，否则下一个自己不知道写了什么
     description = (
         "删掉一条你自己存的向量记忆：记错了、两条重复留了旧的、或者这件事已经过去了不必再提。\n"
         "分辨一下再动手：\n"

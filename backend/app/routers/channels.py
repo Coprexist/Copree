@@ -211,6 +211,46 @@ async def self_test_channel(
         raise HTTPException(400, str(e))
 
 
+@router.post("/{agent_id}/channels/{plugin_id}/login-qr")
+async def refresh_login_qr(
+    agent_id: int,
+    plugin_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """向协议端要一张新的登录二维码
+
+    由用户点击触发，而不是后台定时刷新：扫码票据只有两分钟，主动重出会让倒计时
+    从点击那一刻算起，用户看到的就是真实剩余时间。和启停同一套鉴权。
+    """
+    _declared(plugin_id)
+    await _owned(db, agent_id, user)
+    try:
+        return await channel.refresh_login_qr(plugin_id=plugin_id, agent_id=agent_id)
+    except channel.NoSelfTest as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/{agent_id}/channels/{plugin_id}/relogin")
+async def relogin_channel(
+    agent_id: int,
+    plugin_id: str,
+    user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """重新登录：能靠协议端本地的登录态拉回来就不扫码，拉不回来再给一张码
+
+    "我的"页上的那个按钮走这条：用户要的是"点一下号就回来"，
+    而不是每次都被要求重新扫一遍。
+    """
+    _declared(plugin_id)
+    await _owned(db, agent_id, user)
+    try:
+        return await channel.relogin(plugin_id=plugin_id, agent_id=agent_id)
+    except channel.NoSelfTest as e:
+        raise HTTPException(400, str(e))
+
+
 @router.post("/{agent_id}/channels/{plugin_id}/pairings/approve")
 async def approve_pairing(
     agent_id: int,

@@ -26,7 +26,8 @@ class ListEmojiFaces(ToolPlugin):
                       arguments: dict, context: dict) -> dict:
         from app.services.plugin import catalog
 
-        packs = await catalog.enabled_emoji_packs(db)
+        # 只列"这个 AI 真能用"的包：白名单默认下没勾选的包不出现，免得它写了发不出去
+        packs = await catalog.packs_for_agent(db, agent_id)
         want = str(arguments.get("pack") or "").strip()
         if want:
             packs = [p for p in packs if want in (p["id"], p["name"])]
@@ -36,16 +37,26 @@ class ListEmojiFaces(ToolPlugin):
                 "message": "当前没有可用表情包" + ("（没有叫这个名字的包）" if want else ""),
             }
         return {
-            "how_to_use": "有字符的表情直接写该字符（优先，各通道均可显示）；仅图片的表情写 :id: 短码，"
-                          "站内渲染为图，QQ 等无法接收富媒体的通道会被去掉",
+            "how_to_use": "有字符的表情直接写该字符（最省事）；仅图片的表情写 :id: 短码或 [表情:名字]，"
+                          "平台会把它作为一张图片发出去：站内显示为图，QQ 等通道发图片消息；"
+                          "表情不必单独调工具发送，写进正文即可",
             "packs": [
                 {
                     "id": pack["id"],
                     "name": pack["name"],
                     "usage": pack["usage"],
-                    # 每行给的是"该往正文里写什么"：字符或短码，不写名字
-                    "faces": [f"{face['name']} → {face['emoji'] or ':' + face['id'] + ':'}"
-                              for face in pack["faces"]],
+                    # 每行给的是"该往正文里写什么" + 这张图是什么（caption/keywords 供挑选）
+                    "faces": [
+                        " → ".join(filter(None, [
+                            face["name"],
+                            face["emoji"] or f":{face['id']}:",
+                            (f"（{face['caption']}"
+                             + (f"｜{face['keywords']}" if face.get("keywords") else "")
+                             + (f"｜{face['mood']}" if face.get("mood") else "") + "）")
+                            if face.get("caption") else "",
+                        ]))
+                        for face in pack["faces"]
+                    ],
                 }
                 for pack in packs
             ],

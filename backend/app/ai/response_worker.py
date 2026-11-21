@@ -33,6 +33,9 @@ from app.ai.executor import (
     is_agent_running, mark_agent_running, restore_pending_interrupts, unmark_agent_running,
 )
 from app.ai.alarm import _process_alarm_event
+from app.ai.failure_watch import FailureAlert, failure_watch
+from app.services.infrastructure import capacity
+from app.services.infrastructure.metrics_collector import metrics
 
 logger = logging.getLogger(__name__)
 
@@ -45,14 +48,29 @@ _rate_limit_tracker: dict[int, float] = {}
 # AI 并发锁：resonance/custom 类型同一 AI 串行执行 LLM 调用，general/semi_general 不锁
 _agent_locks: dict[int, asyncio.Lock] = {}
 
-# 思考/输入中状态追踪：{conv_key: {agent_id: {name, avatar_url, state}}}
-# conv_key = "group:7" 或 "dm:1_10"
-# state = "thinking" | "typing"
+# 活动状态追踪：{conv_key: {user_id: {name, avatar_url, state}}}
+# conv_key = "group:7" 或 "dm:1_10"；state = "thinking" | "typing" | "speaking"
+# 三个来源共用这一份（实时事件照旧走 WS，进会话时靠 /activity 回放）：
+#   begin —— 一轮开始（思考）；mark_activity_state —— 工具执行到一半（输入/录音）；clear —— 轮末
 _thinking_state: dict[str, dict[int, dict]] = {}
 
 
+def activity_key(conversation_type: str, *, group_id=None, session_id=None) -> str:
+    """活动状态的会话键。所有读写它的地方都走这里，别各拼各的——
+    拼错一个字，恢复出来的那条就永远清不掉"""
+    return f"group:{group_id}" if conversation_type == "group" else f"dm:{session_id}"
+
+
+def mark_activity_state(conv_key: str, user_id: int, state: str) -> None:
+    """改一个人此刻在干什么（输入中 / 录音中）。只改状态，不新增条目：
+    能改就说明这一轮已经 begin 过了"""
+    info = _thinking_state.get(conv_key, {}).get(user_id)
+    if info is not None:
+        info["state"] = state
+
+
 def get_thinking_state(conv_key: str) -> dict[int, dict]:
-    """获取指定对话的思考/输入中状态"""
+    """获取指定对话的活动状态（进会话时恢复指示器用）"""
     return _thinking_state.get(conv_key, {})
 
 
@@ -173,6 +191,34 @@ async def _requeue_leftover_dm_interrupts(agent_id: int, session_id: str, chain_
         logger.info(f"🔁 AI(agent={agent_id}) 正忙时到达的 {requeued} 条私信改为单独排一轮（会话 {session_id}）")
 
 
+async def _report_failure_alert(alert: FailureAlert) -> None:
+    """把连续失败写进系统日志（审计里看得见），单独开一个 session。
+
+    不复用 worker 那个 session：抛异常的那段工作可能已经把连接弄脏了，
+    告警本身不能因为记账失败再丢一次。
+    """
+    try:
+        from app.utils.error_handler import log_error
+
+        async with work_session() as db:
+            await log_error(
+                db,
+                log_type="worker_consecutive_failure",
+                operator_type="ai",
+                operator_id=alert.agent_id,
+                target_type="agent",
+                target_id=alert.agent_id,
+                details={
+                    "failures": alert.failures,
+                    "duration_seconds": alert.duration_seconds,
+                    "last_error": alert.last_error,
+                    "hint": "连续多轮处理失败，AI 已经不再回复；看这段最后一次异常堆栈",
+                },
+                level="ERROR",
+            )
+    except Exception:
+        logger.exception("连续失败告警写入系统日志失败（不影响 worker）")
+
 async def ai_response_worker():
     """
     后台主循环：持续消费消息队列，为每条消息检查并触发 AI 回复。
@@ -190,11 +236,20 @@ async def ai_response_worker():
             except Exception:
                 pass
             # 每个事件一段工作：路由里写下的东西（帧、待办、投递标记）出块即提交
+            agent_id = int(event.get("agent_id") or 0)
             async with work_session() as db:
                 try:
                     await _process_event(db, event)
                 except Exception as e:
                     logger.error(f"处理消息事件失败: {e}", exc_info=True)
+                    # 只有「连续」失败才升级：同一个 agent 中间成功过一次就清零。
+                    # 一次性的坏消息（比如某条消息解析不了）不该刷告警。
+                    failure_watch_alert = failure_watch.record_failure(agent_id, e)
+                else:
+                    failure_watch.record_success(agent_id)
+                    failure_watch_alert = None
+            if failure_watch_alert is not None:
+                await _report_failure_alert(failure_watch_alert)
             message_queue.task_done()
         except asyncio.CancelledError:
             logger.info("AI 回复 worker 正在关闭...")
@@ -497,6 +552,9 @@ async def _process_group_event(db, event: dict):
     is_priority_msg = has_at or is_at_all
     normal_sem = chat_chain_manager.get_semaphore(group_id, limit=getattr(group, "concurrent_ai_limit", 0))
     priority_sem = chat_chain_manager.get_priority_semaphore(group_id)
+    # 全局准入的优先级：@/全体（有人在等）走 high，群里路过的一句走 normal。
+    # 群信号量先于全局名额：别占着全进程的名额去等某一个群。
+    turn_priority = capacity.HIGH if is_priority_msg else capacity.NORMAL
 
     # 忙时注入要写说话人名字：没人忙时一次都不查
     _busy_names: dict[int, str] = {}
@@ -533,28 +591,32 @@ async def _process_group_event(db, event: dict):
         sem = priority_sem if is_priority_msg else normal_sem
 
         async def _trigger_one(aid, chan_sem):
+            started = time.monotonic()
             async with chan_sem:
-                try:
-                    # work_session：出块即提交。决策技能代发是 flush + 广播 + 通道出口，提前
-                    # return 的路径全靠它兜住（2026-10-04 群 69「排行/打劫」四条就丢在手动提交上）
-                    async with work_session() as inner_db:
-                        await _maybe_trigger_ai_reply(
-                            inner_db, aid, group_id, group, content, message_id,
-                            chain_depth=next_depth,
-                            sender_type=sender_type,
-                            sender_id=sender_id,
-                            message_type=event.get("message_type", "normal"),
-                            world_trigger_mode=world_trigger_mode,
-                            decision_rules=rules_map.get(aid),
-                        )
-                except Exception as e:
-                    logger.error(f"AI {aid} 触发异常 (group={group_id}): {e}", exc_info=True)
-                finally:
-                    chat_chain_manager.release_claim(aid, group_id)
-                    # 收尾兜底：这一轮没赶上的忙时消息自己排一轮（claim 已放开，不会再被挡）
-                    _agent_id = agent_id_by_user.get(int(aid))
-                    if _agent_id is not None:
-                        await _requeue_leftover_interrupts(_agent_id, aid, group_id, chain_depth)
+                async with capacity.admission.slot(turn_priority) as queued:
+                    try:
+                        # work_session：出块即提交。决策技能代发是 flush + 广播 + 通道出口，提前
+                        # return 的路径全靠它兜住（2026-10-04 群 69「排行/打劫」四条就丢在手动提交上）
+                        async with work_session() as inner_db:
+                            await _maybe_trigger_ai_reply(
+                                inner_db, aid, group_id, group, content, message_id,
+                                chain_depth=next_depth,
+                                sender_type=sender_type,
+                                sender_id=sender_id,
+                                message_type=event.get("message_type", "normal"),
+                                world_trigger_mode=world_trigger_mode,
+                                decision_rules=rules_map.get(aid),
+                            )
+                    except Exception as e:
+                        logger.error(f"AI {aid} 触发异常 (group={group_id}): {e}", exc_info=True)
+                    finally:
+                        chat_chain_manager.release_claim(aid, group_id)
+                        # 收尾兜底：这一轮没赶上的忙时消息自己排一轮（claim 已放开，不会再被挡）
+                        _agent_id = agent_id_by_user.get(int(aid))
+                        if _agent_id is not None:
+                            await _requeue_leftover_interrupts(_agent_id, aid, group_id, chain_depth)
+                        # 端到端含排队：只记执行时间会让"用户在等"这件事从面板上消失
+                        await metrics.record_turn(time.monotonic() - started, queued)
 
         asyncio.create_task(_trigger_one(ai_id, sem))
 
@@ -579,10 +641,10 @@ async def _process_group_event(db, event: dict):
                 select(GroupAssistant).where(GroupAssistant.group_id == group_id)
             )).scalars().all()
             for ga in ga_rows:
-                asyncio.create_task(_trigger_group_assistant(
+                asyncio.create_task(_admitted(capacity.HIGH, lambda: _trigger_group_assistant(
                     ga.id, group_id, content, message_id,
                     sender_type=sender_type, sender_id=sender_id,
-                ))
+                )))
         except Exception as e:
             logger.warning(f"群助手触发编排失败: {e}")
 
@@ -594,6 +656,16 @@ async def _process_group_event(db, event: dict):
 # ============================================================
 # 群助手触发（独立实体路径，不走 agent 体系）
 # ============================================================
+
+async def _admitted(priority: str, factory):
+    """带全局准入地跑一个回合：拿不到名额就等，不丢。协程拿到名额后才创建。"""
+    started = time.monotonic()
+    async with capacity.admission.slot(priority) as queued:
+        try:
+            return await factory()
+        finally:
+            await metrics.record_turn(time.monotonic() - started, queued)
+
 
 async def _trigger_group_assistant(
     assistant_id: int, group_id: int, content: str, trigger_message_id: int,
@@ -881,6 +953,7 @@ async def _maybe_trigger_ai_reply(
         is_announcement=is_announcement,
         is_priority_friend=is_priority_friend,
         chain_depth=chain_depth,
+        message_id=trigger_message_id,
     )
     decision = await decide_action(db, agent, ctx)
     logger.info(f"🔍 AI {agent.name}(id={resolved_agent_id}): decision={decision.action_type.value}, "
@@ -969,6 +1042,14 @@ async def _maybe_trigger_ai_reply(
     logger.info(f"🔍 AI {agent.name}: effective_cfg ai_type={effective_cfg['ai_type']}, "
                 f"thinking={effective_cfg['thinking_enabled']}, temp={effective_cfg['temperature']}")
 
+    # 6.5 同一段上下文被反复唤醒：到点就往账本投一句劝告（账本渲染在构建消息里，
+    # 所以必须排在 build_messages 之前；投递记录也在账本，解锁后重新可劝）
+    try:
+        from app.services.brain.frame_reminder import deliver_reminder
+        await deliver_reminder(db, agent, group_id)
+    except Exception as e:
+        logger.warning(f"唤醒提醒投递失败（非致命）: {e}")
+
     # 7. 构建消息
     from app.ai.llm import build_messages, resolve_model
     # 向量加速混合检索仅在 AI 全群启用（AI 内部协作场景）
@@ -1026,6 +1107,12 @@ async def _maybe_trigger_ai_reply(
     )
     delay_allowed = await _is_delay_reply_allowed(db, agent)
     current_tools = get_allowed_tools(agent.state, thinking_enabled=effective_cfg["thinking_enabled"], delay_reply_allowed=delay_allowed)
+    # 语音是可选的平台能力：没配、或配了但没测通，这个工具就不出现在工具表里
+    # （模型不知道有它，自然不会去调一个用不了的工具）。门控判据只有一处：voice_config
+    from app.services.agent.voice_config import has_voice_capability
+    if not await has_voice_capability(db, agent.id):
+        current_tools = [t for t in current_tools
+                         if (t.get("function") or {}).get("name") != "send_voice"]
     allowed_names = {t["function"]["name"] for t in current_tools}
     from app.services.history.context_sync import context_ref
     _session_ref = context_ref(group_id=group_id)
@@ -1099,7 +1186,7 @@ async def _maybe_trigger_ai_reply(
     # 两套 id 混用会让进会话时的 /activity 恢复（agent.id）和实时事件（user_id）
     # 各占一条，同一个 AI 显示成两个人，而且恢复那条永远清不掉
     _thinking_state.setdefault(conv_key, {})[agent.user_id] = {
-        "name": agent.name, "avatar_url": agent.avatar_url,
+        "name": agent.name, "avatar_url": agent.avatar_url, "state": "thinking",
     }
     logger.info(f"🚀 AI {agent.name}: 开始调用 LLM...")
     try:
@@ -1118,6 +1205,14 @@ async def _maybe_trigger_ai_reply(
         )
         if not await _recheck_state_before_run(db, agent):
             return
+        from app.services.agent import frame_budget
+
+        # 帧预算：插件帧里一轮的调用上限单独算（默认 50），小时/天的次数用满就不再开始
+        budget = await frame_budget.open_turn(db, agent.id, effective_cfg["max_tool_rounds"])
+        if budget.blocked:
+            await db.commit()
+            logger.info(f"AI {agent.name} 帧预算用满，跳过本轮：{budget.blocked}")
+            return
         await _run_serialized(agent, _tool_call_loop(
             db=db,
             agent=agent,
@@ -1127,7 +1222,7 @@ async def _maybe_trigger_ai_reply(
             model=model,
             api_base_url=api_base,
             api_key=api_key,
-            max_loops=effective_cfg["max_tool_rounds"],
+            max_loops=budget.max_loops,
             chain_depth=chain_depth,
             conversation_type="group",
             trigger_user_id=trigger_user_id,
@@ -1138,6 +1233,7 @@ async def _maybe_trigger_ai_reply(
             trigger="user",
             is_federated=False,
             pending_delivery=pending_delivery,
+            frame_budget_check=budget.check,
         ))
     except Exception as e:
         logger.error(f"❌ AI {agent.name} 群聊回复异常 (group={group_id}): {e}", exc_info=True)
@@ -1277,6 +1373,12 @@ async def _trigger_dm_ai_reply(
     )
     delay_allowed = await _is_delay_reply_allowed(db, agent)
     current_tools = get_allowed_tools(agent_state, thinking_enabled=effective_cfg["thinking_enabled"], delay_reply_allowed=delay_allowed)
+    # 语音是可选的平台能力：没配、或配了但没测通，这个工具就不出现在工具表里
+    # （模型不知道有它，自然不会去调一个用不了的工具）。门控判据只有一处：voice_config
+    from app.services.agent.voice_config import has_voice_capability
+    if not await has_voice_capability(db, agent.id):
+        current_tools = [t for t in current_tools
+                         if (t.get("function") or {}).get("name") != "send_voice"]
     allowed_names = {t["function"]["name"] for t in current_tools}
     from app.services.history.context_sync import context_ref
     _session_ref = context_ref(session_id=session_id)
@@ -1310,7 +1412,7 @@ async def _trigger_dm_ai_reply(
 
     conv_key = f"dm:{session_id}"
     _thinking_state.setdefault(conv_key, {})[agent_user_id] = {
-        "name": agent_name, "avatar_url": agent_avatar,
+        "name": agent_name, "avatar_url": agent_avatar, "state": "thinking",
     }
     try:
         await chat_api.broadcast_to_dm(
@@ -1332,6 +1434,14 @@ async def _trigger_dm_ai_reply(
         )
         if not await _recheck_state_before_run(db, agent):
             return
+        from app.services.agent import frame_budget
+
+        # 帧预算：插件帧里一轮的调用上限单独算（默认 50），小时/天的次数用满就不再开始
+        budget = await frame_budget.open_turn(db, agent.id, effective_cfg["max_tool_rounds"])
+        if budget.blocked:
+            await db.commit()
+            logger.info(f"AI {agent.name} 帧预算用满，跳过本轮：{budget.blocked}")
+            return
         await _run_serialized(agent, _tool_call_loop(
             db=db,
             agent=agent,
@@ -1341,7 +1451,7 @@ async def _trigger_dm_ai_reply(
             model=model,
             api_base_url=api_base,
             api_key=api_key,
-            max_loops=effective_cfg["max_tool_rounds"],
+            max_loops=budget.max_loops,
             chain_depth=chain_depth,
             conversation_type="dm",
             session_id=session_id,
@@ -1352,6 +1462,7 @@ async def _trigger_dm_ai_reply(
             provider_supports_thinking=provider_info.get("thinking_supported"),
             trigger="user",
             pending_delivery=pending_delivery,
+            frame_budget_check=budget.check,
         ))
     except Exception as e:
         logger.error(f"❌ AI {agent_name} DM 回复异常 (session={session_id}): {e}", exc_info=True)

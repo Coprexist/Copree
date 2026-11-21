@@ -145,6 +145,10 @@ class ToolPlugin:
     # 只在哪些场景出现（group_chat / dm / world）；空 = 所有场景
     usage_scenes: frozenset[str] = frozenset()
 
+    # 调用成功也必须在账本里留一笔：这类工具把东西写进持久状态（闹钟、记忆、经历），
+    # 而账本不存调用参数，只剩一个 ok 的话下一个自己无从知道当时填了什么。
+    persistent_effect: bool = False
+
     # 来源插件 id：目录插件的 plugin.py 里定义的工具由加载器自动填（= 插件 id），
     # 内置工具为空。卸载插件时据此精确回收，绝不误删同名的内置工具。
     owner: str = ""
@@ -198,6 +202,29 @@ class ToolPlugin:
 # 工具注册中心
 # ============================================================
 
+
+def _owner_of(plugin_cls: type) -> str:
+    """这个工具归谁：看它**定义在哪个模块**，不看加载上下文。
+
+    - `app.tools.*` 下的是平台内置工具 → 永远 `owner=""`，卸载任何插件都带不走；
+    - 其余（插件加载器用 `_aisc_plugin_<id>` 导入的模块，含插件自己拆的子模块）
+      → 归当时加载的那个插件。
+
+    为什么不能只看 `get_current_plugin()`：加载器设上下文的那一刻，如果"内置工具模块
+    第一次被 import"正好发生在这个上下文里（插件 `import app.tools` 会触发整包导入），
+    那批内置工具就全被打上该插件的 owner。之后卸载/重扫这个插件，它们会被一起回收——
+    2026-11-06 线上就是这么把 94 个工具（含 send_gm / end_turn / pop_state / set_alarm）
+    当成 bilibili 的回收掉了，进程里只剩插件自己那 18 个。定义在 `app.` 下的，
+    天然不属于任何插件。
+    """
+    module = str(getattr(plugin_cls, "__module__", "") or "")
+    if module == "app" or module.startswith("app."):
+        return ""
+    from app.services.plugin.api import get_current_plugin
+
+    return get_current_plugin() or ""
+
+
 class ToolRegistry:
     """工具注册中心 — 单例模式，自动发现和注册所有 ToolPlugin 子类"""
 
@@ -214,9 +241,7 @@ class ToolRegistry:
         """注册一个工具插件（幂等：同名同类静默跳过）"""
         instance = plugin_cls()
         if not instance.owner:
-            # 插件加载上下文里定义的工具自动挂到该插件名下（懒导入：api 会反向依赖技能引擎）
-            from app.services.plugin.api import get_current_plugin
-            instance.owner = get_current_plugin() or ""
+            instance.owner = _owner_of(plugin_cls)
         if instance.name in cls._plugins:
             existing = cls._plugins[instance.name]
             if isinstance(existing, plugin_cls):
@@ -357,6 +382,11 @@ class ToolRegistry:
     @classmethod
     def get_whitelist(cls) -> dict[str, list[str]]:
         return cls._build_whitelist()
+
+    @classmethod
+    def has_persistent_effect(cls, name: str) -> bool:
+        """这个工具成功时会不会留下必须让下一个自己知道的结果（见 tools.ledger_worthy_tools）。"""
+        return bool(getattr(cls._plugins.get(name or ""), "persistent_effect", False))
 
     @classmethod
     def get_allowed_tools(
@@ -517,7 +547,11 @@ class ToolRegistry:
 
         t0 = time.monotonic()
         try:
-            result = await plugin.execute(db, agent_id, group_id, arguments, context)
+            # 运行期补上插件身份：插件公共接口（如 api.enter_frame）要靠它认命名空间
+            from app.services.plugin.api import plugin_context
+
+            with plugin_context(getattr(plugin, "owner", "")):
+                result = await plugin.execute(db, agent_id, group_id, arguments, context)
         except Exception as e:
             # 工具炸了不许把整轮带走：写库抛在 flush 上（唯一约束、类型、长度）之后，
             # 会话会停在"必须先 rollback"的状态，此后连记账都要再抛一次，异常一路窜到

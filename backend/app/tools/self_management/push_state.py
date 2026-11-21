@@ -50,7 +50,7 @@ class PushState(ToolPlugin):
         stack, msg = await push_state(db, agent_id, frame)
         await db.commit()
         # 切回的可能是同会话原有的那帧（身份不变）：给出去的 id 必须是**真正激活的那帧**，
-        # 不能是刚构建的这个——它可能压根没进栈
+        # 不能是刚构建的这个——它可能压根没进链
         active = current(stack) or frame
         return {"success": True, "message": msg, "stack_depth": len(stack), "frame_id": active["id"]}
 

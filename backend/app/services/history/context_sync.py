@@ -46,7 +46,29 @@ async def append_events(db: AsyncSession, agent, context_ref: str, events: list[
     events = [e for e in (events or []) if (e.get("content") or "").strip()]
     if not events:
         return []
+    events = await _fold_repeats(db, agent.id, context_ref, events)
+    if not events:
+        return []
     return await history_service.append(db, agent.id, context_ref, events)
+
+
+async def _fold_repeats(db: AsyncSession, agent_id: int, context_ref: str,
+                        events: list[dict]) -> list[dict]:
+    """落账前剔掉「跟上次同 kind 同 ref 一字不差」的事件条目（判据见 pure/history.fold_repeats）。
+
+    为什么必须在**写入时**判、而不是压缩时清理：账本只追加，压缩时清理等于改写中段，
+    前缀缓存整段作废。写的时候就不落，老条目一条也不用动。
+    """
+    from app.utils.pure.history import FOLD_KINDS, fold_repeats
+
+    last: dict[tuple[str, str], str] = {}
+    for kind, ref in {(e.get("kind") or "message", e.get("ref") or "") for e in events}:
+        if kind not in FOLD_KINDS:
+            continue
+        row = await history_service.last_of(db, agent_id, context_ref, kind=kind, ref=ref)
+        if row:
+            last[(kind, ref)] = row.get("content") or ""
+    return fold_repeats(events, last)
 
 
 async def rewrite_context(db: AsyncSession, agent, context_ref: str, *,
@@ -84,6 +106,23 @@ async def rewrite_context(db: AsyncSession, agent, context_ref: str, *,
     return rewritten
 
 
+async def _transcripts_of(db: AsyncSession, rows) -> dict[int, str]:
+    """这批消息附件里出现过的文件 → 文稿（一次查完）。
+
+    文稿的家在 `file_metadata.transcript`（唯一来源，见迁移 `0113`）：消息快照只留 file_id，
+    渲染账本前补一次，AI 才读得到"这条语音说了什么"。没有语音的批次这里就是一次空查询。
+    """
+    from app.services.content.file_service import transcripts_for
+    from app.utils.message_serializer import normalize_attachments
+
+    ids: set[int] = set()
+    for m in rows or []:
+        for att in (normalize_attachments(getattr(m, "attachments", None)) or []):
+            if isinstance(att, dict) and att.get("file_id"):
+                ids.add(int(att["file_id"]))
+    return await transcripts_for(db, ids) if ids else {}
+
+
 async def sync_dm_history(db: AsyncSession, agent, session_id: str, *, cap: int) -> list[dict]:
     """把水位之后的新私信补进账本，返回**整段**历史条目（与群聊同一套语义）。
 
@@ -103,6 +142,7 @@ async def sync_dm_history(db: AsyncSession, agent, session_id: str, *, cap: int)
         .order_by(DMMessage.id.desc()).limit(cap)
     )).scalars().all()
     rows = sorted(rows, key=lambda m: m.id)  # 按 id 归正（与群聊同一口径）
+    transcripts = await _transcripts_of(db, rows)
 
     skipped = 0
     if rows:
@@ -123,7 +163,7 @@ async def sync_dm_history(db: AsyncSession, agent, session_id: str, *, cap: int)
         for m in rows:
             batch.append(dm_api.dm_message_entry(
                 m, agent_name=agent_name, agent_user_id=agent_user_id,
-                sender_name=names.get(m.sender_id),
+                sender_name=names.get(m.sender_id), transcripts=transcripts,
             ))
     if batch:
         entries = entries + await history_service.append(db, agent.id, ref, batch)
@@ -148,10 +188,16 @@ async def sync_group_history(db: AsyncSession, agent, group_id: int, *, cap: int
     agent_name = getattr(agent, "name", "") or ""
     agent_user_id = getattr(agent, "user_id", None)
     names = await gm.resolve_speaker_names(db, rows) if rows else {}
+    # @ 的名字一次查全：正文里是 <@!id>，AI 侧要读成人名（见 docs/dev/mention_ids.md）
+    from app.utils.message_serializer import mention_names as resolve_mention_names
+
+    mentioned = await resolve_mention_names(db, [m.content or "" for m in rows]) if rows else {}
+    transcripts = await _transcripts_of(db, rows)
     kept = take_newest_within([
         gm.gm_message_entry(
             m, agent_name=agent_name, agent_user_id=agent_user_id,
             speaker_name=names.get((m.sender_type, m.sender_id)), max_len=max_len,
+            mention_names=mentioned, transcripts=transcripts,
         )
         for m in rows
     ], BATCH_MAX_CHARS)

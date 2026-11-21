@@ -517,6 +517,15 @@ async def _process_alarm_event(db, event: dict):
     except Exception:
         pass
 
+    # 叫醒的可能正是插件帧里的他：帧预算在这里也要算（否则闹钟是绕开上限的后门）
+    from app.services.agent import frame_budget
+
+    budget = await frame_budget.open_turn(db, agent.id, effective_cfg["alarm_max_tool_rounds"])
+    if budget.blocked:
+        await db.commit()
+        logger.info(f"⏰ 闹钟 #{alarm_id}: 帧预算用满，跳过本次唤醒：{budget.blocked}")
+        return
+
     try:
         await _run_serialized(agent, _tool_call_loop(
             db=db,
@@ -527,7 +536,7 @@ async def _process_alarm_event(db, event: dict):
             model=model,
             api_base_url=api_base,
             api_key=api_key,
-            max_loops=effective_cfg["alarm_max_tool_rounds"],
+            max_loops=budget.max_loops,
             chain_depth=0,
             conversation_type="alarm",
             session_id=None,
@@ -537,6 +546,7 @@ async def _process_alarm_event(db, event: dict):
             pool_key_id=pool_key_id,
             provider_supports_thinking=provider_info.get("thinking_supported"),
             trigger="auto",
+            frame_budget_check=budget.check,
         ))
     except Exception as e:
         logger.error(f"⏰ 闹钟 #{alarm_id}: AI {agent.name}({agent_id}) 执行失败: {e}", exc_info=True)
@@ -556,6 +566,7 @@ async def _standalone_agent_turn(db, agent, *, session_block: str, user_content:
     from app.services.tool_registry import get_allowed_tools
     from app.ai.executor import _get_api_config, _tool_call_loop
     from app.ai.response_worker import _run_serialized
+    from app.services.agent import frame_budget
     from app.services.agent.agent_service import get_effective_config as _get_eff_cfg
     from app.services.skill.skill_engine import _is_delay_reply_allowed
 
@@ -578,16 +589,24 @@ async def _standalone_agent_turn(db, agent, *, session_block: str, user_content:
     ]
     model = resolve_model(agent, provider_info=provider_info)
 
+    # 独立事件的唤醒同样可能落在插件帧里：帧预算与别的开轮点一致
+    budget = await frame_budget.open_turn(db, agent.id, effective_cfg.get("alarm_max_tool_rounds") or 5)
+    if budget.blocked:
+        await db.commit()
+        logger.info(f"{tag}: 帧预算用满，跳过本次唤醒：{budget.blocked}")
+        return
+
     try:
         await _run_serialized(agent, _tool_call_loop(
             db=db, agent=agent, group_id=None, messages=messages, tools=tools,
             model=model, api_base_url=api_base, api_key=api_key,
-            max_loops=effective_cfg.get("alarm_max_tool_rounds") or 5,
+            max_loops=budget.max_loops,
             chain_depth=0, conversation_type=conversation_type, session_id=None,
             trigger_user_id=None, effective_cfg=effective_cfg,
             credit_source=credit_source, pool_key_id=pool_key_id,
             provider_supports_thinking=provider_info.get("thinking_supported"),
             trigger="auto",
+            frame_budget_check=budget.check,
         ))
     except Exception as e:
         logger.error(f"{tag}: AI {agent.name} 处理失败: {e}", exc_info=True)

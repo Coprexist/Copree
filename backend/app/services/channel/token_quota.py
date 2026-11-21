@@ -45,6 +45,40 @@ def _now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+def _display_tz():
+    """锚点按平台的展示时区解释（前端的日期也是按它渲染的）；取不到就退回 UTC"""
+    from zoneinfo import ZoneInfo
+
+    from app.config import settings
+
+    try:
+        return ZoneInfo(settings.display_timezone or "UTC")
+    except Exception:  # noqa: BLE001 —— 时区名配错不该让额度判定整个挂掉
+        return timezone.utc
+
+
+def _current_window(policy: dict) -> datetime | None:
+    """当前计数窗口的起点（UTC naive）；不自动重置返回 None"""
+    period = policy.get("reset_period") or ""
+    if not period:
+        return None
+    aware_now = datetime.now(timezone.utc).astimezone(_display_tz())
+    start = pure.window_start(aware_now, period, policy.get("reset_anchor") or pure.DEFAULT_RESET_ANCHOR)
+    if start is None:
+        return None
+    return start.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _used_in_window(policy: dict, row: dict, mode: str) -> int:
+    """窗口内的已用量：窗口变了就当 0（旧窗口的数留在行里，方便回看历史）"""
+    window = _current_window(policy)
+    if window is not None:
+        stored = row.get("window_start")
+        if stored is None or stored != window:
+            return 0
+    return pure.used_tokens(mode, row.get("used_total"), row.get("used_billable"))
+
+
 def _effective(policy: dict, row: dict | None) -> tuple[str, int]:
     """(口径, 额度)：单对话覆盖优先，否则跟随该 AI 在该通道上的默认"""
     row = row or {}
@@ -58,20 +92,28 @@ def _effective(policy: dict, row: dict | None) -> tuple[str, int]:
 async def get_policy(db, agent_id: int, channel_kind: str) -> dict:
     """读默认策略；没有就现建一份默认的（惰性建行，省掉"先初始化"这一步）"""
     params = {"agent_id": int(agent_id), "channel_kind": str(channel_kind)}
+    columns = ("meter_mode, limit_tokens, blocked_reply_enabled, blocked_reply_text, "
+               "reset_period, reset_anchor")
     row = (await db.execute(text(
-        "SELECT meter_mode, limit_tokens, blocked_reply_enabled, blocked_reply_text "
-        "FROM channel_token_policy WHERE agent_id=:agent_id AND channel_kind=:channel_kind"
+        f"SELECT {columns} FROM channel_token_policy "
+        "WHERE agent_id=:agent_id AND channel_kind=:channel_kind"
     ), params)).mappings().first()
     if row is None:
         await db.execute(text("""
             INSERT INTO channel_token_policy (agent_id, channel_kind, meter_mode, limit_tokens,
-                                              blocked_reply_enabled, updated_at)
-            VALUES (:agent_id, :channel_kind, :mode, :limit, true, CURRENT_TIMESTAMP)
+                                              blocked_reply_enabled, reset_period, reset_anchor,
+                                              updated_at)
+            VALUES (:agent_id, :channel_kind, :mode, :limit, true, '', :anchor, CURRENT_TIMESTAMP)
             ON CONFLICT (agent_id, channel_kind) DO NOTHING
-        """), {**params, "mode": pure.DEFAULT_METER_MODE, "limit": pure.DEFAULT_LIMIT_TOKENS})
+        """), {
+            **params,
+            "mode": pure.DEFAULT_METER_MODE,
+            "limit": pure.DEFAULT_LIMIT_TOKENS,
+            "anchor": pure.DEFAULT_RESET_ANCHOR,
+        })
         row = (await db.execute(text(
-            "SELECT meter_mode, limit_tokens, blocked_reply_enabled, blocked_reply_text "
-            "FROM channel_token_policy WHERE agent_id=:agent_id AND channel_kind=:channel_kind"
+            f"SELECT {columns} FROM channel_token_policy "
+            "WHERE agent_id=:agent_id AND channel_kind=:channel_kind"
         ), params)).mappings().first()
     data = dict(row or {})
     return {
@@ -79,6 +121,8 @@ async def get_policy(db, agent_id: int, channel_kind: str) -> dict:
         "limit_tokens": pure.normalize_limit(data.get("limit_tokens")),
         "blocked_reply_enabled": bool(data.get("blocked_reply_enabled", True)),
         "blocked_reply_text": str(data.get("blocked_reply_text") or ""),
+        "reset_period": pure.normalize_reset_period(data.get("reset_period")),
+        "reset_anchor": pure.normalize_anchor(data.get("reset_anchor")),
     }
 
 
@@ -112,7 +156,7 @@ async def decide(db, *, agent_id: int, channel_kind: str, conversation: str, lab
         copree_group_id=copree_group_id, dm_session_id=dm_session_id,
     )
     mode, limit = _effective(policy, row)
-    used = pure.used_tokens(mode, row.get("used_total"), row.get("used_billable"))
+    used = _used_in_window(policy, row, mode)
     blocked = pure.exhausted(limit, used)
     notice = ""
     if blocked and policy["blocked_reply_enabled"]:
@@ -145,13 +189,21 @@ _DM_ORIGIN = text("""
     JOIN users u ON u.id = CASE WHEN s.user1_id <> a.user_id THEN s.user1_id ELSE s.user2_id END
     WHERE s.session_id = :session_id
 """)
+_RESET_WINDOW = text("""
+    UPDATE channel_conversation_usage
+       SET used_total = 0, used_billable = 0, window_start = :window_start,
+           blocked_notice_at = NULL, updated_at = CURRENT_TIMESTAMP
+     WHERE agent_id = :agent_id AND channel_kind = :channel_kind
+       AND conversation = :conversation
+       AND (window_start IS NULL OR window_start <> :window_start)
+""")
 _CHARGE_ROW = text("""
     INSERT INTO channel_conversation_usage (
         agent_id, channel_kind, conversation, label, copree_group_id, dm_session_id,
-        used_total, used_billable, created_at, updated_at
+        used_total, used_billable, window_start, created_at, updated_at
     ) VALUES (
         :agent_id, :channel_kind, :conversation, :label, :copree_group_id, :dm_session_id,
-        :total, :billable, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        :total, :billable, :window_start, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
     )
     ON CONFLICT (agent_id, channel_kind, conversation) DO UPDATE SET
         used_total = channel_conversation_usage.used_total + EXCLUDED.used_total,
@@ -160,6 +212,25 @@ _CHARGE_ROW = text("""
                      ELSE channel_conversation_usage.label END,
         updated_at = CURRENT_TIMESTAMP
 """)
+
+
+async def _plugin_frame(db, agent_id: int) -> dict | None:
+    """当前帧是插件帧时返回 {plugin, context_ref, label}；普通会话帧返回 None。"""
+    from app.services.agent import frame_budget
+    from app.services.agent.state_stack_service import get_current_frame
+
+    try:
+        frame = await get_current_frame(db, int(agent_id))
+    except Exception:  # noqa: BLE001 —— 记账是顺带的，读帧失败就当普通对话
+        return None
+    plugin = frame_budget.plugin_of(frame)
+    if not plugin:
+        return None
+    return {
+        "plugin": plugin,
+        "context_ref": str(frame.get("context_ref") or ""),
+        "label": str(frame.get("label") or frame.get("type") or plugin),
+    }
 
 
 async def charge(db, *, agent_id: int, group_id: int | None = None, session_id: str | None = None,
@@ -182,7 +253,14 @@ async def charge(db, *, agent_id: int, group_id: int | None = None, session_id: 
     copree_group_id: int | None = None
     dm_session_id: str | None = None
 
-    if group_id:
+    # 插件帧（比如「刷 B 站」）：轮次不来自群/私聊，按 group/session 归因会漏账。
+    # 记在帧的 context_ref 上，kind = 插件 id——卡片上那张额度表读的就是同一个 kind。
+    frame = await _plugin_frame(db, agent_id)
+    if frame:
+        kind = frame["plugin"]
+        conversation = frame["context_ref"]
+        label = frame["label"]
+    elif group_id:
         row = (await db.execute(_GROUP_ORIGIN, {"group_id": int(group_id)})).mappings().first()
         kind = str((row or {}).get("origin_channel") or "")
         label = str((row or {}).get("name") or "")
@@ -200,10 +278,18 @@ async def charge(db, *, agent_id: int, group_id: int | None = None, session_id: 
 
     if not kind or not conversation:
         return 0
+    # 自动重置：跨窗口的第一笔账先把计数归零（不需要定时任务，写入这一刻顺手把旧窗口结掉）
+    policy = await get_policy(db, agent_id, kind)
+    window = _current_window(policy)
+    if window is not None:
+        await db.execute(_RESET_WINDOW, {
+            "agent_id": int(agent_id), "channel_kind": kind,
+            "conversation": conversation, "window_start": window,
+        })
     await db.execute(_CHARGE_ROW, {
         "agent_id": int(agent_id), "channel_kind": kind, "conversation": conversation,
         "label": label[:120], "copree_group_id": copree_group_id, "dm_session_id": dm_session_id,
-        "total": total, "billable": billable,
+        "total": total, "billable": billable, "window_start": window,
     })
     return 1
 
@@ -220,7 +306,7 @@ async def overview(db, agent_id: int, channel_kind: str) -> dict:
     for raw in rows:
         row = dict(raw)
         mode, limit = _effective(policy, row)
-        used = pure.used_tokens(mode, row.get("used_total"), row.get("used_billable"))
+        used = _used_in_window(policy, row, mode)
         conversations.append({
             "conversation": row["conversation"],
             "label": row.get("label") or "",
@@ -234,14 +320,30 @@ async def overview(db, agent_id: int, channel_kind: str) -> dict:
         })
     # 已用完的排前面：页面上最需要先看到的就是"哪些对话现在不能用"
     conversations.sort(key=lambda c: (not c["blocked"], c["remaining_tokens"]))
-    return {"policy": policy, "conversations": conversations,
-            "default_blocked_reply": pure.DEFAULT_BLOCKED_REPLY}
+    # 重置的"现在处于哪个窗口、下次什么时候换"也一起给前端：它不该自己再算一遍
+    aware_now = datetime.now(timezone.utc).astimezone(_display_tz())
+    window_aware = pure.window_start(aware_now, policy["reset_period"], policy["reset_anchor"])
+    next_aware = pure.window_end(aware_now, policy["reset_period"], policy["reset_anchor"])
+    return {
+        "policy": policy,
+        "conversations": conversations,
+        "reset": {
+            "period": policy["reset_period"],
+            "anchor": policy["reset_anchor"],
+            "window_start": window_aware.strftime("%Y-%m-%d %H:%M") if window_aware else None,
+            "next_reset_at": next_aware.strftime("%Y-%m-%d %H:%M") if next_aware else None,
+            "timezone": str(getattr(_display_tz(), "key", "UTC")),
+        },
+        "default_blocked_reply": pure.DEFAULT_BLOCKED_REPLY,
+    }
 
 
 async def set_policy(db, agent_id: int, channel_kind: str, *,
                      meter_mode: str | None = None, limit_tokens: int | None = None,
                      blocked_reply_enabled: bool | None = None,
-                     blocked_reply_text: str | None = None) -> dict:
+                     blocked_reply_text: str | None = None,
+                     reset_period: str | None = None,
+                     reset_anchor: str | None = None) -> dict:
     """改默认策略。只改传进来的字段（None = 不动），避免"保存一次把别的项清空"。"""
     await get_policy(db, agent_id, channel_kind)
     sets: list[str] = []
@@ -258,6 +360,12 @@ async def set_policy(db, agent_id: int, channel_kind: str, *,
     if blocked_reply_text is not None:
         sets.append("blocked_reply_text=:blocked_reply_text")
         params["blocked_reply_text"] = str(blocked_reply_text).strip() or None
+    if reset_period is not None:
+        sets.append("reset_period=:reset_period")
+        params["reset_period"] = pure.normalize_reset_period(reset_period)
+    if reset_anchor is not None:
+        sets.append("reset_anchor=:reset_anchor")
+        params["reset_anchor"] = pure.normalize_anchor(reset_anchor)
     if sets:
         await db.execute(text(
             f"UPDATE channel_token_policy SET {', '.join(sets)}, updated_at=CURRENT_TIMESTAMP "
@@ -301,7 +409,9 @@ async def reset_usage(db, agent_id: int, channel_kind: str, conversation: str | 
     if conversation:
         where += " AND conversation=:conversation"
         params["conversation"] = str(conversation)
+    policy = await get_policy(db, agent_id, channel_kind)
+    params["window_start"] = _current_window(policy)
     await db.execute(text(
         "UPDATE channel_conversation_usage SET used_total=0, used_billable=0, "
-        f"blocked_notice_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE {where}"
+        f"blocked_notice_at=NULL, window_start=:window_start, updated_at=CURRENT_TIMESTAMP WHERE {where}"
     ), params)

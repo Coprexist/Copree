@@ -142,6 +142,54 @@ CONFIG_GROUPS: dict[str, dict] = {
                 "type": "number", "label_key": "avatarMaxSize",
                 "hint_key": "avatarMaxSizeHint",
             },
+            # 注入额度：记忆与经历各自封顶（不合并额度），一轮合起来还有总闸。
+            # 经历额度是「一次最多几条」的上限，不是配额——凑不满就少投，不硬凑。
+            "memory_inject_max": {
+                "type": "number", "label_key": "memoryInjectMax",
+                "hint_key": "memoryInjectMaxHint", "min": 0, "max": 20,
+            },
+            "experience_inject_max": {
+                "type": "number", "label_key": "experienceInjectMax",
+                "hint_key": "experienceInjectMaxHint", "min": 0, "max": 20,
+            },
+            "inject_max_total": {
+                "type": "number", "label_key": "injectMaxTotal",
+                "hint_key": "injectMaxTotalHint", "min": 0, "max": 40,
+            },
+            # 跨状态交接的原文尾巴：经历行负责「那一场干了什么」，原文只留「最后说到哪」
+            "handoff_tail_exchanges": {
+                "type": "number", "label_key": "handoffTailExchanges",
+                "hint_key": "handoffTailExchangesHint", "min": 0, "max": 10,
+            },
+            "handoff_tail_chars": {
+                "type": "number", "label_key": "handoffTailChars",
+                "hint_key": "handoffTailCharsHint", "min": 0, "max": 4000,
+            },
+            # 文件日常额度：人与 AI 分开设（AI 批量产文件，跟人飙车不是一回事）。0 = 不限。
+            "file_daily_mb_human": {
+                "type": "number", "label_key": "fileDailyMbHuman",
+                "hint_key": "fileDailyMbHumanHint", "min": 0,
+            },
+            "file_daily_mb_ai": {
+                "type": "number", "label_key": "fileDailyMbAi",
+                "hint_key": "fileDailyMbAiHint", "min": 0,
+            },
+            "file_daily_files_human": {
+                "type": "number", "label_key": "fileDailyFilesHuman",
+                "hint_key": "fileDailyFilesHumanHint", "min": 0,
+            },
+            "file_daily_files_ai": {
+                "type": "number", "label_key": "fileDailyFilesAi",
+                "hint_key": "fileDailyFilesAiHint", "min": 0,
+            },
+            "file_ops_per_minute_human": {
+                "type": "number", "label_key": "fileOpsHuman",
+                "hint_key": "fileOpsHumanHint", "min": 0,
+            },
+            "file_ops_per_minute_ai": {
+                "type": "number", "label_key": "fileOpsAi",
+                "hint_key": "fileOpsAiHint", "min": 0,
+            },
         },
         "encrypted": [],
     },

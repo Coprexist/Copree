@@ -105,6 +105,16 @@ class MetricsCollector:
         self.max_queue_depth: int = 0
         self.current_queue_depth: int = 0
 
+        # 容量准入读数（services/infrastructure/capacity.py 每秒推一次）
+        self.capacity: dict = {}
+
+        # 回合延迟：总时长**含排队**，排队单独记一份。
+        # 只统计"成功返回的请求延迟"会让排队时间凭空消失（coordinated omission）：
+        # 面板会显示一切正常，而用户其实已经等了三分钟。
+        self.turn_latency = LatencyStats()
+        self.turn_queue_latency = LatencyStats()
+        self.turn_count: int = 0
+
         # 意愿评分分布直方图
         self.willingness_buckets: Dict[str, int] = defaultdict(int)
 
@@ -149,6 +159,19 @@ class MetricsCollector:
             if depth > self.max_queue_depth:
                 self.max_queue_depth = depth
 
+    async def record_capacity(self, snapshot: dict):
+        """容量准入读数：怎么限的、现在排了几个、谁在等。"""
+        async with self._lock:
+            self.capacity = snapshot
+
+    async def record_turn(self, latency_seconds: float, queue_seconds: float = 0.0):
+        """一轮的端到端时长（含等待名额）与其中排队的那一段。"""
+        async with self._lock:
+            self.turn_latency.record(max(0.0, latency_seconds))
+            if queue_seconds > 0:
+                self.turn_queue_latency.record(queue_seconds)
+            self.turn_count += 1
+
     async def record_willingness(self, score: int):
         async with self._lock:
             bucket = f"{(score // 10) * 10}-{(score // 10 + 1) * 10}"
@@ -191,6 +214,13 @@ class MetricsCollector:
                 "queue": {
                     "current_depth": self.current_queue_depth,
                     "max_depth": self.max_queue_depth,
+                },
+                "capacity": self.capacity,
+                "rounds": {
+                    # latency 是"用户在等多久"（含排队），queue 是其中排队那一段
+                    "count": self.turn_count,
+                    "latency": self.turn_latency.to_dict(),
+                    "queue": self.turn_queue_latency.to_dict(),
                 },
                 "willingness": dict(self.willingness_buckets),
                 "memory": {

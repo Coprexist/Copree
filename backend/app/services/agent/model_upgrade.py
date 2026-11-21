@@ -67,10 +67,13 @@ async def upgrade_provider_config(db: AsyncSession) -> int:
     items = json.loads(raw) if isinstance(raw, str) else raw
     if not isinstance(items, list) or not items:
         return 0
-    labels = {m["value"]: m["label"] for p in PRESETS.values() for m in p["models"]}
+    # 只看 LLM 预设：语音预设没有 models/chat_model（见 provider_presets.ProviderPreset）
+    llm_presets = [p for p in PRESETS.values() if (p.get("kind") or "llm") == "llm"]
+    labels = {m["value"]: m["label"] for p in llm_presets for m in p.get("models") or []}
     presets = {
-        p["key"]: {"chat_model": p["chat_model"], "work_model": p["work_model"], "models": p["models"]}
-        for p in PRESETS.values()
+        p["key"]: {"chat_model": p["chat_model"], "work_model": p["work_model"],
+                   "models": p.get("models") or []}
+        for p in llm_presets
     }
     new_items, changed = align_provider_models(
         items, presets=presets, aliases=MODEL_ALIASES, labels=labels,

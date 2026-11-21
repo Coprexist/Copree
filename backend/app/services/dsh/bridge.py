@@ -133,6 +133,21 @@ def _raise_for(response: httpx.Response) -> None:
         raise DshBridgeError(f"DSH 返回 {response.status_code}" + (f"：{detail}" if detail else ""))
 
 
+def _unreachable(url: str, exc: Exception) -> DshBridgeError:
+    """回连失败的可诊断文案。
+
+    「连不上」至少有三种成因：DSH 根本没起、advertiseUrl 从后端不可达（后端在容器里
+    却填了 127.0.0.1）、以及中间那层反代没起。它们的排查入口完全不同，而 httpx 只会
+    说一句 All connection attempts failed。所以这里把**实际要连的地址**喊出来，并点名
+    排查章节——管理端状态卡上的详情就是这句话。
+    """
+    origin = url.split(BRIDGE_PATH, 1)[0]
+    return DshBridgeError(
+        f"DSH 不可达（{origin}）：{exc}；该地址须从 Copree 后端可达（容器里访问不到宿主的"
+        f" 127.0.0.1），反代与开机顺序见 docs/DSH接入指南.md §3.6"
+    )
+
+
 async def status() -> dict:
     """探测 DSH 插件是否在线（管理端状态卡的唯一来源）。"""
     url, headers = _target("/status")
@@ -140,7 +155,7 @@ async def status() -> dict:
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.get(url, headers=headers)
     except httpx.HTTPError as exc:
-        raise DshBridgeError(f"DSH 不可达：{exc}") from exc
+        raise _unreachable(url, exc) from exc
     _raise_for(response)
     return response.json()
 
@@ -152,7 +167,7 @@ async def list_sessions() -> list[dict]:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(url, headers=headers)
     except httpx.HTTPError as exc:
-        raise DshBridgeError(f"DSH 不可达：{exc}") from exc
+        raise _unreachable(url, exc) from exc
     _raise_for(response)
     return list(response.json().get("items") or [])
 
@@ -183,7 +198,7 @@ async def prompt(
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(url, headers=headers, json=payload)
     except httpx.HTTPError as exc:
-        raise DshBridgeError(f"DSH 不可达：{exc}") from exc
+        raise _unreachable(url, exc) from exc
     _raise_for(response)
     return response.json()
 
@@ -198,7 +213,7 @@ async def list_commands(session_id: str) -> list[dict]:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(url, headers=headers, params={"sessionId": session_id})
     except httpx.HTTPError as exc:
-        raise DshBridgeError(f"DSH 不可达：{exc}") from exc
+        raise _unreachable(url, exc) from exc
     _raise_for(response)
     return list(response.json().get("items") or [])
 
@@ -214,7 +229,7 @@ async def run_command(session_id: str, line: str) -> dict:
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(url, headers=headers, json={"sessionId": session_id, "line": line})
     except httpx.HTTPError as exc:
-        raise DshBridgeError(f"DSH 不可达：{exc}") from exc
+        raise _unreachable(url, exc) from exc
     _raise_for(response)
     return response.json()
 
@@ -226,7 +241,7 @@ async def cancel(session_id: str) -> None:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(url, headers=headers, json={"sessionId": session_id})
     except httpx.HTTPError as exc:
-        raise DshBridgeError(f"DSH 不可达：{exc}") from exc
+        raise _unreachable(url, exc) from exc
     _raise_for(response)
 
 
@@ -241,7 +256,7 @@ async def answer(payload: dict) -> dict:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(url, headers=headers, json=payload)
     except httpx.HTTPError as exc:
-        raise DshBridgeError(f"DSH 不可达：{exc}") from exc
+        raise _unreachable(url, exc) from exc
     _raise_for(response)
     return response.json()
 
@@ -265,4 +280,4 @@ async def stream(session_id: str, after_seq: int = -1) -> AsyncIterator[bytes]:
                 async for chunk in response.aiter_bytes():
                     yield chunk
     except httpx.HTTPError as exc:
-        raise DshBridgeError(f"DSH 不可达：{exc}") from exc
+        raise _unreachable(url, exc) from exc

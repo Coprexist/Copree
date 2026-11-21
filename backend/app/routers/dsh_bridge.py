@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.services.content.file_service import _get_physical_path, get_file
+from app.services.content.file_service import disk_path, get_file
 from app.services.dsh import bridge
 from app.utils.auth import require_admin
 
@@ -117,7 +117,7 @@ async def bridge_attachment(
     metadata = await get_file(db, file_id)
     if metadata is None:
         raise HTTPException(status_code=404, detail="文件不存在")
-    physical_path = _get_physical_path(metadata.path)
+    physical_path = disk_path(metadata.path)
     if not os.path.exists(physical_path):
         raise HTTPException(status_code=404, detail="物理文件不存在")
     return FileResponse(

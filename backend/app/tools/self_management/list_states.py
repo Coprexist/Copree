@@ -13,9 +13,10 @@ class ListStates(ToolPlugin):
     name = "list_states"
     description = (
         "查看你的状态链——所有帧：还在跑的（含被暂停/跳过的层）、已结束的、待交接的都在。\n"
-        "当摘要提示'另有 N 帧未完成'或'待交接 N 帧'、或你想确认自己还有哪些任务挂着时调用。"
-        "返回每帧的 id / 类型 / 任务 / 待办 / status，可用 pop_state(target_frame_id=...) 直接跳回某一层，"
-        "status 是 ended / retired 的要调 finish_frame 销掉。\n"
+        "开头的帧清单已经给了运行中那些帧的 id；要看细节（在做什么、待办、排队顺序）、"
+        "或要看已结束与待交接的帧时调这个。"
+        "返回每帧的 id / 类型 / 任务 / 待办 / status：还在跑的用 pop_state(target_frame_id=...) 跳回，"
+        "沉睡 / 已结束的用 enter_state(frame_id) 进去，retired 的调 finish_frame 销掉。\n"
         "queue 是它们排队的顺序（**第一个就是正在执行的**，只有它真的在跑）；"
         "执行窗口 max_active 默认 1，即只跑队首那一帧。"
     )

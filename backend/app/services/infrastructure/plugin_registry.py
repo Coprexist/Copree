@@ -11,12 +11,44 @@
 """
 from __future__ import annotations
 
+import functools
 import logging
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 KEY_SEP = ":"
+
+# 平台回调的服务生命周期方法：这些时刻插件可能需要调用公共接口（例如替 AI 建帧），
+# 而插件身份只在加载期有值——所以在这里包一层。列表之外的实例方法不碰。
+# 这些方法平台会在调用点套一层插件上下文（运行期 get_current_plugin() 才有值）：
+# 生命周期四个 + 帧被切进来时的钩子（插件要按帧的 context_ref 往账本里写东西）
+_CONTEXT_BOUND_METHODS = ("start", "stop", "get_status", "environment", "on_frame_enter")
+
+
+def _bind_plugin_context(plugin: ServicePlugin) -> None:
+    """给实例的入口方法套上插件上下文（运行期 get_current_plugin() 才有值）。
+
+    包在实例属性上而不是类上：一个插件可以有多个实例，owner 相同但实例不同；重复注册同一
+    实例时不重复包（标记在包装函数上）。
+    """
+    from app.services.plugin.api import plugin_context
+
+    owner = getattr(plugin, "owner", "") or ""
+    if not owner:
+        return
+    for name in _CONTEXT_BOUND_METHODS:
+        bound = getattr(plugin, name, None)
+        if not callable(bound) or getattr(bound, "__plugin_context_bound__", False):
+            continue
+
+        @functools.wraps(bound)
+        async def wrapped(*args, __bound=bound, __owner=owner, **kwargs):
+            with plugin_context(__owner):
+                return await __bound(*args, **kwargs)
+
+        wrapped.__plugin_context_bound__ = True
+        setattr(plugin, name, wrapped)
 
 
 def registry_key(plugin_id: str, instance: str = "") -> str:
@@ -129,6 +161,7 @@ class PluginRegistry:
         key = plugin.key
         if key in cls._plugins:
             logger.warning(f"插件实例 {key} 重复注册，已覆盖")
+        _bind_plugin_context(plugin)
         cls._plugins[key] = plugin
         logger.info(f"服务插件已注册: {key} ({plugin.name})")
 

@@ -22,13 +22,15 @@ class SystemSettingsResponse(BaseModel):
     audit_log_retention_days: int = 90
     daily_backup_enabled: bool = False
     daily_backup_keep: int = 7
+    memory_daily_target_mb: int = 0
+    memory_limit_mb: int = 0
 
 
 class UpdateSystemSettingsRequest(BaseModel):
     """管理后台更新系统设置"""
     default_language: str | None = Field(None, description="全局默认语言: zh 或 en")
     default_platform_credit: int | None = Field(None, ge=0, description="全局默认平台赠送额度")
-    default_file_quota_mb: int | None = Field(None, ge=1, description="新用户默认文件配额（MB），修改后所有用户同步调整")
+    default_file_quota_mb: int | None = Field(None, ge=1, description="新用户默认存储上限值（MB），修改后所有用户同步调整；写「我的文件」时按它硬拦")
     default_concurrent_ai_limit: int | None = Field(None, ge=1, le=20, description="新建群聊默认 AI 并发数")
     registration_enabled: bool | None = Field(None, description="是否开放注册通道")
     geoip_provider_url: str | None = Field(None, description="IP 地理位置查询后端 URL，含 {ip} 占位符")
@@ -38,6 +40,10 @@ class UpdateSystemSettingsRequest(BaseModel):
     message_retention_days: int | None = Field(None, ge=0, le=3650, description="消息保留天数（0=永久保留）")
     daily_backup_enabled: bool | None = Field(None, description="每日自动备份开关（默认关）")
     daily_backup_keep: int | None = Field(None, ge=1, le=365, description="备份保留份数，超出自动清除（1-365）")
+    memory_daily_target_mb: int | None = Field(
+        None, ge=0, le=1_048_576, description="日常内存占用目标（MB，0=不设，走默认调控）")
+    memory_limit_mb: int | None = Field(
+        None, ge=0, le=1_048_576, description="内存占用上限（MB，0=不设）")
     world_preset_suggestions: list[str] | None = Field(None, description="世界 AI 建议问题预设（你可以问按钮）")
 
 

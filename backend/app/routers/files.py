@@ -18,8 +18,10 @@ from app.services.content.file_service import (
     delete_file, check_file_access, track_file_reference,
     set_collaboration_mode, add_file_collaborator, remove_file_collaborator,
     get_file_collaborators, get_file_referrers,
-    _check_path_safe, _get_physical_path,
+    _check_path_safe, disk_path,
     _remove_forward_reference,
+    list_viewed_files,
+    user_space_dir, user_chat_dir, StorageQuotaExceeded, keep_to_my_files,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,56 +35,29 @@ router = APIRouter(prefix="/fs", tags=["文件"])
 
 @router.get("/list")
 async def list_directory(
-    path: str = Query("/", description="目录路径"),
-    include_forwarded: bool = Query(False, description="是否包含转发来的文件"),
+    scope: str = Query(
+        "mine",
+        pattern="^(mine|produced|viewed)$",
+        description="mine=我的文件 / produced=我在对话里产生的 / viewed=浏览过的",
+    ),
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """列出目录内容（自动过滤无权条目），可选包含转发来的文件"""
-    if not _check_path_safe(path):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="路径不合法")
+    """按存储页的三块口径列文件（§3.1）
 
-    files = await list_files(db, path, "human", current_user["user_id"])
+    三块是**并列**关系，不是一个集合的筛选：我的文件＝users/{uid}/files、我在对话里
+    产生的＝users/{uid}/chat、浏览过的＝别人发的、我看过或转发过的。所以入参是 scope
+    而不是"目录 + 若干开关"——目录由后端按口径算，前端不需要知道搬迁细节。
 
-    # 追加用户 AI 的文件（与 /user/storage 对齐）
-    from sqlalchemy import select
-    from app.models.agent import Agent
-    from app.models.file import FileMetadata as FM
-    agent_ids_r = await db.execute(
-        select(Agent.id).where(Agent.owner_id == current_user["user_id"])
-    )
-    agent_ids = [row[0] for row in agent_ids_r.all()]
-    seen_paths = {f["path"] for f in files}
-    for aid in agent_ids:
-        ai_files = await list_files(db, path, "ai", aid)
-        for f in ai_files:
-            if f["path"] not in seen_paths:
-                files.append(f)
-                seen_paths.add(f["path"])
+    以前这里还会把名下 AI 的文件追加进列表（并有一个 include_forwarded 开关），
+    与三块并列的口径冲突，两者都已移除（§10）。
+    """
+    uid = current_user["user_id"]
+    if scope == "viewed":
+        return await list_viewed_files(db, uid)
 
-    # 合并转发来的文件
-    if include_forwarded:
-        from app.services.content.file_service import get_user_forwarded_file_ids
-        forwarded_ids = await get_user_forwarded_file_ids(db, current_user["user_id"])
-        if forwarded_ids:
-            from sqlalchemy import select
-            from app.models.file import FileMetadata as FM
-            fwd_result = await db.execute(select(FM).where(FM.id.in_(forwarded_ids)))
-            for fm in fwd_result.scalars():
-                files.append({
-                    "id": fm.id,
-                    "path": fm.path,
-                    "owner_type": fm.owner_type,
-                    "owner_id": fm.owner_id,
-                    "size": fm.size,
-                    "mime_type": fm.mime_type,
-                    "collaboration_mode": fm.collaboration_mode,
-                    "created_at": str(fm.created_at) if fm.created_at else None,
-                    "updated_at": str(fm.updated_at) if fm.updated_at else None,
-                    "is_forwarded": True,
-                })
-
-    return files
+    directory = user_space_dir(uid) if scope == "mine" else user_chat_dir(uid)
+    return await list_files(db, directory, "human", uid)
 
 
 # ============================================================
@@ -91,27 +66,32 @@ async def list_directory(
 
 @router.post("/upload")
 async def upload_file_endpoint(
-    path: str = Query("/"),
     collaboration_mode: str = Query("solo", pattern="^(solo|shared|open)$"),
     file: UploadFile = File(...),
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """上传文件"""
-    if not _check_path_safe(path):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="路径不合法")
+    """上传到「我的文件」（users/{uid}/files）
 
+    这里**不接受目录参数**：存储页上传的东西进的是用户自己的空间，配额天天盯着它，
+    路径必须由后端算死。输入框附件走 /upload-attachment，进的是 users/{uid}/chat。
+    """
     content = await file.read()
     from app.config import get_effective_upload_max_size_mb
     max_mb = get_effective_upload_max_size_mb()
     max_bytes = max_mb * 1024 * 1024
     if len(content) > max_bytes:
         raise HTTPException(400, f"文件大小不能超过 {max_mb}MB")
-    metadata = await upload_file(
-        db, path, file.filename or f"unnamed_{uuid.uuid4().hex[:8]}",
-        content, file.content_type, "human", current_user["user_id"],
-        collaboration_mode=collaboration_mode,
-    )
+    try:
+        metadata = await upload_file(
+            db, user_space_dir(current_user["user_id"]),
+            file.filename or f"unnamed_{uuid.uuid4().hex[:8]}",
+            content, file.content_type, "human", current_user["user_id"],
+            collaboration_mode=collaboration_mode,
+        )
+    except StorageQuotaExceeded as e:
+        # 413：这次写入装不下。带上已用/上限，界面直接显示，不用再查一次
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(e))
 
     return {
         "id": metadata.id,
@@ -124,6 +104,40 @@ async def upload_file_endpoint(
 
 
 # ============================================================
+# 语音文稿（按 file_id 批量取）
+# ============================================================
+
+@router.get("/transcripts")
+async def get_transcripts(
+    file_ids: str = Query(..., description="逗号分隔的 file_id"),
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """一批文件的语音文稿 → `{"199": "晚自习别熬太晚。"}`（只回请求者读得到的）。
+
+    文稿的家在 `file_metadata.transcript`，消息负载里**不带**它：语音条按 file_id 懒取，
+    这样转发、ASR 回填都只改一处，消息快照也不会变成 N 份。单次最多 50 个 id。
+    """
+    ids: list[int] = []
+    for part in (file_ids or "").split(","):
+        part = part.strip()
+        if part.isdigit():
+            ids.append(int(part))
+    ids = ids[:50]
+    if not ids:
+        return {}
+    from app.services.content.file_service import transcripts_for
+
+    texts = await transcripts_for(db, ids)
+    out: dict[str, str] = {}
+    for fid, body in texts.items():
+        allowed = await check_file_access(db, fid, "human", current_user["user_id"], "read")
+        if allowed is not None:
+            out[str(fid)] = body
+    return out
+
+
+# ============================================================
 # 消息附件上传（独立端点，上传后返回 file_id 供消息引用）
 # ============================================================
 
@@ -133,7 +147,7 @@ async def upload_attachment(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """上传消息附件（存入 attachments/ 子目录）"""
+    """上传消息附件（进 users/{uid}/chat，发出去之后字节也还在这里）"""
     content = await file.read()
 
     # 限制附件大小
@@ -146,7 +160,8 @@ async def upload_attachment(
 
     try:
         metadata = await upload_file(
-            db, "attachments/", file.filename or f"att_{uuid.uuid4().hex[:8]}",
+            db, user_chat_dir(current_user["user_id"]),
+            file.filename or f"att_{uuid.uuid4().hex[:8]}",
             content, file.content_type, "human", current_user["user_id"],
             collaboration_mode="solo",
         )
@@ -163,6 +178,34 @@ async def upload_attachment(
         "size": metadata.size,
         "mime_type": metadata.mime_type,
     }
+
+
+# ============================================================
+# 收进我的文件（§7.3）
+# ============================================================
+
+@router.post("/keep")
+async def keep_file_endpoint(
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """把一份文件收进我的文件（硬链接，不占第二份磁盘）
+
+    这是第一栏**唯一**的入口：预览弹窗和消息三点菜单都调它，规则只写一处。
+    已在我的空间里返回 already=true（幂等）；配额不够 413，消息里带已用/上限/本次大小。
+    """
+    file_id = int(body.get("file_id") or 0)
+    if not file_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="缺少 file_id")
+    try:
+        return await keep_to_my_files(db, current_user["user_id"], file_id)
+    except StorageQuotaExceeded as e:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(e))
+    except LookupError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 # ============================================================
@@ -217,7 +260,7 @@ async def download_file(
     if not can_access:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权访问此文件")
 
-    physical_path = _get_physical_path(metadata.path)
+    physical_path = disk_path(metadata.path)
     if not os.path.exists(physical_path):
         logger.error(f"下载文件 {file_id}: 物理文件不存在 path={physical_path} metadata.path={metadata.path}")
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"物理文件不存在")
@@ -246,7 +289,7 @@ async def download_public_file(file_id: int, db: AsyncSession = Depends(get_db))
     metadata = await get_file(db, file_id)
     if metadata is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文件不存在")
-    physical_path = _get_physical_path(metadata.path)
+    physical_path = disk_path(metadata.path)
     if not os.path.exists(physical_path):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="物理文件不存在")
     return FileResponse(physical_path, media_type=metadata.mime_type or "application/octet-stream")
@@ -471,7 +514,7 @@ async def create_directory(
     if not _check_path_safe(path):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="路径不合法")
 
-    physical_path = os.path.join(settings.data_dir, path)
+    physical_path = disk_path(path)
     os.makedirs(physical_path, exist_ok=True)
 
     return {"message": "目录已创建", "path": path}

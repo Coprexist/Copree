@@ -2,7 +2,7 @@
 管理员面板路由
 所有端点都需要 admin 权限
 """
-import os, json, asyncio, secrets, shutil, tempfile
+import os, json, asyncio, shutil, tempfile
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -11,7 +11,7 @@ from fastapi.responses import Response, FileResponse
 from starlette.background import BackgroundTask
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, update, delete
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from app.config import settings
 from app.db_providers import get_provider
 from app.services.infrastructure.maintenance import maintenance
@@ -25,7 +25,7 @@ from app.utils.config_resolver import find_old_config
 from app.models.user import User
 from app.models.agent import Agent
 from app.models.group import DEFAULT_CONCURRENT_AI_LIMIT, Group
-from app.models.redemption import RedemptionCode
+from app.services.infrastructure import redemption_service
 from app.routers.ws import manager as ws_manager
 from app.models.system_log import SystemLog
 from app.models.opencli import OpenCLIUsageLog
@@ -58,12 +58,21 @@ class BanUserRequest(BaseModel):
 
 
 class GenerateCodeRequest(BaseModel):
-    quota_amount: int = Field(..., ge=1, le=100)
+    quota_amount: int = Field(..., ge=1)   # 上限按类型在 model_validator 里判：文件配额按 MB 算
     code_type: str = Field(default="ai_quota", pattern="^(ai_quota|api_credit|agent_bundle|file_quota)$")
     expires_in_days: int = Field(..., ge=1, le=365)
     note: str | None = None              # v0.1.5: 管理员备注（保密）
     max_usage: int | None = None         # v0.1.5: 单码最大用量
     is_api_pool: bool = False            # v0.1.5: 是否是 API 池额度
+    # 最多可兑换人次：None=不限人次（活动码，每人仍限一次）、1=一次性（默认）、N=前 N 名
+    usage_limit: int | None = Field(default=1, ge=1, le=100000)
+
+    @model_validator(mode="after")
+    def _quota_within_type_limit(self):
+        limit = 1024 if self.code_type == "file_quota" else 100
+        if self.quota_amount > limit:
+            raise ValueError(f"额度超过上限 {limit}（{self.code_type}）")
+        return self
 
 
 class UpdateUserRoleRequest(BaseModel):
@@ -237,6 +246,15 @@ async def ops_overview(
     total_users = (await db.execute(select(func.count(User.id)).where(
         User.type.notin_(("system", "external"))))).scalar() or 0
 
+    # 文件额度告警：撞闸/配额满/清理失败（§6.2 每类每天只写一条，数字不会大）
+    file_budget_hits, file_quota_hits, cleanup_failed = (
+        int(x or 0) for x in (await db.execute(sql_text("""
+        SELECT sum(CASE WHEN log_type = 'file_budget_exceeded' THEN 1 ELSE 0 END),
+               sum(CASE WHEN log_type = 'file_quota_exceeded' THEN 1 ELSE 0 END),
+               sum(CASE WHEN log_type = 'file_cleanup_failed' THEN 1 ELSE 0 END)
+        FROM system_logs WHERE created_at >= :since
+    """), {"since": since})).first())
+
     # 认证限流挡回的请求（进程内计数，重启归零）：启动时刻晚于窗口起点时，这个数只覆盖了部分窗口
     limit_stats = auth_limit_stats()
     throttle = limit_stats["total"]
@@ -265,6 +283,12 @@ async def ops_overview(
         "lockouts": lockouts,
         "conversation": {"turns": turns, "group_messages": group_msgs, "dm_messages": dm_msgs},
         "people": {"new_local": new_users, "new_audit": new_audit, "total_local": total_users},
+        # 文件侧的「出过事没有」：抽屉里点进去就是日志页对应类型（§6.2）
+        "files": {
+            "alerts": file_budget_hits + file_quota_hits,   # 总数：总览那张卡用它
+            "budget": file_budget_hits, "quota": file_quota_hits,
+            "cleanup_failed": cleanup_failed,
+        },
     }
 
 
@@ -676,36 +700,35 @@ async def generate_code(
     admin: dict = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """生成兑换码（v0.1.5: 支持备注/最大用量/API 池标记）"""
-    code_str = "RC-" + secrets.token_hex(8).upper()
-
-    code = RedemptionCode(
-        code=code_str,
+    """生成兑换码（usage_limit=None 即不限人次的活动码，每人仍限一次）"""
+    code_obj = await redemption_service.create_code(
+        db,
+        admin_id=admin["user_id"],
         quota_amount=req.quota_amount,
         code_type=req.code_type,
-        expires_at=datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=req.expires_in_days),
-        created_by=admin["user_id"],
+        expires_in_days=req.expires_in_days,
         note=req.note,
+        usage_limit=req.usage_limit,
         max_usage=req.max_usage,
         is_api_pool=req.is_api_pool,
     )
-    db.add(code)
 
     await _log_admin_action(
         db, admin["user_id"], "generate_code", "redemption_code", 0,
-        {"code": code_str, "quota_amount": req.quota_amount, "code_type": req.code_type,
-         "note": req.note, "is_api_pool": req.is_api_pool},
+        {"code": code_obj.code, "quota_amount": req.quota_amount, "code_type": req.code_type,
+         "note": req.note, "is_api_pool": req.is_api_pool, "usage_limit": req.usage_limit},
     )
     await db.flush()
 
     return {
-        "code": code_str,
-        "quota_amount": req.quota_amount,
-        "code_type": req.code_type,
+        "code": code_obj.code,
+        "quota_amount": code_obj.quota_amount,
+        "code_type": code_obj.code_type,
         "expires_in_days": req.expires_in_days,
         "note": req.note,
         "max_usage": req.max_usage,
         "is_api_pool": req.is_api_pool,
+        "usage_limit": code_obj.usage_limit,
     }
 
 
@@ -714,27 +737,20 @@ async def list_codes(
     admin: dict = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """列出所有兑换码"""
-    result = await db.execute(
-        select(RedemptionCode).order_by(RedemptionCode.expires_at.desc())
-    )
-    codes = result.scalars().all()
+    """列出所有兑换码（含已兑人次与状态；状态由后端算，含过期判断）"""
+    return await redemption_service.list_codes(db)
 
-    return [
-        {
-            "code": c.code,
-            "quota_amount": c.quota_amount,
-            "code_type": c.code_type or "ai_quota",
-            "expires_at": str(c.expires_at) if c.expires_at else None,
-            "used_by": c.used_by,
-            "used_at": str(c.used_at) if c.used_at else None,
-            "note": c.note,
-            "max_usage": c.max_usage,
-            "is_api_pool": c.is_api_pool if c.is_api_pool else False,
-            "created_at": str(c.created_at) if c.created_at else None,
-        }
-        for c in codes
-    ]
+
+@router.get("/redemption-codes/{code}/redemptions")
+async def list_code_redemptions(
+    code: str,
+    admin: dict = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """某个码的兑换流水：谁、什么时候、兑到多少"""
+    if await redemption_service.get_code(db, code) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="兑换码不存在")
+    return await redemption_service.list_redemptions(db, code)
 
 
 # ---------- API Key 池管理 ----------
@@ -1503,8 +1519,14 @@ async def update_system_settings(
                 daily_backup_enabled=req.daily_backup_enabled,
                 daily_backup_keep=req.daily_backup_keep,
                 world_preset_suggestions=req.world_preset_suggestions,
+                memory_daily_target_mb=req.memory_daily_target_mb,
+                memory_limit_mb=req.memory_limit_mb,
                 updated_by=admin["user_id"],
             )
+        # 容量策略保存即生效：不必等 governor 下一轮去库里刷（重启才生效的配置容易让人误以为没写进去）
+        from app.services.infrastructure import capacity
+        capacity.apply_admin_policy(result.get("memory_daily_target_mb"),
+                                    result.get("memory_limit_mb"))
         await _log_admin_action(
             db, admin["user_id"], "update_system_settings", "system", 1,
             req.model_dump(exclude_none=True),
@@ -2023,7 +2045,7 @@ async def cleanup_files(
     import time
     from app.models.file import FileMetadata as FMD, FileReference as FR, FileCollaborator as FC
     from app.models.system_settings import SystemSettings as SS
-    from app.services.content.file_service import _get_physical_path
+    from app.services.content.file_service import disk_path
 
     avatar_dir = settings.avatars_dir
     trash_dir = avatar_dir.rstrip('/') + '_trash'
@@ -2106,7 +2128,7 @@ async def cleanup_files(
         if fm.path and '/uploads/avatars/' in fm.path:
             continue
         try:
-            phys_path = _get_physical_path(fm.path)
+            phys_path = disk_path(fm.path)
             if not os.path.isfile(phys_path):
                 raise FileNotFoundError
         except (FileNotFoundError, ValueError):
@@ -3287,14 +3309,19 @@ async def admin_update_agent_skill(
 
 @router.get("/provider-presets")
 async def get_provider_presets(
+    kind: str = "llm",
     admin: dict = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """获取所有 LLM 厂商预设 + 当前已配置的供应商列表"""
+    """获取厂商预设 + 当前已配置的供应商列表
+
+    kind 决定取哪一类：llm（默认，与历史行为一致）| voice（TTS 提供商）。
+    两类预设同表不同类，见 provider_presets.ProviderPreset。
+    """
     from app.services.agent.provider_presets import get_all_presets
     from app.services.infrastructure.system_settings_service import get_providers
 
-    presets = get_all_presets()
+    presets = get_all_presets(kind)
     current_providers = await get_providers(db)
 
     return {

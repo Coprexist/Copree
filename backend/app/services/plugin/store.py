@@ -58,7 +58,7 @@ class PackageError(ValueError):
     """安装包不合法（内容问题，直接回给管理员看）"""
 
 
-def _slug_ok(plugin_id: str) -> bool:
+def slug_ok(plugin_id: str) -> bool:
     """插件 id 同时是目录名，必须能安全拼路径：字母数字开头，其余限 [a-z0-9_.-]"""
     if not plugin_id or len(plugin_id) > 40:
         return False
@@ -90,7 +90,7 @@ def _normalize_manifest(raw: Any, fallback_id: str) -> dict:
     if not isinstance(raw, dict):
         raise PackageError("plugin.json 必须是 JSON 对象")
     plugin_id = str(raw.get("id") or fallback_id).strip()
-    if not _slug_ok(plugin_id):
+    if not slug_ok(plugin_id):
         raise PackageError("插件 id 不合法：" + (plugin_id or "(空)") + "（只允许字母数字开头，含 . _ -，≤40 字符）")
     category = str(raw.get("category") or "other").strip()
     if category not in CATEGORIES:
@@ -329,7 +329,7 @@ def uninstall_plugin(plugin_id: str, *, purge_data: bool = False) -> None:
     插件的表和 plugin_data/<id>/ 是用户的资产，重装后能直接接着用；
     只有管理员明确说"一并删掉"才清。
     """
-    if not _slug_ok(plugin_id):
+    if not slug_ok(plugin_id):
         raise PackageError("插件 id 不合法：" + plugin_id)
     if is_builtin(plugin_id):
         raise PackageError("「" + plugin_id + "」是内置插件，不能卸载")

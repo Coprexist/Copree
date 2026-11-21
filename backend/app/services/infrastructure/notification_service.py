@@ -40,10 +40,8 @@ async def message_toast(data: dict) -> tuple[str, set[int], bool]:
     为什么自己开会话：推送路径（connection_manager._push_to_scopes）手里没有 db，而令牌要换成
     人名；只在正文真有令牌时查一次库 —— 这条在消息广播链路上被 await，能省的往返要省掉。
     """
-    from app.utils.message_serializer import make_preview, mention_names
-    from app.utils.text import (
-        iter_mention_ids, mentions_all, plainify_markdown, render_mention_names,
-    )
+    from app.utils.message_serializer import mention_names, text_preview
+    from app.utils.text import iter_mention_ids, mentions_all
 
     content = str((data or {}).get("content") or "")
     ids = set(iter_mention_ids(content))
@@ -53,11 +51,13 @@ async def message_toast(data: dict) -> tuple[str, set[int], bool]:
 
         async with async_session() as db:
             names = await mention_names(db, [content])
-    preview = make_preview(
-        # keep_url=False：两行浮窗里塞一个长 URL 就等于没有正文
-        plainify_markdown(render_mention_names(content, names), keep_url=False),
+    # keep_url=False：两行浮窗里塞一个长 URL 就等于没有正文
+    preview = text_preview(
+        content,
         (data or {}).get("attachments"),
+        names=names,
         max_len=TOAST_MAX_LEN,
+        keep_url=False,
     )
     return preview, ids, mentions_all(content)
 

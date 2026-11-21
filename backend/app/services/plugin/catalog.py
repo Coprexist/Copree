@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -47,12 +48,12 @@ ENTRY_FILE = {
     "emojipack": "emoji.json",
 }
 
-# 表情包：一个表情 = 写法 + 长相。写法 [表情:名字] 是唯一真源（QQ 来消息也归一成同一个写法，
-# 见 qq-channel 插件的 humanize_faces）；长相优先用 unicode 字符（各通道都看得见），
-# 其次才是包里的图片（只在站内渲染）。
+# 表情包：一个表情 = 写法 + 长相。写法 [表情:名字] / :id: 是唯一真源（QQ 来消息也归一成
+# 同一个写法，见 qq-channel 插件的 humanize_faces）。长相以包里那张图为准：站内按图渲染，
+# 通道按附件投递。字符形态（emoji 字段）是可选的旧形态——有它就优先用字符，没有就画图。
 EMOJI_FACE_MAX = 256               # 单包上限：再多翻不完，还每轮占 AI 的清单
 # id 是表情的全局短码（正文写成 :id:）。首字符限字母：短码处于全局命名空间，包作者按
-# <包>_<脸> 命名（内置包为 qq_shy）即可避开冲突；纯数字写法也因此不可能是表情。
+# <包>_<脸> 命名（自制包天然带 u<id>_ 前缀）即可避开冲突；纯数字写法也因此不可能是表情。
 EMOJI_ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,39}$")
 # 只发这些后缀：SVG 在同源下带出脚本执行面，表情用光栅图足够
 EMOJI_ASSET_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".webp")
@@ -274,8 +275,11 @@ def get_skill_defs(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     return [s for s in skills if isinstance(s, dict) and s.get("type")]
 
 
-def _emoji_face(raw: Any) -> dict[str, str] | None:
-    """一条表情 → 规范形状；不合法的单条丢掉，不让一个坏表情带崩整包"""
+def emoji_face(raw: Any) -> dict[str, str] | None:
+    """一条表情 → 规范形状；不合法的单条丢掉，不让一个坏表情带崩整包
+
+    公开：插件扫描与「用户自制表情包」的写入走同一次校验，写进去的和读出来的才算同一种东西。
+    """
     if not isinstance(raw, dict):
         return None
     face_id = str(raw.get("id") or "").strip()
@@ -299,7 +303,14 @@ def _emoji_face(raw: Any) -> dict[str, str] | None:
         file_name = file_name if safe else ""       # 图名就是白名单，不安全的当没有
     if not emoji and not file_name:
         return None
-    return {"id": face_id, "name": name, "emoji": emoji, "file": file_name}
+    # 可选的三段给 AI 读：它凭什么挑这张图（见 dsh-meme 的 caption/keywords 实践）
+    caption = str(raw.get("caption") or "").strip()[:160]
+    keywords = str(raw.get("keywords") or "").strip()[:120]
+    mood = str(raw.get("mood") or "").strip()[:24]
+    return {
+        "id": face_id, "name": name, "emoji": emoji, "file": file_name,
+        "caption": caption, "keywords": keywords, "mood": mood,
+    }
 
 
 def get_emoji_pack(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -310,7 +321,7 @@ def get_emoji_pack(manifest: dict[str, Any]) -> dict[str, Any]:
     faces: list[dict[str, str]] = []
     seen: set[str] = set()
     for raw in (payload.get("faces") or [])[:EMOJI_FACE_MAX]:
-        face = _emoji_face(raw)
+        face = emoji_face(raw)
         if face and face["id"] not in seen:
             seen.add(face["id"])
             faces.append(face)
@@ -340,7 +351,8 @@ def emoji_index(packs: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
     """短码 / 中文名 → 表情（附所属包）。同名冲突先到先得。
 
     这里的 setdefault 是硬约束，不能改成覆盖赋值：短码处于全局命名空间，覆盖会让后启用的包
-    改写历史消息的语义。包作者按 <包>_<脸> 命名可从源头避免撞名（内置包为 qq_ 前缀）。
+    改写历史消息的语义。自制包的短码自带包前缀（u<id>-<包>_<n>），内置包用不带前缀的情绪词
+    （smile / cry），两者天然不撞。
     """
     index: dict[str, dict[str, str]] = {}
     for pack in packs:
@@ -403,6 +415,10 @@ def resolve_emoji_text(content: str, packs: list[dict[str, Any]]) -> str:
     return "".join(out)
 
 
+# 插件里的表情图落到数据目录的位置：data/emoji/<pack>/<file>
+# （硬链接，同一份物理文件；平台据此把它们登记成普通图片附件）
+EMOJI_ASSET_DIR = "emoji"
+
 _emoji_cache: dict[str, Any] = {"at": 0.0, "packs": []}
 
 
@@ -454,6 +470,86 @@ async def enabled_emoji_packs(db: AsyncSession, *, cached: bool = True) -> list[
     return _copy_packs(packs)
 
 
+def _mode() -> str:
+    from app.config import settings
+
+    mode = str(getattr(settings, "emoji_pack_mode", "whitelist") or "whitelist").strip().lower()
+    return mode if mode in ("whitelist", "blacklist") else "whitelist"
+
+
+async def agent_pack_prefs(db: AsyncSession, agent_id: int) -> dict[str, bool]:
+    """这个 AI 明确表过态的表情包：pack_id → 用不用（没有行 = 没表态，按模式取默认）"""
+    from sqlalchemy import select
+
+    from app.models.agent_emoji_pack import AgentEmojiPack
+
+    rows = (await db.execute(
+        select(AgentEmojiPack).where(AgentEmojiPack.agent_id == int(agent_id))
+    )).scalars().all()
+    return {str(r.pack_id): bool(r.enabled) for r in rows}
+
+
+async def packs_for_agent(
+    db: AsyncSession, agent_id: int, *, packs: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """这个 AI 实际能用的表情包
+
+    - 全局启用是前提（管理员装好并打开）；
+    - 默认白名单（settings.emoji_pack_mode）：**没有行 = 不用**，创建者勾上才可用；
+    - 黑名单模式反过来：没有行 = 能用，显式 enabled=False 才关。
+    插件自己不知道部署里有哪些 AI，所以"谁能用"永远只在这里算。
+    """
+    if packs is None:
+        packs = await enabled_emoji_packs(db)
+    prefs = await agent_pack_prefs(db, agent_id)
+    whitelist = _mode() == "whitelist"
+    out: list[dict[str, Any]] = []
+    for pack in packs:
+        chosen = prefs.get(str(pack["id"]))
+        enabled = (chosen is True) if whitelist else (chosen is not False)
+        if enabled:
+            out.append(pack)
+    return out
+
+
+async def packs_for_sender(db: AsyncSession, user_id: int) -> list[dict[str, Any]]:
+    """按"这条消息是谁发的"算可用表情包：AI 按它自己的开关，其余人用全局启用的
+
+    人类/系统消息不按 AI 的偏好过滤——他们写下的表情是平台资源，不该因为某个 AI 关掉
+    这个包就不渲染。AI 发言才需要"它有没有被允许用这个包"。
+    """
+    from sqlalchemy import select
+
+    from app.models.agent import Agent
+
+    agent_id = (await db.execute(
+        select(Agent.id).where(Agent.user_id == int(user_id))
+    )).scalar()
+    if agent_id is None:
+        return await enabled_emoji_packs(db)
+    return await packs_for_agent(db, int(agent_id))
+
+
+async def set_agent_pack(db: AsyncSession, agent_id: int, pack_id: str, enabled: bool) -> bool:
+    """创建者给这个 AI 打开/关闭一个表情包（唯一写入口；AI 设置页与接口都走它）"""
+    from sqlalchemy import select
+
+    from app.models.agent_emoji_pack import AgentEmojiPack
+
+    row = (await db.execute(
+        select(AgentEmojiPack).where(
+            AgentEmojiPack.agent_id == int(agent_id),
+            AgentEmojiPack.pack_id == str(pack_id),
+        )
+    )).scalar_one_or_none()
+    if row is None:
+        db.add(AgentEmojiPack(agent_id=int(agent_id), pack_id=str(pack_id), enabled=bool(enabled)))
+    else:
+        row.enabled = bool(enabled)
+    await db.commit()
+    return bool(enabled)
+
+
 async def normalize_emoji_text(db: AsyncSession, content: str) -> str:
     """入口归一：把表情写法换成字符或标准短码（见 resolve_emoji_text）。
 
@@ -467,6 +563,124 @@ async def normalize_emoji_text(db: AsyncSession, content: str) -> str:
         logger.warning(f"取表情包失败，正文按原样处理：{type(e).__name__}: {e}")
         return content
     return resolve_emoji_text(content, packs)
+
+
+def take_image_faces(content: str, packs: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
+    """正文里的**纯图片表情** → (去掉标记的正文, 要发的图)
+
+    字符表情在上一步（resolve_emoji_text）已经换成 unicode；这里只处理"只有图、没有字符"
+    的那一类：把 :id: / [表情:名] 标记摘掉，图交给调用方当**附件**发——站内渲染与通道投递
+    都只认附件，通道不必再懂一遍表情（2026-11-14 定的分层）。
+    """
+    if not content or ("[表情:" not in content and ":" not in content):
+        return content, []
+    index = emoji_index(packs)
+    if not index:
+        return content, []
+
+    taken: list[dict[str, Any]] = []
+
+    def repl(match: re.Match) -> str:
+        face = index.get(str(match.group(1) or "").strip())
+        if face and not face.get("emoji") and face.get("file"):
+            taken.append(face)
+            return ""
+        return match.group(0)
+
+    out: list[str] = []
+    for is_code, segment in _split_code(content):
+        if is_code:
+            out.append(segment)
+            continue
+        segment = EMOJI_LEGACY_RE.sub(repl, segment)
+        out.append(EMOJI_SHORTCODE_RE.sub(repl, segment))
+    text = "".join(out)
+    if taken:
+        # 标记可能夹在字中间：把摘掉后留下的空档收一收，别让正文变成「 你好 」
+        text = re.sub(r"[ \t]{2,}", " ", text).strip()
+    return text, taken
+
+
+async def emoji_asset_file(db: AsyncSession, face: dict[str, Any]) -> dict[str, Any] | None:
+    """表情里的那张图 → 平台文件（落进 data/emoji/<pack>/，硬链接；登记 owner=system）
+
+    为什么登记成平台文件：表情一旦要"发出去"，它就是一张图片附件——站内渲染、QQ 图片消息、
+    历史标记、文件权限都只认附件。不登记就得让每个通道各认一遍表情，那正是要避免的重复。
+    同一份物理文件（硬链接），插件目录更新后重新激活即可换成新图。
+    """
+    from app.models.file import FileMetadata
+    from app.services.content.file_service import disk_path
+    from app.utils.mime import guess_mime
+    from sqlalchemy import select
+
+    pack_id = str(face.get("pack") or "").strip()
+    file_name = str(face.get("file") or "").strip()
+    if not pack_id or not file_name:
+        return None
+    manifest = scan_disk().get(pack_id) or {}
+    src = emoji_asset_path(manifest, file_name)
+    if src is None:
+        logger.warning(f"表情图不在磁盘上：{pack_id}/{face.get('id')}（{file_name}）")
+        return None
+    rel = f"{EMOJI_ASSET_DIR}/{pack_id}/{os.path.basename(file_name)}"
+    dst = disk_path(rel)
+    if not os.path.isfile(dst):
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        try:
+            os.link(src, dst)              # 同一份 inode：不占第二份磁盘
+        except OSError:
+            import shutil
+
+            shutil.copyfile(src, dst)      # 跨卷/不支持硬链接时如实退回复制
+    metadata = (await db.execute(
+        select(FileMetadata).where(FileMetadata.path == rel)
+    )).scalar_one_or_none()
+    if metadata is None:
+        metadata = FileMetadata(
+            path=rel, owner_type="system", owner_id=0,
+            size=os.path.getsize(dst), mime_type=guess_mime(rel),
+            collaboration_mode="open",       # 表情人人可发，权限不按人算
+        )
+        db.add(metadata)
+        await db.flush()
+    return {
+        "file_id": int(metadata.id),
+        "name": os.path.basename(rel),
+        "path": rel,
+        "size": int(metadata.size or 0),
+        "mime_type": metadata.mime_type or guess_mime(rel),
+    }
+
+
+async def take_image_emoji_attachments(
+    db: AsyncSession, content: str, packs: list[dict[str, Any]] | None = None,
+) -> tuple[str, list[dict[str, Any]]]:
+    """入口归一：图片表情 → 附件；返回 (清理后的正文, 附件列表)
+
+    取包/落盘失败一律降级成"这张图发不出去"，正文照旧——表情不该挡住一条消息。
+    """
+    # 快路径：绝大多数消息没有任何表情写法，别为它们查库/碰缓存
+    if not content or ("[表情:" not in content and not EMOJI_SHORTCODE_RE.search(content)):
+        return content, []
+    try:
+        if packs is None:
+            packs = await enabled_emoji_packs(db)
+        text, faces = take_image_faces(content, packs)
+        if not faces:
+            return content, []
+        attachments: list[dict[str, Any]] = []
+        for face in faces:
+            try:
+                asset = await emoji_asset_file(db, face)
+            except Exception as e:  # noqa: BLE001 —— 一张图失败不拖累整条消息
+                logger.warning(f"表情落成附件失败（{face.get('pack')}/{face.get('id')}）: {e}")
+                asset = None
+            if asset:
+                attachments.append(asset)
+        return text, attachments
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"图片表情归一失败，按原文处理：{type(e).__name__}: {e}")
+        return content, []
 
 
 async def sync_plugins_to_db(db) -> int:
@@ -517,4 +731,7 @@ async def sync_plugins_to_db(db) -> int:
                 changed += 1
     if changed:
         await repo.commit()
+    # 目录/开关变了：入口归一与前端选择器立刻按新状态走，不等 30 秒缓存过期
+    if changed:
+        invalidate_caches()
     return changed

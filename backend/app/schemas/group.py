@@ -38,6 +38,9 @@ class GroupUpdateRequest(BaseModel):
     approve_invites: bool | None = None
     # 群名跟随外部通道：打开后由通道在拉到群名时对齐（群主/管理员可改）
     name_from_channel: bool | None = None
+    # 决策代理在本群的规矩（群主/管理员写）；是否把本群公告给代理看
+    proxy_rules: str | None = Field(default=None, max_length=1000)
+    proxy_announcement: bool | None = None
 
 
 class GroupJoinRequestCreate(BaseModel):
@@ -78,6 +81,8 @@ class GroupResponse(BaseModel):
     approve_invites: bool = False
     # 群名是否跟随外部通道，以及这个群接没接通道（没接就不显示那个开关）
     name_from_channel: bool = False
+    proxy_rules: str | None = None
+    proxy_announcement: bool = True
     channel_bound: bool = False
     # 接着这个群的通道叫什么（如 ['QQ']）：群设置的按钮文案用它，不写死 QQ
     channel_labels: list[str] = []

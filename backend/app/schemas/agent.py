@@ -22,7 +22,7 @@ class AgentCreateRequest(BaseModel):
     max_tool_rounds: int = Field(default=6, ge=1, le=20, description="单次回复最大工具调用轮次")
     alarm_max_tool_rounds: int = Field(default=10, ge=1, le=30, description="闹钟/心跳最大工具调用轮次")
     force_alarm_on_end: bool = Field(default=False, description="对话结束时强制要求 AI 设定闹钟")
-    plan_injection_enabled: bool = Field(default=False, description="把计划与闹钟投进上下文（计划板）")
+    plan_injection_enabled: bool = Field(default=True, description="把计划与闹钟投进上下文（计划板）")
     retire_handover_self: bool = Field(default=False, description="帧后事自己交接（关=平台代销）")
     max_alarms: int = Field(default=10, ge=1, le=50, description="AI 最多可设活跃闹钟数")
     is_ai_editable: bool = Field(default=True, description="是否允许 AI 自修改配置")
@@ -50,6 +50,10 @@ class AgentCreateRequest(BaseModel):
     user_can_view_logs: bool | None = Field(default=None, description="用户可否查看此 AI 对话日志（null=继承全局）")
     auto_reset_quota: bool = Field(default=False, description="每次对话后自动重置配额计数")
     group_owner_pays: bool = Field(default=True, description="群聊中 AI 消息是否由群主付费")
+    draft_id: int | None = Field(
+        default=None,
+        description="创建助手草稿 id：同一个草稿只落一个 AI，重提返回已建成的那条（幂等键）",
+    )
 
     @field_validator("status_text")
     @classmethod

@@ -20,6 +20,7 @@
 服务规则：service 类插件的启停走 /admin/plugins/{id}/start|stop（运行态属于服务，不属于用户偏好）
 """
 import logging
+import shutil
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
@@ -27,6 +28,8 @@ from sqlalchemy import select
 
 from app.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.paths import PLUGIN_DATA_DIR
 
 from app.utils.auth import get_current_user, require_admin
 from app.services.plugin import catalog
@@ -408,8 +411,18 @@ async def install_store_package(
     except store.PackageError as e:
         raise HTTPException(400, str(e))
     changed = await _after_store_change(db, result["manifest"]["id"])
-    logger.info("管理员安装插件 %s v%s（DB 变更 %s）", result["manifest"]["id"], result["manifest"]["version"], changed)
-    return {"message": f"「{result['manifest']['name']}」已{'更新' if upgrade else '安装'}", **result}
+    from app.services.plugin import storage
+
+    # 装完立刻把插件自己的表带上：它的首次查询不会等到下次重启
+    schema = await storage.ensure_installed(result["manifest"]["id"])
+    logger.info("管理员安装插件 %s v%s（DB 变更 %s，迁移 %s）",
+                result["manifest"]["id"], result["manifest"]["version"], changed,
+                (schema or {}).get("applied"))
+    return {
+        "message": f"「{result['manifest']['name']}」已{'更新' if upgrade else '安装'}",
+        **result,
+        "schema": schema,
+    }
 
 
 @router.delete("/store/packages/{file_name}")
@@ -430,17 +443,67 @@ async def delete_store_package(
 @router.delete("/store/installed/{plugin_id}")
 async def uninstall_store_plugin(
     plugin_id: str,
+    purge_data: bool = Query(False, description="true = 连插件数据一起删（默认保留，重装可续用）"),
     _admin: dict = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """卸载已安装插件：删用户插件目录（内置插件一律拒绝）→ 停服务 → 清 DB"""
-    from app.services.plugin import store
+    """卸载已安装插件：删用户插件目录（内置插件一律拒绝）→ 停服务 → 清 DB
+
+    数据默认保留：插件自建的表与 plugin_data/<id>/ 是用户的资产，重装后直接接着用。
+    purge_data=true 才会在同一个流程里把表 DROP 掉、目录删掉。
+    """
+    from app.services.plugin import storage, store
 
     try:
-        store.uninstall_plugin(plugin_id)
+        store.uninstall_plugin(plugin_id, purge_data=purge_data)
     except store.PackageError as e:
         raise HTTPException(400, str(e))
+    kept = await storage.had_data(plugin_id) if not purge_data else False
+    if purge_data:
+        await storage.purge(db, plugin_id)
     await _after_store_change(db, plugin_id)
-    logger.info("管理员卸载插件 %s", plugin_id)
-    return {"message": f"「{plugin_id}」已卸载"}
+    logger.info("管理员卸载插件 %s（purge_data=%s）", plugin_id, purge_data)
+    return {
+        "message": f"「{plugin_id}」已卸载" + ("，数据一并删除" if purge_data else "，数据已保留"),
+        "data_kept": kept,
+    }
+
+
+@router.get("/storage")
+async def list_plugin_storage(
+    _admin: dict = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """插件数据盘点：装着的插件各自留了哪些表；已卸载但保留数据的也列出来"""
+    from app.services.plugin import storage
+
+    installed = set(storage.installed_ids())
+    known: set[str] = set(installed) | {pid for pid in await storage.plugins_with_data(db)}
+    items = []
+    for plugin_id in sorted(known):
+        info = await storage.assets(db, plugin_id)
+        # 一张表都没有、也没有迁移错误的插件不列：这里回答的是"谁占了数据"，
+        # 不是"装了哪些插件"（那是上面的列表）
+        if not info["tables"] and not info["error"]:
+            continue
+        info["installed"] = plugin_id in installed
+        items.append(info)
+    return {"items": items}
+
+
+@router.post("/storage/{plugin_id}/purge")
+async def purge_plugin_storage(
+    plugin_id: str,
+    _admin: dict = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """把某个插件（已卸载的也行）留下的数据彻底清掉：表 + 记账行 + 插件数据目录"""
+    from app.services.plugin import storage
+
+    result = await storage.purge(db, plugin_id)
+    data_dir = PLUGIN_DATA_DIR / plugin_id
+    if data_dir.is_dir():
+        shutil.rmtree(data_dir, ignore_errors=True)
+    logger.info("管理员清空插件数据 %s: %s", plugin_id, result.get("dropped"))
+    return {"message": f"「{plugin_id}」的数据已清空", **result}
 

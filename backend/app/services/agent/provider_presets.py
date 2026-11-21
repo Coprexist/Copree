@@ -7,15 +7,31 @@ from typing import NotRequired, TypedDict
 
 
 class ProviderPreset(TypedDict):
+    """一家 API 提供商的预设——LLM 与语音（TTS）共用这一份形状。
+
+    为什么要共用：给 AI 配"聊天 API"和配"语音 API"是同一件事（选预设 → 填 key →
+    填模型/音色 → 测试 → 存），前端该是同一个组件。分成两张表只会让两边的校验、
+    测试按钮、预设下拉各写一遍。差异全部落在 kind 上：
+    - kind="llm"（缺省）：chat_model / work_model / models 必填
+    - kind="voice"：voice_id / voices 必填，chat_model 系列不填
+    """
+
     key: str
     label: str
     base_url: str
     api_key_url: str  # 获取 API Key 的官网链接
-    chat_model: str
-    work_model: str
-    embedding_model: str
-    thinking_supported: bool
-    models: list[dict]  # {value, label}
+    # "llm"（缺省）| "voice"。**遍历预设的代码必须按它过滤**：语音不是一家模型
+    # 厂商，顺着遍历去问 chat_model 会直接 KeyError（见 get_all_presets）。
+    kind: NotRequired[str]
+    chat_model: NotRequired[str]
+    work_model: NotRequired[str]
+    embedding_model: NotRequired[str]
+    thinking_supported: NotRequired[bool]
+    models: NotRequired[list[dict]]  # {value, label}
+    # ── 语音（kind="voice"）──
+    voice_id: NotRequired[str]       # 默认音色；用户可换成自己的（各家 id 体系不同，不校验格式）
+    voices: NotRequired[list[dict]]  # 建议音色 {value, label}
+    style_hint: NotRequired[bool]    # 是否吃自由语气描述（Breeze 的 instructions；MiniMax 只认枚举）
     # 标了它的预设会在启动时直接变成一条"配置项"（见 services/agent/provider_bootstrap）：
     # 主流厂商升级后本该就位，不该等使用者一个个去点。管理员删过的配置项不会再补。
     auto_config: NotRequired[bool]
@@ -452,6 +468,48 @@ PRESETS: dict[str, ProviderPreset] = {
             {"value": "Ring-2.6-1T", "label": "Ring 2.6 1T（推理）"},
         ],
     },
+
+    # ── 语音（kind="voice"）：TTS 提供商，与 LLM 同一份清单、不同分组 ──
+    # 语音是另一套凭据、另一套端点，跟聊天没有复用关系；放同一张表只为让配置界面
+    # 只有一套组件（预设下拉 → base_url → key → 音色/模型 → 检测 → 保存）。
+    "breeze": {
+        "key": "breeze",
+        "label": "BreezeBlue",
+        "kind": "voice",
+        "base_url": "https://api.breeze.blue/v1",
+        "api_key_url": "https://api.breeze.blue",
+        # 大肥鱼的两套声线（用户自己录/调的），默认迷糊版
+        "voice_id": "voc_8yud7hz7c9q2",
+        "voices": [
+            {"value": "voc_8yud7hz7c9q2", "label": "迷糊版（dreamy）"},
+            {"value": "voc_u3nxkd5578wc", "label": "机灵版（clever）"},
+        ],
+        # Breeze 吃自由语气描述（请求体的 instructions），AI 想怎么说就怎么写
+        "style_hint": True,
+    },
+    # MiniMax 国内站与国际站互不相通（用错站的 key 一律 2049 invalid api key），
+    # 所以拆成两条预设让用户自己选，不做"自动猜站在哪边"。
+    "minimax-cn": {
+        "key": "minimax-cn",
+        "label": "MiniMax（国内站）",
+        "kind": "voice",
+        "base_url": "https://api.minimaxi.com/v1",
+        "api_key_url": "https://platform.minimaxi.com",
+        "voice_id": "",
+        "voices": [],
+        # MiniMax 的语气只有枚举（emotion），不收自由文案
+        "style_hint": False,
+    },
+    "minimax-intl": {
+        "key": "minimax-intl",
+        "label": "MiniMax（国际站）",
+        "kind": "voice",
+        "base_url": "https://api.minimax.io/v1",
+        "api_key_url": "https://platform.minimax.io",
+        "voice_id": "",
+        "voices": [],
+        "style_hint": False,
+    },
 }
 
 
@@ -460,25 +518,43 @@ def get_preset(key: str) -> ProviderPreset | None:
     return PRESETS.get(key)
 
 
-def get_all_presets() -> list[ProviderPreset]:
-    """获取所有厂商预设（简要，不含 models 详情）"""
-    return [
-        {
+def get_all_presets(kind: str = "llm") -> list[ProviderPreset]:
+    """按类别取预设（简要，不含 models 详情）：默认只给 LLM，语音传 kind="voice"。
+
+    **默认必须是 llm**：老调用方（预设下拉、模型标签、api_probe、base_url 登记）都按
+    "一个预设 = 一家模型厂商"写的，顺着遍历去取 chat_model；语音混进去就会 KeyError。
+    想一次拿全部（比如做管理总览）就显式传 kind="*"。
+    """
+    out: list[ProviderPreset] = []
+    for p in PRESETS.values():
+        p_kind = p.get("kind") or "llm"
+        if kind != "*" and p_kind != kind:
+            continue
+        out.append({
             "key": p["key"],
             "label": p["label"],
             "base_url": p["base_url"],
             "api_key_url": p["api_key_url"],
-            "chat_model": p["chat_model"],
-            "work_model": p["work_model"],
-            "embedding_model": p["embedding_model"],
-            "thinking_supported": p["thinking_supported"],
-            "models": p["models"],
+            "kind": p_kind,
+            "chat_model": p.get("chat_model", ""),
+            "work_model": p.get("work_model", ""),
+            "embedding_model": p.get("embedding_model", ""),
+            "thinking_supported": bool(p.get("thinking_supported")),
+            "models": p.get("models") or [],
             "global_default_chat_model": p.get("global_default_chat_model"),
             "global_default_work_model": p.get("global_default_work_model"),
             "auto_config": p.get("auto_config", False),
-        }
-        for p in PRESETS.values()
-    ]
+            # 语音侧字段：LLM 预设没有就留空，前端按 kind 决定显示哪一半
+            "voice_id": p.get("voice_id", ""),
+            "voices": p.get("voices") or [],
+            "style_hint": bool(p.get("style_hint")),
+        })
+    return out
+
+
+def get_voice_presets() -> list[ProviderPreset]:
+    """语音（TTS）预设——配置语音 API 的下拉就吃这一份"""
+    return get_all_presets("voice")
 
 
 # ── 旧模型名 → 现名 ──────────────────────────────────────────────

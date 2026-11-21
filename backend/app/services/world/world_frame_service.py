@@ -24,7 +24,7 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.utils.pure.state_stack import ENDED_STATUS, make_state_frame, world_id_of
+from app.utils.pure.state_stack import ENDED_STATUS, frame_of, make_state_frame, world_id_of
 
 logger = logging.getLogger(__name__)
 
@@ -191,7 +191,7 @@ def _dormant_world_frame(world) -> dict:
 async def _frames_of_world(db: AsyncSession, agent_id: int, world_id: int) -> list[dict]:
     """这个世界的帧（**含已结束的沉睡帧**）——按 context_ref 认，不按状态。
 
-    只认运行集合会把绑定时预建的那条当成"没有"，一进世界又建一条（同一 ref 两条帧）。
+    只认链上在跑的帧，会把绑定时预建的那条当成"没有"，一进世界又建一条（同一 ref 两条帧）。
     """
     from app.services.agent.state_stack_service import get_frames
 
@@ -238,18 +238,17 @@ async def activate_world_frame(db: AsyncSession, agent_id: int, world,
     身份（world_role）在这一刻定稿：给了就刷新，没给就沿用帧上原来那个——「从群里进来的
     是那个群的居民，从私信进来还是他自己那个身份」，不因为换了个门就把身份抹掉。
     """
-    from app.services.agent.state_stack_service import push_state, restore_frame
+    from app.services.agent.state_stack_service import get_frames, push_state, restore_frame
 
     doing = f"在世界「{world.name}」里游玩"
     label = f"世界「{world.name}」"
-    existing = await _frames_of_world(db, agent_id, world.id)
-    if existing:
-        # 归一化后的存储里历史区在前、运行区在后，取末位就是"这条世界帧"（有活在跑的优先）
+    existing = frame_of(await get_frames(db, agent_id), f"world:{world.id}")
+    if existing is not None:
         # handoff=True：进世界是从别处切过来，要带上"刚在哪个会话说话"的交接包
         updates: dict = {"label": label, "doing": doing}
         if world_role:
             updates["world_role"] = world_role
-        frame = await restore_frame(db, agent_id, str(existing[-1].get("id") or ""),
+        frame = await restore_frame(db, agent_id, str(existing.get("id") or ""),
                                     updates=updates, handoff=True)
         return frame, True
 

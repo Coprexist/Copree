@@ -17,6 +17,7 @@ from app.models.agent import Agent
 from app.models.federation import FederatedEntity
 from app.models.friendship import Friendship
 from app.utils.display_name import display_name, display_names
+from app.utils.multimodal import attachment_marks, with_transcripts
 from app.utils.pure.history import make_entry
 from app.utils.pure.prompting import format_message, format_time_shanghai
 
@@ -43,20 +44,16 @@ async def resolve_dm_sender_names(db, messages) -> dict[int, str]:
 
 
 def dm_message_entry(message, *, agent_name: str, agent_user_id: int | None,
-                     sender_name: str | None = None) -> dict:
+                     sender_name: str | None = None,
+                     transcripts: dict[int, str] | None = None) -> dict:
     """一条私信 → 账本条目（**渲染即落库**：content 就是发给模型的最终字节）。
 
     附件名注入正文（对方发了什么文件，AI 得知道）；私信不截断正文（与旧路径同口径）。
     """
     content = message.content or ""
-    if message.attachments:
-        try:
-            atts = json.loads(message.attachments) if isinstance(message.attachments, str) else message.attachments
-            file_names = [a.get("name", a.get("path", "file")) for a in atts]
-            desc = f"[文件: {', '.join(file_names)}]"
-            content = f"{desc} {content}" if content else desc
-        except (json.JSONDecodeError, TypeError):
-            pass
+    marks = attachment_marks(with_transcripts(message.attachments, transcripts), said=content)
+    if marks:
+        content = f"{marks} {content}" if content else marks
     if getattr(message, "revoked_at", None):
         from app.utils.pure.history import revoked_text
 
@@ -231,6 +228,16 @@ async def list_dm_sessions(db: AsyncSession, user_id: int) -> list[dict]:
         }
         names = await mention_names(db, [m.content for m in last_msgs.values()])
 
+    # 末尾那条被撤回的：要写"谁撤回了一条消息"，名字按 users 号段一次查齐
+    revoked_sender_ids = {
+        int(m.sender_id) for m in last_msgs.values() if getattr(m, "revoked_at", None)
+    }
+    revoked_names: dict[int, str] = {}
+    if revoked_sender_ids:
+        from app.utils.display_name import display_names
+
+        revoked_names = await display_names(db, revoked_sender_ids)
+
     federated = {
         row[0] for row in (await db.execute(
             select(FederatedEntity.local_ref_id).where(
@@ -241,8 +248,7 @@ async def list_dm_sessions(db: AsyncSession, user_id: int) -> list[dict]:
         )).all()
     }
 
-    from app.utils.message_serializer import make_preview
-    from app.utils.text import render_mention_names
+    from app.utils.message_serializer import preview_of, revoked_preview
 
     dm_list = []
     for s in sessions:
@@ -251,10 +257,15 @@ async def list_dm_sessions(db: AsyncSession, user_id: int) -> list[dict]:
 
         last_msg = last_msgs.get(s.last_message_id) if s.last_message_id else None
         last_message_preview = None
+        revoked_name = None
         if last_msg:
-            last_message_preview = make_preview(
-                render_mention_names(last_msg.content or "", names), last_msg.attachments, max_len=100
-            )
+            # 撤回的私信也要说清是谁撤的（与群、与消息胶囊同一个口径：名字 + 撤回了一条消息）
+            if getattr(last_msg, "revoked_at", None):
+                revoked_name = revoked_names.get(int(last_msg.sender_id))
+                last_message_preview = revoked_preview(revoked_name)
+            else:
+                revoked_name = None
+                last_message_preview = preview_of(last_msg, names, max_len=100)
 
         dm_list.append({
             "session_id": s.session_id,
@@ -262,6 +273,8 @@ async def list_dm_sessions(db: AsyncSession, user_id: int) -> list[dict]:
                 "id": partner_id, "name": f"未知:{partner_id}", "type": "unknown", "state": None,
             },
             "last_message_preview": last_message_preview,
+            # 撤回那行要把名字单独给出去：侧栏要"宽度不够先缩名字"，得能分开渲染
+            "last_message_revoked_name": revoked_name,
             "last_message_at": str(s.last_message_at) if s.last_message_at else None,
             "unread_count": unread.get(s.session_id, 0),
             "my_dnd_until": str(my_dnd_until) if my_dnd_until else None,
@@ -359,12 +372,17 @@ async def send_dm_message(
     skip_friendship_check: bool = False,
 ) -> dict:
     """发送私信消息"""
-    # 表情归一：与群聊同一条契约（入口把写法换成字符或标准短码，见 catalog.resolve_emoji_text）
-    from app.services.plugin.catalog import normalize_emoji_text
+    # 表情归一：与群聊同一条契约（字符→unicode；图片表情→附件，见 catalog）
+    from app.services.plugin import catalog
     # AI 抄回来的 [msg_id=N] 收掉：标记是给它读的，N 属本会话就当成本意。
     from app.utils.text import take_trailing_msg_id
 
-    content = await normalize_emoji_text(db, content)
+    content = await catalog.normalize_emoji_text(db, content)
+    # 私信同样按发言者过滤（AI 只能用被允许的包，其他人用全局启用的）
+    packs = await catalog.packs_for_sender(db, sender_id)
+    content, emoji_attachments = await catalog.take_image_emoji_attachments(db, content, packs)
+    if emoji_attachments:
+        attachments = [*(attachments or []), *emoji_attachments]
     content, echoed = take_trailing_msg_id(content)
     if echoed and reply_to is None:
         exists = (await db.execute(
@@ -402,12 +420,10 @@ async def send_dm_message(
     db.add(msg)
     await db.flush()
 
-    if attachments:
-        from app.services.content.file_service import track_forward_reference
-        for att in attachments:
-            fid = att.get("file_id") if isinstance(att, dict) else getattr(att, "file_id", None)
-            if fid:
-                await track_forward_reference(db, fid, "human", sender_id)
+    # 附件引用记账：与群消息同一处（见 file_service.track_attachments）
+    from app.services.content.file_service import track_attachments
+
+    await track_attachments(db, attachments, "human", sender_id)
 
     # 回复即阅读：标记对方未读消息为已读
     await db.execute(

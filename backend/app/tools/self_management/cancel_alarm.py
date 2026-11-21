@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 class CancelAlarm(ToolPlugin):
     name = "cancel_alarm"
+    persistent_effect = True   # 写进持久状态：结果要进账本，否则下一个自己不知道写了什么
     description = "取消一个之前设定的闹钟。如果你改变主意了，或者任务已经不需要做了，可以用这个来取消。"
     segment = "self_management"
     parameters = {

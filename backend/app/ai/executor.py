@@ -34,6 +34,14 @@ _CLOSING_TOOLS = ("send_gm", "send_dm", "end_turn")
 # 强制留痕的思考上限：各轮拼起来可能很长，超了留头尾
 _FORCED_THINKING_MAX = 6000
 
+# 工具 → 活动状态：发消息 = 正在输入，发语音 = 正在录音（合成那几秒人得看得见）。
+# 文案由前端 i18n 出，这里只给语义；沿用同一个 ai_typing 事件、多带一个 state，不新开一路 WS
+_TOOL_ACTIVITY_STATE = {
+    "send_gm": "typing",
+    "send_dm": "typing",
+    "send_voice": "speaking",
+}
+
 # 收尾轮指令：轮次已用尽，这一轮白送（不占额度）
 # 只说话、不调工具时的提醒文案。工具轮里的 system_reminder 与轮末账本条目共用这一份——
 # 两处各写一遍，迟早出现"账本说 A、提醒说 B"，而这条文字就是 AI 唯一能学到的纠错说明。
@@ -585,6 +593,62 @@ async def _notify_force_own_key_failure(db, agent, user, failures: list[str]) ->
 # 工具调用循环
 # ============================================================
 
+# ── 工具结果带图（目前只有 B 站取帧用）─────────────────────────────
+# 图片不走工具消息：多数供应商的 tool 角色只收文本，几十 KB 的 base64 塞进 JSON
+# 还会把对话日志撑大。图片另起一条 user 消息注入，标签留在工具结果的 images[i].label。
+MAX_TOOL_IMAGES = 4
+TOOL_IMAGES_PREFIX = "【工具附图】"
+
+
+def _take_tool_images(result: dict, tool_name: str) -> list[dict]:
+    """把工具结果里的图片取出来（并从结果里摘掉），返回 [{url, label}]。
+
+    images 每项可以是字符串，也可以是 {"url", "label"}；label 是这张图对应的
+    画面时间，注入时按顺序念给模型，免得它以为第 2 张就是它要的那个时间点。
+    """
+    images = result.pop("images", None) if isinstance(result, dict) else None
+    if not isinstance(images, list):
+        return []
+    items: list[dict] = []
+    for raw in images:
+        if isinstance(raw, str):
+            url, label = raw, ""
+        elif isinstance(raw, dict):
+            url = str(raw.get("url") or "")
+            label = str(raw.get("label") or "")
+        else:
+            continue
+        if not url.startswith(("data:image/", "http://", "https://")):
+            continue
+        items.append({"url": url, "label": label, "tool": tool_name})
+    return items
+
+
+def _inject_tool_images(messages: list[dict], items: list[dict]) -> int:
+    """把工具取回的图片注入成一条附图消息（返回注入张数）。
+
+    顺序即对应关系：标签按同一顺序写在正文里，模型据文字认图，不靠位置猜。
+    """
+    kept = items[:MAX_TOOL_IMAGES]
+    if not kept:
+        return 0
+    from app.utils.multimodal import image_note
+
+    names = "、".join(
+        f"第{i}张 {it['label']}" if it.get("label") else f"第{i}张"
+        for i, it in enumerate(kept, start=1)
+    )
+    parts: list[dict] = [{
+        "type": "text",
+        "text": f"{TOOL_IMAGES_PREFIX}工具返回 {len(kept)} 张画面，按顺序：{names}。"
+                "这些是工具给的截图，不是用户发的。",
+    }]
+    parts.extend({"type": "image_url", "image_url": {"url": it["url"]}} for it in kept)
+    messages.append({"role": "user", "content": parts})
+    messages.append({"role": "system", "content": image_note(len(kept), source="工具刚返回的画面")})
+    return len(kept)
+
+
 async def _tool_call_loop(
     db,
     agent,
@@ -606,6 +670,7 @@ async def _tool_call_loop(
     trigger: str = "user",
     is_federated: bool = False,
     pending_delivery: list[dict] | None = None,
+    frame_budget_check=None,
 ) -> None:
     """
     工具调用循环：LLM 必须通过工具调用来执行所有操作（包括发消息）。
@@ -666,6 +731,9 @@ async def _tool_call_loop(
     _self_ended = False
     # 各轮思考：没走 end_turn 就被收尾时，它是「为什么在干这件事」的唯一记录
     _reasoning_log: list[str] = []
+    # 这一轮写过、但没走发送工具的话。轮级状态：只留在 messages 里会随轮末一起消失，
+    # 下一个自己就不知道自己说过这句（它看得见的只有账本）
+    _unsent_text = ""
 
     def _did_real_work() -> bool:
         """本轮除了发消息/结束，还干过别的事没有。"""
@@ -688,15 +756,22 @@ async def _tool_call_loop(
                 else "一条消息都没发出去——上面的工具过程别当成已经说过的话。")
         return f"{reason}{tail}"
 
-    async def _seal(reasoning: str = "", cutoff: str = "",
-                    unsent: tuple[str, str] | None = None) -> None:
-        """三个出口（end_turn 工具 / intent=end_turn / 循环走完）共用这一次封存。
+    async def _seal(reasoning: str = "", cutoff: str = "") -> None:
+        """所有出口（end_turn 工具 / intent=end_turn / 循环走完 / 中断）共用这一次封存。
 
         不是 AI 自己收的尾（轮次用尽、模型只回了文字）时思考必须留：它是「为什么在干这件事」
         的唯一记录；只发过消息的轮次没有这个负担，照旧不留。
 
-        unsent：这一轮只写了文字、没调发送工具的（正文, 平台提醒）——写进账本，下一个自己看得到。
+        未发送的正文由这里统一认领，调用方不必记：这一轮只要写过纯文字又一条都没发出去，
+        不管是哪一轮收的尾，都把那句话和平台提醒一起写进账本，下一个自己看得到。
+
+        不直接代发而是静默留账，是怕给其他对话发消息却没有调用工具导致泄漏——纯文字可能是
+        思考输出、不是回答输出，也可能答的不是当前这段对话，平台分不清该发给谁。
+        这可能会导致因为模型的专注问题等消耗多余的 token，但是能保证特殊情况下的隐私泄漏
+        问题不出现。未来或将加上默认文字输出处理方式选择功能，可选是静默保留还是直接发出。
         """
+        unsent = ((_unsent_text, _PROSE_REMINDER)
+                  if _unsent_text and not _has_sent_message else None)
         if not (_end_turn or _self_ended) and _did_real_work():
             _settlement["keep_thinking"] = True
             reasoning = _forced_reasoning() or reasoning
@@ -712,7 +787,7 @@ async def _tool_call_loop(
     async def _seal_aborted(reason: str) -> None:
         """取消/异常也是收尾出口：不在这里封存，这一轮就只剩用户那条消息。
 
-        平台重启会直接 cancel 在跑的轮次（bootstrap.cancel_all_tasks），异常也会把栈直接弹走；
+        平台重启会直接 cancel 在跑的轮次（bootstrap.cancel_all_tasks），异常也会把帧直接弹走；
         两种都没走 end_turn，所以思考照收（判据在 _seal 里），并如实说明是怎么断的。
         """
         try:
@@ -808,6 +883,16 @@ async def _tool_call_loop(
     loop_idx = 0
     try:
         while loop_idx < max_loops + _reminder_extra + _closing_extra:
+            # 帧预算：小时 / 天的调用次数用满了就停，别把剩下的次数烧在已经没额度的帧里
+            if frame_budget_check is not None:
+                try:
+                    stop_reason = await frame_budget_check()
+                except Exception as e:  # noqa: BLE001 —— 预算查询故障不该打断这一轮
+                    logger.debug(f"帧预算检查失败（按不限制处理）: {e}")
+                    stop_reason = ""
+                if stop_reason:
+                    logger.info(f"AI {agent.name}({agent.id}) 帧预算用满，本轮停止：{stop_reason}")
+                    break
             # 轮次读数：AI 不知道额度还剩几次，就会把每一轮都花在检索上、用尽后静默收尾
             _free_round = _free_next
             _free_next = False
@@ -859,6 +944,7 @@ async def _tool_call_loop(
 
                 # 流式逐工具分发：回调在 SSE 解析到完整 tool_call 时即刻执行
                 _pending_results: list[dict] = []  # {tc_id, result}
+                _pending_images: list[dict] = []  # 工具带回的图片 {url, label}，下一轮注入
                 _end_turn = False
                 # 轮末结算（docs/dev/conversation_history.md §5）：思考留不留 + 留给后面自己的关键信息
                 _settlement: dict = {}
@@ -925,9 +1011,20 @@ async def _tool_call_loop(
                         _pending_results.append({"tc_id": tc_id, "result": {"error": True, "message": validate_error}})
                         return
                     logger.info(f"AI {agent.name} 调用工具: {tool_name}({arguments})")
-                    # 消息类工具推送"正在输入中…"状态
-                    if tool_name in ("send_gm", "send_dm") and trigger == "user":
-                        _typing_data: dict = {"user_id": agent.user_id, "agent_name": agent.name, "agent_avatar_url": agent.avatar_url, "trigger": trigger}
+                    # 消息类工具推送活动状态（正在输入 / 正在录音），见 _TOOL_ACTIVITY_STATE
+                    _activity_state = _TOOL_ACTIVITY_STATE.get(tool_name)
+                    if _activity_state and trigger == "user":
+                        # 恢复接口回放的是这份内存状态：不同步改它，刷新/切回来就只剩"思考中"
+                        from app.ai.response_worker import activity_key, mark_activity_state
+                        mark_activity_state(
+                            activity_key(conversation_type, group_id=group_id, session_id=session_id),
+                            agent.user_id, _activity_state,
+                        )
+                        _typing_data: dict = {
+                            "user_id": agent.user_id, "agent_name": agent.name,
+                            "agent_avatar_url": agent.avatar_url, "trigger": trigger,
+                            "state": _activity_state,
+                        }
                         if conversation_type == "dm" and session_id:
                             _typing_data["session_id"] = session_id
                         elif group_id is not None:
@@ -944,9 +1041,27 @@ async def _tool_call_loop(
                     # 曾经用工具名兜底，于是线上留下了「当前任务：调用工具 pop_state」这种幻影任务：
                     # 它会一直挂着，每来一条消息就把"被打断"的时间戳刷新一遍，而 AI 什么也没接。
                     task_summary = _get_tool_task_summary(tool_name, arguments)
+                    # 换帧类工具：执行前后各读一次状态链。换掉了就把「被离开的那一段」落进它的桶
+                    # （口径见 services/agent/segment_log.py）。执行前那份快照必须留，它 active
+                    # 的正是被离开的帧——执行完再读，读到的是新帧。
+                    from app.services.agent import segment_log
+                    from app.services.agent.state_stack_service import get_frames
+
+                    stack_before = (await get_frames(db, agent.id)
+                                    if tool_name in segment_log.SWITCH_TOOLS else None)
+                    # 事务不跨外部 I/O：工具可能自己开会话写库（插件就是这么写的），
+                    # 带着没提交的写去等它返回，等于把行锁抵押给一个正在等我们的调用——
+                    # 2026-11-07 群 81 的自锁死就是这么来的（见 docs/dev/conversation_history.md）。
+                    await db.commit()
                     result = await dispatch_tool_call(db, agent.id, group_id, tool_name, arguments, context)
+                    if stack_before is not None:
+                        await segment_log.record_leave(
+                            db, agent, stack_before=stack_before, messages=messages,
+                            conversation_type=conversation_type, group_id=group_id,
+                            session_id=session_id)
                     if task_summary:
                         last_task = task_summary
+                    _pending_images.extend(_take_tool_images(result, tool_name))
                     _pending_results.append({"tc_id": tc_id, "result": result})
                     # 工具总账：工具名 + 失败原因或工具自报的摘要——轮末封存为一条 tool 条目
                     _tool_log.append({"name": tool_name, "note": tool_ledger_note(result)})
@@ -1050,6 +1165,8 @@ async def _tool_call_loop(
                 # 少一条响应整次请求就 400；纯函数校验，O(n)，代价可忽略）
                 if heal_tool_chain(messages):
                     logger.warning(f"🔧 AI {agent.name}({agent.id}) 补齐悬空 tool_calls（避免 400）")
+                # 请求前同样先提交：模型这一趟要等几十秒，别带着未提交的写干等（同上）。
+                await db.commit()
                 try:
                     # 内层：同 Key 重试（500/503）
                     for server_retry in range(MAX_SERVER_RETRIES + 1):
@@ -1184,6 +1301,7 @@ async def _tool_call_loop(
                 for pr in _pending_results:
                     messages.append({"role": "tool", "tool_call_id": pr["tc_id"],
                                      "content": json.dumps(pr["result"], ensure_ascii=False)})
+                _pending_images.clear()   # 本轮已结束，图注入给谁也看不见
                 await _seal(response.get("reasoning_content") or "")
                 logger.info(
                     f"AI {agent.name}({agent.id}) end_turn 流式触发，本轮结束"
@@ -1254,6 +1372,8 @@ async def _tool_call_loop(
             else:  # 'every_time'
                 reminder_max = 10
             if content and not tool_calls and not _pending_results:
+                # 记下来：这一轮可能被提醒后改走工具收尾，那句话不能跟着 messages 一起没掉
+                _unsent_text = content.strip()
                 # 提醒只发一次：协议讲一遍就够。反复要它「改用工具重说」既烧 token（每一遍都是
                 # 整段上下文重跑），也会把模型逼成胡话——曾经一个晚上重试到第 10 遍才憋出一段乱码。
                 # 提醒过还只说话，**不替它发**：正文可能是它给自己记的过程，也可能是准备发给另一个
@@ -1262,8 +1382,7 @@ async def _tool_call_loop(
                     logger.info(
                         f"AI {agent.name}({agent.id}) 提醒后仍只返回文字，不代发、写入账本: {content[:60]}"
                     )
-                    await _seal(response.get("reasoning_content") or "",
-                                unsent=(content.strip(), _PROSE_REMINDER))
+                    await _seal(response.get("reasoning_content") or "")
                     await _save_conversation_log_safe(
                         db, agent, messages, conversation_type,
                         group_id, session_id,
@@ -1345,6 +1464,10 @@ async def _tool_call_loop(
                     "tool_call_id": pr["tc_id"],
                     "content": json.dumps(pr["result"], ensure_ascii=False),
                 })
+            # 工具带回的图片：紧跟在工具消息之后注入；不注入就丢掉（end_turn 路径）
+            if _pending_images:
+                _inject_tool_images(messages, _pending_images)
+                _pending_images.clear()
 
             # ── 闹钟模式：第一轮工具执行完后注入收尾提醒 ──
             if conversation_type == "alarm":
@@ -1499,13 +1622,18 @@ async def _save_conversation_log_safe(
     model: str | None = None,
     token_usage: dict | None = None,
 ) -> None:
-    """安全保存对话日志（失败不影响主流程）"""
+    """安全保存对话日志（失败不影响主流程）
+
+    落库前把图片字节换成 [图片] 占位：日志是整份请求体的快照，一张 480×270 的
+    base64 就几十 KB，留着既撑大账本，回看时也没有人读那些字节。
+    """
     try:
         from app.services.content.conversation_log_service import save_conversation_log
+        from app.utils.multimodal import strip_image_bytes
         await save_conversation_log(
             db,
             agent_id=agent.id,
-            messages=messages,
+            messages=strip_image_bytes(messages),
             conversation_type=conversation_type,
             group_id=group_id,
             session_id=session_id,
@@ -1541,15 +1669,25 @@ async def _seal_turn(db, agent, *, group_id, session_id, conversation_type,
 
     不封存的话，AI 下一轮只看得见消息、看不见自己上一轮干了什么——工具轮历史原本只活在当轮
     messages 里，轮一结束就没了。这里是它进账本的唯一入口。
+
+    key_note 有两处去处，别只看到账本那条：它还写一行经历（别的会话里的自己想起它）。
+    经历写入失败不回滚账本——「这一轮干了什么」当场要留，跨场景那一路只是锦上添花。
     """
     from app.services.history.context_sync import append_events
+    from app.tools.base import ToolRegistry
     from app.utils.pure.history import (
-        cutoff_entry, handoff_entry, thinking_entry, tools_entry, unsent_text_entry,
+        cutoff_entry, handoff_entry, ledger_worthy_tools, thinking_entry, tools_entry,
+        unsent_text_entry,
     )
 
+    context_ref = _context_ref(group_id, session_id, conversation_type)
+
     entries = []
-    if tool_log:
-        entries.append(tools_entry(tool_log))
+    # 账本只留失败与有持久副作用的结果：读类调用成功只回一个 ok，进账本没有信息量，
+    # 而压缩时事件条目原样搬运，每轮一条会越积越长（线上单段会话见过 164 条）。
+    notable = ledger_worthy_tools(tool_log or [], ToolRegistry.has_persistent_effect)
+    if notable:
+        entries.append(tools_entry(notable))
     if unsent:
         # 只说了话没发出去：把那句话和平台当时的提醒一起留给下一个自己（见 history.unsent_text_entry）
         entries.append(unsent_text_entry(*unsent))
@@ -1560,9 +1698,36 @@ async def _seal_turn(db, agent, *, group_id, session_id, conversation_type,
         entries.append(handoff_entry(note))
     if settlement.get("keep_thinking") and (reasoning or "").strip():
         entries.append(thinking_entry(reasoning))
-    if not entries:
-        return
-    await append_events(db, agent, _context_ref(group_id, session_id, conversation_type), entries)
+    if entries:
+        await append_events(db, agent, context_ref, entries)
+    if note:
+        await _record_key_note_experience(db, agent, context_ref, group_id, note, tool_log)
+
+
+async def _record_key_note_experience(db, agent, context_ref: str, group_id: int | None,
+                                      note: str, tool_log: list[dict]) -> None:
+    """把 key_note 落成一行经历：别的场景里的自己据此想起「我在那儿干过什么」。
+
+    场景取**当前帧**（当前帧）的 context_ref，不取会话键：插件帧、世界帧都是自己的一段，
+    在插件帧里干的事要落在插件帧的场景上，而不是落回它所在的群。
+    """
+    from app.utils.pure.history import tools_summary
+
+    try:
+        from app.models.agent_experience import OWNER_AI
+        from app.services.agent.state_stack_service import current_scene
+        from app.services.experience import experience_service
+
+        active = await current_scene(db, agent.id)
+        scene = active.get("context_ref") or context_ref
+        await experience_service.record(
+            db, owner_type=OWNER_AI, owner_id=agent.id, context_ref=scene,
+            group_id=group_id, me_user_id=agent.user_id or 0, summary=note,
+            source=experience_service.SOURCE_KEY_NOTE, tools=tools_summary(tool_log),
+            frame_type=active.get("type") or "", label=active.get("label") or "",
+        )
+    except Exception as e:
+        logger.warning(f"轮末经历写入失败（非致命）: {e}")
 
 
 async def _unlock_context(db, agent, *, group_id, session_id, conversation_type,

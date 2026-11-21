@@ -83,7 +83,7 @@ def plan_board(alarms, *, context_ref: str, current_frame_id: str = "",
             else:
                 mine.append(alarm)
         elif target or origin:
-            # 目标帧还在栈上就按帧归堆（能带上它的名字），否则退回会话键——会话键是稳的
+            # 目标帧还在链上就按帧归堆（能带上它的名字），否则退回会话键——会话键是稳的
             key = target if target in frames_by_id else (origin or target)
             others[key] = others.get(key, 0) + 1
         else:
@@ -165,7 +165,7 @@ def _task_text(task, limit: int = PLAN_TASK_CHARS) -> str:
 
 
 def _frame_label(frame, key: str = "") -> str:
-    """计数栏的标签：帧还在栈上就用它的身份，否则退回会话键（帧会被 pop，会话轴不会）。
+    """计数栏的标签：帧还在链上就用它的身份，否则退回会话键（帧会被 pop，会话轴不会）。
 
     会话键两种口径：群是 `group:{id}`，私信就是 session_id（`40_90` 这种）——见 context_sync.context_ref。
     """

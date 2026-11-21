@@ -14,6 +14,8 @@ import logging
 from dataclasses import dataclass, field
 from enum import Enum
 
+from app.config import settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -56,6 +58,7 @@ class ActionContext:
     is_announcement: bool = False  # v0.2.1: 群公告 穿透 DND
     is_priority_friend: bool = False  # v2.0.6: 特别关心好友消息穿透 DND
     chain_depth: int = 0
+    message_id: int | None = None   # 触发这条决策的消息 id：代理判定的幂等键
     # 闹钟事件字段
     alarm_id: int | None = None
     alarm_task: str = ""
@@ -199,7 +202,20 @@ async def _decide_reply_action(db, agent, context: ActionContext) -> ActionDecis
 
     # Gate 5: 意愿判断（使用 AI 的 auto_dnd_threshold，尊重用户设置）
     threshold = getattr(agent, 'auto_dnd_threshold', None) or 20
-    if not is_mentioned and w.score < threshold:
+    heuristic_wake = is_mentioned or w.score >= threshold
+
+    # 代理 LLM：只接管「没点名」那一档。@ 本人 / @all / 群公告 / 特别关心 到这里已经该醒，
+    # 不该由 LLM 复核；反过来它们也不该被 LLM 拦住。
+    if _proxy_applies(context):
+        verdict = await _ask_proxy(db, agent, context, heuristic_wake=heuristic_wake)
+        if verdict is not None:
+            from app.services.brain.proxy_judge import enforced_for
+
+            # 留白名单里的群照旧影子（判了只记账），其余群按判定执行
+            if enforced_for(context.group_id):
+                return _decision_from_proxy(agent, verdict, w)
+
+    if not heuristic_wake:
         return ActionDecision(False, ActionType.NONE, w.score,
                             f"AI {agent.name} 意愿不足({w.score} < 阈值{threshold})")
 
@@ -244,4 +260,169 @@ async def _decide_proactive_action(db, agent, context: ActionContext) -> ActionD
         reason=w.reason,
         willingness_score=w.score,
         willingness_level=w.level,
+    )
+
+# ══════════════════════════════════════════════════════════════
+# 代理 LLM（判「值不值得拉起本尊」，口径见 docs/dev/decision_proxy_llm.md）
+# ══════════════════════════════════════════════════════════════
+
+def _proxy_applies(context: ActionContext) -> bool:
+    """这一条消息要不要问代理。
+
+    总开关关着就不问；@ 本人 / @all / 群公告 / 特别关心 不问——它们要么是强制唤醒，
+    要么是人自己设的穿透条件，不该被一个模型复核。
+    """
+    if not settings.proxy_wake_enabled:
+        return False
+    return not (context.is_mentioned or context.is_at_all
+                or context.is_announcement or context.is_priority_friend)
+
+
+async def _proxy_api_config(db, agent, context: ActionContext) -> tuple[str | None, str]:
+    """代理判定用的 Key / 地址：与本尊这一轮同一套（群聊按群主账单口径）。"""
+    from app.ai.executor import _get_api_config
+
+    try:
+        api_key, api_base, *_ = await _get_api_config(
+            db, agent, chatter_id=context.sender_id, conversation_type="group")
+        return api_key, api_base
+    except Exception as e:  # noqa: BLE001 —— 解析失败就当作没有 Key，回退启发式
+        logger.warning(f"AI {getattr(agent, 'name', '?')} 代理判定取 Key 失败: {e}")
+        return None, settings.deepseek_base_url
+
+
+async def _group_policy(db, group_id: int | None) -> tuple[str, str]:
+    """本群给代理的标准：(群主规矩, 群公告)。
+
+    公告受群开关控制——关掉意味着「这段别给代理看」，判定照常进行，只是少一段依据。
+    """
+    if not group_id:
+        return "", ""
+    from app.models.group import Group
+
+    group = await db.get(Group, group_id)
+    if group is None:
+        return "", ""
+    announcement = (group.announcement or "") if group.proxy_announcement else ""
+    return (group.proxy_rules or ""), announcement
+
+
+async def _attachment_note(db, message_id: int | None) -> str:
+    """这条消息带了什么附件 → 给代理一句人话
+
+    代理只读文本，而正文里图片早被压成 `[图片]`：不点明"带了什么"，它会当成"没内容"。
+    2026-11-14 真机：群里发图，代理判「只是发图，没叫我或派活」→ 不唤醒，AI 就此错过那张图。
+    """
+    if not message_id:
+        return ""
+    from app.models.message import Message
+    from app.utils.multimodal import is_image, normalize_attachments
+
+    message = await db.get(Message, int(message_id))
+    if message is None:
+        return ""
+    atts = normalize_attachments(getattr(message, "attachments", None)) or []
+    images = [a for a in atts if isinstance(a, dict) and is_image(a)]
+    files = [a for a in atts if isinstance(a, dict) and not is_image(a)]
+    if not images and not files:
+        return ""
+    bits: list[str] = []
+    if images:
+        bits.append(f"{len(images)} 张图片")
+    if files:
+        names = "、".join(str(a.get("name") or "文件") for a in files[:3])
+        bits.append(f"{len(files)} 个文件（{names}）")
+    return "（这条带了 " + "、".join(bits) + "）"
+
+
+async def _mention_annotated(db, content: str) -> str:
+    """给代理看的那一份正文：<@!id> 注成 <@!id>（名字）（不是你）。
+
+    代理只在「没点名本人」的时机被问到（见 _proxy_applies），所以每个 @ 后面补一句
+    "不是你"是事实，不是推断——让它对着裸令牌自己比对名字，它就会把自己代入：
+    2026-11-14 群 77 真机，正文 `<@!120> 那你在这里发条语音吧……`（@ 的是大肥鱼），
+    代理判「点名让我发语音」并起身接话。
+
+    名字只在使用时现算，与账本同一份来源（见 docs/dev/mention_ids.md）；注脚就地跟在
+    id 后面，与 `<@!id>（名字）` 的既有形态只差最后三个字，不另起一句话。
+    """
+    from app.utils.text import iter_mention_ids, render_mention_with_names
+
+    ids = list(dict.fromkeys(iter_mention_ids(content or "")))
+    if not ids:
+        return content
+    from app.utils.message_serializer import mention_names
+
+    names = await mention_names(db, [content or ""])
+    # 认不出名字也要标：空着它又会自己猜是谁
+    filled = {uid: (names.get(uid) or f"用户{uid}") for uid in ids}
+    return render_mention_with_names(content, filled, extra="（不是你）")
+
+
+async def _ask_proxy(db, agent, context: ActionContext, *, heuristic_wake: bool) -> dict | None:
+    """问一次代理，并把这次判断留痕。判不了返回 None（调用方走启发式）。
+
+    留痕一行一个判断：判成功记真实结论，判不了记 fallback——后者不参与自动停用统计，
+    但能看出代理的失败率。
+    """
+    from app.services.agent import state_stack_service
+    from app.services.brain import proxy_judge
+
+    try:
+        if not await proxy_judge.worthwhile(db, agent.id):
+            return None
+
+        cached = await proxy_judge.cached_verdict(db, agent.id, context.message_id)
+        if cached is not None and not cached.get("fallback"):
+            return cached
+
+        stack = await state_stack_service.list_states(db, agent.id)
+        frame = stack[-1] if stack else {}
+
+        api_key, api_base = await _proxy_api_config(db, agent, context)
+        # 判定依据按群走：群主写的规矩与公告（公告受群开关控制），不是全局一套口径
+        group_rules, announcement = await _group_policy(db, context.group_id)
+        attachment_note = await _attachment_note(db, context.message_id)
+        # 正文交给代理前先注上"@ 的是谁、不是谁"：裸令牌它会把自己代入
+        verdict = await proxy_judge.judge(
+            db, agent, frame,
+            message_text=await _mention_annotated(db, context.content),
+            api_base=api_base,
+            api_key=api_key,
+            group_rules=group_rules,
+            announcement=announcement,
+            attachment_note=attachment_note,
+            message_id=context.message_id,
+        )
+        if verdict is None:
+            await proxy_judge.record(
+                db, agent.id, frame, message_id=context.message_id,
+                verdict=proxy_judge.ProxyVerdict(
+                    wake=heuristic_wake, reason="代理不可用，退回启发式", fallback=True),
+            )
+            return None
+
+        await proxy_judge.record(db, agent.id, frame, message_id=context.message_id, verdict=verdict)
+        return {"wake": verdict.wake, "reason": verdict.reason,
+                "urgency": verdict.urgency, "model": verdict.model,
+                "latency_ms": verdict.latency_ms}
+    except Exception as e:  # noqa: BLE001 —— 代理出问题不能让消息丢失
+        logger.warning(f"AI {getattr(agent, 'name', '?')} 代理判定失败（非致命）: {e}")
+        return None
+
+
+def _decision_from_proxy(agent, verdict: dict, w) -> ActionDecision:
+    """把代理的结论翻成决策。enforce 档专用。"""
+    reason = verdict.get("reason") or ""
+    if not verdict.get("wake"):
+        return ActionDecision(False, ActionType.NONE, w.score,
+                              f"AI {agent.name} 代理判断不打扰：{reason}")
+    return ActionDecision(
+        should_act=True,
+        action_type=ActionType.REPLY,
+        priority=w.score,
+        reason=f"代理判断该醒：{reason}",
+        willingness_score=w.score,
+        willingness_level=w.level,
+        details={"proxy": verdict},
     )

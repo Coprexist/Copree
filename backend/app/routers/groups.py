@@ -21,6 +21,7 @@ from app.chat.gm import (
     list_user_groups,
     add_member,
     get_group_members,
+    group_settings_payload,
     update_group_settings,
     set_announcement,
     delete_announcement,
@@ -194,30 +195,16 @@ async def get_group_detail(
     # 通道那边这个群是什么样（群名/人数/简介）：拿不到就是空，资料卡不显示那一段
     channels = await channel_service.describe_group(db, group_id)
 
-    return {
-        "id": group.id,
-        "name": group.name,
-        "owner_type": group.owner_type,
-        "owner_id": group.owner_id,
-        "is_paused": group.is_paused,
-        "is_vector_accelerated": group.is_vector_accelerated,
-        "avatar_mode": group.avatar_mode or "default",
-        "avatar_url": group.avatar_url,
-        "include_ai_in_avatar": group.include_ai_in_avatar,
-        "searchable": bool(group.searchable),
-        "auto_approve_join": bool(group.auto_approve_join),
-        "approve_invites": bool(group.approve_invites),
-        "name_from_channel": bool(group.name_from_channel),
+    payload = group_settings_payload(group)
+    payload.update({
+        # 只有详情才有：通道绑定状态与那边长什么样（资料卡）、成员数
         "channel_bound": bool(served),
         "channel_labels": channel_labels,
         "channels": channels,
-        # 资料卡要显示的：群简介与群公告（列表里不带，详情里给）
-        "bio": group.bio,
-        "announcement": group.announcement,
-        "created_at": str(group.created_at) if group.created_at else None,
         "member_count": member_count,
         "online_count": online_count,
-    }
+    })
+    return payload
 
 
 @router.post("/groups/{group_id}/invite")
@@ -430,26 +417,7 @@ async def update_group(
         group = await update_group_settings(
             db, group_id, current_user["user_id"], updates,
         )
-        return {
-            "id": group.id,
-            "name": group.name,
-            "owner_type": group.owner_type,
-            "is_paused": group.is_paused,
-            "owner_id": group.owner_id,
-            "is_vector_accelerated": group.is_vector_accelerated,
-            "announcement": group.announcement,
-            "speak_limit_per_minute": group.speak_limit_per_minute or 0,
-            "speak_limit_window_seconds": group.speak_limit_window_seconds or 120,
-            "concurrent_ai_limit": group.concurrent_ai_limit or DEFAULT_CONCURRENT_AI_LIMIT,
-            "avatar_mode": group.avatar_mode or "default",
-            "avatar_url": group.avatar_url,
-            "include_ai_in_avatar": group.include_ai_in_avatar,
-            "searchable": bool(group.searchable),
-            "auto_approve_join": bool(group.auto_approve_join),
-            "approve_invites": bool(group.approve_invites),
-            "name_from_channel": bool(group.name_from_channel),
-            "created_at": str(group.created_at) if group.created_at else None,
-        }
+        return group_settings_payload(group)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
@@ -882,6 +850,5 @@ async def get_group_activity(
     current_user: dict = Depends(get_current_user),
 ):
     """获取群聊当前 AI 思考/输入中状态（用于进入对话时恢复活动指示器）"""
-    from app.ai.response_worker import get_thinking_state
-    conv_key = f"group:{group_id}"
-    return get_thinking_state(conv_key)
+    from app.ai.response_worker import activity_key, get_thinking_state
+    return get_thinking_state(activity_key("group", group_id=group_id))

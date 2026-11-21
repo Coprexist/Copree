@@ -5,8 +5,11 @@ AI 代理服务
 import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.repositories.agent_repo import AgentRepository, SQLAlchemyAgentRepository
-from sqlalchemy import select, func, update
+from sqlalchemy import delete, or_, select, func, update
 from app.models.user import User
+from app.models.dm import DMSession
+from app.models.group import Group, GroupMember
+from app.models.world import World
 from app.models.agent import Agent, AgentConfigHistory, AgentUserConfig, AgentCollaborator
 from app.models.memory import RoughMemory, DetailMemory
 from app.config import settings
@@ -51,7 +54,7 @@ CONFIG_PROFILES = {
         "alarm_max_tool_rounds": 8,
         # 闹钟 / 心跳
         "force_alarm_on_end": False,
-        "plan_injection_enabled": False,
+        "plan_injection_enabled": True,
         "max_alarms": 3,
         # 帧后事谁办：跟着档位走——便宜档由平台代销（只留告知），数字生命档交给他自己
         "retire_handover_self": False,
@@ -76,7 +79,7 @@ CONFIG_PROFILES = {
         "alarm_max_tool_rounds": 10,
         # 闹钟 / 心跳
         "force_alarm_on_end": False,
-        "plan_injection_enabled": False,
+        "plan_injection_enabled": True,
         "max_alarms": 5,
         # 帧后事谁办：跟着档位走——便宜档由平台代销（只留告知），数字生命档交给他自己
         "retire_handover_self": False,
@@ -215,6 +218,23 @@ async def apply_config_profile(
     return agent
 
 
+
+async def _unique_ai_username(db, name: str, *, exclude_user_id: int | None = None) -> str:
+    """给 AI 的虚拟账号挑一个不撞的 username。
+
+    agents.name 是显示名，允许重名，可以任意写；users.username 有唯一约束，
+    又是私信等共用表里展示的身份名，所以两者只在「没人占用」时才字面相等。
+    AI 没有登录语义，撞名加的后缀不会伤到任何人。
+    """
+    from uuid import uuid4 as _uuid4
+    stmt = select(User.id).where(User.username == name)
+    if exclude_user_id is not None:
+        stmt = stmt.where(User.id != exclude_user_id)
+    if (await db.execute(stmt)).first() is None:
+        return name
+    return f"{name}-{_uuid4().hex[:4]}"
+
+
 async def create_agent(
     db: AsyncSession,
     owner_id: int,
@@ -235,7 +255,7 @@ async def create_agent(
     max_tool_rounds: int = 3,
     alarm_max_tool_rounds: int = 10,
     force_alarm_on_end: bool = False,
-    plan_injection_enabled: bool = False,
+    plan_injection_enabled: bool = True,
     retire_handover_self: bool = False,
     max_alarms: int = 10,
     is_ai_editable: bool = True,
@@ -280,12 +300,7 @@ async def create_agent(
             raise ValueError("AI 创建额度不足，请联系管理员获取兑换码")
 
     # 创建 Agent 对应的 users 条目（统一 ID 空间，用于私信等场景）
-    # username 唯一（AI 无登录语义）：撞名加短后缀，显示名（agent.name）不受影响
-    from uuid import uuid4 as _uuid4
-    username = name
-    dup = (await db.execute(select(User.id).where(User.username == name))).first()
-    if dup:
-        username = f"{name}-{_uuid4().hex[:4]}"
+    username = await _unique_ai_username(db, name)
     ai_user = User(
         username=username,
         type="ai",
@@ -526,6 +541,68 @@ async def get_effective_config(
     }
 
 
+async def _purge_ai_dm(db, user_id: int) -> None:
+    """清掉这个账号参与的私信会话（会话里的消息随 session_id 的 CASCADE 一起走）。
+
+    私信表对 users.id 是 NO ACTION：账号删了、会话还挂着就删不动账号。
+    会话对已经删掉的 AI 没有意义，跟着一起清；这也是它比"改 FK 成 CASCADE"更保守的地方——
+    只有删账号这一条路会动到这里。
+    """
+    await db.execute(
+        delete(DMSession).where(
+            or_(DMSession.user1_id == user_id, DMSession.user2_id == user_id)
+        )
+    )
+    await db.flush()
+
+
+async def _transplant_ai_assets(db, agent_id: int, ai_user_id: int | None, owner_id: int) -> dict:
+    """删 AI 之前，把它名下的人类资产交还给主人：它建的群、它名下的世界。
+
+    groups.owner_type/owner_id 与 worlds.owner_id 都是裸 id，没有指向 agents 的 FK：
+    删 AI 不会连带删群删世界，但会留下「群主是个已经不存在的 AI」和「世界挂在一个已删除
+    的账号上」。所以先原样挂回主人，人类资产一条不少。
+
+    AI 自己的群成员行也在这里清掉——群还在、成员早没了，就是线上那批孤儿成员行的来路。
+    """
+    groups = (await db.execute(
+        select(Group).where(Group.owner_type == "ai", Group.owner_id == agent_id)
+    )).scalars().all()
+    for group in groups:
+        row = (await db.execute(
+            select(GroupMember).where(
+                GroupMember.group_id == group.id,
+                GroupMember.member_type == "human",
+                GroupMember.member_id == owner_id,
+            )
+        )).scalar_one_or_none()
+        if row is None:
+            # 主人不在群里时先把他加进来：群主是一个不在群里的人，之后就没人能管这个群了
+            row = GroupMember(group_id=group.id, member_type="human", member_id=owner_id, role="owner")
+            db.add(row)
+        row.role = "owner"
+        group.owner_type, group.owner_id = "human", owner_id
+
+    await db.execute(
+        delete(GroupMember).where(
+            GroupMember.member_type == "ai", GroupMember.member_id == agent_id,
+        )
+    )
+
+    worlds = 0
+    if ai_user_id:
+        worlds = (await db.execute(
+            update(World).where(World.owner_id == ai_user_id).values(owner_id=owner_id)
+        )).rowcount or 0
+
+    await db.flush()
+    if groups or worlds:
+        logger.info(
+            f"AI (id={agent_id}) 名下的 {len(groups)} 个群、{worlds} 个世界已交还给用户 id={owner_id}"
+        )
+    return {"groups": len(groups), "worlds": worlds}
+
+
 async def delete_agent(
     db: AsyncSession,
     agent_id: int,
@@ -555,17 +632,24 @@ async def delete_agent(
         if owner:
             owner.api_credit += returned_credit
 
-    # 删除关联的 User（type='ai'）
-    if agent.user_id:
-        await db.execute(select(User).where(User.id == agent.user_id))
-        ai_user_result = await db.execute(select(User).where(User.id == agent.user_id))
-        ai_user = ai_user_result.scalar_one_or_none()
-        if ai_user:
-            await db.delete(ai_user)
-
     agent_name = agent.name
+    ai_user_id = agent.user_id
+
+    # 群与世界对 AI 是裸 id（没有 FK 兜底）：删之前先交还给主人，不留悬空的群主
+    await _transplant_ai_assets(db, agent_id, ai_user_id, owner_id)
+
+    # 顺序是这条链唯一的正确顺序，换一行就 500：
+    # agents.user_id 与 dm_messages.sender_id 对 users.id 的 FK 都是 NO ACTION，
+    # 先删账号会被它们挡下来（2026-11-15「删除 AI 报服务器内部错误」，卡在 dm_messages）。
     await db.delete(agent)
     await db.flush()
+
+    if ai_user_id:
+        await _purge_ai_dm(db, ai_user_id)
+        ai_user = (await db.execute(select(User).where(User.id == ai_user_id))).scalar_one_or_none()
+        if ai_user:
+            await db.delete(ai_user)
+            await db.flush()
 
     logger.info(
         f"AI '{agent_name}' (id={agent_id}) 已删除，"
@@ -796,9 +880,15 @@ async def update_agent_config(
     if "memory_shared_scope" in updates and updates["memory_shared_scope"] is not None:
         agent.memory_shared_scope = updates["memory_shared_scope"]
 
-    # 名称
+    # 名称：agents.name 是显示名，users.username 是共用表里的身份名，改一个必须带另一个，
+    # 否则私信列表、消息头这些读 username 的地方会一直显示旧名。
     if "name" in updates and updates["name"] is not None:
         agent.name = updates["name"]
+        if agent.user_id:
+            ai_user = await db.get(User, agent.user_id)
+            if ai_user is not None:
+                ai_user.username = await _unique_ai_username(
+                    db, agent.name, exclude_user_id=ai_user.id)
 
     # 简介 & 状态文本
     if "bio" in updates:

@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 from app.bootstrap import lifespan
 from app.config import settings
 from app.middleware import register_middlewares
+from app.services.content.file_budget import FileBudgetExceeded
 from app.routers import get_all_routers
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,26 @@ def validation_exception_handler(
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content={"detail": errors},
+    )
+
+
+@app.exception_handler(FileBudgetExceeded)
+def file_budget_exception_handler(request: Request, exc: FileBudgetExceeded) -> JSONResponse:
+    """文件日额度/分钟闸用完：429 + Retry-After，让界面能说清什么时候再来
+
+    单在这里映射一次，上传、发消息、转发三条路都不用各写一遍 except——它们在同一个应用里
+    抛的是同一个异常。
+    """
+    return JSONResponse(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        content={
+            "detail": str(exc),
+            "code": f"file_{exc.kind}_limit",
+            "retry_after": exc.retry_after,
+            "limit": exc.limit,
+            "used": exc.used,
+        },
+        headers={"Retry-After": str(exc.retry_after)},
     )
 
 

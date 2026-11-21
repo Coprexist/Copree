@@ -14,14 +14,14 @@ class CloseState(ToolPlugin):
     description = (
         "关闭当前状态帧或指定帧，不会自动恢复上一任务。"
         "用于'这件事不做了/被叫停了'的场景。"
-        "frame_id 为空时关闭栈顶，填 frame_id（从 list_states 获取）则关闭指定帧。"
+        "frame_id 为空时关闭当前帧，填 frame_id（从 list_states 获取）则关闭指定帧。"
     )
     segment = "self_management"
     parameters = {
         "frame_id": {
             "type": "string",
             "nullable": True,
-            "description": "要关闭的状态帧 ID（从 list_states 获取），为空则关闭栈顶",
+            "description": "要关闭的状态帧 ID（从 list_states 获取），为空则关闭当前帧",
         },
     }
     required = []

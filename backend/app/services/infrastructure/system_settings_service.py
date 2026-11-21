@@ -114,6 +114,8 @@ async def get_settings(db: AsyncSession) -> dict:
         "daily_backup_enabled": bool(getattr(row, "daily_backup_enabled", False)),
         "daily_backup_keep": getattr(row, "daily_backup_keep", 7) or 7,
         "world_preset_suggestions": getattr(row, "world_preset_suggestions", None),
+        "memory_daily_target_mb": getattr(row, "memory_daily_target_mb", 0) or 0,
+        "memory_limit_mb": getattr(row, "memory_limit_mb", 0) or 0,
     }
 
 
@@ -132,6 +134,8 @@ async def update_settings(
     daily_backup_enabled: bool | None = None,
     daily_backup_keep: int | None = None,
     world_preset_suggestions: list[str] | None = None,
+    memory_daily_target_mb: int | None = None,
+    memory_limit_mb: int | None = None,
     updated_by: int | None = None,
 ) -> dict:
     """
@@ -237,6 +241,19 @@ async def update_settings(
     if world_preset_suggestions is not None:
         row.world_preset_suggestions = [str(q).strip()[:40] for q in world_preset_suggestions if str(q).strip()][:10]
         logger.info(f"  备份保留份数: {daily_backup_keep}")
+
+    # 容量策略：0 表示"不设"，走默认调控；两者都设时必须日常 ≤ 上限，
+    # 否则"日常水位"会高于硬上限，调控永远处于超限状态、一直缩到底。
+    if memory_daily_target_mb is not None:
+        row.memory_daily_target_mb = max(0, int(memory_daily_target_mb))
+    if memory_limit_mb is not None:
+        row.memory_limit_mb = max(0, int(memory_limit_mb))
+    daily_mb = row.memory_daily_target_mb or 0
+    limit_mb = row.memory_limit_mb or 0
+    if daily_mb and limit_mb and daily_mb > limit_mb:
+        raise ValueError("日常内存占用目标不能高于内存占用上限")
+    if memory_daily_target_mb is not None or memory_limit_mb is not None:
+        logger.info(f"  容量策略: 日常={daily_mb or '未设'}MB 上限={limit_mb or '未设'}MB")
 
     if updated_by is not None:
         row.updated_by = updated_by

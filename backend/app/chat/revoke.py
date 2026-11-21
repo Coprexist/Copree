@@ -19,6 +19,10 @@ logger = logging.getLogger(__name__)
 # 站内撤回窗口：与 QQ 一致
 REVOKE_WINDOW_SECONDS = 120
 
+# 撤回后等多久才回收字节：给通道侧撤销与在线广播留时间，也把短时间内的多次撤回凑成一批删
+# （§5.6：约 1 分钟后批量删，避免 IO 抖动）
+REVOKE_RECLAIM_DELAY_SECONDS = 60
+
 
 class RevokeDenied(PermissionError):
     """不能撤：不是自己发的（且不是管理员），或者已经撤过了"""
@@ -78,6 +82,50 @@ async def _append_revoke_notices(db, *, context_ref: str, message_id: int, speak
     return notified
 
 
+async def _reclaim_attachments(db, message) -> int:
+    """撤回附件：清消息快照，没被别人转走的排进回收（§5.6）
+
+    为什么不当场删字节：删盘要能失败重试、要凑批，都放在回收器里做；撤回事务里只定
+    「什么时候可以删」——file_metadata.reclaim_after，全平台唯一的一条删除时钟（§3.5）。
+
+    为什么被转发过就不排：转发是别人的新消息在引用同一个 file_id，删了那条消息的附件就
+    打不开了。file_references 里的 forward 行一定是非 owner 记的（owner 自己不记，见
+    track_forward_reference），所以「有 forward 行」就等于「别人认领过」。
+    """
+    from sqlalchemy import select as sa_select
+
+    from app.models.file import FileMetadata, FileReference
+    from app.utils.message_serializer import normalize_attachments
+
+    entries = normalize_attachments(getattr(message, "attachments", None))
+    ids = [
+        int(e["file_id"]) for e in (entries or [])
+        if isinstance(e, dict) and e.get("file_id")
+    ]
+    message.attachments = None      # 快照先清：撤回的消息不再显示附件，也不再被引用
+    if not ids:
+        return 0
+
+    claimed = set((await db.execute(
+        sa_select(FileReference.file_id).where(
+            FileReference.file_id.in_(ids),
+            FileReference.ref_type == "forward",
+        )
+    )).scalars().all())
+    rows = (await db.execute(
+        sa_select(FileMetadata).where(FileMetadata.id.in_(ids))
+    )).scalars().all()
+    deadline = _now() + timedelta(seconds=REVOKE_RECLAIM_DELAY_SECONDS)
+    queued = 0
+    for meta in rows:
+        if int(meta.id) in claimed:
+            continue
+        meta.reclaim_after = deadline
+        queued += 1
+    await db.flush()
+    return queued
+
+
 async def revoke_group_message(db, message, *, actor_id: int | None, is_admin: bool = False) -> dict:
     """撤回一条群消息：标记 + 给看过它的 AI 补通知（广播/通道联动由调用方做）。"""
     from app.services.history.context_sync import context_ref
@@ -87,6 +135,7 @@ async def revoke_group_message(db, message, *, actor_id: int | None, is_admin: b
     message.revoked_at = _now()
     message.revoked_by = int(actor_id) if actor_id else None
     await db.flush()
+    queued = await _reclaim_attachments(db, message)
     notified = await _append_revoke_notices(
         db, context_ref=context_ref(group_id=message.group_id), message_id=message.id, speaker=speaker
     )
@@ -95,10 +144,11 @@ async def revoke_group_message(db, message, *, actor_id: int | None, is_admin: b
 
     channel = await dispatch_revoke(db, message.group_id, message)
     logger.info(
-        "群 %s 的消息 %s 已撤回（补通知 %s 个 AI，通道 %s）",
-        message.group_id, message.id, len(notified), channel or "无",
+        "群 %s 的消息 %s 已撤回（补通知 %s 个 AI，排回收 %s 个附件，通道 %s）",
+        message.group_id, message.id, len(notified), queued, channel or "无",
     )
-    return {"revoked": True, "speaker": speaker, "notified_agents": notified, "channel": channel}
+    return {"revoked": True, "speaker": speaker, "notified_agents": notified,
+            "channel": channel, "attachments_queued": queued}
 
 
 async def revoke_dm_message(db, message, *, actor_id: int | None, is_admin: bool = False) -> dict:
@@ -110,9 +160,14 @@ async def revoke_dm_message(db, message, *, actor_id: int | None, is_admin: bool
     message.revoked_at = _now()
     message.revoked_by = int(actor_id) if actor_id else None
     await db.flush()
+    queued = await _reclaim_attachments(db, message)
     notified = await _append_revoke_notices(
         db, context_ref=context_ref(session_id=str(message.session_id)),
         message_id=message.id, speaker=speaker,
     )
-    logger.info("私信 %s 的消息 %s 已撤回（补通知 %s 个 AI）", message.session_id, message.id, len(notified))
-    return {"revoked": True, "speaker": speaker, "notified_agents": notified}
+    logger.info(
+        "私信 %s 的消息 %s 已撤回（补通知 %s 个 AI，排回收 %s 个附件）",
+        message.session_id, message.id, len(notified), queued,
+    )
+    return {"revoked": True, "speaker": speaker, "notified_agents": notified,
+            "attachments_queued": queued}

@@ -3,11 +3,11 @@
 
 三层要分清（这是全篇的前提）：
 - **存储** = agents.state_stack 整个数组，全量保留，只在「他交接完后事」（finish_frame）时删；
-- **运行集合 = 状态链**（agent_state_chain / _node 两张表）：一条双向链表，节点只存
+- **状态链**（agent_state_chain / _node 两张表）：一条双向链表，节点只存
   「帧 id + 前驱后继」，链尾是最后加入、正在执行的那一端。链头是压得最久的那端；
 - **执行窗口** = 链尾起 max_active 个节点（默认 1 ⇒ 只跑链尾那一帧）。
 
-为什么要有链：以前"谁是当前帧"靠数组顺序 + status 推，切个会话就得重排整份栈（线上见过
+为什么要有链：以前"谁是当前帧"靠数组顺序 + status 推，切个会话就得重排整份帧数组（线上见过
 126 帧 / 546 KB 的一份），而"帧 id → 在队里第几个"只能扫数组。现在顺序由链说了算：
 切回某帧 = 把它拉到链尾（常数条指针更新），帧 id → 节点号有 O(1) 索引。
 指针算术全在 utils/pure/state_chain.py，本层只负责把补丁打到行上。
@@ -15,8 +15,9 @@
 顺序不变量：数组 = [历史区][运行区，当前帧在末尾]，由链决定（order_by_chain）。
 **当前帧 = 链尾**：调用方只管把帧标成 active，_save（唯一写入点）把它挪到链尾，
 所以 push / pop / close / restore / ensure_active 各条路径都不必各自记得动链。
-身份不变量：一个 context_ref（一段会话）至多一帧——push 认出同会话就切回原帧（帧 id 稳定），
-_save 再兜底归并（规则表见 pure.merge_same_context）；契约 docs/dev/frame_lifecycle.md。
+身份不变量：一个 context_ref（一段会话）至多一帧——认帧只有一个入口（pure.frame_of），
+切会话、他自己压帧、插件代建都从那里取；链上的并发重复由 _save 兜底归并
+（规则表见 pure.merge_same_context）；契约 docs/dev/frame_lifecycle.md。
 
 纯函数在 utils/pure/state_stack.py（帧）与 utils/pure/state_chain.py（链），本层只做 DB 编排。
 """
@@ -31,15 +32,22 @@ from app.utils.pure.handover import drop_note
 from app.models.agent_state_chain import AgentStateChain, AgentStateChainNode
 from app.utils.pure import state_chain
 from app.utils.pure.state_stack import (
+    FRAME_TEXT_FIELDS,
+    handoff_pending,
     make_state_frame, format_state_stack_summary, format_handoff_tail,
     DEFAULT_FRAME_CAPACITY, ENDED_STATUS,
-    by_id, context_frames, current, drop_context_frames, drop_overflow,
-    drop_retired_overflow, is_running, merge_same_context, normalize_order, resume_target, retired,
+    by_id, context_frames, current, drop_context_frames, drop_overflow, frame_of,
+    drop_retired_overflow, frame_ident, is_running, merge_same_context, normalize_order,
+    render_frame_roster, resume_target, retired, roster_frames,
     retire_context_frames, retire_overflow, running, touch, world_id_of,
 )
 from app.utils.pure.emotion import decay_emotion, apply_emotion_update
 
 logger = logging.getLogger(__name__)
+
+# 跳帧时"被顶下来的那一帧"的去向（pull_frame 的 leave）
+LEAVE_SUSPEND = "suspend"   # 挂着：目标 pop 之后回到它
+LEAVE_END = "end"           # 结束：退出链，不再回来
 
 
 def _ensure_repo(db_or_repo):
@@ -54,7 +62,7 @@ def _ensure_repo(db_or_repo):
 # ═══════════════════════════════════════════════════════════════
 
 async def _get_stack(db: AsyncSession, agent_id: int) -> list[dict]:
-    """读取 agent 的状态栈（返回可修改的副本）。"""
+    """读取 agent 的状态链（返回可修改的副本）。"""
     db = _ensure_repo(db)
     result = await db.execute(
         select(Agent.state_stack).where(Agent.id == agent_id)
@@ -75,7 +83,7 @@ async def _write_stack(db: AsyncSession, agent_id: int, stack: list[dict]) -> No
 
 
 # ═══════════════════════════════════════════════════════════════
-# 状态链（运行集合）：帧 id ↔ 链节点，切帧 = 挪指针
+# 状态链：帧 id ↔ 链节点，切帧 = 挪指针
 # ═══════════════════════════════════════════════════════════════
 
 async def _load_chain(db: AsyncSession, agent_id: int) -> dict | None:
@@ -122,7 +130,7 @@ async def _write_chain_ends(db: AsyncSession, agent_id: int, chain: dict) -> Non
 
 
 async def _chain_attach(db: AsyncSession, agent_id: int, chain: dict, frame_id: str) -> int | None:
-    """让这个帧上链（第一次进运行集合）；已经在链上就当成「拉到最末」处理。
+    """让这个帧上链（第一次进状态链）；已经在链上就当成「拉到最末」处理。
 
     节点行只写 `(agent_id, frame_id)`，指针由纯函数算完再补——链怎么连只有一处写法。
     """
@@ -161,7 +169,7 @@ async def _chain_move_tail(db: AsyncSession, agent_id: int, chain: dict, node_id
 
 
 async def _chain_detach(db: AsyncSession, agent_id: int, chain: dict, node_id: int) -> None:
-    """节点下链（帧出运行集合：pop / close / 挂起 / 代销 / 归并）。行删掉，前后帧直接相连。"""
+    """节点下链（帧出状态链：pop / close / 挂起 / 代销 / 归并）。行删掉，前后帧直接相连。"""
     db = _ensure_repo(db)
     patches = state_chain.detach(chain, node_id)
     await _apply_chain_patches(db, patches)
@@ -171,9 +179,9 @@ async def _chain_detach(db: AsyncSession, agent_id: int, chain: dict, node_id: i
 
 
 async def _ensure_chain(db: AsyncSession, agent_id: int, stack: list[dict]) -> dict:
-    """取这条 AI 的链；改造前的老 AI 没有链，第一次写栈时按当时的运行集合现建一条。
+    """取这条 AI 的链；改造前的老 AI 没有链，第一次落库时按当时在跑的帧现建一条。
 
-    建链顺序取当时的栈序（调用方已 normalize_order 过：[历史][运行区]），所以老 AI
+    建链顺序取当时的数组序（调用方已 normalize_order 过：[历史][运行区]），所以老 AI
     升级后"当前帧"不变——只是从"数组末尾恰好是谁"换成"链尾是谁"。
     """
     db = _ensure_repo(db)
@@ -221,7 +229,7 @@ async def _rebuild_chain(db: AsyncSession, agent_id: int, chain: dict,
 
 async def _reconcile_chain(db: AsyncSession, agent_id: int, chain: dict,
                            stack: list[dict]) -> dict:
-    """链 ↔ 运行集合对账，并把当前帧归位到链尾。
+    """链 ↔ 在跑的帧对账，并把当前帧归位到链尾。
 
     **只在这里做**（_save 是帧的唯一写入点），于是 push / pop / close / restore /
     ensure_active 各条路径都不必记得动链——它们只管改 status，链由这一处跟着改。
@@ -254,7 +262,7 @@ async def _reconcile_chain(db: AsyncSession, agent_id: int, chain: dict,
     actives = [f for f in running(stack) if f.get("status") == "active"]
     if len(actives) > len(window):
         logger.warning(
-            f"Agent({agent_id}) 运行集合里有 {len(actives)} 帧是 active，"
+            f"Agent({agent_id}) 链上有 {len(actives)} 帧是 active，"
             f"执行窗口只有 {len(window)}：实际只跑链尾那 {len(window)} 帧")
 
     if problems := state_chain.problems(chain):
@@ -305,14 +313,19 @@ async def _save(db: AsyncSession, agent_id: int, stack: list[dict]) -> list[dict
     同一段会话归并（见 pure.merge_same_context）与容量处置都放这里：都是"帧本身的状态"，
     与"谁触发的那次写入"无关；分散到各调用点就会出现"push 一套、切会话另一套"。
     链对账（_reconcile_chain）同理放在这里：各条路径只改 status，谁在链尾、谁下链由这一处定。
-    归一是**原地**的，调用方手里那份栈与落库的是同一份。
+    归一是**原地**的，调用方手里那份帧数组与落库的是同一份。
     走的方式按这档 AI 的取向分两条（挂起待交接 / 平台代销），但**都不静默**：
     挂起的会收到清单，代销的会收到一条「平台代销」告知。
     """
     db = _ensure_repo(db)
     # ① 先按 status 归一（链还没建时这是唯一依据）
     stack[:] = normalize_order(stack)
-    # ② 老 AI 第一次写栈：按上面这个顺序把链建起来（当前帧因此不变）
+    # 沉睡标记只属于"预建、还没进过"的帧：上了链就不再沉睡。收敛在这一个写入点，
+    # 各条进帧路径不必各自记得清
+    for frame in stack:
+        if frame.get("dormant") and is_running(frame):
+            frame["dormant"] = False
+    # ② 老 AI 第一次落库：按上面这个顺序把链建起来（当前帧因此不变）
     chain = await _ensure_chain(db, agent_id, stack)
     # ③ 此后顺序由链说了算：数组只是把链序摊平成老读者认得的形状
     stack[:] = state_chain.order_by_chain(stack, chain)
@@ -338,7 +351,7 @@ async def _save(db: AsyncSession, agent_id: int, stack: list[dict]) -> list[dict
         notes.append(drop_note(backlog, "backlog"))
         logger.warning(f"Agent({agent_id}) 待交接积压超限：平台代销 {[f.get('id') for f in backlog]}")
     _attach_notices(stack, agent_id, notes)
-    # ④ 链 ↔ 运行集合对账（挂上 / 摘掉 / 当前帧归位），顺序再摊平一次后落库
+    # ④ 链 ↔ 在跑的帧对账（挂上 / 摘掉 / 当前帧归位），顺序再摊平一次后落库
     await _reconcile_chain(db, agent_id, chain, stack)
     stack[:] = state_chain.order_by_chain(stack, chain)
     await _write_stack(db, agent_id, stack)
@@ -387,18 +400,18 @@ async def get_frames(db: AsyncSession, agent_id: int) -> list[dict]:
 
 
 async def get_chain(db: AsyncSession, agent_id: int) -> dict:
-    """运行集合的读视图（工具/界面用）：当前执行帧、整条队列、执行窗口大小。
+    """状态链的读视图（工具/界面用）：当前执行帧、整条队列、执行窗口大小。
 
     queue **尾在前**——"接下来依次跑谁"就是这个顺序；current 是链尾（= 当前帧）。
     只读两张小表，不碰帧内容；要内容另取 get_frames。
-    老 AI 还没建链时按当时的运行集合现算一份（只读不写：读接口不该顺手改库）。
+    老 AI 还没建链时按当时的状态链现算一份（只读不写：读接口不该顺手改库）。
     """
     db = _ensure_repo(db)
     chain = await _load_chain(db, agent_id)
     materialized = chain is not None
     if chain is None:
-        # 还没建链（改造后的 AI 只要再写一次栈就会建）：按运行集合现算一条**只在内存里**的链。
-        # 队列口径与真链共用同一段代码——不另写一份"把运行集合倒过来"，两处迟早会分叉。
+        # 还没建链（改造后的 AI 只要再落一次库就会建）：按状态链现算一条**只在内存里**的链。
+        # 队列口径与真链共用同一段代码——不另写一份"把状态链倒过来"，两处迟早会分叉。
         chain = state_chain.empty_chain()
         for node_id, frame in enumerate(running(await _get_stack(db, agent_id)), start=1):
             frame_id = str(frame.get("id") or "")
@@ -427,26 +440,92 @@ async def set_chain_max_active(db: AsyncSession, agent_id: int, value) -> int:
     return n
 
 
+async def pull_frame(db: AsyncSession, agent_id: int, frame_id: str, *,
+                      leave: str = LEAVE_SUSPEND, handoff: bool = True,
+                      updates: dict | None = None) -> dict:
+    """把一帧拉到链尾（成为当前帧），并处置被它顶下来的那一帧。
+
+    这是"跳到某帧"的唯一实现。目标在状态链里就重新移位置——链上的指针由 _save 的
+    链对账改，这里只改 status；目标已出状态链（ended / retired）就先复活再接入链尾。
+
+    唯一的选择是**原来那帧**的去向：leave="suspend" 挂着（目标 pop 之后回到它），
+    leave="end" 结束（退出链，不再回来）。链上只有链尾在跑，其余帧地位相同——
+    "排在目标前后"的帧一律不动，不存在连带结束。
+    """
+    db = _ensure_repo(db)
+    if leave not in (LEAVE_SUSPEND, LEAVE_END):
+        raise ValueError(f"leave 只能是 {LEAVE_SUSPEND} / {LEAVE_END}，收到 {leave!r}")
+    stack = await _get_stack(db, agent_id)
+    frame = by_id(stack, frame_id)
+    if frame is None:
+        return {}
+    return await _pull(db, agent_id, stack, frame, leave=leave, handoff=handoff,
+                       updates=updates)
+
+
+async def _pull(db: AsyncSession, agent_id: int, stack: list[dict], frame: dict, *,
+                leave: str, handoff: bool, updates: dict | None = None) -> dict:
+    """pull_frame 的核心：帧数组已经读好在手（restore_frame 要先按 id 重建才调这里）。"""
+    # 先认"从哪来"：目标一被提为 active 就取不到它了
+    prev = current(stack)
+    if updates:
+        frame.update({k: v for k, v in updates.items() if v is not None})
+    if prev is not None and prev is not frame:
+        if leave == LEAVE_END:
+            prev["status"] = ENDED_STATUS
+            await _auto_journal(db, agent_id, "pop", prev)
+        else:
+            prev["status"] = "suspended"
+        _record_switch(frame, prev, leave=leave, handoff=handoff)
+    frame["status"] = "active"
+    touch(frame)
+    await _save(db, agent_id, stack)
+    logger.info(f"Agent({agent_id}) pull [{frame.get('type')}]({frame.get('id')})"
+                f" leave={leave}（顶下 [{prev.get('type') if prev else '-'}]）")
+    return frame
+
+
+def _record_switch(frame: dict, prev: dict, *, leave: str, handoff: bool) -> None:
+    """把"从哪来"记到**被切进去的那帧**上：结束是"回来的交接"，挂起是"去处的交接"。"""
+    if leave == LEAVE_END:
+        # 回到某帧：告诉它刚才那帧做完了什么（pop 之后摘要里念的就是它）
+        frame["completed_handoff"] = {
+            "type": prev.get("type"),
+            "doing": (prev.get("doing") or prev.get("why") or "")[:200],
+            "label": prev.get("label") or prev.get("context_ref") or "",
+            "tail": prev.get("tail") or [],
+        }
+        return
+    if not handoff:
+        return
+    if not frame.get("source_emotion"):
+        frame["source_emotion"] = {
+            "type": prev.get("type"),
+            "emotion": prev.get("emotion") or {},
+            "emotion_text": prev.get("emotion_text") or "",
+        }
+    if not frame.get("handoff"):
+        frame["handoff"] = _left_conversation(prev)
+
+
 async def restore_frame(db: AsyncSession, agent_id: int, frame_id: str,
                         origin_context_ref: str = "", updates: dict | None = None,
                         handoff: bool = False) -> dict:
-    """把当前帧换成指定帧（闹钟唤醒用）：帧还在存储里就复活它，从没记过才重建同型帧。
+    """把指定帧拉到链尾（闹钟唤醒、进世界用）：帧还在存储里就复活，从没记过才重建同型帧。
 
-    帧不再被 pop/close 删掉，所以"计划排给谁"这个指针长期有效——连已结束的帧都能按 id 复活。
-    重建只发生在**这个 id 从来没存在过**时（老数据、或帧被代销/交接删了之后）；
-    重建**沿用原 frame_id**，身份不因中间发生什么而换人。
-    updates：复活时一并写回的字段——帧的身份没变、内容要跟着这次进来的地方更新
-    （同世界再进：世界帧上的入场身份按这一刻的绑定刷新，帧上不记群）。
-    handoff：要不要像 push_state 那样带上"从哪来 / 在干嘛"的交接包。闹钟唤醒是"接着自己
-    排好的计划"，不需要；进世界是**从别处切过来**，不带的话他不知道自己刚在哪个会话里说话。
-    返回恢复好的帧（没有帧身份可用时返回 {}）。
+    与 pull_frame 的唯一差别是"帧不存在时要不要重建"：闹钟记的帧指针在帧被销掉之后仍要有效，
+    重建沿用原 frame_id——身份不因中间发生什么而换人。
+    updates：复活时一并写回的字段（同世界再进：入场身份按这一刻的绑定刷新）。
+    handoff：要不要带"从哪来 / 在干嘛"的交接包。闹钟是"接着自己排好的计划"，不带；
+    从别处切过来（进世界、AI 自己进帧）要带，否则它不知道自己刚在哪儿说话。
     """
     db = _ensure_repo(db)
     stack = await _get_stack(db, agent_id)
-    # 先认「当前帧」，再动栈：新帧一 append 就自己也成了 active，那时再取 current 会取到它自己
-    prev = current(stack)
-    # 在**全量存储**里按 id 找：帧不再被随手删，所以闹钟记的帧指针长期有效（连已结束的也能复活）
     frame = by_id(stack, frame_id)
+    if frame is None and origin_context_ref:
+        # 闹钟记的 id 可能已经过时（帧被清掉过、或迁移归并时换成了另一条）：按会话认帧——
+        # 这段会话已经有帧就复活那一条，不按 id 另建一条同会话的帧（一段会话只有一帧）
+        frame = frame_of(stack, origin_context_ref)
     if frame is None:
         if not origin_context_ref:
             return {}
@@ -457,32 +536,20 @@ async def restore_frame(db: AsyncSession, agent_id: int, frame_id: str,
                    else "dm"),
             context_ref=origin_context_ref, id=frame_id or None,
             why="闹钟唤醒", doing="执行自己排下的计划",
+            # 建出来先按挂起算，由下面的 _pull 提成 active。make_state_frame 默认就是
+            # active，而 _pull 靠"此刻谁是 active"认原来那帧——带着 active 进数组会让它
+            # 把自己认成原来那帧，上一帧就永远压不下去（状态链里两个 active）。
+            status="suspended",
         )
         stack.append(frame)
-    if prev is not None and prev is not frame:
-        prev["status"] = "suspended"
-        if handoff:
-            # 与 push_state 同一份交接口径：情绪来源 + 原文尾巴（旧交接不重复注入）
-            if not frame.get("source_emotion"):
-                frame["source_emotion"] = {
-                    "type": prev.get("type"),
-                    "emotion": prev.get("emotion") or {},
-                    "emotion_text": prev.get("emotion_text") or "",
-                }
-            if not frame.get("handoff"):
-                frame["handoff"] = _left_conversation(prev)
-    if updates:
-        frame.update(updates)
-    frame["status"] = "active"
-    touch(frame)
-    await _save(db, agent_id, stack)
-    return frame
+    return await _pull(db, agent_id, stack, frame, leave=LEAVE_SUSPEND,
+                       handoff=handoff, updates=updates)
 
 
 async def load_trigger_state(db: AsyncSession, agent_id: int) -> dict:
     """读当前会话的触发规则状态（{tool_uses, delivered}）。
 
-    挂在栈顶帧上：没有帧就没有会话，"本会话第几次"无从谈起，返回空状态。
+    挂在当前帧上：没有帧就没有会话，"本会话第几次"无从谈起，返回空状态。
     """
     db = _ensure_repo(db)
     stack = await _get_stack(db, agent_id)
@@ -528,7 +595,7 @@ async def reset_frame_trigger_state(db: AsyncSession, agent_id: int) -> int:
 
 
 async def set_active_semantic_focus(db: AsyncSession, agent_id: int, focus_id: str) -> str:
-    """把栈顶帧的当前语义焦段换成 focus_id（空串 = 清空）。
+    """把当前帧的当前语义焦段换成 focus_id（空串 = 清空）。
 
     没有帧时什么都不做：语义焦段是「这段会话正在聊什么」，没有会话就无处可挂。
     """
@@ -542,7 +609,7 @@ async def set_active_semantic_focus(db: AsyncSession, agent_id: int, focus_id: s
 
 
 async def get_active_semantic_focus(db: AsyncSession, agent_id: int) -> str:
-    """读栈顶帧的当前语义焦段。"""
+    """读当前帧的当前语义焦段。"""
     db = _ensure_repo(db)
     stack = await _get_stack(db, agent_id)
     return str(stack[-1].get("semantic_focus") or "") if stack else ""
@@ -576,16 +643,17 @@ async def push_state(
     """把状态切到这一帧：同会话（context_ref）已有活帧就**切回它**（就地更新，帧 id 不变），
     没有才压新帧。帧 id 是闹钟之类记着的长期指针，同会话换一次入口不能换 id。
 
-    原当前帧压成 paused，「从哪来 / 在干嘛 / 原文尾巴」打成交接包记在切过去的那帧上。
-    返回 (新栈, 消息)。
+    原当前帧压成 suspended（挂着等回来），「从哪来 / 在干嘛 / 原文尾巴」打成交接包记在切过去的那帧上。
+    返回 (新帧数组, 消息)。
     """
     db = _ensure_repo(db)
     stack = await _get_stack(db, agent_id)
-    # 先认当前帧再动栈：新帧一 append 就自己也成了 active，那时再取 current 会取到它自己
+    # 先认当前帧再动数组：新帧一 append 就自己也成了 active，那时再取 current 会取到它自己
     prev = current(stack)
 
-    same = context_frames(stack, str(frame.get("context_ref") or ""))
-    existing = same[-1] if same else None
+    # 身份是 context_ref：这段会话的帧还在存储里（哪怕已经结束、待交接）就复活它，
+    # 不另压第二条——同一段会话攒两条会让环境锁、便签副本、帧 id 指向不同的帧
+    existing = frame_of(stack, str(frame.get("context_ref") or ""))
     if existing is None:
         target = frame
         stack.append(target)
@@ -596,7 +664,7 @@ async def push_state(
                        if v is not None and k not in ("id", "created_at", "status")})
 
     if prev is not None and prev is not target:
-        prev["status"] = "paused"
+        prev["status"] = "suspended"
         if not target.get("source_emotion"):
             target["source_emotion"] = {
                 "type": prev.get("type"),
@@ -626,72 +694,56 @@ async def push_state(
 async def pop_state(
     db: AsyncSession, agent_id: int, target_frame_id: str = "",
 ) -> tuple[list[dict], str]:
-    """结束当前帧并可选回跳：帧**只出运行集合（status=ended），记录保留在存储里**。
+    """结束当前帧；给了 target 就顺手把它拉到链尾。帧只出状态链，记录留在存储里。
 
-    - target_frame_id 为空 → 回到上一层（LIFO）
-    - target_frame_id 指定 → 直接回到目标帧，中间仍在运行的帧一并结束（写 journal）
-    恢复的帧记 completed_handoff（刚完成啥 + 跳过层），摘要注入"回来的交接"。
+    只动**当前这一帧**与**被拉起来的那一帧**：链上只有链尾在跑，没有"要被连带着放弃的中间层"，
+    其他帧的顺序与状态一律不变。目标可以是已结束的帧（按 id 复活）。
+    回到的那帧记 completed_handoff（刚完成啥 + 原文尾巴），摘要注入"回来的交接"。
     返回 (全量存储, 消息)。
     """
     db = _ensure_repo(db)
-    stack = await _get_stack(db, agent_id)
+    if target_frame_id:
+        frame = await pull_frame(db, agent_id, target_frame_id, leave=LEAVE_END)
+        stack = await _get_stack(db, agent_id)
+        if not frame:
+            return stack, f"没找到状态帧 {target_frame_id}，当前帧没动"
+        return stack, (f"已结束刚才那帧，回到 [{frame.get('type')}]: "
+                       f"{frame.get('doing') or frame.get('why') or ''}")
 
+    stack = await _get_stack(db, agent_id)
     live = running(stack)
     if not live:
-        return [], "状态栈为空，无需弹出"
+        return [], "状态链为空，无需弹出"
 
-    popped = live[-1]                     # LIFO：弹出运行集合的末位
-    popped["status"] = ENDED_STATUS       # 出运行集合；记录留在存储里，等他以后交接
-    skipped: list[str] = []
-
-    if target_frame_id:
-        # 选择性回跳：找到目标帧，中间仍在运行的帧一并结束
-        target = by_id(stack, target_frame_id)
-        if target is None or not is_running(target):
-            # 目标不存在（或已结束）→ 回退为 LIFO（不破坏栈）
-            popped["status"] = "active"
-            return stack, f"未找到目标状态帧 {target_frame_id}，已回退为回到上一层"
-        rest = running(stack)
-        cut = rest.index(target)
-        skipped = [f"[{f.get('type')}]({(f.get('doing') or f.get('why') or '?')[:40]})"
-                   for f in rest[cut + 1:]]
-        for f in rest[cut + 1:]:
-            f["status"] = ENDED_STATUS
-            await _auto_journal(db, agent_id, "pop", f)  # 归档写 journal
-
-    # 恢复帧记录“回来的交接”：刚完成啥 + 跳过了哪些层
-    resume = resume_target(stack)
+    popped = live[-1]                     # 只弹当前这一帧
+    popped["status"] = ENDED_STATUS       # 出状态链；记录留在存储里，等他以后交接
+    resume = resume_target(stack)         # 链尾自然落到它的前驱——就是拉取那一刻的来处
     if resume is not None:
-        resume["status"] = "active"      # 回到的那层此刻就是当前会话（paused/suspended 一律提为 active）
+        resume["status"] = "active"
         touch(resume)
         resume["completed_handoff"] = {
             "type": popped.get("type"),
             "doing": (popped.get("doing") or popped.get("why") or "")[:200],
-            "skipped": " → ".join(skipped) if skipped else "",
             "label": popped.get("label") or popped.get("context_ref") or "",
             "tail": popped.get("tail") or [],
         }
 
     await _save(db, agent_id, stack)
-
-    # P4: 自动写 JOURNAL（弹栈帧）
     await _auto_journal(db, agent_id, "pop", popped)
 
-    logger.info(f"Agent({agent_id}) pop [{popped.get('type')}]"
-                + (f" 跳过 {len(skipped)} 帧" if skipped else ""))
-
+    logger.info(f"Agent({agent_id}) pop [{popped.get('type')}]({popped.get('id')})")
     if resume is not None:
-        suffix = f"（跳过 {len(skipped)} 帧）" if skipped else ""
-        return stack, f"已弹出 [{popped.get('type')}]，恢复到 [{resume.get('type')}]: {resume.get('doing', resume.get('why', ''))}{suffix}"
-    return stack, f"已弹出 [{popped.get('type')}]，状态栈已空"
+        return stack, (f"已弹出 [{popped.get('type')}]，恢复到 [{resume.get('type')}]: "
+                       f"{resume.get('doing', resume.get('why', ''))}")
+    return stack, f"已弹出 [{popped.get('type')}]，状态链已空"
 
 
 def _close_frame(stack: list[dict], frame: dict) -> None:
-    """把一帧移出运行集合（标记结束），并把回到的那层提为当前帧。
+    """把一帧移出状态链（标记结束），并把回到的那层提为当前帧。
 
     只改 status：帧记录留在存储里，等他交接完后事才由 finish_frame 删。
     回到的那层不论原来是 paused（被压着）还是 suspended（会话切走了），此刻它就是当前会话，
-    统一提为 active——否则会出现"运行集合里一个 active 都没有"，摘要就没有当前帧可念。
+    统一提为 active——否则会出现"状态链里一个 active 都没有"，摘要就没有当前帧可念。
     """
     frame["status"] = ENDED_STATUS
     nxt = resume_target(stack)
@@ -703,7 +755,7 @@ def _close_frame(stack: list[dict], frame: dict) -> None:
 async def close_state(
     db: AsyncSession, agent_id: int, frame_id: str = "",
 ) -> tuple[list[dict], str]:
-    """关闭指定帧或当前帧：同样只出运行集合（status=ended），**记录保留**。
+    """关闭指定帧或当前帧：同样只出状态链（status=ended），**记录保留**。
 
     frame_id 为空时关当前帧。返回 (全量存储, 消息)。
     """
@@ -712,7 +764,7 @@ async def close_state(
 
     live = running(stack)
     if not live:
-        return [], "状态栈为空，无需关闭"
+        return [], "状态链为空，无需关闭"
 
     frame = by_id(stack, frame_id) if frame_id else live[-1]
     if frame is None or not is_running(frame):
@@ -728,7 +780,7 @@ async def finish_frame(db: AsyncSession, agent_id: int, frame_id: str) -> tuple[
     """他表态「这帧的后事办完了」→ **删帧**。这是帧唯一的删除点。
 
     为什么判据只有他能给：平台猜不出来（"连续几轮没提它"这类猜测，猜错就是静默丢状态）。
-    只销不在运行集合里的帧——正在跑的状态该用 close_state 关，不该被一纸交接单销掉。
+    只销不在状态链里的帧——正在跑的状态该用 close_state 关，不该被一纸交接单销掉。
     """
     db = _ensure_repo(db)
     stack = await _get_stack(db, agent_id)
@@ -770,17 +822,31 @@ async def clear_pending_notices(db: AsyncSession, agent_id: int) -> int:
 
 
 async def list_states(db: AsyncSession, agent_id: int) -> list[dict]:
-    """获取当前状态栈（工具用）。"""
+    """获取当前状态链（工具用）。"""
     db = _ensure_repo(db)
     return await _get_stack(db, agent_id)
 
 
 async def get_state_stack_summary(db: AsyncSession, agent_id: int, max_chars: int | None = None) -> str:
-    """获取状态栈摘要文本（注入 prompt 用）。max_chars 默认 500（可被 agent 配置覆盖）。"""
+    """获取状态链摘要文本（注入 prompt 用）。max_chars 默认 500（可被 agent 配置覆盖）。"""
     db = _ensure_repo(db)
     stack = await _get_stack(db, agent_id)
     if not stack:
         return ""
+    return await render_state_summary(db, agent_id, stack, max_chars=max_chars)
+
+
+async def render_state_summary(db: AsyncSession, agent_id: int, stack: list[dict],
+                               max_chars: int | None = None,
+                               budget_frame: dict | None = None) -> str:
+    """按给定的状态链渲染摘要（当前帧 = 链里在跑的那帧）。
+
+    为什么把渲染与"读库"分开：状态段收尾要把**那一段**的样子落进日志，链用的是换帧之前
+    那一份快照（它 active 的正是被离开的帧）。若这里自己去读库，读到的是换帧之后的新帧，
+    落下来的就成了下一段的样子。
+
+    budget_frame：预算按哪一帧算，不给就按此刻的当前帧。
+    """
     if max_chars is None:
         from sqlalchemy import text as _text
         row = (await db.execute(_text("SELECT state_stack_max_chars FROM agents WHERE id = :aid"),
@@ -794,13 +860,98 @@ async def get_state_stack_summary(db: AsyncSession, agent_id: int, max_chars: in
     foci = await focus_service.load(db, agent_id)
     focus_line = pure_focus.describe(foci, top.get("context_ref") or "",
                                      top.get("semantic_focus") or "")
-    return format_state_stack_summary(stack, max_chars=max_chars, focus_line=focus_line)
+    # 插件帧的预算每轮复述：AI 不必靠猜自己还能调几次、这小时还剩多少（普通对话返回空串）
+    from app.services.agent import frame_budget
+
+    budget_line = await frame_budget.describe(db, agent_id, frame=budget_frame)
+    return format_state_stack_summary(stack, max_chars=max_chars,
+                                      focus_line=focus_line, budget_line=budget_line)
+
+
+async def frame_roster(db: AsyncSession, agent) -> str:
+    """本会话该看到的帧清单：**一次给全**，之后只把「多了 / 结束了」补成账本条目。
+
+    三档落位与提示词同一套口径（docs/dev/conversation_history.md）：
+    - 清单是不变事实 → 固定块，字节在解锁点之间不动，放在稳定前缀之后、历史之前；
+    - 帧的增删是事件 → 账本条目，投一次就够，解锁点随快照重写一起离场。
+
+    为什么不放尾部读数：尾部每轮按未命中计价，而清单一动就是每轮都动。为什么不整段每轮
+    重算：那等于每轮都改写历史之前的一块，后面整段前缀缓存全废。
+
+    首次渲染（这一帧还没有清单）与解锁点之后（reset_frame_roster 清空）各重算一次全量。
+    """
+    db = _ensure_repo(db)
+    stack = await _get_stack(db, agent.id)
+    top = current(stack) if stack else None
+    live = running(stack) if stack else []
+    if top is None or not live:
+        return ""
+
+    now = {str(f.get("id")): frame_ident(f) for f in roster_frames(stack) if f.get("id")}
+    locked = str(top.get("roster_locked") or "")
+    notified = dict(top.get("roster_notified") or {})
+    if not locked:
+        # 同一段会话的旧段留着清单：换了个帧实例不该把这块字节改写一遍。
+        # 清单按会话（context_ref）继承，差集照常补——回到这段会话时，这段时间的增删会补给它
+        ref = str(top.get("context_ref") or "")
+        prev = next((f for f in reversed(stack)
+                     if f is not top and str(f.get("context_ref") or "") == ref
+                     and f.get("roster_locked")), None)
+        if prev is not None:
+            locked = str(prev.get("roster_locked") or "")
+            notified = dict(prev.get("roster_notified") or {})
+    # 第一次渲染：这一刻的集合就是那份清单，不必再补"多了谁"的条目
+    first = not locked
+    if first:
+        locked = render_frame_roster(stack)
+        notified = now
+    added = [(fid, ident) for fid, ident in now.items() if fid not in notified]
+    gone = [(fid, ident) for fid, ident in notified.items() if fid not in now]
+
+    if added or gone:
+        lines = [f"【状态帧】多了一个：{ident}（id={fid}），要进去用 enter_state。"
+                 for fid, ident in added]
+        lines += [f"【状态帧】{ident}（id={fid}）已经结束。"
+                  for fid, ident in gone]
+        # 直接落账本，不走 report_notice：那是留给插件写通知的公共入口，
+        # 这条是平台在说"你的帧变了"，借它的口子以后两端语义会纠缠
+        from app.services.history.context_sync import append_events
+        from app.utils.pure.history import make_entry
+
+        try:
+            await append_events(db, agent, str(top.get("context_ref") or ""),
+                                [make_entry("notice", "\n".join(lines),
+                                            flags={"drop_on_unlock": True})])
+        except Exception as e:  # noqa: BLE001 —— 条目补不上只影响这一次告知，不影响这一轮
+            logger.warning("帧清单变更条目投递失败（不影响这一轮）: %s", e)
+
+    if locked != str(top.get("roster_locked") or "") or now != notified:
+        top["roster_locked"] = locked
+        top["roster_notified"] = now
+        await _save(db, agent.id, stack)
+    return locked
+
+
+async def reset_frame_roster(db: AsyncSession, agent_id: int) -> bool:
+    """解锁点清掉清单：下一次请求按此刻的帧集合重算一份全量。
+
+    清单与增量条目都在解锁点收尾（条目带 drop_on_unlock 自己离场），这里只管把清单作废。
+    """
+    db = _ensure_repo(db)
+    stack = await _get_stack(db, agent_id)
+    top = current(stack) if stack else None
+    if top is None or (not top.get("roster_locked") and not top.get("roster_notified")):
+        return False
+    top["roster_locked"] = ""
+    top["roster_notified"] = {}
+    await _save(db, agent_id, stack)
+    return True
 
 
 async def set_frame_notes(db: AsyncSession, agent_id: int, context_ref: str, copies: list[dict]) -> list[dict]:
-    """把「已投递到本会话的便签」写进栈顶帧，返回落地后的那份。
+    """把「已投递到本会话的便签」写进当前帧，返回落地后的那份。
 
-    只认栈顶帧 = 本会话：切换没走完时栈顶还是别的会话，硬写会把 A 的便签记到 B 头上。
+    只认当前帧 = 本会话：切换没走完时当前帧还是别的会话，硬写会把 A 的便签记到 B 头上。
     """
     db = _ensure_repo(db)
     stack = await _get_stack(db, agent_id)
@@ -812,30 +963,35 @@ async def set_frame_notes(db: AsyncSession, agent_id: int, context_ref: str, cop
 
 
 async def read_frame_env(db: AsyncSession, agent_id: int, context_ref: str) -> tuple[bool, dict | None, dict | None]:
-    """读取本会话帧上的环境状态。
+    """读取本会话的环境状态。
 
-    返回 (established, locked, notified)：established 表示该会话帧是否已建立环境基线；
-    locked 是写进前缀的那一份；notified 是已告知 AI 的那一份。会话帧不在栈顶时，
+    返回 (established, locked, notified)：established 表示该会话是否已建立环境基线；
+    locked 是写进前缀的那一份；notified 是已告知 AI 的那一份。会话帧不在当前帧时，
     三者依次为 False、None、None。
 
-    两个字段均不存在即尚未建立基线（新帧，或由旧版本升级而来的帧），调用方据此只记录、
-    不通知——否则 AI 进入会话时会先收到一条并不存在的环境变更。
+    只读会话那一帧：环境是这段会话的事实，一段会话只有一帧（身份 = context_ref，pure.frame_of），
+    所以这里不做任何向后扫描。旧版本每轮新建一条帧、把锁留在更早那条上的存量数据，由迁移
+    0109 把锁并到现帧上，读路径不再为那种形状留分支——兜底留在读路径上，等于每次读都要为一段
+    已经修好的历史付费。
+
+    当前帧没有锁就是尚未建立基线，调用方据此只记录、不通知——否则 AI 进入会话时会先收到
+    一条并不存在的环境变更。
     """
     db = _ensure_repo(db)
     stack = await _get_stack(db, agent_id)
     if not stack or str(stack[-1].get("context_ref")) != str(context_ref):
         return False, None, None
     top = stack[-1]
-    if "env_locked" not in top and "env_notified" not in top:
-        return False, None, None
-    return True, top.get("env_locked"), top.get("env_notified")
+    if "env_locked" in top or "env_notified" in top:
+        return True, top.get("env_locked"), top.get("env_notified")
+    return False, None, None
 
 
 async def write_frame_env(db: AsyncSession, agent_id: int, context_ref: str, *,
                           locked: dict | None, notified: dict | None) -> bool:
     """写入本会话帧的环境字段，返回是否命中该会话帧。
 
-    只认栈顶帧即本会话，理由与 set_frame_notes 相同：切换未完成时栈顶仍是别的会话，
+    只认当前帧即本会话，理由与 set_frame_notes 相同：切换未完成时当前帧仍是别的会话，
     强行写入会把 A 的环境记到 B 名下。本函数不提交事务，以保证与通知条目同属一次提交。
     """
     db = _ensure_repo(db)
@@ -913,10 +1069,10 @@ async def frame_turn_context(
 ) -> str:
     """一轮开始时的状态帧记账（一次读 + 最多一次写），返回要注入提示词的一次性尾巴。
 
-    1. 把本会话的最后几轮原文存进栈顶帧——它是「原文尾巴」的来源，切走时随交接带走；
+    1. 把本会话的最后几轮原文存进当前帧——它是「原文尾巴」的来源，切走时随交接带走；
     2. 取出并清空上一段对话留下的尾巴——临时性交接，只注入一轮，避免每轮重复喂。
 
-    尾巴只在栈顶帧就是当前会话时才存：栈顶是别的会话（切换还没走完）时硬写会写错帧。
+    尾巴只在当前帧就是当前会话时才存：当前帧是别的会话（切换还没走完）时硬写会写错帧。
     """
     db = _ensure_repo(db)
     stack = await _get_stack(db, agent_id)
@@ -931,18 +1087,23 @@ async def frame_turn_context(
             top["tail"] = tail
             dirty = True
 
-    # 一次性消费：handoff（切过来）优先，其次 completed_handoff（pop 回来）
+    # 一次性消费：handoff（切过来）优先，其次 completed_handoff（pop 回来）。
+    # 判据是「有东西可讲」而不是「有原文」：插件帧被会话消息叫回来时没有原文，
+    # 但「你刚才在刷 B 站」一样要交接（见 pure.state_stack.handoff_pending）。
     block = ""
     for key in ("handoff", "completed_handoff"):
         pending = top.get(key) or {}
-        pending_tail = pending.get("tail") or []
-        if not pending_tail:
+        if not handoff_pending(pending):
             continue
         if not block:
             label = pending.get("from_label") or pending.get("label") or pending.get("from_context_ref") or ""
             reason = top.get("why") or ""
-            block = format_handoff_tail(label, pending_tail, reason=reason)
+            doing = pending.get("doing") or pending.get("from_doing") or ""
+            block = format_handoff_tail(label, pending.get("tail") or [], reason=reason, doing=doing)
+        # 消费标记：原文尾巴被收走，交接本身也不再算"待讲"（下一轮不再重复注入）。
+        # 字段留着——状态摘要还要靠 from_doing/doing 显示「← 从[刷 B 站]来」。
         pending.pop("tail", None)
+        pending["consumed"] = True
         top[key] = pending
         dirty = True
 
@@ -951,9 +1112,57 @@ async def frame_turn_context(
     return block
 
 
+async def current_scene(db: AsyncSession, agent_id: int) -> dict:
+    """当前这一轮所在的场景（当前帧），一次读链把经历投递要的三样一起给出。
+
+    场景 = **帧**的 context_ref，不是会话键：插件帧、世界帧都是自己的一段，
+    「我在哪儿干过什么」要按帧算。主站会话帧的 context_ref 与会话键同值，
+    所以群聊/私信取到的就是 group:1 / 40_90。
+
+    返回 `{context_ref, type, label, handoff}`；`handoff` 是还没被消费的交接
+    （判据与 frame_turn_context 同一口径，见 pure.state_stack.handoff_pending），
+    空 dict 表示不是刚切过来。
+    """
+    db = _ensure_repo(db)
+    stack = await _get_stack(db, agent_id)
+    if not stack:
+        return {}
+    top = stack[-1]
+    handoff: dict = {}
+    for key in ("handoff", "completed_handoff"):
+        pending = top.get(key) or {}
+        if handoff_pending(pending):
+            handoff = {
+                "from_context_ref": str(pending.get("from_context_ref") or ""),
+                "from_label": str(pending.get("from_label") or ""),
+                "from_type": str(pending.get("from_type") or ""),
+                "why": str(top.get("why") or ""),
+            }
+            break
+    return {
+        "context_ref": str(top.get("context_ref") or ""),
+        "type": str(top.get("type") or ""),
+        "label": str(top.get("label") or ""),
+        "handoff": handoff,
+    }
+
+
 # ═══════════════════════════════════════════════════════════
 # 会话帧自动维护（2026-08-09）：聊天即情景
 # ═══════════════════════════════════════════════════════════
+
+def _park_when_called_elsewhere(prev: dict) -> str:
+    """被会话消息顶下来的那一帧，该以什么状态留着。
+
+    会话帧之间来回切是 "suspended"：它们仍然算在状态链里（链上排队，pop 回来就是它）。
+    插件帧 / AI 自己压的任务帧不一样——它们是用完就出状态链的一段，插件预建时也是
+    ENDED_STATUS（park_frame）。留成 suspended 会让状态链里挂着一堆"未完成"的帧，
+    状态摘要每轮都要念「另有 N 帧未完成」。出集合不等于销毁：帧记录还在存储里，
+    enter_state 会把它复活（pull_frame 支持 ended 复活）。
+    """
+    prev["status"] = "suspended" if prev.get("type") in ("dm", "group_chat") else ENDED_STATUS
+    return prev["status"]
+
 
 async def ensure_active_frame(
     db: AsyncSession, agent_id: int,
@@ -961,16 +1170,25 @@ async def ensure_active_frame(
     title: str, actor_name: str,
 ) -> None:
     """
-    确保状态栈栈顶帧 = 当前会话（DM/群聊触发时自动调用）。
+    确保当前帧 = 当前会话（DM/群聊触发时自动调用）。
 
     聊天是一个情景：AI 切换会话时自动记录「我去干什么 / 我干了什么 /
     回去接着干什么」，切回时带交接摘要，使 AI 在任何会话都能感知手头的事。
 
-    - 栈顶已是本会话：不动（同一会话继续）
-    - 栈里有本会话挂起帧：提到栈顶恢复 active，写 completed_handoff
+    - 当前帧已是本会话：不动（同一会话继续）
+    - 链上有本会话挂起帧：拉到链尾恢复 active，写 completed_handoff
       （📝 刚完成：刚才在别的会话干了什么）
-    - 栈里没有：旧栈顶挂起（保留其 why/doing），push 新帧
-    - 栈顶是 AI 手动帧（非 dm/group_chat）：不干预，等 AI 自己 pop
+    - 链上没有、但存储里有这个会话的帧（出过链、或一直沉睡）：**拉起原来那条**——帧 id
+      不变，环境锁、帧清单、便签副本、原文尾巴原样还在。消息是外界带来的，不是他自己切帧，
+      没有理由把这段会话的状态清零重来（帧 id 还是闹钟、计划板记着的长期指针）
+    - 这段会话从没建过帧：旧当前帧挂起（保留其 why/doing），push 新帧
+    - 当前帧是插件帧 / AI 自己压的帧：**也切回本会话**（插件帧出状态链、记录留着，
+      说话的人不等你刷完）
+
+    最后一条是 2026-11-01 改的：以前对「非会话帧」不干预，于是 AI 在插件帧里时，
+    群里来消息会在插件帧里被处理——日志按状态分桶会落进插件桶，经历也会记成插件场景，
+    而那个回合实际是在回群里的人。有人在会话里叫你，你就回到那个会话；插件帧出状态链（status=ended，记录留着），
+    想去再 enter_state 就能复活（帧上有 doing，不上锁）。
 
     注：超配额不触发回复时也会调用（帧记录「有人找过」），
     AI 切回其他会话时通过摘要感知未处理的消息。
@@ -982,25 +1200,28 @@ async def ensure_active_frame(
 
     conv_label = "私信" if conv_type == "dm" else "群"
 
-    # 栈顶已是当前会话：不动——但只认**还在运行**的帧。弹掉的帧（ended）留在数组里当记录，
-    # 拿它当"还在这个会话"会让这个会话从此再也压不出帧：运行集合一直空着，
+    # 当前帧已是当前会话：不动——但只认**还在运行**的帧。弹掉的帧（ended）留在数组里当记录，
+    # 拿它当"还在这个会话"会让这个会话从此再也压不出帧：状态链一直空着，
     # 之后的每轮既没有状态身份（日志全落「无状态」）也没有交接摘要。
     top = stack[-1] if stack else None
     if top is not None and is_running(top) and top.get("context_ref") == context_ref:
         return
-    # 栈顶是 AI 手动帧：不干预（同样只认运行中的）
-    if top is not None and is_running(top) and top.get("type") not in ("dm", "group_chat"):
-        return
 
     label = f"{conv_label}「{title}」"
     prev = current(stack)
-    # 在**运行集合**里找本会话的帧：已结束的帧不复活（那段上下文已经重新开始了）
-    frame = next((f for f in running(stack) if f.get("context_ref") == context_ref), None)
+    # 这段会话的帧可能还在存储里、却不在链上（他 pop 回了上一层，或早先被弹出去）。
+    # 消息是外界带来的，不是他自己切帧：把原来那条拉起来就行，不要另建一条——帧 id 是
+    # 闹钟、计划板记着的长期指针，换人等于让它们指向空气；环境锁、帧清单、便签副本、
+    # 原文尾巴也都挂在那一条上。出链只是它这会儿没在跑，不等于这个状态没了。
+    frame = frame_of(stack, context_ref)
+    # 待交接（retired）的帧也照拉：它是"平台让他收尾"，不是"这段会话没了"，
+    # 复活不动记录，后事照旧由 pending_notices 投递
+    revived = frame is not None and not is_running(frame)
 
     if frame is not None:
-        # 切回挂起的会话：把「刚离开那段对话」的尾巴挂上，切回瞬间才知道刚才在别处说到哪
+        # 回到这一段会话：把「刚离开那段对话」的尾巴挂上，回来瞬间才知道刚才在别处说到哪
         if prev is not None and prev is not frame:
-            prev["status"] = "suspended"
+            _park_when_called_elsewhere(prev)
             frame["completed_handoff"] = {
                 "type": prev.get("type"),
                 "doing": prev.get("doing"),
@@ -1009,10 +1230,11 @@ async def ensure_active_frame(
             }
         frame["status"] = "active"
         frame["label"] = label
-        frame["why"] = f"收到{actor_name}的消息"
+        frame["why"] = (f"由于外界环境改变（{actor_name}在这个会话里说话），替他拉起这一帧"
+                        if revived else f"收到{actor_name}的消息")
         frame["doing"] = f"在{conv_label}「{title}」中回复{actor_name}"
     else:
-        # 新会话：旧当前帧挂起 + push（handoff 写在新帧上——渲染读当前帧）
+        # 这个会话从没有过帧：建一条（handoff 写在新帧上——渲染读当前帧）
         frame = make_state_frame(
             type_=conv_type,
             context_ref=context_ref,
@@ -1021,7 +1243,7 @@ async def ensure_active_frame(
             doing=f"在{conv_label}「{title}」中回复{actor_name}",
         )
         if prev is not None:
-            prev["status"] = "suspended"
+            _park_when_called_elsewhere(prev)
             frame["handoff"] = _left_conversation(prev)
         stack.append(frame)
 
@@ -1059,6 +1281,10 @@ async def bump_frame_call_count(db: AsyncSession, agent_id: int, calls: int = 1)
     top = current(stack)
     if top is not None:
         top["call_count"] = int(top.get("call_count") or 0) + calls
+        # 小时 / 天两个桶跟着这一调用一起记：帧预算（插件帧）靠它判"这一小时/今天用了几次"
+        from app.utils.pure import frame_usage as _usage
+
+        top["usage"] = _usage.bump(top.get("usage"), calls)
         if top.get("emotion"):
             top["emotion"] = decay_emotion(top["emotion"], calls)
         touch(top)
@@ -1066,7 +1292,7 @@ async def bump_frame_call_count(db: AsyncSession, agent_id: int, calls: int = 1)
 
 
 async def update_active_emotion(db: AsyncSession, agent_id: int, update) -> dict:
-    """更新栈顶帧情感（情感工具用）：增量（"+0.2"）/ 完整向量 / 概括词。
+    """更新当前帧情感（情感工具用）：增量（"+0.2"）/ 完整向量 / 概括词。
     无 active 帧时写 agent 级情感暂存（context_ref="" 的隐式帧不存在则忽略）。"""
     db = _ensure_repo(db)
     stack = await _get_stack(db, agent_id)
@@ -1080,7 +1306,7 @@ async def update_active_emotion(db: AsyncSession, agent_id: int, update) -> dict
 
 
 async def set_active_emotion_text(db: AsyncSession, agent_id: int, text: str) -> None:
-    """设置栈顶帧文字心情（未向量化模式）。"""
+    """设置当前帧文字心情（未向量化模式）。"""
     db = _ensure_repo(db)
     stack = await _get_stack(db, agent_id)
     if not stack:
@@ -1090,7 +1316,7 @@ async def set_active_emotion_text(db: AsyncSession, agent_id: int, text: str) ->
 
 
 async def get_active_emotion(db: AsyncSession, agent_id: int) -> dict:
-    """读栈顶帧情感（向量 + 文字），供注入/展示。"""
+    """读当前帧情感（向量 + 文字），供注入/展示。"""
     db = _ensure_repo(db)
     stack = await _get_stack(db, agent_id)
     if not stack:
@@ -1105,14 +1331,14 @@ async def get_active_emotion(db: AsyncSession, agent_id: int) -> dict:
 
 
 async def get_current_frame(db: AsyncSession, agent_id: int) -> dict | None:
-    """当前运行的那帧（栈顶，归一化后 stack[-1] 就是它）；没有帧返回 None。"""
+    """当前运行的那帧（当前帧，归一化后 stack[-1] 就是它）；没有帧返回 None。"""
     db = _ensure_repo(db)
     stack = await _get_stack(db, agent_id)
     return current(stack) if stack else None
 
 
 async def get_active_frame_tools(db: AsyncSession, agent_id: int) -> tuple[list[str] | None, list[str] | None]:
-    """读栈顶帧的工具/技能白名单（None = 不隔离，保持全局）。
+    """读当前帧的工具/技能白名单（None = 不隔离，保持全局）。
 
     世界帧（type=world）不看帧上存的字段，而是**现算**：基础集 + 该世界当前颁布的技能
     （见 services/world/world_frame_service）。世界后来颁布了新技能，下一轮就能用；
@@ -1147,16 +1373,52 @@ async def park_frame(db: AsyncSession, agent_id: int, frame: dict) -> None:
     db = _ensure_repo(db)
     stack = await _get_stack(db, agent_id)
     frame["status"] = ENDED_STATUS
+    # 沉睡帧 = 预建好、等着他进去的一帧：清单里要列出来，否则他不知道有它
+    frame["dormant"] = True
     stack.append(frame)
     await _save(db, agent_id, stack)
 
 
+async def mark_dormant(db: AsyncSession, agent_id: int, frame_id: str) -> bool:
+    """把一帧标成"预建好、等着进去"的沉睡帧（插件 switch=False 复用旧帧时用）。
+
+    进了状态链的帧不标：它已经是他的现在，不是等着进去的选项。
+    """
+    db = _ensure_repo(db)
+    stack = await _get_stack(db, agent_id)
+    frame = by_id(stack, frame_id)
+    if frame is None or is_running(frame) or frame.get("dormant"):
+        return False
+    frame["dormant"] = True
+    await _save(db, agent_id, stack)
+    return True
+
+
+async def update_frame(db: AsyncSession, agent_id: int, frame_id: str,
+                       updates: dict, *, allow: tuple[str, ...] = FRAME_TEXT_FIELDS) -> dict | None:
+    """就地改写一帧的内容（不动当前帧、不动链、不碰身份）。
+
+    默认可写集合是 FRAME_TEXT_FIELDS。身份字段改不了是有意的：帧 id 是闹钟/插件记着的
+    长期指针，type/context_ref 决定它属于哪段会话——换身份得走 push / restore。
+    allow 只给已知的例外用（插件帧刷 tools / skills 白名单），调用方别拿它绕身份字段。
+    """
+    db = _ensure_repo(db)
+    stack = await _get_stack(db, agent_id)
+    frame = by_id(stack, frame_id)
+    if frame is None:
+        return None
+    frame.update({k: v for k, v in (updates or {}).items()
+                  if k in allow and v is not None})
+    await _save(db, agent_id, stack)
+    return frame
+
+
 async def current_context(db: AsyncSession, agent_id: int,
                           fallback_group_id: int | None = None) -> dict:
-    """AI 现在在哪（群）：本次回复所在的群 + 状态栈里最近的群会话，按新鲜度去重。
+    """AI 现在在哪（群）：本次回复所在的群 + 状态链里最近的群会话，按新鲜度去重。
 
     只回答"他手上有哪些群"。世界在哪儿不在这里：世界帧自己回答（world_frame_service.active_world），
-    命令也不再需要群——两处各扫一遍栈正是「通道群」那层耦合的来源，已经收掉了。
+    命令也不再需要群——两处各扫一遍帧正是「通道群」那层耦合的来源，已经收掉了。
     """
     groups: list[int] = [int(fallback_group_id)] if fallback_group_id is not None else []
     for frame in reversed(running(await _get_stack(db, agent_id))):
@@ -1177,7 +1439,7 @@ async def persist_last_task_as_state(
     group_id: int | None, context_ref: str = "",
 ) -> None:
     """
-    end_turn 兜底：状态栈为空但有 last_task 时，自动 push 一个帧。
+    end_turn 兜底：状态链为空但有 last_task 时，自动 push 一个帧。
     防止 AI 在做的事在下次激活时丢失。
     """
     db = _ensure_repo(db)

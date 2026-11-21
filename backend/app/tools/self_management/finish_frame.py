@@ -35,6 +35,7 @@ class FinishFrame(ToolPlugin):
 
     async def execute(self, db: AsyncSession, agent_id: int, group_id: int | None,
                       arguments: dict, context: dict) -> dict:
+        from app.models.agent import Agent
         from app.services.agent import focus_service
         from app.services.agent.state_stack_service import finish_frame
         from app.services.history.context_sync import append_events
@@ -49,9 +50,12 @@ class FinishFrame(ToolPlugin):
             return {"error": True, "message": message}
 
         # 「已处置」落历史（进前缀，只写一次，之后每轮命中缓存）；解锁时随一次性条目离场
+        # append_events 要的是 agent 对象（它自己取 agent.id），不是 agent_id——
+        # 传 int 会在销帧成功之后炸在这里，看起来像"销不掉"（2026-11-02 线上就这么误导了一次）
         ref = focus_service.current_ref(group_id, context or {})
-        if ref:
-            await append_events(db, agent_id, ref, [make_entry(
+        agent = await db.get(Agent, int(agent_id))
+        if ref and agent is not None:
+            await append_events(db, agent, ref, [make_entry(
                 "notice", f"（状态帧 {frame_id} 的后事已交接完毕，记录已销。）",
                 flags={"drop_on_unlock": True},
             )])

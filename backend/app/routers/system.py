@@ -2,6 +2,7 @@
 基础系统路由：健康检查、维护消息、登录页公开设置、服务根路径。
 """
 import asyncio
+import json
 import logging
 
 from fastapi import APIRouter, Depends
@@ -61,6 +62,17 @@ async def update_status(force: bool = False):
     from app.services.infrastructure.update_check import get_update_status
 
     return await get_update_status(force=force)
+
+
+@router.post("/system/debug-wave")
+async def debug_wave(payload: dict):
+    """临时调试端点：把每帧波形高度追加写入 /tmp/waveframes.jsonl（分析波形用，用完删除）。"""
+    try:
+        with open("/tmp/waveframes.jsonl", "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except OSError:
+        logger.exception("debug-wave 写入失败")
+    return {"ok": True}
 
 
 @router.get("/health")

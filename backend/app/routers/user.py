@@ -88,61 +88,13 @@ async def redeem_code(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """使用兑换码增加 AI 创建额度"""
-    from sqlalchemy import select
-    from datetime import datetime, timezone
-    from app.models.user import User
-    from app.models.redemption import RedemptionCode
+    """使用兑换码增加额度（一次性/不限人次、每人限一次等规则见 redemption_service）"""
+    from app.services.infrastructure.redemption_service import RedemptionError, redeem
 
-    # 查找兑换码
-    result = await db.execute(
-        select(RedemptionCode).where(RedemptionCode.code == req.code)
-    )
-    code_obj = result.scalar_one_or_none()
-
-    if code_obj is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="兑换码无效")
-
-    if code_obj.used_by is not None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="兑换码已被使用")
-
-    if code_obj.expires_at and code_obj.expires_at < datetime.now(timezone.utc).replace(tzinfo=None):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="兑换码已过期")
-
-    # 增加额度（按类型加到不同字段）
-    user_result = await db.execute(select(User).where(User.id == current_user["user_id"]))
-    user = user_result.scalar_one()
-    code_type = code_obj.code_type or "ai_quota"
-    # 兼容旧版 file_size（自动映射到 file_quota）
-    if code_type == "file_size":
-        code_type = "file_quota"
-    if code_type == "api_credit":
-        user.api_credit += code_obj.quota_amount
-        msg = f"兑换成功，获得 {code_obj.quota_amount} 通用 API 额度"
-    elif code_type == "agent_bundle":
-        user.agent_bundle_credit += code_obj.quota_amount
-        msg = f"兑换成功，获得 {code_obj.quota_amount} AI 包断额度"
-    elif code_type == "file_quota":
-        user.file_quota_mb += code_obj.quota_amount
-        user.file_quota_bonus_mb = (user.file_quota_bonus_mb or 0) + code_obj.quota_amount
-        msg = f"兑换成功，获得 {code_obj.quota_amount} MB 文件存储配额"
-    else:
-        user.ai_quota += code_obj.quota_amount
-        msg = f"兑换成功，获得 {code_obj.quota_amount} AI 创建额度"
-
-    # 标记兑换码已使用
-    code_obj.used_by = current_user["user_id"]
-    code_obj.used_at = datetime.now(timezone.utc).replace(tzinfo=None)
-
-    await db.flush()
-
-    return {
-        "message": msg,
-        "ai_quota": user.ai_quota,
-        "api_credit": user.api_credit,
-        "agent_bundle_credit": user.agent_bundle_credit,
-        "file_quota_mb": user.file_quota_mb,
-    }
+    try:
+        return await redeem(db, user_id=current_user["user_id"], code=req.code)
+    except RedemptionError as e:
+        raise HTTPException(status_code=e.status, detail=e.message)
 
 
 # v0.1.5: 用户额度状态
@@ -278,7 +230,6 @@ async def get_user_stats(
     from app.models.agent import Agent
     from app.models.friendship import Friendship
     from app.models.group import Group as GroupModel, GroupMember
-    from app.models.file import FileMetadata
 
     uid = current_user["user_id"]
 
@@ -297,20 +248,12 @@ async def get_user_stats(
         )
     )).scalar() or 0
 
-    ai_storage = (await db.execute(
-        select(func.coalesce(func.sum(FileMetadata.size), 0)).where(
-            FileMetadata.owner_type == "ai",
-            FileMetadata.owner_id.in_(select(Agent.id).where(Agent.owner_id == uid))
-        )
-    )).scalar() or 0
-
-    human_storage = (await db.execute(
-        select(func.coalesce(func.sum(FileMetadata.size), 0)).where(
-            FileMetadata.owner_type == "human", FileMetadata.owner_id == uid
-        )
-    )).scalar() or 0
-
-    storage_n = ai_storage + human_storage
+    # 与 /user/storage 的 total_used 同口径（单一来源）：只算「我的文件」，
+    # 即 users/{uid}/files 下按 physical_key 去重后的字节。AI 的产出与对话里的附件不计入。
+    from app.services.content.file_service import measure_usage, user_space_dir
+    storage_n = (await measure_usage(
+        db, "human", [uid], path_prefix=user_space_dir(uid),
+    )).get(uid, {}).get("bytes", 0)
 
     return {"ai_count": ai_n, "friend_count": friend_n, "group_count": group_n, "storage_used": storage_n}
 
@@ -320,71 +263,45 @@ async def get_user_storage(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """获取用户存储概览（所有 AI 的文件总和 + 进度条数据）"""
-    import os
-    from app.config import settings
+    """存储概览：按 §3.1 的三块口径分别给出数字（去重后的字节数）
+
+    → 我的文件    = users/{uid}/files（能删，计入 100 MB 上限，平台不自动清）
+    → 我在对话里产生的 = users/{uid}/chat（不占上限，按 24 小时 / 梯度回收）
+    → AI 的工作文件 = 名下各 AI 自己的空间（属于 AI，单独给数，不混进「我的文件」）
+
+    三块都用 file_service.measure_usage：按 physical_key 去重、只算字节真在盘上的行，
+    范围由 path_prefix 圈定。以前这里是逐行累加，把硬链接和历史版本一起算进去，
+    数字虚高（§5.7.1）。
+    """
     from sqlalchemy import select
     from app.models.agent import Agent
-    from app.models.file import FileMetadata as FM
     from app.models.user import User
+    from app.services.content.file_service import measure_usage, user_space_dir, user_chat_dir
 
-    # 获取用户所有 AI
-    agent_result = await db.execute(
-        select(Agent).where(Agent.owner_id == current_user["user_id"])
-    )
-    agents = agent_result.scalars().all()
+    uid = current_user["user_id"]
+    agents = (await db.execute(select(Agent).where(Agent.owner_id == uid))).scalars().all()
+    agent_ids = [a.id for a in agents]
 
-    total_used = 0
-    total_files = 0
-    per_agent: list[dict] = []
+    mine = (await measure_usage(db, "human", [uid], path_prefix=user_space_dir(uid))).get(uid, {})
+    produced = (await measure_usage(db, "human", [uid], path_prefix=user_chat_dir(uid))).get(uid, {})
+    per_agent_usage = await measure_usage(db, "ai", agent_ids)
 
-    for agent in agents:
-        agent_used = 0
-        agent_files = 0
+    total_used = mine.get("bytes", 0)
+    total_files = mine.get("files", 0)
 
-        # 数据库记录的文件（FileMetadata 中 owner_type="ai" 且 owner_id=agent_id）
-        db_result = await db.execute(
-            select(FM).where(FM.owner_type == "ai", FM.owner_id == agent.id)
-        )
-        for fm in db_result.scalars():
-            agent_used += fm.size or 0
-            agent_files += 1
+    # AI 自己的账：步 5 的存储页按 §3.1 单列，在此之前它们不进 total_used
+    per_agent = [
+        {
+            "agent_id": a.id,
+            "agent_name": a.name,
+            "used": per_agent_usage.get(a.id, {}).get("bytes", 0),
+            "files": per_agent_usage.get(a.id, {}).get("files", 0),
+        }
+        for a in agents
+    ]
 
-        total_used += agent_used
-        total_files += agent_files
-        per_agent.append({
-            "agent_id": agent.id,
-            "agent_name": agent.name,
-            "used": agent_used,
-            "files": agent_files,
-        })
-
-    # 用户自己上传的文件（owner_type="human"）
-    human_result = await db.execute(
-        select(FM).where(FM.owner_type == "human", FM.owner_id == current_user["user_id"])
-    )
-    for fm in human_result.scalars():
-        total_used += fm.size or 0
-        total_files += 1
-
-    # 转发来的文件（计入用户配额）
-    from app.services.content.file_service import get_user_forwarded_file_ids
-    forwarded_ids = await get_user_forwarded_file_ids(db, current_user["user_id"])
-    forwarded_used = 0
-    forwarded_files = 0
-    if forwarded_ids:
-        fwd_result = await db.execute(
-            select(FM).where(FM.id.in_(forwarded_ids))
-        )
-        for fm in fwd_result.scalars():
-            forwarded_used += fm.size or 0
-            forwarded_files += 1
-    total_used += forwarded_used
-    total_files += forwarded_files
-
-    # 用户配额
-    user_result = await db.execute(select(User).where(User.id == current_user["user_id"]))
-    user = user_result.scalar_one()
+    # 上限值：与 upload_file 的配额闸同源（file_quota_mb），写入时真的会拦
+    user = (await db.execute(select(User).where(User.id == uid))).scalar_one()
     quota_mb = user.file_quota_mb or 100
     quota_bytes = quota_mb * 1024 * 1024
 
@@ -394,9 +311,11 @@ async def get_user_storage(
         "quota_mb": quota_mb,
         "quota_bytes": quota_bytes,
         "usage_percent": round(total_used / quota_bytes * 100, 1) if quota_bytes > 0 else 0,
+        # 「我在对话里产生的」：对话里的附件，只展示，不占上限（§7.1）。
+        # 字段名不叫 archived_* ——现在这一栏的判据是目录，不是「有没有归档」。
+        "chat_used": produced.get("bytes", 0),
+        "chat_files": produced.get("files", 0),
         "per_agent": per_agent,
-        "forwarded_files": forwarded_files,
-        "forwarded_used": forwarded_used,
     }
 
 

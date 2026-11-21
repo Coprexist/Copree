@@ -18,13 +18,10 @@ logger = logging.getLogger(__name__)
 class PopState(ToolPlugin):
     name = "pop_state"
     description = (
-        "结束当前状态帧，回到目标状态继续之前的任务。\n"
-        "两种用法：\n"
-        "1. 不传 target_frame_id → 回到上一层（最近被打断的任务）\n"
-        "2. 传 target_frame_id → 直接回到指定的状态帧（多层嵌套时跳过中间层，"
-        "中间层会归档并在摘要里汇报——它未完成的事由你决定是否继续）\n"
-        "调用后系统会告诉你回到什么任务、跳过了哪些层。"
-        "如果当前任务完成想回去用这个；不做了想放弃用 close_state。"
+        "结束当前状态帧（只这一帧），回到上一层继续之前的任务；带 target_frame_id 就回到指定那帧。\n"
+        "别的帧一个都不动——想去哪帧就把它拉成当前帧，链上其余帧的顺序不变。\n"
+        "当前任务完成想回去用这个；不做了想放弃用 close_state；只是离开一会儿、之后还要回到现在"
+        "这一帧，用 enter_state。"
     )
     segment = "self_management"
     parameters = {

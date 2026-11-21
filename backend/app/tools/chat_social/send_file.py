@@ -34,8 +34,7 @@ class SendFile(ToolPlugin):
 
     async def execute(self, db: AsyncSession, agent_id: int, group_id: int | None,
                       arguments: dict, context: dict) -> dict:
-        from app.models.file import FileMetadata
-        from app.services.content.file_service import ai_stored_path
+        from app.services.content.file_service import ai_file
         from app.utils.mime import effective_mime
         from app.chat.gm import send_gm_message, gm_message_to_dict
         from app.chat.dm import send_dm_message, get_or_create_dm_session
@@ -74,15 +73,10 @@ class SendFile(ToolPlugin):
         attachments = []
         missing = []
         for fp in paths:
-            result = await db.execute(
-                select(FileMetadata).where(
-                    FileMetadata.path == ai_stored_path(agent_id, fp),
-                    FileMetadata.owner_type == "ai",
-                    FileMetadata.owner_id == agent_id,
-                )
-            )
-            meta = result.scalar_one_or_none()
-            if not meta:
+            # 路径→元数据只在 file_service.ai_file 一处；这里额外要求"确实归这个 AI 所有"
+            # （send_file 发的是它自己的文件，共享给别人的不算）
+            meta = await ai_file(db, agent_id, fp)
+            if meta is None or meta.owner_type != "ai" or int(meta.owner_id or 0) != int(agent_id):
                 missing.append(fp)
             else:
                 attachments.append({

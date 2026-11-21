@@ -144,7 +144,7 @@ async def wait_for_db(timeout: float = 30.0) -> None:
             last = e
             if not warned:
                 # 只报"未就绪"会把根因（认证失败、连接被重置、扩展缺失）吞掉，
-                # 用户拿到的栈里没有任何可查的信息，所以首次失败就带上目标与异常类型。
+                # 用户拿到的链上没有任何可查的信息，所以首次失败就带上目标与异常类型。
                 logger.warning(
                     f"[WAIT] 等待数据库就绪（最多 {timeout:.0f}s，超时将中止启动）："
                     f"{type(e).__name__}: {e}；目标 {mask_dsn(settings.database_url)}"
@@ -256,8 +256,57 @@ async def _ensure_auto_providers() -> None:
         logger.warning(f"[WARN] 自动加入配置项失败（不影响启动）: {e}", exc_info=True)
 
 
+async def _shutdown_step(name: str, factory, budget: float = 2.0) -> None:
+    """关闭流程的一步：限时、计时、失败只告警。
+
+    关闭时任何一步卡住都会把整体拖到被 SIGKILL（等于硬杀：正在跑的回合丢、缓冲丢），
+    所以每步给一个预算，超时就跳过——把剩余时间留给后面的步骤，保证进程一定能自己退出来。
+    `factory` 是"返回协程的可调用对象"：import 也放在里面，导入失败同样不阻塞。
+    """
+    started = time.perf_counter()
+    try:
+        await asyncio.wait_for(factory(), timeout=budget)
+    except asyncio.TimeoutError:
+        logger.warning("[STOP] %s 超过 %.1fs，跳过（不阻塞关闭）", name, budget)
+    except Exception as e:  # noqa: BLE001 —— 关闭阶段的单步失败不该阻止进程退出
+        logger.warning("[STOP] %s 失败（继续关闭）: %s", name, e)
+    else:
+        logger.info("[STOP] %s 完成（%.2fs）", name, time.perf_counter() - started)
+
+
+async def _embedding_dimension_selfcheck() -> None:
+    """向量维度自检（原在 prestart 里阻塞启动）。
+
+    三者不一致时记忆写入会静默失败（2026-09-25 事故），所以必须响；但"检查本身"失败
+    不该拦启动——它挪到后台跑完打日志，启动路径上省掉一次建引擎 + 连接（约 0.5s）。
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.database import engine
+    from app.services.infrastructure.embedding_config_service import check_dimension_consistency
+
+    try:
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as db:
+            problems = await check_dimension_consistency(db)
+    except Exception as e:  # noqa: BLE001 —— 自检失败不阻塞启动
+        logger.info("[INFO] 向量维度自检跳过: %s", e)
+        return
+    if problems:
+        logger.error("[ERROR] 向量维度不一致，记忆写入会失败：%s", "；".join(problems))
+        logger.error("        修法：EMBEDDING_DIMENSION 必须等于表列维度与模型输出维度"
+                     "（本地 nomic-embed-text = 768）")
+    else:
+        logger.info("[OK] 向量维度自检通过")
+
+
 async def _startup_workers() -> None:
     """核心循环型后台 worker（异常退出自动重启）"""
+    # 容量准入先装配再起 worker：从启动第一刻就有一个总闸，而不是等采样任务跑起来才有
+    from app.services.infrastructure import capacity
+    capacity.configure_from_settings()
+    spawn_task(capacity.capacity_worker, "capacity_worker", restart=True)
+
     from app.ai.response_worker import ai_response_worker
     spawn_task(ai_response_worker, "ai_response_worker", restart=True)
 
@@ -311,8 +360,8 @@ async def _startup_workers() -> None:
     from app.services.memory.tidy_service import memory_tidy_worker
     spawn_task(memory_tidy_worker, "memory_tidy_worker", restart=True)
 
-    from app.services.content.file_service import orphan_cleanup_worker
-    spawn_task(orphan_cleanup_worker, "orphan_cleanup_worker", restart=True)
+    from app.services.content.file_service import file_cleanup_worker
+    spawn_task(file_cleanup_worker, "file_cleanup_worker", restart=True)
 
     from app.services.infrastructure.metrics_collector import metrics_flush_worker
     spawn_task(metrics_flush_worker, "metrics_flush_worker", restart=True)
@@ -451,6 +500,27 @@ async def _startup_brain_and_skills() -> None:
 # 生命周期
 # ══════════════════════════════════════════════════════════════
 
+async def _startup_plugin_schemas() -> None:
+    """把已安装插件自带的迁移跑到最新（只跑没跑过的；改过旧迁移会拒绝并留错误）
+
+    必须在插件代码加载之前：插件的第一个查询就发生在启动阶段（状态轮询），
+    表不在会直接炸。单个插件失败不拦整个站的启动，原因留给管理台看。
+    """
+    from app.services.plugin import storage
+
+    try:
+        result = await storage.sync_all()
+    except Exception as e:  # noqa: BLE001 —— 插件表坏了不许拦住整个站的启动
+        logger.error("插件表迁移收敛失败: %s", e, exc_info=True)
+        return
+    applied = {pid: r["applied"] for pid, r in result.items() if r.get("applied")}
+    if applied:
+        logger.info("插件表迁移已应用: %s", applied)
+    for pid, r in result.items():
+        if r.get("error"):
+            logger.error("插件 %s 的迁移失败，它的数据表可能落后: %s", pid, r["error"])
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
@@ -463,8 +533,12 @@ async def lifespan(app: FastAPI):
     maintenance.set_auto()
 
     await _startup_db()
+    # 自检不挡启动：跑完自己打日志
+    spawn_task(_embedding_dimension_selfcheck, "_embedding_dimension_selfcheck")
     await _upgrade_stored_model_names()
     await _ensure_auto_providers()
+    # 插件自带的表要在插件代码加载前就位（插件的首次查询发生在启动阶段）
+    await _startup_plugin_schemas()
     await _startup_plugins()
     await _startup_workers()
     await _startup_world()
@@ -483,46 +557,39 @@ async def lifespan(app: FastAPI):
 
     # 启动完成，退出自动维护（但手动维护仍生效）
     elapsed = time.perf_counter() - started_at
-    if maintenance.clear_auto():
-        logger.info(
-            (f"[OK] 自动维护已关闭，服务就绪（启动耗时 {elapsed:.1f}s）" if not maintenance.is_soft()
-             else f"[OK] 服务就绪但软维护仍开启（启动耗时 {elapsed:.1f}s）")
-        )
+    soft = maintenance.is_soft()
+    maintenance.clear_auto()
+    # 无条件打一条：以前只在 maintenance 状态切换时打，正常重启根本看不到启动耗时
+    logger.info("[OK] 服务就绪（启动耗时 %.1fs）%s", elapsed,
+                "，软维护仍开启" if soft else "")
 
     yield
 
     # 进入关闭流程，自动维护
     logger.info("[STOP] 系统关闭，正在停止后台 worker...")
     maintenance.set_auto()
+    shutdown_started = time.perf_counter()
 
-    # 发出系统关闭事件
-    try:
+    async def _emit_shutdown():
         from app.services.brain.event_bus import event_bus, EventType
         await event_bus.emit(EventType.SYSTEM_SHUTDOWN)
-    except Exception as e:
-        logger.warning(f"[WARN] 系统关闭事件发送失败: {e}", exc_info=True)
 
-    # 优雅关闭：排空记忆缓冲区
-    try:
+    async def _drain_memory():
         from app.services.memory.memory_buffer import drain_buffer_on_shutdown
         await drain_buffer_on_shutdown()
-    except Exception as e:
-        logger.warning(f"[WARN] 记忆缓冲区排空失败: {e}", exc_info=True)
 
-    # 先断开所有联邦连接
-    try:
+    async def _drop_federation():
         from app.services.federation.federation_manager import federation_manager
         await federation_manager.disconnect_all()
-    except Exception as e:
-        logger.warning(f"[WARN] 联邦连接断开失败: {e}", exc_info=True)
 
-    # 停止所有后台任务（含延迟重启任务）
-    await cancel_all_tasks()
-
-    # 停止所有服务插件（含共享 Chromium）
-    await _stop_service_plugins()
+    # 预算总和 ≤ uvicorn 的 --timeout-graceful-shutdown(5s)：某一步卡住时把时间留给后面的
+    # 步骤，而不是整体被 SIGKILL（那等于硬杀，正在跑的回合全丢）。
+    await _shutdown_step("关闭事件", _emit_shutdown, budget=0.5)
+    await _shutdown_step("记忆缓冲排空", _drain_memory, budget=1.5)
+    await _shutdown_step("联邦连接断开", _drop_federation, budget=0.5)
+    await _shutdown_step("取消后台任务", cancel_all_tasks, budget=1.2)
+    await _shutdown_step("停止服务插件", _stop_service_plugins, budget=1.2)
 
     # 释放数据库连接池
-    await engine.dispose()
-    logger.info("[OK] 数据库连接池已释放")
-    logger.info("[OK] 后台 worker 已停止")
+    await _shutdown_step("释放连接池", engine.dispose, budget=1.0)
+    logger.info("[OK] 关闭完成（%.2fs）", time.perf_counter() - shutdown_started)

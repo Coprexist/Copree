@@ -16,6 +16,7 @@ import logging
 import os
 
 from app.utils.message_serializer import normalize_attachments
+from app.utils.mime import IMAGE_MIMES
 
 logger = logging.getLogger(__name__)
 
@@ -27,18 +28,28 @@ DEFAULT_MAX_IMAGES = 1  # 单条消息最多注入几张真实图片
 IMAGE_NOTE_PREFIX = "【本轮附图】"
 
 VISION_UNSUPPORTED_HINT = (
-    "[系统提示] 用户发送了图片，但当前模型不支持查看图片，你看不到图片内容。"
-    "请如实告诉用户你无法查看图片，不要猜测或编造图片内容。"
+    "[系统提示] 这条消息带了图片，但当前模型不支持查看图片，你看不到图片内容。"
+    "请如实说明你看不到，不要猜测或编造图片内容。"
 )
 
 
 # 模型侧的视觉接口只吃这四种；extension/svg 一律按"看得见但发不过去"处理
-VISION_MIMES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
+# 集合本身在 utils/mime.py（图片口径的单一来源），这里只是沿用旧名字，调用方不用改
+VISION_MIMES = IMAGE_MIMES
 
 
 def is_image(att: dict) -> bool:
     """该附件是否是图片（渲染语义：image/* 都算，含 SVG）。"""
     return str(att.get("mime_type") or "").lower().startswith("image/")
+
+
+def is_audio(att: dict) -> bool:
+    """该附件是否是音频（语音条就是这么渲染的：audio/* 一律按语音处理）。"""
+    return str(att.get("mime_type") or "").split(";")[0].strip().lower().startswith("audio/")
+
+
+# 语音文稿进上下文的上限：它只是"这条说了什么"的摘要，全文靠转写字段本身
+TRANSCRIPT_MARK_MAX = 200
 
 
 def is_vision_image(att: dict) -> bool:
@@ -127,14 +138,16 @@ def _read_data_url(att: dict, data_dir: str, max_bytes: int) -> str | None:
 
 # ── 视觉不支持时的降级（模型是纯文本，发多模态会被 400 拒掉）────────────
 
-def image_note(count: int) -> str:
+def image_note(count: int, source: str = "用户最新一条消息") -> str:
     """尾部 system 便签：把"你能看到这张图"作为**平台事实**告诉模型。
 
     必须是真 system role，不能塞进用户正文——塞正文等于替用户说话，权威性也低。
     实测：只给 image_url 不给这句话，mimo-v2.5 会自称"我是文本 AI"，
     却又能描述出图里的刷新图标。
-"""
-    return f"{IMAGE_NOTE_PREFIX}用户最新一条消息含 {count} 张图片，你可以直接查看。"
+    source 是图片的来处（用户发的 / 工具返回的）：说清楚才不会让模型把工具截图
+    当成用户发来的图去回应用户。
+    """
+    return f"{IMAGE_NOTE_PREFIX}{source}含 {count} 张图片，你可以直接查看。"
 
 
 def injected_image_count(content) -> int:
@@ -189,6 +202,174 @@ def strip_image_parts(messages: list[dict]) -> tuple[list[dict], int]:
         new_m["content"] = f"{body}\n{hint}".strip() if body else hint
         out.append(new_m)
     return out, removed
+
+
+def strip_image_bytes(messages: list[dict], max_keep: int = 16) -> list[dict]:
+    """落库前的清洗：图片字节换成占位标记，其余内容原样保留。
+
+    对话日志是整份请求体的快照，一条消息里几十 KB 的 base64 会把账本撑爆，
+    而回看历史时这些字节也没人读（模型侧下一次本来就只有最新一条带真图）。
+    max_keep 是保险：超出这个数的图片直接丢掉，不给脏数据留口子。
+    """
+    out: list[dict] = []
+    left = max_keep
+    for m in messages:
+        content = m.get("content")
+        if not isinstance(content, list):
+            out.append(m)
+            continue
+        parts: list[dict] = []
+        changed = False
+        for p in content:
+            if isinstance(p, dict) and p.get("type") == "image_url":
+                changed = True
+                if left > 0:
+                    left -= 1
+                    parts.append({"type": "text", "text": IMAGE_PLACEHOLDER})
+                continue
+            parts.append(p)
+        if not changed:
+            out.append(m)
+            continue
+        new_m = dict(m)
+        new_m["content"] = parts
+        out.append(new_m)
+    return out
+
+
+# ── 附件在上下文里的两种呈现：标记（每轮都可见）与正文（只给最新一条）──────
+# 图片走 image_placeholder/build_content（多模态），其余文件只能靠文字：渲染层铺
+# 一行标记，让模型至少知道"对方发了个什么文件"；文本类附件再把内容读进最新一条。
+TEXT_MIMES = frozenset({
+    "text/plain", "text/markdown", "text/csv", "text/html", "text/xml",
+    "application/json", "application/xml", "application/yaml",
+})
+TEXT_SUFFIXES = (
+    ".txt", ".md", ".csv", ".json", ".log", ".yaml", ".yml", ".xml",
+    ".html", ".py", ".js", ".ts", ".sql", ".ini", ".toml",
+)
+INLINE_MAX_BYTES = 64 * 1024     # 再大的文件内联进来只是烧 token
+INLINE_MAX_CHARS = 3000          # 一次最多贴这么多字，余下的让 AI 自己问
+
+
+def is_text_attachment(att: dict) -> bool:
+    """这个附件能不能当文本读（按 mime，退一步按扩展名）。"""
+    mime = str(att.get("mime_type") or "").split(";")[0].strip().lower()
+    if mime in TEXT_MIMES:
+        return True
+    if mime and mime != "application/octet-stream":
+        return False
+    name = str(att.get("name") or att.get("path") or "").lower()
+    return name.endswith(TEXT_SUFFIXES)
+
+
+def _size_text(size) -> str:
+    try:
+        n = int(size or 0)
+    except (TypeError, ValueError):
+        return ""
+    if n <= 0:
+        return ""
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    return f"{n / 1024 / 1024:.1f} MB"
+
+
+def with_transcripts(attachments, transcripts: dict[int, str] | None) -> list | None:
+    """把文件级的文稿补进附件快照（纯函数）。
+
+    文稿的家在 `file_metadata.transcript`（唯一来源，见迁移 `0113`），消息快照只留 file_id；
+    渲染账本前补一次，AI 才读得到"这条语音说了什么"。已经带了的不覆盖（调用方的引用式补丁优先）。
+    """
+    items = normalize_attachments(attachments)
+    if not items or not transcripts:
+        return items
+    out: list = []
+    for att in items:
+        if isinstance(att, dict) and att.get("file_id") and not att.get("transcript"):
+            body = transcripts.get(int(att["file_id"]))
+            if body:
+                att = {**att, "transcript": body}
+        out.append(att)
+    return out
+
+
+def attachment_marks(attachments, *, said: str = "") -> str:
+    """把附件铺成一行文字标记：图片 [图片]，语音 [语音]（带文稿），其余 [文件] 名（大小）。
+
+    群聊与私信共用（私信原先自己有套 [文件: a, b] 的写法，两处口径会分叉）。
+    卡片类附件（好友/群邀请）没有文件语义，不进标记。
+
+    said = 这条消息的正文：正文里已经写了 [图片]，就不再补一个同样的标记——
+    通道入站（QQ 图片）的正文本身就带占位，再叠一次会让 AI 和人都看到两个 [图片]。
+
+    语音优先用附件上的 transcript：没有它，AI 只能看到 `voice_20261114033204_49.mp3`
+    这种文件名——连自己刚说过什么都不知道（AI 的语音就是它自己的文字念出来的，
+    文稿是现成的，见 send_voice）。没有 transcript 的（人的语音、还没转写）退回文件名。
+    """
+    marks: list[str] = []
+    for att in (normalize_attachments(attachments) or []):
+        if not isinstance(att, dict) or att.get("type"):
+            continue
+        if is_image(att):
+            if IMAGE_PLACEHOLDER not in (said or ""):
+                marks.append(IMAGE_PLACEHOLDER)
+            continue
+        if is_audio(att):
+            said_text = " ".join(str(att.get("transcript") or "").split())
+            if said_text:
+                if len(said_text) > TRANSCRIPT_MARK_MAX:
+                    said_text = said_text[: TRANSCRIPT_MARK_MAX - 1] + "…"
+                marks.append(f"[语音] {said_text}")
+            else:
+                marks.append("[语音]")
+            continue
+        name = str(att.get("name") or att.get("path") or "文件")
+        size = _size_text(att.get("size"))
+        marks.append(f"[文件] {name}（{size}）" if size else f"[文件] {name}")
+    return " ".join(marks)
+
+
+def text_attachment_blocks(
+    attachments, data_dir: str, *, max_bytes: int = INLINE_MAX_BYTES, max_chars: int = INLINE_MAX_CHARS
+) -> str:
+    """最新一条消息里的文本附件：把内容读出来（截断）。
+
+    只给最新一条注入，历史里留标记——与图片注入同一套约定：字节/大段内容只在
+    "刚发生的那条"上，不随历史越滚越大。文件本身不可变，读失败只记日志。
+    """
+    blocks: list[str] = []
+    for att in (normalize_attachments(attachments) or []):
+        if not isinstance(att, dict) or not is_text_attachment(att):
+            continue
+        rel = att.get("path") or ""
+        if not rel:
+            continue
+        physical = os.path.join(data_dir, rel)
+        if not os.path.isfile(physical):
+            logger.warning(f"📄 附件文件不存在，跳过内联: {physical}")
+            continue
+        try:
+            if os.path.getsize(physical) > max_bytes:
+                blocks.append(
+                    f"[文件] {att.get('name') or rel}（{_size_text(att.get('size'))}，太大没有内联，"
+                    "需要内容请让发送者贴出来或分片发）"
+                )
+                continue
+            with open(physical, "r", encoding="utf-8", errors="replace") as f:
+                body = f.read()
+        except OSError as e:
+            logger.warning(f"📄 读取附件失败: {physical}: {e}")
+            continue
+        clipped = len(body) > max_chars
+        head = body[:max_chars]
+        note = f"（前 {max_chars} 字，全文 {len(body)} 字）" if clipped else ""
+        blocks.append(
+            f"[文件内容] {att.get('name') or rel}{note}\n{head}" + ("\n……（后面还有，需要就再问）" if clipped else "")
+        )
+    return "\n\n".join(blocks)
 
 
 def is_vision_unsupported_error(error_text: str) -> bool:

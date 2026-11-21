@@ -5,10 +5,10 @@
 """
 import logging
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.agent import AgentHistoryEntry
+from app.models.agent import AgentHistoryEntry, AgentHistorySeq
 
 logger = logging.getLogger(__name__)
 
@@ -27,20 +27,66 @@ def _row_to_dict(row: AgentHistoryEntry) -> dict:
     }
 
 
+async def last_of(db: AsyncSession, agent_id: int, context_ref: str, *,
+                   kind: str, ref: str = "") -> dict | None:
+    """同 kind、同 ref 的**最近一条**——写入时判「这句是不是刚说过」的唯一查询。
+
+    按 (kind, ref) 一起定位：通知、计划板都靠 ref 归属，同 kind 不同 ref 是两件不同的事。
+    """
+    row = (await db.execute(
+        select(AgentHistoryEntry).where(
+            AgentHistoryEntry.agent_id == agent_id,
+            AgentHistoryEntry.context_ref == context_ref,
+            AgentHistoryEntry.kind == kind,
+            func.coalesce(AgentHistoryEntry.ref, "") == (ref or ""),
+        ).order_by(AgentHistoryEntry.seq.desc()).limit(1)
+    )).scalars().first()
+    return _row_to_dict(row) if row else None
+
+
+# 领号：一次把这一批要用的 seq 区间领走，返回区间起点（条目从 base+1 开始排）。
+# 首写自播种：计数行不存在时按账本现有的 MAX(seq) 起算，所以迁移不回填、老库也接得上。
+# 三个参数都显式 CAST：同一个参数在 INSERT / 子查询 / ON CONFLICT 里被推断成不同类型时，
+# PG 会直接报 AmbiguousParameterError。
+_RESERVE_SQL = """
+    INSERT INTO agent_history_seq (agent_id, context_ref, last_seq)
+    VALUES (
+        CAST(:a AS INTEGER), CAST(:c AS VARCHAR(64)),
+        CAST(:n AS INTEGER) + COALESCE(
+            (SELECT MAX(seq) FROM agent_history_entries
+              WHERE agent_id = CAST(:a AS INTEGER)
+                AND context_ref = CAST(:c AS VARCHAR(64))), 0)
+    )
+    ON CONFLICT (agent_id, context_ref)
+    DO UPDATE SET last_seq = agent_history_seq.last_seq + CAST(:n AS INTEGER)
+    RETURNING last_seq - CAST(:n AS INTEGER)
+"""
+
+
+async def _reserve(db: AsyncSession, agent_id: int, context_ref: str, count: int) -> int:
+    """向数据库领 count 个连续的 seq，返回这一段的前一号。
+
+    为什么不在 Python 里算：`MAX(seq)+1` 看不见别的事务还没提交的行，两个并发的写者会领到
+    同一个号，后到的那个撞唯一索引、原地等先到的提交。先到的要是正等着后到的返回（回合里调
+    插件工具就是这个形状），两边就互等——2026-11-07 群 81 冻结 12 小时。
+    这条语句把「读 + 加 + 写」交给数据库一次做完，领到的区间只属于自己，写几条都不会撞。
+    """
+    row = (await db.execute(text(_RESERVE_SQL), {
+        "a": int(agent_id), "c": context_ref, "n": int(count),
+    })).first()
+    return int(row[0] or 0)
+
+
 async def append(db: AsyncSession, agent_id: int, context_ref: str, entries: list[dict]) -> list[dict]:
     """追加一批条目：seq 在这里统一分配（调用方不用管），批次内顺序即传入顺序。
 
     缺口事件和它那批消息必须**同一次 append**（缺口在前）——这是不断缓存的前提。
+    分配走 `_reserve`（数据库一次领走），所以并发写同一段会话也不会撞号、不会互等。
     """
     entries = [e for e in (entries or []) if (e.get("content") or "").strip()]
     if not entries:
         return []
-    base = (await db.execute(
-        select(func.coalesce(func.max(AgentHistoryEntry.seq), 0)).where(
-            AgentHistoryEntry.agent_id == agent_id,
-            AgentHistoryEntry.context_ref == context_ref,
-        )
-    )).scalar() or 0
+    base = await _reserve(db, agent_id, context_ref, len(entries))
 
     out: list[dict] = []
     rows: list[AgentHistoryEntry] = []
@@ -141,10 +187,15 @@ async def clear(db: AsyncSession, agent_id: int, context_ref: str) -> int:
     """解锁（compact / 超时压缩 / clear）时的重写：整段丢掉。
 
     只由解锁点调用——锁定态碰它就是断缓存。
+    领号计数一并清掉（同一笔事务）：重写后的账本重新从 1 开始，跟"重写"这件事本身的语义一致。
     """
     result = await db.execute(delete(AgentHistoryEntry).where(
         AgentHistoryEntry.agent_id == agent_id,
         AgentHistoryEntry.context_ref == context_ref,
+    ))
+    await db.execute(delete(AgentHistorySeq).where(
+        AgentHistorySeq.agent_id == agent_id,
+        AgentHistorySeq.context_ref == context_ref,
     ))
     removed = result.rowcount or 0
     if removed:

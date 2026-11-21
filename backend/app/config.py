@@ -61,6 +61,23 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://ai_chat:change_me@localhost:5432/ai_group_chat"
     database_url_sync: str = "postgresql://ai_chat:change_me@localhost:5432/ai_group_chat"
 
+    # ── 容量准入（见 docs/dev/capacity.md）──
+    # 本进程同时运行的 AI 回合上限。0 = 跟随连接池容量（pool_size + max_overflow）：
+    # 也就是"在排到池子之前先在这里排"——那里的排队没有优先级，也看不见。负数 = 不限。
+    # 分片部署时每个后端进程各管自己这一片，它不是全局配额。
+    ai_max_concurrent_turns: int = 0
+    # 自适应收敛（AIMD）：只在 [floor, hard] 之间动，默认关（先只采样观察）。
+    ai_adaptive_concurrency: bool = False
+    ai_adaptive_floor: int = 1
+    # 压力阈值：都是部署形态的函数（CPU / 连接池 / 入口队列），默认取保守通用值。
+    # 排队时长（最近 60 秒 p95）超过它就收缩：这是"用户在等"的直接代理，
+    # 比事件循环延迟更准（后者会被无关的慢操作污染）。2000ms 是人机交互的通用感知线，
+    # 不是我们的统计值；嫌紧就调，调到很大等于关掉这条。
+    ai_pressure_queue_lag_ms: int = 2000
+    ai_pressure_loop_lag_ms: int = 250
+    ai_pressure_pool_ratio: float = 0.9
+    ai_pressure_queue_ratio: float = 0.8
+
     # ── JWT ──
     jwt_secret_key: str = "dev-secret-change-me"
     jwt_algorithm: str = "HS256"
@@ -72,6 +89,22 @@ class Settings(BaseSettings):
     default_work_model: str = "deepseek-v4-pro"
     # JSON 格式的自定义模型选项列表（优先于默认列表）
     model_options: str = ""
+
+    # ── 代理 LLM（判断「这条消息值不值得拉起本尊」）──
+    # 只替换决定意愿的那一道；静音/勿扰/离线/mention_only/@ 这些确定性门在它之前。
+    proxy_wake_enabled: bool = False          # 总开关，默认关
+    proxy_wake_enforce: bool = False          # False = 影子：照常判、照常记，但不改行为
+    # 留白名单：逗号分隔群 id。总开关打开时，这些群仍维持影子——氛围群（角色扮演、闲聊）
+    # 的日常接话正是代理会压掉的部分，先把它们放进来，其余群按判定执行。空 = 不再留白
+    proxy_wake_shadow_groups: str = ""
+    proxy_wake_model: str = ""                # 空 = 用 default_chat_model
+    proxy_wake_timeout_ms: int = 2000
+    # 拦下率下限：低于它说明代理没省下多少，停用代理、直接放行。
+    # 94%（唤醒率上限）= 1 - 这个值，两个数是同一个门槛的两面，只存这一个。
+    proxy_wake_min_saving_ratio: float = 0.06
+    proxy_wake_sample_min: int = 10
+    proxy_wake_sample_window: int = 50
+    proxy_wake_remind_threshold: int = 3      # 一段上下文内被触发超过几次才劝一次
 
     # ── Embedding 提供方插件化 ──
     # 后端: disabled | ollama | api | local
@@ -147,9 +180,25 @@ class Settings(BaseSettings):
     # 子目录布局（agents/ worlds/ plugins/ market/ …）见 app/paths.py，别在模块里另写相对路径。
     data_dir: str = _default_data_dir()
 
+    # ── 表情包（平台资源，插件只提供图与描述）──
+    # whitelist（默认）：装了包也不自动给所有 AI 用，创建者在 AI 设置里逐个勾选；
+    # blacklist：默认全部可用，创建者可以逐个关掉。
+    emoji_pack_mode: str = "whitelist"
+
     # ── 文件上传 ──
     avatar_max_size_mb: int = 10
     upload_max_size_mb: int = 32
+
+    # ── 文件日常额度（§6.2）：人与 AI 各一套，管理页 runtime 组可改，热生效 ──
+    # 口径：每天写入字节只算"真的写了字节"（去重命中、硬链接收文件不算）；每天新增文件数
+    # 只算新建物理文件（同路径覆盖写不算，inode 没变）；每分钟操作次数算上传+发送+转发。
+    # 0 = 关闭那道闸（不设限），不要用"很大"来假装关闭。
+    file_daily_mb_human: int = 2048
+    file_daily_mb_ai: int = 2048
+    file_daily_files_human: int = 200
+    file_daily_files_ai: int = 200
+    file_ops_per_minute_human: int = 30
+    file_ops_per_minute_ai: int = 30
     # 头像落盘目录（唯一来源；各路由不再各写字面量）
     avatars_dir: str = _default_avatars_dir()
 
@@ -180,6 +229,15 @@ class Settings(BaseSettings):
 
     # ── 摘要缓存 TTL（秒） ──
     summary_cache_ttl: int = 600
+
+    # ── 注入额度（每类上限 + 合计上限）：记忆与经历各自不合并额度，但一轮合起来有闸 ──
+    memory_inject_max: int = 5
+    experience_inject_max: int = 5
+    inject_max_total: int = 7
+
+    # ── 跨状态交接的原文尾巴：切会话时抄最后几轮、多少字（经历行另算）──
+    handoff_tail_exchanges: int = 2
+    handoff_tail_chars: int = 400
 
     # ── 系统监控指标保留天数 ──
     agent_metrics_retention_days: int = 30

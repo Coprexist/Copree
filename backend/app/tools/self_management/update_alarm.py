@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 class UpdateAlarm(ToolPlugin):
     name = "update_alarm"
+    persistent_effect = True   # 写进持久状态：结果要进账本，否则下一个自己不知道写了什么
     description = "修改一个闹钟的唤醒时间或任务内容。设错了时间？要调整任务？用这个改。wake_at 和 task 可以只改一个。"
     segment = "self_management"
     parameters = {

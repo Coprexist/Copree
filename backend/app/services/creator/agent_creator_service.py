@@ -270,6 +270,25 @@ async def get_draft(db: AsyncSession, user_id: int, draft_id: int) -> AgentCreat
     )).scalars().first()
 
 
+async def get_draft_for_update(
+    db: AsyncSession, user_id: int, draft_id: int
+) -> AgentCreationDraft | None:
+    """取草稿并锁住这一行——同一个草稿的创建请求由此排成一条队。
+
+    没有这个锁时，"建 AI" 与"标草稿已建"之间是空窗：两次点击都会走到建号那一步，
+    轻则建出两个 AI（2026-11-15 初音未来 ×2），重则两个请求同时给 AI 起同名账号，
+    撞 `users_username_key` 直接 500。锁在**建号之前**拿，后来者等到的是已经
+    created 的草稿，直接把建成的那条返回就行。
+    """
+    return (await db.execute(
+        select(AgentCreationDraft)
+        .where(
+            AgentCreationDraft.id == draft_id, AgentCreationDraft.user_id == user_id
+        )
+        .with_for_update()
+    )).scalars().first()
+
+
 async def update_draft(db: AsyncSession, draft: AgentCreationDraft, **fields) -> AgentCreationDraft:
     for key, value in fields.items():
         if value is not None and hasattr(draft, key):
@@ -653,6 +672,12 @@ async def _run_turn(db: AsyncSession, user_id: int, draft: AgentCreationDraft, m
 
     if hit_cap:
         yield _sse({"type": "notice", "message": "工具轮次到上限，这一轮只能说话、不再改表单"})
+
+    # 模型只给了思考、没给正文（或整轮空转）时，前端会停在一条空气泡上，
+    # 看上去像「连接断了」。这里补一帧人话，让客户端显示真实原因而不是假装断线。
+    if not text_out.strip():
+        yield _sse({"type": "notice",
+                    "message": "模型这一轮没有输出正文（可能只产生了思考内容），可以再发一次，或换一个模型试试。"})
 
     try:
         await save_conversation_log(

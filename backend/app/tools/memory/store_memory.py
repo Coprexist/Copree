@@ -22,6 +22,7 @@ _WEIGHT_HINT = "设定权值 1-5；不填按类型默认（人物与关系 5、�
 
 class StoreMemory(ToolPlugin):
     name = "store_memory"
+    persistent_effect = True   # 写进持久状态：结果要进账本，否则下一个自己不知道写了什么
     description = (
         "存储一条长期记忆（以后还能被想起来的事）；带 memory_id = 改已有的那条。\n"
         "**改**：memory_id 用 recall_memory 查，只改你传了的字段——锚错了改锚点、权值给错了改权值、"

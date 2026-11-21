@@ -33,13 +33,18 @@ class SlidingWindow:
         self._max_keys = max(int(max_keys), 1)
         self._hits: OrderedDict[str, deque[float]] = OrderedDict()
 
-    def hit(self, key: str) -> int:
-        """记一次访问：返回 0 = 放行；>0 = 已超限，需要等待的秒数。"""
+    def hit(self, key: str, limit: int | None = None) -> int:
+        """记一次访问：返回 0 = 放行；>0 = 已超限，需要等待的秒数。
+
+        `limit` 给定时按它算这一笔：同一个窗口服务多种上限（文件操作的分钟闸，人与 AI
+        各有一套），就不必为每个上限各造一个实例。
+        """
+        limit = self.limit if limit is None else max(int(limit), 1)
         now = time.monotonic()
         bucket = self._bucket(key, now)
         while bucket and now - bucket[0] > self.window:
             bucket.popleft()
-        if len(bucket) >= self.limit:
+        if len(bucket) >= limit:
             # 窗口内最早那次滑出去就腾出一个名额，那一刻就是下一次能成功的时间。
             # 不写死常量：窗口改了它也自动跟着变。
             return _seconds_until(bucket[0] + self.window, now)
@@ -126,3 +131,55 @@ class FailureGuard:
 
     def __len__(self) -> int:
         return len(self._state)
+
+
+class DailyCounter:
+    """按日历日计数的额度：换了日期就清零（边界由调用方给的日期串决定）
+
+    与 SlidingWindow 的分工：那个管「最近 N 秒」，用 monotonic 计时，表达不了「实例时区
+    的今天 0 点」；额度要按日历日重置，所以单列一个。计数同样只在进程内、同样有键上限
+    ——额度是防滥用的，重启清零不给出可乘之机（要跨重启刷，得先重启服务，那已经暴露了）。
+    """
+
+    def __init__(self, *, max_keys: int = MAX_KEYS) -> None:
+        self._max_keys = max(int(max_keys), 1)
+        self._day: str | None = None
+        self._hits: OrderedDict[str, int] = OrderedDict()
+
+    def used(self, day: str, key: str) -> int:
+        """今天这个 key 已经记了多少（日期变了会先清零）"""
+        self._sync_day(day)
+        value = self._hits.get(key)
+        if value is None:
+            return 0
+        self._hits.move_to_end(key)
+        return int(value)
+
+    def charge(self, day: str, key: str, amount: int, limit: int) -> bool:
+        """记一笔并判断额度：放不下就不记，返回 False
+
+        为什么拒了不记：额度是硬闸。拒了一次还涨一格，会让同一轮里的下一次更早被拒，
+        同一个请求重试两次就被判"用完了"，这是把拒绝变成惩罚。
+        """
+        self._sync_day(day)
+        used = self.used(day, key)
+        if used + int(amount) > max(int(limit), 0):
+            return False
+        if key not in self._hits and len(self._hits) >= self._max_keys:
+            self._hits.popitem(last=False)      # 键有上界：键来自 uid，不设上界等于给人塞键的口子
+        self._hits[key] = used + int(amount)
+        self._hits.move_to_end(key)
+        return True
+
+    def clear(self) -> None:
+        """清零（测试与运维用）：换日之外，明确想丢弃今天已经记的量"""
+        self._hits.clear()
+        self._day = None
+
+    def _sync_day(self, day: str) -> None:
+        if day != self._day:
+            self._day = day
+            self._hits.clear()
+
+    def __len__(self) -> int:
+        return len(self._hits)

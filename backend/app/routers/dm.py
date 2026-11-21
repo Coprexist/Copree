@@ -259,8 +259,8 @@ async def get_dm_activity(
     db: AsyncSession = Depends(get_db),
 ):
     """获取私信当前 AI 思考状态（用于进入对话时恢复活动指示器）"""
-    from app.ai.response_worker import get_thinking_state
-    return get_thinking_state(f"dm:{session_id}")
+    from app.ai.response_worker import activity_key, get_thinking_state
+    return get_thinking_state(activity_key("dm", session_id=session_id))
 
 
 @router.post("/dm/{session_id}/dnd")
@@ -450,7 +450,7 @@ async def _maybe_trigger_dm_ai_reply(
         if sender_agent is None:
             return
         if not dm_quota.quota_allows(sender_agent, "send", now) or not dm_quota.quota_allows(agent, "receive", now):
-            # 限额是 AI↔AI 唯一该拦的地方；拦下也把「有人找过」记进状态栈，
+            # 限额是 AI↔AI 唯一该拦的地方；拦下也把「有人找过」记进状态链，
             # 否则 AI 下次开口时完全不知道这条私信来过（同上文档「超配额也建帧」）
             await _note_dm_contact(db, agent, session_id, sender_id)
             return
@@ -582,10 +582,10 @@ async def _maybe_trigger_dm_ai_reply(
 
 
 async def _note_dm_contact(db: AsyncSession, agent, session_id: str, sender_id: int) -> None:
-    """把「这个私信会话里有人找过我」记进状态栈——不触发回复的路径也要记。
+    """把「这个私信会话里有人找过我」记进状态链——不触发回复的路径也要记。
 
     与 response_worker 的帧维护同一个入口（ensure_active_frame）：那边是「真要回」时把帧
-    置顶，这里是「没回也得知道」。失败只告警：一条私信不该因为状态栈写不进去就丢掉。
+    置顶，这里是「没回也得知道」。失败只告警：一条私信不该因为状态链写不进去就丢掉。
     """
     try:
         from app.services.agent.state_stack_service import ensure_active_frame

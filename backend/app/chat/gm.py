@@ -11,6 +11,8 @@ from sqlalchemy import select, desc, and_, or_, update, delete, func as sqlfunc
 from app.models.group import DEFAULT_CONCURRENT_AI_LIMIT, Group, GroupMember
 from app.models.message import Message
 from app.models.agent import Agent as AgentModel
+from app.utils.multimodal import attachment_marks, with_transcripts
+from app.utils.text import render_mention_with_names
 from app.utils.pure.history import make_entry
 from app.utils.pure.prompting import format_message, format_time_shanghai
 
@@ -80,6 +82,37 @@ async def get_group(db: AsyncSession, group_id: int) -> Group | None:
     return result.scalar_one_or_none()
 
 
+def group_settings_payload(group: Group) -> dict:
+    """群级设置的单一份序列化（列表 / 详情 / PATCH 回包共用）。
+
+    新增一个群级设置只改这里：三处各手抄一份时已经漂过——群详情缺发言限制与 AI 并发数、
+    PATCH 回包缺群简介，前端只能按「这段数据从哪个接口来」兜底显示。形状只该维护一次。
+    """
+    return {
+        "id": group.id,
+        "name": group.name,
+        "owner_type": group.owner_type,
+        "owner_id": group.owner_id,
+        "is_paused": bool(group.is_paused),
+        "is_vector_accelerated": bool(group.is_vector_accelerated),
+        "announcement": group.announcement,
+        "bio": group.bio,
+        "speak_limit_per_minute": group.speak_limit_per_minute or 0,
+        "speak_limit_window_seconds": group.speak_limit_window_seconds or 120,
+        "concurrent_ai_limit": group.concurrent_ai_limit or DEFAULT_CONCURRENT_AI_LIMIT,
+        "avatar_mode": group.avatar_mode or "default",
+        "avatar_url": group.avatar_url,
+        "include_ai_in_avatar": bool(group.include_ai_in_avatar),
+        "searchable": bool(group.searchable),
+        "auto_approve_join": bool(group.auto_approve_join),
+        "approve_invites": bool(group.approve_invites),
+        "name_from_channel": bool(group.name_from_channel),
+        "proxy_rules": group.proxy_rules,
+        "proxy_announcement": bool(group.proxy_announcement),
+        "created_at": str(group.created_at) if group.created_at else None,
+    }
+
+
 async def list_user_groups(db: AsyncSession, user_id: int) -> list[dict]:
     """列出用户所属的群聊（含未读信息、公告摘要等）。
 
@@ -87,8 +120,8 @@ async def list_user_groups(db: AsyncSession, user_id: int) -> list[dict]:
     侧栏每次刷新都要跑它，逐群查（二十几个群就是一百多条 SQL）会让列表刷新肉眼可见地卡。
     """
     from app.models.user import User
-    from app.utils.message_serializer import make_preview, mention_names
-    from app.utils.text import mention_token, render_mention_names
+    from app.utils.message_serializer import mention_names, preview_of, revoked_preview
+    from app.utils.text import mention_token
 
     # 成员关系连着群本身一起取（内连接：群没了就该跳过，与原先 db.get 取不到时 continue 一致）
     pairs: list[tuple[GroupMember, Group]] = [
@@ -262,48 +295,40 @@ async def list_user_groups(db: AsyncSession, user_id: int) -> list[dict]:
         last_msg = last_msgs.get(group.id)
         if last_msg:
             last_message_at = str(last_msg.created_at) if last_msg.created_at else None
-            # 正文里存的是 <@!id>（聊天界面由前端渲染成名字）；这里是"顺手给人看"的地方，后端自己换
-            preview = make_preview(
-                render_mention_names(last_msg.content or "", names), last_msg.attachments, max_len=50
-            )
             if last_msg.sender_type == "system":
                 sender = "系统"
             else:
                 # 人 / AI / 群助手：名字都来自 sender_names，别再手抄一套 if
                 sender = last_sender_names.get((last_msg.sender_type, last_msg.sender_id)) or "用户"
-            last_message_preview = f"{sender}: {preview}"
+            revoked_name = None
+            if getattr(last_msg, "revoked_at", None):
+                # 群里的撤回写"谁撤回了一条消息"（名字完整），不套 "名字: 内容" 那个冒号口径——
+                # 这里没有内容可给，冒号只会显得话没说完
+                revoked_name = sender
+                last_message_preview = revoked_preview(sender)
+            else:
+                # 正文里存的是 <@!id>（聊天界面由前端渲染成名字）；这里是"顺手给人看"的地方，
+                # 后端自己换名字，预览口径由 preview_of 统一收口，别在这里另写一套判断
+                last_message_preview = f"{sender}: {preview_of(last_msg, names, max_len=50)}"
 
-        groups.append({
-            "id": group.id,
-            "name": group.name,
-            "owner_type": group.owner_type,
-            "owner_id": group.owner_id,
-            "is_vector_accelerated": group.is_vector_accelerated,
+        payload = group_settings_payload(group)
+        payload.update({
+            # 列表只给公告摘要：原文可能很长，侧栏要的是一眼能看的那句
             "announcement": announcement,
-            "bio": group.bio,
-            "speak_limit_per_minute": group.speak_limit_per_minute or 0,
-            "speak_limit_window_seconds": group.speak_limit_window_seconds or 120,
-            "concurrent_ai_limit": group.concurrent_ai_limit or DEFAULT_CONCURRENT_AI_LIMIT,
             "my_role": m.role,
             "unread_count": unread_count,
             "has_mention": group.id in has_mention,
             "last_message_preview": last_message_preview,
+            # 撤回那行要把名字单独给出去：侧栏要"宽度不够先缩名字"，得能分开渲染
+            "last_message_revoked_name": revoked_name,
             "last_message_at": last_message_at,
             "dnd_until": str(m.dnd_until) if m.dnd_until else None,
             "member_avatars": avatars_by_group.get(group.id, []),
-            "avatar_mode": group.avatar_mode or "default",
-            "avatar_url": group.avatar_url,
-            "include_ai_in_avatar": group.include_ai_in_avatar,
-            # 发现与入群三开关：群设置面板据此回显，不能只在 PATCH 响应里给
-            "searchable": bool(group.searchable),
-            "auto_approve_join": bool(group.auto_approve_join),
-            "approve_invites": bool(group.approve_invites),
-            "name_from_channel": bool(group.name_from_channel),
             "channel_bound": group.id in channel_labels,
             "channel_labels": channel_labels.get(group.id, []),
             "is_pinned": False,
-            "created_at": str(group.created_at) if group.created_at else None,
         })
+        groups.append(payload)
     return groups
 
 
@@ -409,11 +434,16 @@ async def send_gm_message(
     # 入口归一：@名字 → <@!id>。人的手打、QQ 入站、工具调用都经这里，
     # 所以下游（唤醒判定、AI 上下文、通道出口）不必再各写一套名字比对
     content = await link_group_mentions(db, group_id, content)
-    # 表情归一：能对上 unicode 的换成字符、只有图的规范成 :id:——正文里从此不出现自造写法
-    # （唯一入口，见 catalog.resolve_emoji_text；失败按原文入库，表情不该挡住消息）
-    from app.services.plugin.catalog import normalize_emoji_text
+    # 表情归一（唯一入口）：能对上 unicode 的换成字符；只有图的摘掉标记、变成附件。
+    # 图片表情走附件，站内与通道都只认附件——通道不必再各懂一遍表情（失败按原文入库）。
+    from app.services.plugin import catalog
 
-    content = await normalize_emoji_text(db, content)
+    content = await catalog.normalize_emoji_text(db, content)
+    # 图片表情按"谁在说"过滤：AI 只能发它被允许的包（默认白名单），人类/系统用全局启用的
+    packs = await catalog.packs_for_sender(db, sender_id)
+    content, emoji_attachments = await catalog.take_image_emoji_attachments(db, content, packs)
+    if emoji_attachments:
+        attachments = [*(attachments or []), *emoji_attachments]
     # 同上一条的道理：上下文里的 [msg_id=N] 标记被抄进正文时收掉，
     # N 确实是本群的消息就当成本意——它本来就是要"回复那条"
     from app.utils.text import take_trailing_msg_id
@@ -436,12 +466,10 @@ async def send_gm_message(
     db.add(message)
     await db.flush()
 
-    if attachments:
-        from app.services.content.file_service import track_forward_reference
-        for att in attachments:
-            fid = att.get("file_id") if isinstance(att, dict) else getattr(att, "file_id", None)
-            if fid:
-                await track_forward_reference(db, fid, sender_type, sender_id)
+    # 附件引用记账：群/私信共用一处（见 file_service.track_attachments）
+    from app.services.content.file_service import track_attachments
+
+    await track_attachments(db, attachments, sender_type, sender_id)
 
     await db.refresh(message)
 
@@ -502,15 +530,21 @@ async def get_gm_messages(
         query = query.where(Message.created_at > after_time)
         query = query.order_by(desc(Message.created_at))
     elif before_id:
-        # 贴着游标往前一页（游标方向 = 翻旧消息）
+        # 贴着游标往前一页（游标方向 = 翻旧消息）：必须按 id 倒序，取的才是「紧贴游标的 20 条」。
+        # 少了这个 order_by，SQL 给的是物理顺序（≈最早的一批），于是翻到顶加载出来的是几个月前
+        # 的零散旧消息（2026-11-14 群 81：before_id=5184 返回 4081/3723/3537/4606…，前端排完序
+        # 就是「一周前的消息夹在最新几条上面」）。after_id 早就按 id 升序了，这里是它的镜像。
         query = query.where(Message.id < before_id)
+        query = query.order_by(desc(Message.id))
     elif after_id:
         # 贴着游标往后一页、按 id 升序：after 是 before 的镜像。原先"按时间倒序取最新一窗"
         # 等于每次都跳到末尾，中间那批永远取不到（2026-10-04 群 69 实测）。
         query = query.where(Message.id > after_id)
         query = query.order_by(Message.id)
     else:
-        query = query.order_by(desc(Message.created_at))
+        # 首屏也按 id：与两个游标同一口径。用 created_at 时同一秒插入的两条顺序不稳
+        # （AI 回复和人类消息常挤在同一秒），而且 after_time 之外的三种取法本就应该一致。
+        query = query.order_by(desc(Message.id))
 
     query = query.limit(limit)
     result = await db.execute(query)
@@ -616,7 +650,9 @@ async def link_group_mentions(db, group_id: int, content: str) -> str:
 
 
 def gm_message_entry(message, *, agent_name: str, agent_user_id: int | None,
-                     speaker_name: str | None = None, max_len: int | None = None) -> dict:
+                     speaker_name: str | None = None, max_len: int | None = None,
+                     mention_names: dict[int, str] | None = None,
+                     transcripts: dict[int, str] | None = None) -> dict:
     """一条群消息 → 账本条目（**渲染即落库**：content 就是发给模型的最终字节）。
 
     同一列消息每次渲染必须字节一致——差一个字符，从它开始的前缀全部 miss（§0）。
@@ -628,10 +664,22 @@ def gm_message_entry(message, *, agent_name: str, agent_user_id: int | None,
         # "撤回后才进历史"的那些因此天然只有占位，不用另外判断
         content = revoked_text()
     else:
+        body = message.content or ""
+        # 存储层用 <@!id>（唯一、改名不漂），但 AI 读到令牌只会反问"213 是哪位"：
+        # 补一个名字注脚，id 原样留在前面——AI 照抄它就能 @ 到同一个人
+        if mention_names:
+            body = render_mention_with_names(body, mention_names)
         # 超长消息折成「前 75% + 省略标记 + 后 25%」：只截前半会让 AI 对自己的话失忆
         content = fold_text(
-            message.content or "", limit=FOLD_LIMIT if max_len is None else max_len, expand_id=message.id
+            body, limit=FOLD_LIMIT if max_len is None else max_len, expand_id=message.id
         )
+        # 附件铺在正文前：平台上直接带的附件以前在群聊里完全消失（只有 QQ 通道
+        # 自己把 [文件] 名字拼进了正文），AI 既看不到文件名也读不到内容
+        # 语音文稿的家在 file_metadata（消息快照只留 file_id），渲染前补一次 AI 才读得到
+        marks = attachment_marks(
+            with_transcripts(getattr(message, "attachments", None), transcripts), said=content)
+        if marks:
+            content = f"{marks} {content}" if content else marks
     is_self = message.sender_type == "ai" and message.sender_id == agent_user_id
     rendered = format_message({
         "time": format_time_shanghai(message.created_at),
@@ -788,6 +836,8 @@ async def update_group_settings(db: AsyncSession, group_id: int, operator_id: in
         "searchable", "auto_approve_join", "approve_invites",
         # 群名跟随外部通道
         "name_from_channel",
+        # 决策代理规矩与公告可见性
+        "proxy_rules", "proxy_announcement",
     }
     for key, value in updates.items():
         if key not in allowed_fields:

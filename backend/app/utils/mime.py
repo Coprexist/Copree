@@ -14,6 +14,10 @@ import os
 
 TEXT_PLAIN = "text/plain"
 
+# 光栅图片：视觉接口与官方通道都只收这几种（SVG 是图，但两边都不认，模板里按文件渲染）。
+# 以前多模态与 QQ 媒体层各写一份同样的集合，改一处就漏一处（2026-11-14 收口）。
+IMAGE_MIMES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
+
 # 「没有信息量」的类型：留成这些值等于没识别，允许用扩展名覆盖
 GENERIC_MIMES = frozenset({"", TEXT_PLAIN, "application/octet-stream", "binary/octet-stream"})
 

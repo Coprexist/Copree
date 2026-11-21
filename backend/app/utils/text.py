@@ -122,6 +122,38 @@ def render_mentions(content: str, resolve) -> str:
     return MENTION_TOKEN_RE.sub(lambda m: resolve(int(m.group(1))), content)
 
 
+# 注脚里的名字最多留这么多字：群昵称常有「书爱 Shu Ai Neumann ᴸᴼᵛᴱ」这种长串，
+# 整段进上下文既费 token 又挤占正文，反正身份由前面的 id 定
+MAX_MENTION_NAME_CHARS = 15
+
+
+def short_mention_name(name: str, limit: int = MAX_MENTION_NAME_CHARS) -> str:
+    """注脚名截断：超长才动，且只在名字这一处（不碰正文、不碰 id）。"""
+    clean = (name or "").strip()
+    return clean if len(clean) <= limit else clean[:limit] + "…"
+
+
+def render_mention_with_names(content: str, id_to_name: dict[int, str], *,
+                              extra: str = "") -> str:
+    """<@!id> → <@!id>（名字）：AI 上下文里的规范写法。
+
+    id 是**身份**，名字只是给人（和模型）看的注脚——所以 id 必须留在前面、原样可解析：
+    AI 照抄 <@!id> 就能 @ 到同一个人，改名、重名都不会指错；名字只帮它认出"这是谁"。
+    查不到名字时只留 <@!id>，不编一个假名字。
+
+    extra：紧跟在注脚后的补充，只给**判定侧**用（代理 LLM 在注脚后补「（不是你）」——
+    它只在没点名本人时被问到，所以这是事实）。账本渲染不传，AI 自己读到的那一份没有这句。
+    """
+    def annotate(match) -> str:
+        token = match.group(0)
+        name = short_mention_name(id_to_name.get(int(match.group(1))) or "")
+        return f"{token}（{name}）{extra}" if name else token
+
+    if not content:
+        return content
+    return MENTION_TOKEN_RE.sub(annotate, content)
+
+
 def render_mention_names(content: str, id_to_name: dict[int, str]) -> str:
     """<@!id> → @名字（纯函数）。
 

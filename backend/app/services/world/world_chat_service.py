@@ -833,7 +833,9 @@ async def resolve_chat_model(
     provider = find_provider_by_base_url(await get_providers(repo), api_base)
     # 3. 管理员没配这个 base_url → 回退内置预设
     if provider is None:
-        provider = find_provider_by_base_url(list(PRESETS.values()), api_base)
+        provider = find_provider_by_base_url(
+            [p for p in PRESETS.values() if (p.get("kind") or "llm") == "llm"], api_base,
+        )
     if provider:
         model = provider.get("global_default_chat_model") or provider.get("chat_model")
         if model:
@@ -1294,7 +1296,8 @@ async def _prepare_world_chat(
     # world 45 因此在 v7 上按旧文案去找本环境不存在的 world_push，白烧轮次。
     # 新会话第一轮没有"前缀要保"的包袱（历史为空，缓存本来就要重建），在这里对齐一次。
     # 代价：版本确实变过时，这一轮前缀全额 miss 一次（约 76k × ¥0.2/M ≈ 1.5 分）。
-    if await session_is_fresh(world_repo, world):
+    fresh_session = await session_is_fresh(world_repo, world)
+    if fresh_session:
         _prefix_cfg = dict(world.config or {})
         _sources = prefix_capability_sources(world_id)
         # 换成最新 = 也已告知（effective + known 一起推，唯一入口 mark_prefix_fresh）：
@@ -1413,6 +1416,19 @@ async def _prepare_world_chat(
             logger.warning(f"🌐 世界 #{world_id} 记忆地图注入失败（本轮降级）: {e}")
     if needs_compress:
         messages.append({"role": "system", "content": "⚠️ 上下文已接近上限，请调用 compact_context 工具压缩对话历史后再继续。"})
+    # 跨情景经历：别的会话里干过的事（新会话先补最近一场，再按语境召回）。
+    # 与主站同一张表；世界侧没有账本，投递标记记在会话元信息（见 experience/world_experience.py）
+    try:
+        from app.services.experience.world_experience import deliver_world_experiences
+
+        await deliver_world_experiences(
+            world_repo, world, wai, messages,
+            query=" ".join(it.text for it in items)[:500],
+            limit=int(settings.experience_inject_max),
+            fresh=fresh_session,
+        )
+    except Exception as e:
+        logger.warning(f"🌐 世界 #{world_id} 经历注入失败（非致命）: {e}")
     from app.utils.pure.timeutil import get_zoneinfo
     tz_name = settings.display_timezone
     tz = get_zoneinfo(tz_name)
@@ -2031,6 +2047,18 @@ async def stream_world_chat(
 
     async for event in _emit_suggestions(world_repo, world, world_id, turn_state):
         yield event
+
+    # 跨情景经历：世界 AI 没有 end_turn 的 key_note，平台兜底就是这一轮的工具总账
+    try:
+        from app.services.world.world_service import ensure_world_ai
+
+        wai_row = await ensure_world_ai(world_repo, world_id)
+        from app.services.experience.world_experience import record_world_turn
+
+        await record_world_turn(world_repo, world, wai_row,
+                                tools_done=turn_state.get("tools_done") or [])
+    except Exception as e:
+        logger.warning(f"🌐 世界 #{world_id} 经历落库失败（非致命）: {e}")
 
     yield "data: [DONE]\n\n"
 

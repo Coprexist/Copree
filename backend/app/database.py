@@ -27,6 +27,9 @@ if provider.name == "postgres":
         max_overflow=40,
         pool_pre_ping=True,
         echo=False,
+        # 等锁必须有上限：某次写要等的事务永远不提交时，等够 15 秒就报错，别把后台队列一起冻住
+        # （2026-11-07 群 81：一条 INSERT 等了一个已挂 12 小时的回合事务，没人知道）。
+        connect_args={"server_settings": {"lock_timeout": "15000"}},
     )
 else:
     engine = create_async_engine(

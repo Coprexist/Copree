@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 class SetAlarm(ToolPlugin):
     name = "set_alarm"
+    persistent_effect = True   # 写进持久状态：结果要进账本，否则下一个自己不知道写了什么
     description = "给自己设定一个闹钟。到时间后你会被自动唤醒，系统会告诉你「你的闹钟响了」以及你当初设定要做什么事，然后你就可以执行那个任务了。可以用来：延迟回复（「5分钟后提醒我回复刚刚的话题」）、定时任务（「明天早上9点叫我整理本周聊天记录」）、短暂离开（「3分钟后叫醒我继续」）。delay_seconds 和 wake_at 二选一：用 delay_seconds 表示「多久之后」，用 wake_at 表示「具体时间点」。"
     segment = "self_management"
     parameters = {

@@ -23,8 +23,9 @@ UNLOCK_STEPS = (
     "clear_note_copies",      # 便签副本（连同撤下通知）随上下文重建离场
     "reset_trigger_state",    # 触发规则状态复位（scope=frame 在新上下文里从零开始）
     "apply_pending_config",   # 应用挂起的配置
-    "apply_pending_changes",  # 能力版本对齐最新（工具定义 + 提示词）
+    "apply_pending_changes",  # 能力版本对齐最新（工具定义 + 提示词；前缀快照也在这一步清空）
     "apply_environment",      # 环境：写进前缀的那份对齐现值（锁定态只落通知，字节不动）
+    "reset_frame_roster",     # 帧清单作废：下次请求按此刻的帧集合重算一份全量
 )
 
 
@@ -96,6 +97,12 @@ async def unlock_context(db: AsyncSession, agent, *, group_id: int | None, sessi
         current = await environment_snapshot(db, group_id) if group_id else None
         await write_frame_env(db, agent.id, ref, locked=current, notified=current)
 
+    async def _reset_frame_roster():
+        # 清单是快照式投递：解锁点重写历史之后，它也该跟此刻的帧集合对齐，
+        # 不然合并/结束掉的帧会一直挂在清单上
+        from app.services.agent.state_stack_service import reset_frame_roster
+        await reset_frame_roster(db, agent.id)
+
     runners = {
         "rewrite_history": _rewrite_history,
         "clear_note_copies": _clear_note_copies,
@@ -103,6 +110,7 @@ async def unlock_context(db: AsyncSession, agent, *, group_id: int | None, sessi
         "apply_pending_config": _apply_pending_config,
         "apply_pending_changes": _apply_pending_changes,
         "apply_environment": _apply_environment,
+        "reset_frame_roster": _reset_frame_roster,
     }
     done: list[str] = []
     for name in UNLOCK_STEPS:

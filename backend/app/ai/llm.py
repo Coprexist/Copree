@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
+from app.ai.prefix import guard as prefix_guard, locked as prefix_locked
 from app.models.group import Group as GroupModel
 from app.models.context_config import ContextConfig
 from app.chat import chat_api
@@ -25,6 +26,7 @@ from app.utils.pure.prompting import (
 from app.utils.multimodal import (
     build_content, image_attachments, image_note, injected_image_count,
     messages_have_images, strip_image_parts, is_vision_unsupported_error,
+    text_attachment_blocks,
 )
 
 logger = logging.getLogger(__name__)
@@ -504,14 +506,21 @@ async def _get_segment_order(db) -> list[str]:
 async def _inject_cross_state_context(db, agent, context_ref: str, messages: list[dict]) -> None:
     """原文尾巴：记下本会话最后几轮原文；把刚离开那段对话的尾巴注入一次。
 
+    尾巴只是「最后说到哪」的收窄版（轮数/字数是 runtime 配置）：那一场干过什么由经历行
+    在切场的第一轮补进账本（见 _deliver_recollection），两段文案分开放，边界也分开写。
+
     放在历史之后、当前时间之前——动态内容沉底，前缀（system + 历史）仍可缓存。
     便签不走这里：它是**投递制**，投进来就固化在会话前缀里（见 _deliver_frame_notes）。
     """
     try:
+        from app.config import settings
         from app.services.agent.state_stack_service import frame_turn_context
         from app.utils.pure.state_stack import frame_tail
 
-        block = await frame_turn_context(db, agent.id, context_ref, frame_tail(messages))
+        tail = frame_tail(messages,
+                          max_exchanges=settings.handoff_tail_exchanges,
+                          max_chars=settings.handoff_tail_chars)
+        block = await frame_turn_context(db, agent.id, context_ref, tail)
         if block:
             messages.append({"role": "system", "content": block})
     except Exception as e:
@@ -522,6 +531,45 @@ async def _deliver_plan_board(db, agent, context_ref: str) -> None:
     """计划板：与记忆同一条管线，落在当轮新消息之前（见 docs/dev/plan_and_alarm.md §3.2）。"""
     from app.services.agent.plan_service import deliver_plans
     await deliver_plans(db, agent, context_ref)
+
+
+async def _deliver_recollection(
+    db, agent, context_ref: str, *, query: str, recalled_memory_ids: list[int],
+) -> None:
+    """记忆与经历同一条管线：抢在 sync 之前落账本（先想起，再读新话）。
+
+    额度按**真正投出去**的条数算（不是召回到几条）：这一轮记忆全都投过了，经历就该多拿几条。
+    切场那一轮先把「刚离开那一场」的行投满，剩额才给按语境召回——刚切过来时当前消息还没
+    生效，按语境找不到什么，额度花在上一场更值。
+
+    场景取当前帧（`current_scene`），不取会话键：插件帧里干的事落在插件帧的场景上，
+    但「投过没有」仍记在会话账本里（`context_ref`）——同一段对话里的账本就是那一本。
+    """
+    from app.config import settings
+    from app.services.agent.state_stack_service import current_scene
+    from app.services.experience.experience_delivery import (
+        deliver_recalled_experiences, deliver_switch_experiences,
+    )
+    from app.services.memory.memory_delivery import deliver_memories
+    from app.utils.pure.injection_budget import experience_slots
+
+    delivered = await deliver_memories(db, agent, context_ref, recalled_memory_ids)
+    limit = experience_slots(
+        len(delivered),
+        memory_max=settings.memory_inject_max,
+        experience_max=settings.experience_inject_max,
+        total_max=settings.inject_max_total,
+    )
+    scene = await current_scene(db, agent.id)
+    scene_ref = str(scene.get("context_ref") or "") or context_ref
+    switched = await deliver_switch_experiences(
+        db, owner_id=agent.id, context_ref=context_ref, scene=scene_ref,
+        handoff=scene.get("handoff") or {}, limit=limit,
+    )
+    await deliver_recalled_experiences(
+        db, owner_id=agent.id, context_ref=context_ref, scene=scene_ref,
+        limit=max(0, limit - len(switched)), query=query,
+    )
 
 
 async def _bound_world_sources(db, agent, group_id: int | None) -> list[str]:
@@ -704,12 +752,14 @@ async def _build_capability_notice(db, agent, context_ref: str, prompt_source: s
 "变更通知"只该有一个出口——单独再拼一条既没有账本、也没有 drop_on_unlock。
     """
     try:
+        from app.ai.prefix import notice_sources
         from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
-        from app.services.capability_versioning import build_change_notice, SOURCE_PLATFORM
-        from app.services.capability_versioning import memory_index_source
+        from app.services.capability_versioning import build_change_notice
+        # 源清单只有一份（ai/prefix.notice_sources）：新增一段有版本的内容只改那里，
+        # 通知自动跟上，不会出现"前缀变了却没人被告知"。
         notice = await build_change_notice(
             SQLAlchemyCapabilityRepository(db), agent,
-            [SOURCE_PLATFORM, prompt_source, memory_index_source(agent.id), *extra_sources],
+            notice_sources(agent.id, prompt_source, extra_sources),
             state=context_ref, foci=getattr(agent, "foci", None))
         return notice or ""
     except Exception as e:
@@ -722,7 +772,7 @@ async def _inject_personality_anchor(db, agent, system_prompt: str, language: st
     人格锚点注入 — 设计文档 6.2：只读、始终在最前面、随一致性系数缩放。
 
     锚点存在于 personality_anchors 表时注入，不存在则原样返回。
-    注入发生在所有段落拼接之后、工作区/状态栈追加之前，保证锚点位于最前。
+    注入发生在所有段落拼接之后、工作区/状态链追加之前，保证锚点位于最前。
     """
     try:
         from app.repositories.agent_repo import SQLAlchemyAgentRepository
@@ -744,11 +794,20 @@ async def _inject_personality_anchor(db, agent, system_prompt: str, language: st
 # _build_personality ——已迁移到 utils/pure/prompting.py，导入为 build_personality_segment
 
 
-async def _emoji_packs_note(db) -> str:
-    """可用表情包：常驻只给包名、用法与写法，具体表情名走 list_emoji_faces。
+async def _build_emoji_section(db) -> str:
+    """表情包段：**探测**（登记版本）+ 产出文本，两件事同一份内容。
 
-    全量清单是每轮的固定开销，包一多即上千 token，而多数轮次并不发表情；按需查询更省。
+    表情包清单是"进前缀且会变"的内容——加了包/删了包，字节就会变。以前它既不在版本链里、
+    也不在通知源里：2026-11-14 加"大肥鱼"24 张，前缀从第 0 字节失效、却一条通知都没有。
+    现在它和记忆索引、人格一样走版本链（作用域全部），变更由【能力变更通知】告知。
+
+    内容上常驻只给包名、用法与写法，具体表情名走 list_emoji_faces：全量清单是每轮的固定
+    开销，包一多即上千 token，而多数轮次并不发表情。
     """
+    from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
+    from app.services.capability_versioning import (
+        emoji_packs_source, ensure_text_source_version, SCOPE_ALL,
+    )
     from app.services.plugin import catalog
 
     packs = await catalog.enabled_emoji_packs(db)
@@ -756,16 +815,22 @@ async def _emoji_packs_note(db) -> str:
         return ""
     lines = [
         "## 可用表情包",
-        "标准表情直接写字符（如 🙂），自定义表情写短码（如 :qq_shy:）——一条消息最多一两个：",
+        "表情写成短码（如 :smile:），旧写法 [表情:名字] 也认——一条消息最多一两个：",
     ]
     for pack in packs:
         usage = f"：{pack['usage']}" if pack["usage"] else ""
         lines.append(f"- **{pack['name']}**（{len(pack['faces'])} 个）{usage}")
     lines.append("具体有哪些表情、名字怎么写，调用 list_emoji_faces 查，别凭印象编名字。")
-    return "\n".join(lines)
+    text = "\n".join(lines)
+    try:
+        await ensure_text_source_version(
+            SQLAlchemyCapabilityRepository(db), emoji_packs_source(), text, "表情包", scope=SCOPE_ALL)
+    except Exception as e:
+        logger.warning(f"表情包版本登记失败（非致命，本轮照常渲染）: {e}")
+    return text
 
 
-async def _build_tools_segment(db, agent, is_dm: bool = False) -> str:
+async def _build_tools_segment(db, agent, is_dm: bool = False, emoji_note: str = "") -> str:
     """tools 段：技能目录 + 要点——告诉模型「有什么、怎么调、要注意什么」。
 
     目录给全（每个可用工具一行，含最小调用形态），要点按层级与场景排；两者都不含 schema
@@ -783,7 +848,7 @@ async def _build_tools_segment(db, agent, is_dm: bool = False) -> str:
     )
     current_tool_names = {t["function"]["name"] for t in current_tools}
 
-    # 🎭 状态帧工具隔离：栈顶帧有白名单就再过滤一层。世界帧的白名单是**现算**的
+    # 🎭 状态帧工具隔离：当前帧有白名单就再过滤一层。世界帧的白名单是**现算**的
     # （基础集 + 这个世界当前颁布的技能，见 world_frame_service），这里只认同一份闸门
     from app.services.world.world_frame_service import active_world, frame_tool_gate
     gate = await frame_tool_gate(db, agent.id)
@@ -827,7 +892,7 @@ async def _build_tools_segment(db, agent, is_dm: bool = False) -> str:
         if dropped:
             lines.append(f"（另有 {dropped} 条要点未列出，需要时调 list_available_skills）")
 
-    emoji_note = await _emoji_packs_note(db)
+    # 表情包段由探测阶段产好传进来（版本登记与渲染同一份内容，不重复查库）
     if emoji_note:
         lines.append("")
         lines.append(emoji_note)
@@ -866,24 +931,26 @@ async def _build_current_context(
 
 def set_round_budget(messages: list[dict], *, round_no: int, total: int,
                      free: bool = False) -> bool:
-    """把工具轮次读数写进尾部动态块（`## 当前时间` 那条 system 消息）。
+    """把本轮轮次读数**追加**在上下文末尾（只追加，绝不改写已有的任何一条）。
 
-    为什么改这条而不是新 append 一条：尾部动态块的位置本来就是「每轮都变、放在最后」，
-    改它不动前缀 cache；每轮追加会让读数在上下文里堆成 N 条。
-    找不到那块（别的拼装路径）就返回 False——读数缺席不影响主流程。
+    为什么当初想改写「## 当前时间」那条 system：它本来就在尾部，改它不动前缀。
+    但它只在第一轮真的在尾部——轮内每多一条工具结果，它就被甩到中间去；再原地改写，
+    等于把"它之后的所有工具结果"全部作废，每轮重算一遍。轮数一多就是平方级：
+    2026-11-06 线上那一轮 18 次调用，重算 252,355 token，命中率从常态 96% 掉到 77%，
+    一次就吃掉 30 万额度里的 85%。
+
+    前缀缓存只认字节前缀，所以这条读数只能往末尾长。累积代价是一轮几十 token，
+    与它省下的相比可以忽略；历史里那些旧读数由常规裁剪/压缩带走。
+
+    返回 True = 写进去了；没有 messages 就返回 False（读数缺席不影响主流程）。
     """
-    from app.utils.pure.round_budget import HEADER, round_budget_text
+    from app.utils.pure.round_budget import round_budget_text
 
-    text = round_budget_text(round_no=round_no, total=total, free=free)
-    for msg in reversed(messages):
-        if msg.get("role") != "system":
-            continue
-        content = msg.get("content")
-        if not isinstance(content, str) or "## 当前时间" not in content:
-            continue
-        msg["content"] = content.split("\n\n" + HEADER)[0] + "\n\n" + text
-        return True
-    return False
+    if not isinstance(messages, list) or not messages:
+        return False
+    messages.append({"role": "system", "content": round_budget_text(
+        round_no=round_no, total=total, free=free)})
+    return True
 
 
 async def _recall_memory_ids(
@@ -904,13 +971,14 @@ async def _recall_memory_ids(
     if not query_text.strip():
         return []
     try:
+        from app.config import settings
         from app.services.agent.state_stack_service import get_active_semantic_focus
         memories = await recall_relevant_memories(
             db, agent.id,
             query=query_text,
             api_base_url=api_base_url or "https://api.deepseek.com",
             api_key=api_key,
-            top_k=5,
+            top_k=settings.memory_inject_max,
             group_id=group_id,
             user_id=trigger_user_id,
             ai_type=agent.ai_type or "resonance",
@@ -968,18 +1036,18 @@ async def _build_memory_index(db, agent, state: str | None = None) -> str:
         return ""
 
 
-def _attach_image_to_message(
+def _attach_attachments_to_message(
     messages: list[dict],
     index: int | None,
     orm_message,
     data_dir: str,
 ) -> int:
-    """把 messages[index] 升级成多模态内容（仅当该条消息带图片附件时）。
+    """把 messages[index] 的附件升级成模型能读的内容（图片 parts / 文本正文块）。
 
-    只让"最新一条用户消息"携带真实图片字节，历史消息保持纯文本——既护住
-    prompt cache，也避免 token 爆炸。返回是否真的注入了图片。
+    只让"最新一条用户消息"携带真实图片字节与文件内容，历史消息保持纯文本——既护住
+    prompt cache，也避免 token 爆炸（历史里留的是渲染层铺的 [图片]/[文件] 标记）。
 
-    返回实际注入的图片数（0 = 没注入）。
+    返回实际注入的图片数（文本内容不计）。
 
     之前这里靠"格式化后的 content 里包含 ORM 原文"来反查是哪条消息，
     内容雷同时会匹配错；现在由调用方直接给出下标与 ORM 对象。
@@ -987,14 +1055,48 @@ def _attach_image_to_message(
     if index is None or orm_message is None:
         return 0
     attachments = getattr(orm_message, "attachments", None)
-    if not image_attachments(attachments):
+    if not attachments:
         return 0
-    content = build_content(messages[index].get("content"), attachments, data_dir)
-    if not isinstance(content, list):
-        return 0  # 图片一张都没读出来 → 保持纯文本
-    messages[index]["content"] = content
-    return injected_image_count(content)
 
+    injected = 0
+    if image_attachments(attachments):
+        content = build_content(messages[index].get("content"), attachments, data_dir)
+        if isinstance(content, list):      # 一张图都没读出来时保持纯文本
+            messages[index]["content"] = content
+            injected = injected_image_count(content)
+
+    block = text_attachment_blocks(attachments, data_dir)
+    if block:
+        content = messages[index].get("content")
+        if isinstance(content, list):
+            content.append({"type": "text", "text": block})
+        else:
+            messages[index]["content"] = f"{content}\n\n{block}" if content else block
+    return injected
+
+
+async def _turn_image_of(db, slots: list, orm_model, fallback_idx, fallback_orm):
+    """本轮用户消息里最近的一张带图消息 → (下标, ORM)；没有就回落到最后一条
+
+    为什么不是"只认最后一条"：先发图、再补一句"收到了吗"是群里最常见的连发。只认最后一条
+    时，那句文字会成为"最新一条用户消息"，图退化成历史里的 [图片] 标记——2026-11-14 真机
+    上 AI 就是回"还是只有[图片]，我这边没收到内容"。
+
+    仍然只注入一张图（默认 max_images=1）、只在本轮里找：不跨轮（上一轮的老图不该当新图），
+    也不因为往回找就多塞字节——token 与 prompt cache 的账没变。
+    """
+    from app.utils.multimodal import image_attachments
+
+    if image_attachments(getattr(fallback_orm, "attachments", None)):
+        return fallback_idx, fallback_orm
+    for index, entry in reversed(slots or []):
+        ref = entry.get("ref")
+        if not ref:
+            continue
+        orm = await db.get(orm_model, int(ref))
+        if orm is not None and image_attachments(getattr(orm, "attachments", None)):
+            return index, orm
+    return fallback_idx, fallback_orm
 
 # _format_time ——已迁移到 utils/pure/prompting.py，导入为 format_time_shanghai
 # format_message ——已迁移到 utils/pure/prompting.py
@@ -1012,7 +1114,7 @@ async def _build_cross_conversation_context(
     跨对话多会话上下文收集（已禁用）。
 
     v0.2.1 起永久返回空列表：原设计将其他群的消息注入为 system 上下文，
-    导致 LLM 跨群回复（"历史重播"死循环）。新的「状态栈系统」已通过状态栈摘要
+    导致 LLM 跨群回复（"历史重播"死循环）。新的「状态链系统」已通过状态链摘要
     提供跨任务上下文感知，不再需要原文注入。
     保留函数签名以兼容调用方（调用方均有 if cross_msgs 保护）。
     """
@@ -1055,6 +1157,55 @@ def _core_identity(overrides: dict) -> str:
     """
     base = overrides.get("core_identity") or CORE_IDENTITY
     return f"{base.rstrip()}\n\n{PLATFORM_ORIGIN}"
+
+
+async def _dm_session_list_block(
+    db: AsyncSession, agent, *, current_session_id: str = ""
+) -> str:
+    """「你在别处还有这些私信会话」：只给存在性、未读数与最后时间，不给内容。
+
+    为什么不给内容：私信正文属于另一个会话。要看就调 read_conversation（一次一条，
+    AI 知道自己读了什么），不是每轮把所有私信糊进上下文。群聊这边也要这块——
+    2026-11-03 线上：AI 在群里被问"你能看到私信吗"，答"看不到"——它手上根本没有这份清单，
+    工具（view_unread / read_conversation / send_dm）都在，但没人告诉它私信存在。
+    """
+    from sqlalchemy import func, or_
+
+    if not getattr(agent, "user_id", None):
+        return ""
+    from app.models.dm import DMMessage, DMSession
+
+    rows = (await db.execute(
+        select(DMSession)
+        .where(or_(DMSession.user1_id == agent.user_id, DMSession.user2_id == agent.user_id))
+        .order_by(DMSession.last_message_at.desc().nullslast())
+        .limit(8)
+    )).scalars().all()
+    rows = [ds for ds in rows if ds.session_id != current_session_id]
+    if not rows:
+        return ""
+
+    lines = [
+        "## 📂 你的私信会话",
+        "（这些是别的会话，消息不在这里：看内容用 read_conversation（target_user_id=对方 users.id），"
+        "说话用 send_dm。）",
+    ]
+    for ds in rows:
+        other_id = ds.user2_id if ds.user1_id == agent.user_id else ds.user1_id
+        oname = await display_name(db, other_id)
+        unread = (await db.execute(
+            select(func.count())
+            .select_from(DMMessage)
+            .where(
+                DMMessage.session_id == ds.session_id,
+                DMMessage.sender_id == other_id,
+                DMMessage.read_at.is_(None),
+            )
+        )).scalar() or 0
+        last_t = ds.last_message_at.strftime("%m-%d %H:%M") if ds.last_message_at else "—"
+        unread_str = f"，{unread} 条未读" if unread else ""
+        lines.append(f"- 私信「{oname}」(会话 {ds.session_id})：最后消息 {last_t}{unread_str}")
+    return "\n".join(lines)
 
 
 async def build_messages(
@@ -1160,16 +1311,14 @@ async def build_messages(
     segments = {}
     if "core_identity" in enabled_segments:
         segments["core_identity"] = _core_identity(overrides)
-    
     if "personality" in enabled_segments:
         segments["personality"] = build_personality_segment(agent, language, eff_personality)
-    
     if "protocol" in enabled_segments:
         segments["protocol"] = overrides.get(f"protocol_{profile}") or protocol
-    
     if "tools" in enabled_segments:
-        segments["tools"] = await _build_tools_segment(db, agent, is_dm)
-    
+        # 表情包段自带版本登记（探测），与渲染同一份内容：一个口子，不重复查库
+        segments["tools"] = await _build_tools_segment(
+            db, agent, is_dm, emoji_note=await _build_emoji_section(db))
     # injected_skills（记忆索引 + 技能注入）拆成两半：索引只看能力版本，走版本链冻结，
     # 所以能待在锁定段；技能注入的检索词是「最近 5 条消息」，属于当轮事实，归尾部读数。
     recalled_memory_ids: list[int] = []
@@ -1203,7 +1352,12 @@ async def build_messages(
     # ✨ 人格锚点注入（只读，始终在最前面 — 设计文档 6.2）
     system_prompt = await _inject_personality_anchor(db, agent, system_prompt, language)
 
-    # 动态内容一律沉到尾部（message 0 只留静态段）：状态栈每次切会话都在变、任务/通道规矩/
+    # 锁定态前缀：拼装照旧跑（探测=各构建函数里的版本登记，只有一处真理），
+    # 但**发出去的是上次钉下的字节**——目录/表情包/索引的代码怎么改都进不了活跃会话。
+    # 每轮白算几次查询换来一条路径，这是刻意的取舍（见 ai/prefix.py 模块头）。
+    system_prompt = prefix_locked(agent, session_ref, personality_source, system_prompt)
+
+    # 动态内容一律沉到尾部（message 0 只留静态段）：状态链每次切会话都在变、任务/通道规矩/
     # 好友申请也会变——写进前缀等于每轮重建整个前缀，缓存全废。它们按「当轮事实」跟在历史后面。
     # 记忆是例外，但它走的是账本条目（追加在历史尾部），不是"提前到历史之前"
     tail_blocks: list[str] = []
@@ -1222,7 +1376,7 @@ async def build_messages(
         except Exception as e:
             logger.warning(f"工作区上下文注入失败（非致命）: {e}")
 
-    # ✨ 状态栈摘要（配置驱动）
+    # ✨ 状态链摘要（配置驱动）
     if context_config_parser.should_inject_state_stack(context_config):
         try:
             from app.services.agent.state_stack_service import get_state_stack_summary
@@ -1230,7 +1384,7 @@ async def build_messages(
             if stack_summary:
                 tail_blocks.append(stack_summary)
         except Exception as e:
-            logger.warning(f"状态栈摘要注入失败（非致命）: {e}")
+            logger.warning(f"状态链摘要注入失败（非致命）: {e}")
 
     # 📡 通道规矩里唯一随运行期变的一条（@其他成员会不会断在中间）：其余在锁定段里
     if group_id:
@@ -1245,7 +1399,19 @@ async def build_messages(
     # message 0 之后直接进对话历史：这里曾经有个"当轮注入区"（dynamic_readings），
     # 每轮重算的块放在历史之前会把后面整段前缀缓存打掉——能力索引已冻结进 message 0，
     # 其余当轮事实（技能、任务、状态、时间）一律沉到尾部读数或账本条目
+    # 发出去之前再核对一次：以后若有人在这行之后又往 system_prompt 里塞东西，这里当场报错，
+    # 而不是悄悄让所有人的前缀从头失效（口径见 ai/prefix.py）
+    prefix_guard(agent, session_ref, personality_source, system_prompt)
     messages = [{"role": "system", "content": system_prompt}]
+
+    # ── 帧清单：一次给全「你手上有哪些帧」，省掉每轮先 list_states 找 id ──
+    # 位置就是"稳定前缀之后、历史之前"：清单在解锁点之间字节不动，帧的增删由账本条目补，
+    # 所以它不会每轮改写历史之前那块（那会废掉后面整段前缀缓存）
+    from app.services.agent.state_stack_service import frame_roster
+
+    roster = await frame_roster(db, agent)
+    if roster:
+        messages.append({"role": "system", "content": roster})
 
     # ── 多会话上下文（配置驱动）──
     if context_config_parser.should_inject_cross_conversation(context_config):
@@ -1310,10 +1476,10 @@ async def build_messages(
 
         group_ref = session_ref
 
-        # 记忆条目**必须排在当轮新消息之前**：「先想起这个人，再读他说的话」。
+        # 记忆与经历条目**必须排在当轮新消息之前**：「先想起这个人，再读他说的话」。
         # 所以它抢在 sync 之前落账本——sync 一追加，新消息就压到它前面去了。
-        from app.services.memory.memory_delivery import deliver_memories
-        await deliver_memories(db, agent, group_ref, recalled_memory_ids)
+        await _deliver_recollection(
+            db, agent, group_ref, query=query_text, recalled_memory_ids=recalled_memory_ids)
         # 计划板同一条管线：先投计划、再 sync 落当轮消息，板子就紧挨着新消息之前
         await _deliver_plan_board(db, agent, group_ref)
 
@@ -1334,12 +1500,18 @@ async def build_messages(
 
         last_user_idx = None
         last_user_orm = None
+        # 本轮的用户消息（按时间序）：图可能不在"最后一条"上（先发图、再跟一句文字），
+        # 所以要能往回找本轮里最近的一张图
+        turn_user_slots: list[tuple[int, dict]] = []
         for entry in ledger:
             messages.append({
                 "role": ROLE_BY_ACTOR.get(entry["actor"], "system"),
                 "content": entry["content"],
             })
-            if entry["actor"] == "user":
+            if entry["actor"] == "self":
+                turn_user_slots = []          # 上一轮的图不算本轮
+            elif entry["actor"] in ("user", "world"):
+                turn_user_slots.append((len(messages) - 1, entry))
                 last_user_idx = len(messages) - 1
                 last_user_orm = (await db.get(MessageModel, int(entry["ref"]))) if entry.get("ref") else None
 
@@ -1347,7 +1519,10 @@ async def build_messages(
             pending_delivery.extend(undelivered(ledger))
 
         if context_config_parser.should_inject_image(context_config):
-            _n_img = _attach_image_to_message(messages, last_user_idx, last_user_orm, settings.data_dir)
+            image_idx, image_orm = await _turn_image_of(
+                db, turn_user_slots, MessageModel, last_user_idx, last_user_orm,
+            )
+            _n_img = _attach_attachments_to_message(messages, image_idx, image_orm, settings.data_dir)
             if _n_img:
                 messages.append({"role": "system", "content": image_note(_n_img)})
 
@@ -1565,7 +1740,8 @@ async def build_dm_messages(
         "core_identity": _core_identity(overrides),
         "personality": build_personality_segment(agent, language, eff_personality),
         "protocol": dm_protocol,
-        "tools": await _build_tools_segment(db, agent, is_dm=True),
+        "tools": await _build_tools_segment(
+            db, agent, is_dm=True, emoji_note=await _build_emoji_section(db)),
         "injected_skills": await _build_memory_index(db, agent, dm_ref),  # 索引（冻结）进锁定段
     }
     # 记忆不走这里：它是账本条目，落在当轮新消息之前（见下方账本段）
@@ -1581,7 +1757,10 @@ async def build_dm_messages(
     # ✨ 人格锚点注入（只读，始终在最前面 — 设计文档 6.2）
     system_prompt = await _inject_personality_anchor(db, agent, system_prompt, language)
 
-    # 动态内容一律沉到尾部（message 0 只留静态段）：切会话时状态栈会变，写进前缀
+    # 锁定态前缀：与群聊同一把锁、同一个键口径（私信的键就是 session_id）
+    system_prompt = prefix_locked(agent, dm_ref, personality_source, system_prompt)
+
+    # 动态内容一律沉到尾部（message 0 只留静态段）：切会话时状态链会变，写进前缀
     # 等于每轮重建前缀、缓存全废。它们按「当轮事实」跟在历史后面。
     # 记忆是例外，但它走的是账本条目（追加在历史尾部），不是"提前到历史之前"
     tail_blocks: list[str] = []
@@ -1599,51 +1778,35 @@ async def build_dm_messages(
     except Exception as e:
         logger.warning(f"DM 工作区上下文注入失败（非致命）: {e}")
 
-    # ✨ 状态栈摘要（v0.2.1）
+    # ✨ 状态链摘要（v0.2.1）
     try:
         from app.services.agent.state_stack_service import get_state_stack_summary
         stack_summary = await get_state_stack_summary(db, agent.id)
         if stack_summary:
             tail_blocks.append(stack_summary)
     except Exception as e:
-        logger.warning(f"DM 状态栈摘要注入失败（非致命）: {e}")
+        logger.warning(f"DM 状态链摘要注入失败（非致命）: {e}")
 
     # 📂 私信会话列表（v0.3.2）：AI 感知自己有哪些 DM 会话（存在性+未读数，不含内容）
     try:
-        from app.models.dm import DMSession as DMSessionModel, DMMessage as DMMessageModel
-        from sqlalchemy import or_ as sa_or, func as sa_func
-        if agent.user_id:
-            sess_res = await db.execute(
-                sa_select(DMSessionModel)
-                .where(sa_or(DMSessionModel.user1_id == agent.user_id, DMSessionModel.user2_id == agent.user_id))
-                .order_by(DMSessionModel.last_message_at.desc().nullslast())
-                .limit(8)
-            )
-            dm_sess_list = sess_res.scalars().all()
-            if dm_sess_list:
-                lines = ["\n## 📂 你的私信会话（其他会话的消息不在这里，需要时可主动 send_dm 过去）"]
-                for ds in dm_sess_list:
-                    if ds.session_id == session_id:
-                        continue  # 当前会话单独展示
-                    other_id = ds.user2_id if ds.user1_id == agent.user_id else ds.user1_id
-                    oname = await display_name(db, other_id)
-                    # 未读数：对方发的且自己未读
-                    unread = (await db.execute(
-                        sa_select(sa_func.count())
-                        .select_from(DMMessageModel)
-                        .where(DMMessageModel.session_id == ds.session_id, DMMessageModel.sender_id == other_id, DMMessageModel.read_at.is_(None))
-                    )).scalar() or 0
-                    last_t = ds.last_message_at.strftime("%m-%d %H:%M") if ds.last_message_at else "—"
-                    unread_str = f"，{unread} 条未读" if unread else ""
-                    lines.append(f"- 私信「{oname}」(会话 {ds.session_id})：最后消息 {last_t}{unread_str}")
-                tail_blocks.append("\n".join(lines))
+        dm_block = await _dm_session_list_block(db, agent, current_session_id=session_id)
+        if dm_block:
+            tail_blocks.append(dm_block)
     except Exception as e:
         logger.warning(f"DM 会话列表注入失败（非致命）: {e}")
 
     # message 0 之后直接进对话历史：这里曾经有个"当轮注入区"（dynamic_readings），
     # 每轮重算的块放在历史之前会把后面整段前缀缓存打掉——能力索引已冻结进 message 0，
     # 其余当轮事实（技能、任务、状态、时间）一律沉到尾部读数或账本条目
+    prefix_guard(agent, dm_ref, personality_source, system_prompt)  # 同上：发出去前核对
     messages = [{"role": "system", "content": system_prompt}]
+
+    # ── 帧清单：与群聊同一块、同一位置（稳定前缀之后、历史之前）──
+    from app.services.agent.state_stack_service import frame_roster as _frame_roster
+
+    _roster = await _frame_roster(db, agent)
+    if _roster:
+        messages.append({"role": "system", "content": _roster})
 
     # ── 统一上下文：数字生命档/沉浸档/共振 → 加载多会话上下文 ──
     cross_msgs = await _build_cross_conversation_context(
@@ -1665,9 +1828,9 @@ async def build_dm_messages(
     from app.utils.pure.history import ROLE_BY_ACTOR, make_entry, undelivered
 
 
-    # 记忆条目抢在 sync 之前落账本：位置就是"当轮新消息之前"（同群聊）
-    from app.services.memory.memory_delivery import deliver_memories
-    await deliver_memories(db, agent, dm_ref, recalled_memory_ids)
+    # 记忆与经历抢在 sync 之前落账本：位置就是"当轮新消息之前"（同群聊）
+    await _deliver_recollection(
+        db, agent, dm_ref, query=query_text, recalled_memory_ids=recalled_memory_ids)
     # 计划板同一条管线：先投计划、再 sync 落当轮消息
     await _deliver_plan_board(db, agent, dm_ref)
 
@@ -1679,20 +1842,26 @@ async def build_dm_messages(
 
     last_user_idx = None
     last_user_orm = None
+    turn_user_slots: list[tuple[int, dict]] = []
     for entry in ledger:
         messages.append({
             "role": ROLE_BY_ACTOR.get(entry["actor"], "system"),
             "content": entry["content"],
         })
-        if entry["actor"] == "user":
+        if entry["actor"] == "self":
+            turn_user_slots = []              # 上一轮的图不算本轮
+        elif entry["actor"] in ("user", "world"):
+            turn_user_slots.append((len(messages) - 1, entry))
             last_user_idx = len(messages) - 1
             last_user_orm = (await db.get(DMMessageModel, int(entry["ref"]))) if entry.get("ref") else None
 
     if pending_delivery is not None:
         pending_delivery.extend(undelivered(ledger))
 
-    # 🖼️ 为最后一条用户消息注入图片附件
-    _n_img = _attach_image_to_message(messages, last_user_idx, last_user_orm, settings.data_dir)
+    # 🖼️ 本轮里最近的一条带图消息注入真图（先图后文也认）
+    image_idx, image_orm = await _turn_image_of(
+        db, turn_user_slots, DMMessageModel, last_user_idx, last_user_orm)
+    _n_img = _attach_attachments_to_message(messages, image_idx, image_orm, settings.data_dir)
     if _n_img:
         messages.append({"role": "system", "content": image_note(_n_img)})
 

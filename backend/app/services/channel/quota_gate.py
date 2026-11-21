@@ -21,6 +21,9 @@ CFG_METER_MODE = "quota_meter_mode"
 CFG_LIMIT_TOKENS = "quota_limit_tokens"
 CFG_BLOCKED_REPLY = "quota_blocked_reply"
 CFG_BLOCKED_REPLY_TEXT = "quota_blocked_reply_text"
+CFG_RESET_ENABLED = "quota_reset_enabled"
+CFG_RESET_PERIOD = "quota_reset_period"
+CFG_RESET_ANCHOR = "quota_reset_anchor"
 
 _FALSEY = {"0", "false", "off", "no", "none"}
 
@@ -35,12 +38,18 @@ def _as_flag(value: object, *, default: bool) -> bool:
 
 
 def policy_from_config(cfg: Mapping[str, Any]) -> dict[str, Any]:
-    """把插件声明的四项设置翻译成 set_policy 的参数；脏值交给平台那边归一"""
+    """把插件声明的设置翻译成 set_policy 的参数；脏值交给平台那边归一"""
     return {
         "meter_mode": str(cfg.get(CFG_METER_MODE) or ""),
         "limit_tokens": cfg.get(CFG_LIMIT_TOKENS),
         "blocked_reply_enabled": _as_flag(cfg.get(CFG_BLOCKED_REPLY), default=True),
         "blocked_reply_text": str(cfg.get(CFG_BLOCKED_REPLY_TEXT) or ""),
+        # 开关关掉就把周期清空（= 平台侧不自动重置）；周期本身仍然留着，下次打开还是上次那个
+        "reset_period": (
+            str(cfg.get(CFG_RESET_PERIOD) or "day")
+            if _as_flag(cfg.get(CFG_RESET_ENABLED), default=False) else ""
+        ),
+        "reset_anchor": str(cfg.get(CFG_RESET_ANCHOR) or ""),
     }
 
 

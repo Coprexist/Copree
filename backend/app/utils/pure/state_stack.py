@@ -3,15 +3,16 @@
 
 存储与运行是两层（本模块的分界线）：
 - 存储 = 整个数组（含已结束 ended、待交接 retired 的帧，全量保留，只在他交接完后事时删）；
-- 运行集合 = running(stack)，status 处于 active/paused/suspended 的那串指针。
+- 链上（running）= status 处于 active/paused/suspended 的那串帧。
 
-运行集合的**顺序**不在这里算：它是状态链（agent_state_chain，见 pure/state_chain.py）的事——
+链上帧的**顺序**不在这里算：它是状态链（agent_state_chain，见 pure/state_chain.py）的事——
 切回某帧是把它拉到链尾，不是重排这个数组。本模块只回答"哪些帧还在跑"，链回答"接下来跑谁"。
 
 make_state_frame(): 构建单个状态帧（交接驱动：handoff/completed_handoff）
 normalize_order(): 排成 [历史区][运行区，当前帧在末尾]——全仓 stack[-1] 等于当前帧的依据
-current()/running()/by_id()/retired(): 运行集合与存储的各自视图
-merge_same_context(): 同一段会话只留一帧（重复帧归并进最近激活的那帧）——写入点的不变量
+current()/running()/by_id()/retired(): 链上与存储的各自视图
+frame_of(): 一段会话的那一帧（身份 = context_ref；所有认帧的路径共用这一个口）
+merge_same_context(): 链上同一段会话只留一帧（重复帧归并进最近激活的那帧）——写入点的不变量
 retire_overflow()/drop_overflow()/drop_retired_overflow(): 容量闸的两条走法（挂起待交接 / 平台直接代销）与积压硬底
 format_state_stack_summary(): 存储 → AI 可读摘要（只渲染当前帧 + 交接信息 + 待交接计数）
 parse_state_summary(): 摘要 → 当时的当前帧身份（写与读共用一份标记，见 STATE_SUMMARY_MARK）
@@ -35,16 +36,16 @@ from app.utils.pure.emotion import (
 
 
 # 帧容量：存储里帧数超过它，就把「最久没被激活」的那个帧挂起交给他自己办后事。
-# 默认 31，AI 可自配（update_self_config）；它是**存储**的上限，不是运行集合的上限。
+# 默认 31，AI 可自配（update_self_config）；它是**存储**的上限，不是链上的上限。
 DEFAULT_FRAME_CAPACITY = 31
 
-# 帧状态分两段：在跑的（占运行集合=指针排队）与留在存储的（不再参与运行）。
-# 分开表达是这一层的全部要点：pop/close 只把帧从运行集合里取出来，**不删记录**；
+# 帧状态分两段：在跑的（在链上占位次）与留在存储的（不再参与运行）。
+# 分开表达是这一层的全部要点：pop/close 只把帧从链上取下来，**不删记录**；
 # 记录只在「他交接完后事」之后才删（唯一删除点）。
 RUNNING_STATUSES = ("active", "paused", "suspended")
 ENDED_STATUS = "ended"
 RETIRED_STATUS = "retired"
-# "不在运行集合"的历史写法：completed / closed 是旧口径留下的，读的时候一视同仁，
+# "不在链上"的历史写法：completed / closed 是旧口径留下的，读的时候一视同仁，
 # 新写一律用 ended——三种写法并存会让"这帧还在跑吗"这种问题每次都要想一遍。
 ENDED_STATUSES = (ENDED_STATUS, "completed", "closed")
 
@@ -86,11 +87,28 @@ _FRAME_FIELDS = (
     # 两者分开是必需的——值变过去又变回来时，现值可能等于 locked 却不等于 notified。
     "env_locked",
     "env_notified",
+    # usage：插件帧的调用次数桶（{hour:{key,n}, day:{key,n}}）。放在帧上而不是另建表：
+    # 换帧/结束帧时它跟着帧走，compact 也不该把它清零——那是"这个状态花了多少"的事实
+    "usage",
     # tool_uses / delivered：触发组合规则的本会话状态（哪个工具调过几次、哪条规则投过了）。
     # 挂在帧上是有意的——compact/clear 后帧重建，「本会话第一次」自然归零，不必另建状态表
     "tool_uses",
     "delivered",
+    # roster_locked：写进请求的那份「你手上有哪些帧」清单（解锁点与首次建帧时渲染，
+    # 之后字节不动）；roster_notified：已经告知过的那份（{帧 id: 帧身份}，判定增删的基准）。
+    # 与 env_locked / env_notified 同一个套路：清单是快照，变化只补条目。
+    "roster_locked",
+    "roster_notified",
+    # dormant：预建好、还没进去过的沉睡帧（插件替 AI 建的）。它不在链上，
+    # 但确实是"能进去的一帧"，清单要列它；一旦上过链就不再算沉睡
+    "dormant",
 )
+
+
+# 可以被就地改写的文本字段（update_frame 的唯一可写集合）。
+# 身份字段（id / type / context_ref / status）不在这里：换身份要走 push / restore，
+# 帧 id 是闹钟之类记着的长期指针，不能靠"改一下字段"换人。
+FRAME_TEXT_FIELDS = ("label", "why", "doing", "todo", "plan", "journal")
 
 
 def make_state_frame(type_: str, context_ref: str = "", **extras) -> dict:
@@ -130,13 +148,16 @@ def make_state_frame(type_: str, context_ref: str = "", **extras) -> dict:
     return frame
 
 
-def frame_tail(messages: list[dict], max_exchanges: int = 4, max_chars: int = 1200) -> list[str]:
+def frame_tail(messages: list[dict], max_exchanges: int = 2, max_chars: int = 400) -> list[str]:
     """取「最后几轮对话原文」（切走时靠它保持连续，无需额外 LLM 调用）。
 
     只认 user/assistant 且有文本内容的消息：system 段（规矩、时间、摘要）不是
     对话原文，混进来只会让 AI 把注入内容当成对方说过的话。按「轮」收集——收集满
     max_exchanges 条用户消息（连同其后的回复）即停；再从最旧端按 max_chars 丢，
     因为尾巴的意义就是「最新说到哪」。
+
+    默认收得很窄（2 轮 / 400 字）：后半段交接交给经历行（那一场干过什么），原文只负责
+    「最后一句说到哪」。两个数在 runtime 配置里可调，不必改这里。
     """
     picked: list[str] = []
     users = 0
@@ -165,33 +186,33 @@ def frame_tail(messages: list[dict], max_exchanges: int = 4, max_chars: int = 12
 
 
 # ═══════════════════════════════════════════════════════════════
-# 运行集合（"栈"只剩指针排队）与存储的分界
+# 链上（只剩指针排队）与存储的分界
 # ═══════════════════════════════════════════════════════════════
 
 def is_running(frame: dict) -> bool:
-    """这帧还在运行集合里吗（当前 / 被压着还要回来 / 会话切走了等它回来）。"""
+    """这帧还在链上吗（当前 / 被压着还要回来 / 会话切走了等它回来）。"""
     return (frame or {}).get("status") in RUNNING_STATUSES
 
 
 def is_ended(frame: dict) -> bool:
-    """已出运行集合（ended / 旧写法的 completed、closed）。"""
+    """已出链（ended / 旧写法的 completed、closed）。"""
     return (frame or {}).get("status") in ENDED_STATUSES
 
 
 def running(stack: list[dict]) -> list[dict]:
-    """运行集合 —— 数组里"还在跑"的那串指针，保序（相对顺序即排队位次）。
+    """状态链 —— 数组里"还在跑"的那串帧，保序（相对顺序即排队位次）。
 
     存储 = 整个数组（含已结束/待交接的帧，永不随手丢）；运行 = 这个过滤视图。
-    所以"栈顶"不再是 stack[-1]：数组末尾可能躺着一帧已经结束的。
+    所以"当前帧"不再是 stack[-1]：数组末尾可能躺着一帧已经结束的。
     """
     return [f for f in (stack or []) if is_running(f)]
 
 
 def current(stack: list[dict]) -> dict | None:
-    """当前帧 = 运行集合里 status 为 active 的那个。
+    """当前帧 = 状态链里 status 为 active 的那个。
 
-    正常情况下运行集合里恰好一个 active（切换/弹出/关闭都会把当前帧提上来）。若一个都没有
-    （历史数据，或将来某条路径漏了提升），退回运行集合末位**并告警**——兜底可以，静默不行。
+    正常情况下状态链里恰好一个 active（切换/弹出/关闭都会把当前帧提上来）。若一个都没有
+    （历史数据，或将来某条路径漏了提升），退回链尾**并告警**——兜底可以，静默不行。
     """
     live = running(stack)
     if not live:
@@ -202,7 +223,7 @@ def current(stack: list[dict]) -> dict | None:
         # 不当异常；两帧以上都没有 active 才是真不清楚谁是当前——那种要响。
         if len(live) > 1:
             logger.warning(
-                "运行集合里没有 active 帧，暂以末位为当前帧："
+                "链上没有 active 帧，暂以链尾为当前帧："
                 + str([(f.get("status"), f.get("context_ref") or f.get("type")) for f in live]))
         return live[-1]
     return act
@@ -225,9 +246,9 @@ def normalize_order(stack: list[dict]) -> list[dict]:
 
 
 def resume_target(stack: list[dict]) -> dict | None:
-    """撤下当前帧之后回到哪一层：运行集合的末位。
+    """撤下当前帧之后回到哪一层：链尾。
 
-    与 current() 的区别是时机：此刻当前帧刚被标成 ended，运行集合里可能一个 active 都没有，
+    与 current() 的区别是时机：此刻当前帧刚被标成 ended，链上可能一个 active 都没有，
     这不是异常，而是"正要把它提上来"。所以这里不告警，也不该走 current() 的兜底。
     """
     live = running(stack)
@@ -238,6 +259,28 @@ def by_id(stack: list[dict], frame_id: str) -> dict | None:
     """按帧 id 找帧——在**全量存储**里找，所以被 pop/close 过的帧照样找得到。"""
     fid = str(frame_id or "")
     return next((f for f in (stack or []) if fid and f.get("id") == fid), None)
+
+
+def frame_of(stack: list[dict], context_ref: str) -> dict | None:
+    """这段会话的那一帧（身份 = context_ref；没有就返回 None）。
+
+    一段会话只有一帧——身份是"哪段会话"，不是"第几次压帧"。历史库里可能还躺着同名的重复帧
+    （旧版本每轮新建一条），所以这里给出确定的挑选规则，而不是撞见哪条算哪条：在跑的优先
+    （存储顺序里运行区在末尾，最后那帧就是最近切进来的），全都不在跑时取最近激活的那条——
+    该复活的是最近离开的那次，不是更早的某次。
+
+    切会话（ensure_active_frame）、他自己压帧（push_state）、插件代建（enter_frame）都从这里
+    认帧，于是不会有一条路径自己另起一帧。
+    """
+    ref = str(context_ref or "")
+    if not ref:
+        return None
+    same = [frame for frame in (stack or []) if str(frame.get("context_ref") or "") == ref]
+    if not same:
+        return None
+    # 挑选规则与归并共用 _pick_keeper 一处：认帧和"归并时留谁"必须是同一个答案，
+    # 否则并发下两边会各自认定不同的那条，归并完再认一次又换人
+    return _pick_keeper([frame for frame in same if is_running(frame)] or same)
 
 
 def touch(frame: dict) -> None:
@@ -252,7 +295,7 @@ def retired(stack: list[dict]) -> list[dict]:
 
 
 def _overflow(stack: list[dict], capacity: int) -> list[dict]:
-    """运行集合超容量时该让谁走：**最久没被调用**的非当前帧，够数即止。
+    """帧超容量时该让谁走：**最久没被调用**的非当前帧，够数即止。
 
     "最久"的键是 last_active_at（最后一次调用，LLM 调用与决策调用都记），不是创建时间——
     长期在用的会话帧不该因为建得早被挑走。当前帧永远不挑；已挂起的不重复挑。
@@ -342,10 +385,16 @@ def _merge_handoff(keeper_handoff, other_handoff) -> dict:
     return out
 
 
+# 归并时不属于内容的字段：身份/时序由幸存者自己定，标记只属于被并的那条帧，
+# 搬过去会变成"幸存者说自己是被并的"或"幸存者被标成待交接"
+_MERGE_SKIP_FIELDS = ("id", "created_at", "status", "last_active_at",
+                      "merged_into", "retired_at")
+
+
 def _merge_frame_into(keeper: dict, frame: dict) -> None:
     """把一个被归并帧并进幸存者（规则表见 merge_same_context 的说明与 docs/dev/frame_lifecycle.md）。"""
     for key, value in frame.items():
-        if key in ("id", "created_at", "status", "last_active_at") or _blank(value):
+        if key in _MERGE_SKIP_FIELDS or _blank(value):
             continue
         if key == "call_count":
             keeper[key] = int(keeper.get(key) or 0) + int(value or 0)
@@ -367,11 +416,26 @@ def _merge_frame_into(keeper: dict, frame: dict) -> None:
             keeper[key] = value
 
 
-def merge_same_context(stack: list[dict]) -> list[dict]:
-    """同一段会话只留一帧：运行集合里同 context_ref 的重复帧归并进一帧，返回被归并的帧。
+def _context_groups(frames: list[dict]) -> list[list[dict]]:
+    """按 context_ref 分组的帧（空 ref 不参与：它们不属于任何一段会话）。"""
+    groups: dict[str, list[dict]] = {}
+    for frame in (frames or []):
+        ref = str(frame.get("context_ref") or "")
+        if ref:
+            groups.setdefault(ref, []).append(frame)
+    return list(groups.values())
 
-    重复来自"push 只跟栈顶比身份"（线上实测：某 AI 的 group:59 攒了三帧）。挂起/销掉是事后清
-    症状，不变量要落在唯一写入点（_save）——这样哪条路径 push 都攒不出第二帧。
+
+def _pick_keeper(frames: list[dict]) -> dict:
+    """一组重复帧里留谁：当前帧优先，其次最近激活。"""
+    return max(frames, key=lambda frame: (
+        frame.get("status") == "active",
+        str(frame.get("last_active_at") or frame.get("created_at") or ""),
+    ))
+
+
+def _merge_group(frames: list[dict]) -> list[dict]:
+    """把一组同会话的帧归并进幸存者，返回被归并的帧（已置 ended、记 merged_into）。
 
     规则表（契约级，改这里必须同步 docs/dev/frame_lifecycle.md「同一段会话至多一帧」）：
     留「当前帧优先、其次最近激活」那帧；**未列出的字段一律幸存者优先**（同名值有意丢弃）；
@@ -379,30 +443,36 @@ def merge_same_context(stack: list[dict]) -> list[dict]:
     call_count 求和、tool_uses 逐键取大、delivered 键并集；pending_notices / notes / tail 与
     交接包的 tail 取并集。被归并帧置 ended 并记 merged_into（留痕：不是他自己结束的）。
     """
-    groups: dict[str, list[dict]] = {}
-    for frame in running(stack):
-        ref = str(frame.get("context_ref") or "")
-        if ref:
-            groups.setdefault(ref, []).append(frame)
+    if len(frames) < 2:
+        return []
+    keeper = _pick_keeper(frames)
     merged: list[dict] = []
-    for frames in groups.values():
-        if len(frames) < 2:
+    for frame in frames:
+        if frame is keeper:
             continue
-        keeper = max(frames, key=lambda f: (
-            f.get("status") == "active",
-            str(f.get("last_active_at") or f.get("created_at") or ""),
-        ))
-        for frame in frames:
-            if frame is keeper:
-                continue
-            _merge_frame_into(keeper, frame)
-            frame["status"] = ENDED_STATUS
-            frame["merged_into"] = str(keeper.get("id") or "")
-            merged.append(frame)
-        # 刚被用过的那一帧，时间戳不该停在旧值上（容量闸按它挑"最久没用"）
-        stamps = [str(f.get("last_active_at") or f.get("created_at") or "") for f in frames]
-        if max(stamps):
-            keeper["last_active_at"] = max(stamps)
+        _merge_frame_into(keeper, frame)
+        frame["status"] = ENDED_STATUS
+        frame["merged_into"] = str(keeper.get("id") or "")
+        merged.append(frame)
+    # 刚被用过的那一帧，时间戳不该停在旧值上（容量闸按它挑"最久没用"）
+    stamps = [str(f.get("last_active_at") or f.get("created_at") or "") for f in frames]
+    if max(stamps):
+        keeper["last_active_at"] = max(stamps)
+    return merged
+
+
+def merge_same_context(stack: list[dict]) -> list[dict]:
+    """同一段会话只留一帧：链上同 context_ref 的重复帧归并进一帧，返回被归并的帧。
+
+    重复来自"push 只跟当前帧比身份"（线上实测：某 AI 的 group:59 攒了三帧）。挂起/销掉是事后清
+    症状，不变量要落在唯一写入点（_save）——这样哪条路径 push 都攒不出第二帧。
+
+    只看链上的帧：写入点兜的是并发（两个请求同时读到同一条尾），不是历史数据。旧版本留下的
+    已结束重复帧由迁移 0109 一次性归并，运行时不再扫它们。
+    """
+    merged: list[dict] = []
+    for frames in _context_groups(running(stack)):
+        merged += _merge_group(frames)
     return merged
 
 
@@ -447,47 +517,68 @@ def drop_retired_overflow(stack: list[dict], capacity: int,
     return dropped
 
 
-def format_handoff_tail(label: str, tail: list[str], reason: str = "") -> str:
+def handoff_pending(pending: dict | None) -> bool:
+    """这份交接还没被消费吗——判据是「有东西可讲」，不要求一定有原文。
+
+    原文尾巴是收窄过的（2 轮 / 400 字），插件帧、纯工具帧可能一条对话原文都没有；
+    但「你刚才在[刷 B 站]」本身就是要交接的信息（也是经历按场补投的触发点）。
+    """
+    p = pending or {}
+    if p.get("consumed"):
+        return False
+    return bool(p.get("tail") or p.get("from_context_ref") or p.get("label")
+                or p.get("from_label") or p.get("doing"))
+
+
+def format_handoff_tail(label: str, tail: list[str], reason: str = "", doing: str = "") -> str:
     """渲染「上一段对话的原文尾巴」——临时性交接，只注入一次。
 
-   两道边界都要说清（2026-09-25 实测踩过第一条的坑）：
+    两道边界都要说清（2026-09-25 实测踩过第一条的坑）：
     - **别串台**：群里看到私信的尾巴，AI 很容易顺手在群里答一句私信的内容；
     - **但约定要履约**：如果那段对话里说好了「到了别处做什么」（暗号、触发条件、待办），
       必须照做——只写禁令会让 AI 明明看见了暗号也不敢答（用户实测：私信约好暗号，
       群里喊了暗号，AI 只看见"便签：就剩暗号那条待验证"，却没看见答什么，也没敢接）。
+
+    `tail` 为空但 `doing` 有内容时（插件帧、纯工具帧），只讲「你刚才在那边做什么」——
+    没有原文可抄，但来源必须说清，否则 AI 不知道自己是从哪段状态里被叫出来的。
     """
-    if not tail:
-        return ""
     where = f"（{label}）" if label else ""
+    if not tail and not doing:
+        return ""
     lines = [
-        f"## 📎 上一段对话的原文尾巴{where}",
-        "这是你刚离开的那段对话的最后原文：",
+        f"## 📎 刚才你在别处{where}",
+        "这是你刚离开的那段状态：",
         "- 不要在当前会话里回应它、不要把它当成当前会话的消息，也不要向当前的人复述它；",
-        "- 但如果那段对话里和你约定了**到了别处要做的事**（暗号、触发条件、待办），"
+        "- 但如果那边和你约定了**到了别处要做的事**（暗号、触发条件、待办），"
         "现在条件满足就按约定执行——这条提醒不构成不做它的理由。",
     ]
+    if doing:
+        lines.append(f"- 你在那边正在做的事：{doing}")
     if reason:
         lines.append(f"（你离开那里的原因：{reason}）")
-    lines += [f"  {t}" for t in tail]
+    if tail:
+        lines.append("最后几句原文：")
+        lines += [f"  {t}" for t in tail]
     lines.append(
-        "（要是那段对话里还有该带到别处、但原文这里没说完的临时约定，用 cross_state_note 记下来："
+        "（要是那边还有该带到别处、但这里没说完的临时约定，用 cross_state_note 记下来："
         "40 次 API 调用内有效，别的会话拿到后会一直留在它的上下文里。）"
     )
     return "\n".join(lines)
 
 
 def format_state_stack_summary(stack: list[dict], max_chars: int = 500,
-                               focus_line: str = "") -> str:
-    """栈 → AI 可读摘要（交接驱动）。
+                               focus_line: str = "", budget_line: str = "") -> str:
+    """帧数组 → AI 可读摘要（交接驱动）。
 
     只渲染「当前帧 + 交接信息」，不逐层展开历史帧：
     - 旧交接已在 LLM 对话历史里出现过（工具调用参数），不重复注入
-    - 当前帧 = 运行集合里 active 的那个（**不是数组末尾**：末尾可能躺着已结束的帧）
+    - 当前帧 = 状态链里 active 的那个（**不是数组末尾**：末尾可能躺着已结束的帧）
     - 当前帧：doing / TODO / PLAN / 🎭 情感（完整）
     - handoff：本次切换的交接（← 从[来源]来，为什么，回去继续）
     - completed_handoff：pop 回来后刚完成的交接（📝 刚完成）
-    - 嵌套提示：栈深 > 1 时给"共 N 帧"计数
+    - 嵌套提示：链深 > 1 时给"共 N 帧"计数
     - focus_line：当前会话的焦段归属（由调用方按 agents.foci 算好，纯函数只负责渲染）
+    - budget_line：插件帧的预算（一轮上限 / 本小时 / 今天 / token 用量，同样由调用方算好）
 
     长度控制（max_chars 默认 500）：超限按降级阶梯（_RENDER_*），
     最新帧的 TODO/PLAN 永不丢。
@@ -511,6 +602,8 @@ def format_state_stack_summary(stack: list[dict], max_chars: int = 500,
         lines.append(f"{marker} [{type_name}] {context_str}: {doing or why}")
         if focus_line:
             lines.append(f"   焦段: {focus_line}")
+        if budget_line:
+            lines.append(f"   预算: {budget_line}")
         if todo:
             lines.append(f"   TODO: {todo.strip().replace(chr(10), '; ')}")
         if plan:
@@ -529,7 +622,7 @@ def format_state_stack_summary(stack: list[dict], max_chars: int = 500,
             lines.append(prefix + emotion_to_text(src_vec))
         live = running(stack)
         if len(live) > 1:
-            lines.append(f"   ⏸ 另有 {len(live) - 1} 帧未完成（可 list_states 查看）")
+            lines.append(f"   ⏸ 另有 {len(live) - 1} 帧未完成（见开头的帧清单）")
         # 待交接帧只报"有几帧、要用哪个工具销"，清单（要处置哪些记忆）落历史，不在这里念
         if pend := retired(stack):
             lines.append(f"   ⏳ 待交接 {len(pend)} 帧（状态已结束，后事办完调 finish_frame 销掉）")
@@ -568,7 +661,7 @@ def format_state_stack_summary(stack: list[dict], max_chars: int = 500,
 
 
 def parse_state_summary(summary: str) -> dict:
-    """从状态摘要里读回「当时栈顶是哪一帧」——format_state_stack_summary 的逆。
+    """从状态摘要里读回「当时当前帧是哪一帧」——format_state_stack_summary 的逆。
 
     帧身份 = type + label（没有 label 时是 context_ref）。摘要里本来就没有帧实例 id：
     日志该按「同一段状态」归堆，而不是按「同一次 push」——pop 再 push 是同一段状态。
@@ -604,6 +697,60 @@ def frame_of_state_key(key: str | None) -> dict:
     return {"type": frame_type, "label": label} if frame_type else {}
 
 
+def frame_ident(frame: dict | None) -> str:
+    """帧身份说人话：`[type] label`；没写 label 的帧退回 context_ref（与摘要同一个口径）。"""
+    frame = frame or {}
+    type_ = str(frame.get("type") or "?")
+    label = str(frame.get("label") or frame.get("context_ref") or "").strip()
+    return f"[{type_}] {label}".strip()
+
+
+ROSTER_MAX_ROWS = 4  # 清单最多列几帧：链很长时（线上见过 126 帧）不能把这段吃光
+
+
+def roster_frames(stack: list[dict]) -> list[dict]:
+    """清单要列的帧：链上的帧 + 预建的沉睡帧（插件替 AI 建好、等着它进去的那些）。
+
+    沉睡帧的 status 是 ended，不在链上；不列出来，AI 就只能自己 push_state 造一帧
+    顶上（线上真发生过：「刷 B 站」明明是预建好的，它另建了一个 world 帧）。
+    """
+    live = running(stack)
+    live_ids = {str(f.get("id")) for f in live}
+    dormant = [f for f in (stack or [])
+               if f.get("dormant") and str(f.get("id")) not in live_ids]
+    return live + dormant
+
+
+def render_frame_roster(stack: list[dict], max_rows: int = ROSTER_MAX_ROWS) -> str:
+    """状态帧清单：一次给全「你手上有哪些帧」，省掉每次先 list_states 找 id。
+
+    只列链上的帧（active / paused / suspended）。已结束的帧进不去（进去是复活，得先知道
+    为什么进去），待交接的那批只报数——那是后事，不是可选的目的地。
+
+    渲染时机由调用方定：解锁点与「这一帧第一次成为当前帧」时渲染一次，之后字节不动，
+    增删只补账本条目（见 services/agent/state_stack_service.frame_roster）。
+    """
+    frames = roster_frames(stack)
+    if not frames:
+        return ""
+    lines = ["## 🗂 你手上的状态帧"]
+    for frame in frames[:max_rows]:
+        mark = "" if is_running(frame) else "（沉睡）"
+        lines.append(f"- {frame_ident(frame)}{mark} id={frame.get('id')}")
+    if (rest := len(frames) - max_rows) > 0:
+        lines.append(f"- …另有 {rest} 帧，调 list_states 看全量")
+    lines.append("要进哪一帧就 enter_state(id)；新建、进出、结束都会在后面补一条。")
+    return "\n".join(lines)
+
+
+def is_state_summary(content: Any) -> bool:
+    """这条 system 消息是不是状态摘要块。
+
+    注入块的首字节固定：用户自己贴一段带同样标记的文字不算（它是消息正文，不是摘要）。
+    """
+    return isinstance(content, str) and content.startswith(_STATE_SUMMARY_PREFIX)
+
+
 def state_frame_of(messages: list[dict]) -> dict:
     """从一份请求体里读回当时的状态帧身份（那轮没注入状态摘要时返回空）。
 
@@ -613,8 +760,7 @@ def state_frame_of(messages: list[dict]) -> dict:
     for msg in messages or []:
         if not isinstance(msg, dict) or msg.get("role") != "system":
             continue
-        content = msg.get("content")
-        if isinstance(content, str) and content.startswith(_STATE_SUMMARY_PREFIX):
-            return parse_state_summary(content)
+        if is_state_summary(msg.get("content")):
+            return parse_state_summary(msg["content"])
     return {}
 

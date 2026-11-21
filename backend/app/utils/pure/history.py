@@ -25,6 +25,7 @@ KINDS = (
     "summary",     # compact 产物
     "thinking",    # 保留的思考（仅 keep_thinking=true 时）
     "memory",      # 记忆投递：想起一条 / 这条改动过（内容指纹在 ref 里，不进请求体）
+    "experience",  # 经历投递：想起自己在别处干过什么（ref=exp:<id>，投过就不再投）
     "plan",        # 计划板：这个状态下排了什么 / 板子变了以新的为准（键是会话，不是帧）
 )
 
@@ -32,7 +33,7 @@ KINDS = (
 ROLE_BY_ACTOR = {"self": "assistant", "user": "user", "world": "user", "system": "system"}
 
 # 事件类：压缩时**原样搬运**，不揉进摘要（揉了就等于丢契约/丢"有个洞"）
-NEVER_COMPRESSIBLE = ("gap", "note", "notice", "handoff", "memory", "plan")
+NEVER_COMPRESSIBLE = ("gap", "note", "notice", "handoff", "memory", "experience", "plan")
 
 
 def make_entry(kind: str, content: str, *, actor: str = "system",
@@ -182,23 +183,79 @@ def tool_ledger_note(result: dict | None) -> str:
     return note or "ok"
 
 
-def tools_entry(items: list[dict]) -> dict:
-    """本轮工具调用一笔总账（**我干了什么**）——一条条目，不是每个调用一条：
+def ledger_worthy_tools(items: list[dict], has_effect) -> list[dict]:
+    """哪几条工具调用值得进账本（has_effect(name) 由调用方注入，保持本模块无依赖）。
 
-    逐个调用落账本会被工具淹没（一轮十几个调用），细节本来就在 ConversationLog 里。
+    成功的读类调用只回一个 ok，账本里留「某工具 ok」对下一个自己没有信息量，而压缩时
+    这类事件条目是原样搬运的，越积越长。失败必须留（带原因）；有持久副作用的也留结果
+    ——账本不存调用参数（参数只落在对话日志里），不写就没人知道闹钟定在几点、记忆写了什么。
     """
+    out = []
+    for it in items or []:
+        if (it.get("note") or "ok").strip() != "ok":
+            out.append(it)
+        elif has_effect((it.get("name") or "").strip()):
+            out.append(it)
+    return out
+
+
+def tools_summary(items: list[dict]) -> str:
+    """工具调用的一行总账：`name(note)；name(note)`。账本条目与经历行共用这一份措辞。"""
     parts = []
     for it in items or []:
         name = (it.get("name") or "?").strip()
         note = (it.get("note") or "ok").strip()
         parts.append(f"{name}({note})")
-    return make_entry("tool", "[本轮工具] " + "；".join(parts), actor="self")
+    return "；".join(parts)
+
+
+def tools_entry(items: list[dict]) -> dict:
+    """本轮工具调用一笔总账（**我干了什么**）——一条条目，不是每个调用一条：
+
+    逐个调用落账本会被工具淹没（一轮十几个调用），细节本来就在 ConversationLog 里。
+    """
+    return make_entry("tool", "[本轮工具] " + tools_summary(items), actor="self")
+
+
+# 会「同一句话反复落」的事件类：工具总账与平台通知。压缩时事件条目原样搬运、折不掉，
+# 一段会话里能积到几十条正文相同的条目（线上实测 [本轮工具] 最多 59 条、channel_mode
+# 通知同 ref 9 条），上下文就这么被同一句话撑长。
+FOLD_KINDS = ("tool", "notice")
+
+
+def fold_repeats(entries: list[dict], last_by_key: dict[tuple[str, str], str]) -> list[dict]:
+    """剔掉「跟上一次同 kind、同 ref 的条目一字不差」的那些（写入时判，不改老条目）。
+
+    last_by_key 是调用方查来的账本现状 {(kind, ref): 正文}，只判**上一次**：中间夹了别的
+    条目不影响——「我上一句已经说过一模一样的话」没有新信息，再说一遍只是噪声。
+
+    只对 FOLD_KINDS 生效。message / summary / handoff / gap 重复就是内容真的重复
+    （同一句话发了两次、两次缺口），吞掉会丢东西，不许折。
+    """
+    out: list[dict] = []
+    for entry in entries or []:
+        kind = entry.get("kind") or "message"
+        if kind not in FOLD_KINDS:
+            out.append(entry)
+            continue
+        key = (kind, entry.get("ref") or "")
+        text = (entry.get("content") or "").strip()
+        if key in last_by_key and last_by_key[key].strip() == text:
+            continue
+        last_by_key[key] = text
+        out.append(entry)
+    return out
 
 
 def handoff_entry(note: str) -> dict:
-    """轮末交接（end_turn.key_note）：留给后面自己的关键信息。
+    """轮末笔记（end_turn.key_note）：这一轮干了什么、为什么这么定、下一步。
 
-    只活到解锁：它讲的是"这一轮在干什么"，压缩后新上下文由摘要接手，不必再背着。
+    有两处读它，别只当「留给下一个自己的交接」：
+    - 当场：这条条目留给同一段对话里的下一轮，讲的是"这一轮在干什么"；
+    - 跨场：同一段文本还会写进经历表（source=key_note），别的会话里的自己能想起它。
+      所以笔记里不该出现只在当前会话成立、又不该被别处看到的东西（人名、金额、约定）。
+
+    只活到解锁：压缩后新上下文由摘要接手，不必再背着；经历表那行不受解锁影响。
     """
     return make_entry("handoff", f"[上一轮交接] {note.strip()}", actor="system",
                       flags={"drop_on_unlock": True})

@@ -52,12 +52,27 @@ from app.services.agent.agent_service import (
     collaborator_to_dict,
 )
 from app.services.agent import workspace_service
+from app.services.creator import agent_creator_service as creator
 from app.utils.auth import get_current_user
 from app.utils.crypto import decrypt_api_key
 from app.models.user import User
 from sqlalchemy import select
 
 router = APIRouter(prefix="/agents", tags=["AI 管理"])
+
+
+@router.get("/voice-presets")
+async def list_voice_presets(
+    current_user: dict = Depends(get_current_user),
+):
+    """语音（TTS）提供商预设 —— 配置语音 API 的下拉数据
+
+    普通用户也要能取（不是管理员专用）：预设只是"填什么 base_url 的提示"，
+    键本身还是要用户自己填。必须定义在 /{agent_id} 之前，否则会被当成 agent_id。
+    """
+    from app.services.agent.provider_presets import get_voice_presets
+
+    return get_voice_presets()
 
 
 @router.get("/models")
@@ -133,6 +148,22 @@ def _require_collab_permission(agent, permission: str):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"需要 '{permission}' 权限")
 
 
+def _can_manage_agent_emoji(agent, current_user: dict) -> bool:
+    """谁能改这个 AI 的表情包开关：主人 / 管理员 / 获主人授权的 can_edit 合作者
+
+    表情包与通道是两件事：包本身是创建者的资产（只能在 /emoji-packs 里改），
+    这里判的是「这个 AI 能拿哪些包发图」，属于它对外表现的授权面。
+    """
+    if agent.owner_id == current_user["user_id"] or current_user.get("role") == "admin":
+        return True
+    collab = getattr(agent, "_collaborator", None)
+    return bool(
+        collab is not None
+        and getattr(collab, "can_edit", False)
+        and getattr(agent, "collaborators_manage_emoji", False)
+    )
+
+
 async def _get_user_api_key(db: AsyncSession, user_id: int) -> str | None:
     """获取用户的 API Key（解密后）"""
     result = await db.execute(select(User).where(User.id == user_id))
@@ -181,10 +212,25 @@ async def _open_agent_dm(db: AsyncSession, owner_id: int, agent_user_id: int) ->
 @router.post("", response_model=AgentResponse, status_code=status.HTTP_201_CREATED)
 async def create_new_agent(
     req: AgentCreateRequest,
+    response: Response,
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """创建新 AI（消耗额度）"""
+    """创建新 AI（消耗额度）
+
+    **一个创建草稿只落一个 AI**：带 draft_id 时，草稿已建过就直接把那条返回（200），
+    不再新建。并发（双击、手机 + 电脑同时点）由草稿行的原子占用裁决——谁抢到谁赢，
+    输的那次把自己刚建的这个撤掉、返回赢家。没带 draft_id 的老调用保持原样。
+    """
+    draft = None
+    if req.draft_id is not None:
+        draft = await creator.get_draft_for_update(db, current_user["user_id"], req.draft_id)
+        if draft is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "创建草稿不存在")
+        if draft.agent_id:
+            existing = (await get_agent(db, draft.agent_id)).unwrap()
+            response.status_code = status.HTTP_200_OK
+            return agent_to_dict(existing)
     try:
         agent = await create_agent(
             db,
@@ -226,6 +272,10 @@ async def create_new_agent(
             others_chat_used=req.others_chat_used,
             disallow_mode=req.disallow_mode,
         )
+        # 草稿锁一直在手里：这里不会有人跟我们抢，直接记下"这张草稿建成了谁"
+        if draft is not None:
+            draft.agent_id = agent.id
+            draft.status = "created"
         # 让新 AI 出现在聊天列表里：与它的私聊先建好、落一条开场
         if agent.user_id:
             await _open_agent_dm(db, current_user["user_id"], agent.user_id)
@@ -574,6 +624,93 @@ async def put_channel_access(
     return {"message": "已保存", "allow_collaborators": bool(agent.collaborators_manage_channels)}
 
 
+@router.get("/{agent_id}/emoji-access")
+async def get_emoji_access(
+    agent_id: int,
+    agent: any = Depends(_require_agent_access),
+    current_user: dict = Depends(get_current_user),
+):
+    """表情包开关是否允许合作者改——主人决定，合作者只读"""
+    return {
+        "allow_collaborators": bool(getattr(agent, "collaborators_manage_emoji", False)),
+        "is_owner": agent.owner_id == current_user["user_id"],
+    }
+
+
+@router.put("/{agent_id}/emoji-access")
+async def put_emoji_access(
+    agent_id: int,
+    req: dict,
+    agent: any = Depends(_require_agent_access),
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """打开/关闭「合作者可管理表情包开关」。只有主人能改。"""
+    if agent.owner_id != current_user["user_id"] and current_user.get("role") != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只有主人能设置这一项")
+    agent.collaborators_manage_emoji = bool(req.get("allow_collaborators", False))
+    await db.commit()
+    return {"message": "已保存", "allow_collaborators": bool(agent.collaborators_manage_emoji)}
+
+
+@router.get("/{agent_id}/emoji-packs")
+async def get_emoji_packs(
+    agent_id: int,
+    agent: any = Depends(_require_agent_access),
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """这个 AI 的表情包与开关状态（平台装好的资源，用不用由创建者勾选）
+
+    默认白名单：没有行 = 不用；黑名单模式反过来（没有行 = 能用）。
+    插件只管提供图与描述，这里只算"这个 AI 能不能用"。
+    """
+    from app.config import settings
+    from app.services.plugin import catalog
+
+    mode = str(getattr(settings, "emoji_pack_mode", "whitelist") or "whitelist")
+    packs = await catalog.enabled_emoji_packs(db)
+    prefs = await catalog.agent_pack_prefs(db, agent_id)
+    whitelist = mode == "whitelist"
+    return {
+        "mode": mode,
+        "is_owner": agent.owner_id == current_user["user_id"],
+        "can_manage": _can_manage_agent_emoji(agent, current_user),
+        "packs": [
+            {
+                "id": pack["id"],
+                "name": pack["name"],
+                "usage": pack["usage"],
+                "faces": len(pack["faces"]),
+                "enabled": prefs.get(pack["id"], False if whitelist else True),
+            }
+            for pack in packs
+        ],
+    }
+
+
+@router.put("/{agent_id}/emoji-packs/{pack_id}")
+async def put_emoji_pack(
+    agent_id: int,
+    pack_id: str,
+    req: dict,
+    agent: any = Depends(_require_agent_access),
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """打开/关闭这个 AI 对某个表情包的使用权。只有主人能改：这决定 AI 能拿什么发图。"""
+    from app.services.plugin import catalog
+
+    if not _can_manage_agent_emoji(agent, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="只有主人（或获主人授权的合作者）能设置这一项",
+        )
+    enabled = bool(req.get("enabled", False))
+    await catalog.set_agent_pack(db, agent_id, pack_id, enabled)
+    return {"message": "已保存", "pack_id": pack_id, "enabled": enabled}
+
+
 @router.post("/{agent_id}/collaborators")
 async def add_agent_collaborator(
     agent_id: int,
@@ -814,7 +951,7 @@ async def get_agent_storage(
             "name": view.rsplit("/", 1)[-1],
         })
 
-    # 3. 配额（默认每 AI 100MB）
+    # 3. 上限值（默认每 AI 100MB）：只用来画进度条，不拦截；正式落点是 agents.storage_limit_mb
     quota_mb = int(os.getenv("STORAGE_QUOTA_PER_AI_MB", "100"))
     quota_bytes = quota_mb * 1024 * 1024
 
@@ -1223,3 +1360,142 @@ async def update_workspace(
     await workspace_service.set_workspace_file(db, agent_id, req.file, req.content)
     files = await workspace_service.get_all_workspace_files(db, agent_id)
     return WorkspaceResponse(**files)
+
+
+# ──────────────────────────── AI 语音（TTS）────────────────────────────
+
+from datetime import datetime as _dt  # noqa: E402 —— 本段是后加的子资源，就近取用
+from pydantic import BaseModel as _BaseModel  # noqa: E402
+
+
+class VoiceConfigRequest(_BaseModel):
+    provider: str = ""
+    base_url: str = ""
+    api_key: str | None = None      # None = 不改这一项；"" = 清空
+    voice_id: str = ""
+    model: str = ""
+
+
+class VoiceConfigResponse(_BaseModel):
+    provider: str
+    base_url: str
+    voice_id: str
+    model: str
+    has_key: bool
+    probe_ok: bool
+    probe_kind: str
+    probe_message: str
+    probed_at: _dt | None
+
+
+def _voice_payload(cfg) -> VoiceConfigResponse:
+    """对外形状：**不回传 key 明文**，只回"配没配" """
+    if cfg is None:
+        return VoiceConfigResponse(
+            provider="", base_url="", voice_id="", model="",
+            has_key=False, probe_ok=False, probe_kind="", probe_message="", probed_at=None,
+        )
+    return VoiceConfigResponse(
+        provider=cfg.provider or "",
+        base_url=cfg.base_url or "",
+        voice_id=cfg.voice_id or "",
+        model=cfg.model or "",
+        has_key=bool(cfg.api_key_encrypted),
+        probe_ok=bool(cfg.probe_ok),
+        probe_kind=cfg.probe_kind or "",
+        probe_message=cfg.probe_message or "",
+        probed_at=cfg.probed_at,
+    )
+
+
+@router.get("/{agent_id}/voice", response_model=VoiceConfigResponse)
+async def get_voice_settings(
+    agent_id: int,
+    agent: any = Depends(_require_agent_access),
+    db: AsyncSession = Depends(get_db),
+):
+    """读这个 AI 的语音配置（key 只回"有没有配"）"""
+    from app.services.agent.voice_config import get_voice_config
+
+    return _voice_payload(await get_voice_config(db, agent_id))
+
+
+@router.put("/{agent_id}/voice", response_model=VoiceConfigResponse)
+async def update_voice_settings(
+    agent_id: int,
+    req: VoiceConfigRequest,
+    agent: any = Depends(_require_agent_access),
+    db: AsyncSession = Depends(get_db),
+):
+    """存这套语音配置，并且当场测一次。
+
+    任何字段一改，旧的检测结论立刻作废；这里顺手把新的测出来——否则用户改完
+    还得记得去点「测试」，中间那段时间 AI 是哑的（工具表里根本没有 send_voice）。
+    没改动的重复保存不会重复打供应商：结论还有效就直接沿用。
+    """
+    from app.services.agent.voice_config import probe_now, save_voice_config
+
+    cfg = await save_voice_config(
+        db, agent_id,
+        provider=req.provider, base_url=req.base_url, api_key=req.api_key,
+        voice_id=req.voice_id, model=req.model,
+    )
+    # 没填 base_url 就没什么可测的：那是"清空配置"，状态退回「还没测过」而不是「不可用」
+    if cfg.base_url and not cfg.probe_ok:
+        await probe_now(db, cfg)
+    await db.commit()
+    return _voice_payload(cfg)
+
+
+@router.post("/{agent_id}/voice/preview")
+async def preview_voice_settings(
+    agent_id: int,
+    agent: any = Depends(_require_agent_access),
+    db: AsyncSession = Depends(get_db),
+):
+    """试听：合一句短话直接回 mp3（会消耗一次合成额度，只给"听听像不像"用）"""
+    from app.services.agent.voice_config import api_key_of, get_voice_config
+    from app.services.agent.voice_tts import VoiceSynthError, synthesize
+
+    cfg = await get_voice_config(db, agent_id)
+    if cfg is None or not cfg.base_url or not cfg.voice_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="这套语音配置还不完整（缺 Base URL 或音色）")
+    try:
+        audio = await synthesize(
+            provider=cfg.provider, base_url=cfg.base_url, api_key=api_key_of(cfg),
+            voice_id=cfg.voice_id, text="你好，这是我的声音。",
+            style="自然、日常，像随口说的。", model=cfg.model or "",
+        )
+    except VoiceSynthError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=f"{e.kind}：{e.message}")
+    return Response(content=audio, media_type="audio/mpeg")
+
+
+@router.post("/{agent_id}/voice/test", response_model=VoiceConfigResponse)
+async def test_voice_settings(
+    agent_id: int,
+    req: VoiceConfigRequest | None = None,
+    agent: any = Depends(_require_agent_access),
+    db: AsyncSession = Depends(get_db),
+):
+    """立刻测一次，把结论写回配置。
+
+    带上表单值（req）就按它先存再测——用户点"测试"时还没点保存，不能拿旧配置测。
+    不消耗合成额度：Breeze 走官方自检端点，MiniMax 只发一条 max_tokens=1 的极小请求。
+    """
+    from app.services.agent.voice_config import get_voice_config, probe_now, save_voice_config
+
+    if req is not None and (req.base_url or req.provider):
+        cfg = await save_voice_config(
+            db, agent_id, provider=req.provider, base_url=req.base_url,
+            api_key=req.api_key, voice_id=req.voice_id, model=req.model,
+        )
+    else:
+        cfg = await get_voice_config(db, agent_id)
+    if cfg is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="这个 AI 还没配语音")
+    await probe_now(db, cfg)
+    await db.commit()
+    return _voice_payload(cfg)

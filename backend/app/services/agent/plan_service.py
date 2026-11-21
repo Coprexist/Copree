@@ -31,6 +31,15 @@ async def deliver_plans(db: AsyncSession, agent, context_ref: str) -> list[dict]
     from app.services.history.context_sync import append_events
 
     try:
+        # 一条闹钟行都没有 = 这个 AI 从来不排计划，板上永远不会有内容：先短路，省掉每轮
+        # 读一遍整本账（开关对全量打开后这笔开销每轮都要付）。取消/已执行的闹钟行都还在，
+        # 所以"零行"不会是"投过、后来都取消了"——那种要回一句"已经没有计划了"，走下面那条路。
+        alarms = (await db.execute(
+            select(AgentAlarm).where(AgentAlarm.agent_id == agent.id)
+        )).scalars().all()
+        if not alarms:
+            return []
+
         ledger = await history_service.read(db, agent.id, context_ref)
         ref = plan_ref(context_ref)
         delivered = ""
@@ -38,9 +47,6 @@ async def deliver_plans(db: AsyncSession, agent, context_ref: str) -> list[dict]
             if str((entry or {}).get("ref") or "") == ref:
                 delivered = board_of((entry or {}).get("content") or "")
 
-        alarms = (await db.execute(
-            select(AgentAlarm).where(AgentAlarm.agent_id == agent.id)
-        )).scalars().all()
         frames = await get_frames(db, agent.id)
         board = plan_board(
             alarms, context_ref=context_ref,

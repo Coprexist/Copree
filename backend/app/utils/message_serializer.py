@@ -37,13 +37,38 @@ async def mention_names(db, contents) -> dict[int, str]:
     return await display_names(db, ids)
 
 
+# 撤回的会话预览：与账本占位（history.revoked_text）同一语义，但列表要短。
+# 一律写"谁撤回了一条消息"（完整名字，不截）：私信也一样——不再分"你/对方"，
+# 少一种特判就少一处跟消息里的灰色胶囊对不齐的机会。
+REVOKED_PREVIEW = "撤回了一条消息"
+
+
+def revoked_preview(sender_name: str | None = None) -> str:
+    """撤回那条在会话列表里怎么写：有名字就带上，没有就退回中性说法，别猜。"""
+    return f"{sender_name} {REVOKED_PREVIEW}" if sender_name else REVOKED_PREVIEW
+
+
+def voice_label(duration_ms: int | None) -> str:
+    """语音在列表里的写法：[语音] / [语音 12"] / [语音 1'42"]
+
+    时长缺失（老消息的快照里没有、或探测失败）就退回不带时长的写法，不显示 0'00"。
+    """
+    if not duration_ms or duration_ms <= 0:
+        return "[语音]"
+    total = int(round(duration_ms / 1000))
+    if total < 60:
+        return f'[语音 {total}"]'
+    return f"[语音 {total // 60}'{total % 60:02d}]"
+
+
 def make_preview(content: str | None, attachments: list | str | None = None, max_len: int = 50) -> str:
     """生成消息预览文本。
 
     纯附件无文字：
-      - 单个 → 图片显示 [图片]，其余显示文件名或 [文件]
+      - 单个 → 图片 [图片]、语音 [语音]，其余显示文件名或 [文件]
       - 多个 → [N个文件]
-    有文字 → 截取前 max_len 个字符（去除 HTML 标签）。
+    有文字 → 截取前 max_len 个字符（去除 HTML 标签）；彩色标签与 Markdown 先在
+    text_preview 里脱掉，这里只做截断与附件占位。
 
     attachments 兼容 list（群聊 JSONB）和 str（私信 Text 列存 JSON）。
     """
@@ -65,11 +90,50 @@ def make_preview(content: str | None, attachments: list | str | None = None, max
             mime = a.get('mime_type', '') or ''
             if mime.startswith('image/'):
                 return "[图片]"
+            # 语音给占位而不是文件名：voice_20261114104640_1.mp3 在列表里既长又没信息
+            if mime.startswith('audio/'):
+                return voice_label(a.get('duration_ms'))
             name = a.get('name', '')
             if name:
                 return name[:max_len] + ("..." if len(name) > max_len else "")
         return "[文件]"
     return f"[{count}个文件]"
+
+
+def text_preview(
+    content: str | None,
+    attachments: list | str | None = None,
+    *,
+    names: dict[int, str] | None = None,
+    max_len: int = 50,
+    keep_url: bool = True,
+) -> str:
+    """一条消息 → 给人看的一行：@ 令牌换名字 → 去 Markdown 与彩色标签 → 截断。
+
+    会话列表与站内浮窗共用这一份拼法（浮窗传 keep_url=False 省地方）：
+    两处各写一套，就会出现「列表里露着 [blue]、浮窗里是干净的」这种对不齐。
+    [blue]…[/blue] 是站内自定义文法，不脱掉的话侧栏直接显示字面量。
+    """
+    from app.utils.text import plainify_markdown, render_mention_names
+
+    plain = plainify_markdown(render_mention_names(content or "", names or {}), keep_url=keep_url)
+    return make_preview(plain, attachments, max_len=max_len)
+
+
+def preview_of(message, names: dict[int, str] | None = None, max_len: int = 50) -> str:
+    """会话列表那一行预览：撤回的只留占位，不把原文透出去。
+
+    撤回是「这条没了」，原文只留在库里（审计/排障）。消息渲染按 revoked_at 走占位，
+    列表预览也得走同一个口径——否则撤回后侧栏还挂着原话，刷新也甩不掉。
+    """
+    if getattr(message, "revoked_at", None):
+        return REVOKED_PREVIEW
+    return text_preview(
+        getattr(message, "content", None),
+        getattr(message, "attachments", None),
+        names=names,
+        max_len=max_len,
+    )
 
 
 def serialize_message(message, *,

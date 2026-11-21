@@ -99,10 +99,18 @@ async def save_conversation_log(
     model: str | None = None,
     thinking_enabled: bool = False,
     user_id: int | None = None,
+    origin: str = "call",
+    state_key: str | None = None,
 ) -> int | None:
     """保存一次完整对话，自动清理超出限制的旧记录
 
     user_id：记账人（世界 AI 用量传世界主人；普通 AI 记录留空按 agent.owner_id 归属）。
+
+    origin：这行从哪来。默认 call = 一次真的模型调用；switch = 离开一个状态帧时落的那一段
+    （见 services/agent/segment_log.py）——它不是调用，没有结局也不该记用量。
+
+    state_key：显式指定归哪个桶。默认从 messages 里的状态块读回；切换行在请求体里读不到
+    时会用它兜底（那一段的身份由调用方知道，不该因为请求体缺块就落成无状态）。
 
     第一参数收会话或内容仓库（as_content_repo 统一）：executor 那条最热的路直接传 session，
     而通道额度要的 SAVEPOINT 只有仓库能给出底层会话——不统一就在这里炸，且被下面的
@@ -122,8 +130,9 @@ async def save_conversation_log(
             has_output=has_output,
             model=model,
             thinking_enabled=thinking_enabled,
+            origin=origin,
             # 状态身份在这里算一次存下：裁剪按它分桶、列表按它归堆，都不必回读整份 messages
-            state_key=state_key_of(state_frame_of(messages)),
+            state_key=state_key if state_key is not None else state_key_of(state_frame_of(messages)),
         )
         content_repo.add(log)
         await content_repo.flush()
@@ -999,6 +1008,16 @@ def _state_frame_of_log(log: ConversationLog) -> dict:
     return frame_of_state_key(log.state_key) or state_frame_of(log.messages or [])
 
 
+def _origin_of(log: ConversationLog) -> str:
+    """这行从哪来：真实模型调用（call）还是离开状态帧时落的那一段（switch）。"""
+    return log.origin or "call"
+
+
+def _log_status(log: ConversationLog) -> str | None:
+    """结局只属于模型调用；切换行不是一次调用，谈不上「无输出」。"""
+    return None if _origin_of(log) == "switch" else _run_status(log.messages or [], bool(log.has_output))
+
+
 def _bare_group_id(label: str) -> int | None:
     """裸的会话键 group:{id}（帧没写 label 时摘要回退打印的就是它）"""
     head, _, tail = label.partition(":")
@@ -1056,7 +1075,8 @@ def _log_to_summary(log: ConversationLog) -> dict:
         "message_count": log.message_count,
         "token_usage": log.token_usage,
         "has_output": log.has_output,
-        "status": _run_status(msgs, bool(log.has_output)),
+        "origin": _origin_of(log),
+        "status": _log_status(log),
         # 这轮是在哪段状态下发出的（帧身份 = type + label）：不同状态的请求体前缀本就不同，
         # 列表按它归堆才看得出「这段状态的上下文长什么样」
         "state_frame": _state_frame_of_log(log),
@@ -1079,7 +1099,8 @@ def _log_to_detail(log: ConversationLog) -> dict:
         "message_count": log.message_count,
         "token_usage": log.token_usage,
         "has_output": log.has_output,
-        "status": _run_status(log.messages or [], bool(log.has_output)),
+        "origin": _origin_of(log),
+        "status": _log_status(log),
         "state_frame": _state_frame_of_log(log),
         "model": log.model,
         "thinking_enabled": log.thinking_enabled,

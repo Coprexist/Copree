@@ -30,6 +30,7 @@ import contextvars
 import hashlib
 import json
 import logging
+import time
 from typing import NamedTuple
 
 from sqlalchemy import select
@@ -526,6 +527,111 @@ def clear_frozen_allowed(holder, state: str | None) -> None:
         _set_holder_map(holder, "cap_effective_allowed", m)
 
 
+# ── 锁定态的前缀文本快照 ──
+# 上面两把锁锁的都是"输入"（版本号、名单）：渲染代码里任何一处现算，字节照样变，锁白锁。
+# 2026-11-14 实测：send_voice / file_fetch / 大肥鱼表情包三次改动，版本号没变、名单没变，
+# 前缀却从第 0 字节失效 7 次，多付 283k 未命中。所以这里锁"输出"：
+# 首见把**渲染结果**整段钉下来，之后每轮直接用这份字节——目录、表情包、索引的代码怎么改，
+# 都进不了活跃会话。变更走【能力变更通知】账本条目，compact/clear 解锁时才换字节。
+# 键是会话键（前缀按会话拼）：一个会话解锁不该换别的会话的字节。
+PREFIX_SOURCE = "prefix"
+
+#: 每个 AI 保留多少条会话前缀快照（约 14KB/条）。超出按最近使用丢弃最旧的。
+PREFIX_SNAPSHOT_LIMIT = 64
+
+
+def emoji_packs_source() -> str:
+    """表情包清单的版本源（全局）：加了包/删了包要像别的能力一样发通知。
+
+    以前它不在链上：2026-11-14 加"大肥鱼"24 张，前缀变了却一条通知都没有——
+    与「进前缀的东西必须有版本、变更走通知」是两条没对齐的口径。
+    """
+    return "emoji-packs"
+
+
+def prefix_key(context_ref: str, variant: str = "") -> str:
+    """快照键：与进度键同一口径 = {会话键}|{源}，源是 `prefix` 或 `prefix:{人格变体}`。
+
+    为什么带变体：人格段可以按**说话的人**覆盖（群里有人的覆盖、有人的没有），那是字节
+    本来就该不同的两个版本——共用一条快照会让 B 用户读到 A 用户的覆盖。带上变体后，
+    每个版本各自钉一份；只有真正"同一版本被外部改了"才叫漂移，才该被快照拦住。
+    """
+    return progress_key(context_ref, f"{PREFIX_SOURCE}:{variant}" if variant else PREFIX_SOURCE)
+
+
+def frozen_prefix(holder, context_ref: str, variant: str = "") -> str | None:
+    """锁定态该会话的前缀字节；None = 首见（还没锁过，调用方渲染一份再 freeze_prefix）。"""
+    raw = _holder_map(holder, "cap_effective_prefix").get(prefix_key(context_ref, variant))
+    if isinstance(raw, dict):
+        text = raw.get("text")
+        if isinstance(text, str):
+            return text
+    return None
+
+
+async def locked_prefix(holder, context_ref: str, render, variant: str = "") -> str:
+    """锁定态前缀的**唯一读写口**：命中快照就返回字节，连 render 都不调。
+
+    render 是"本轮按最新内容拼一份"的 async 函数，只会在首见与解锁之后执行。
+    这样"不现算"是结构事实，不是调用方的自觉：任何新加的段、任何多加的一次查库，
+    在锁定态都影响不到发出去的字节。
+    版本探测不在这里——它每轮都跑（见 llm 的前缀探测段），所以省掉渲染不会丢通知。
+    """
+    frozen = frozen_prefix(holder, context_ref, variant)
+    if frozen is not None:
+        return frozen
+    return freeze_prefix(holder, context_ref, await render(), variant)
+
+
+def freeze_prefix(holder, context_ref: str, text: str, variant: str = "") -> str:
+    """把这一份前缀字节锁进 holder，返回**实际该发出去的那份**。
+
+    已有快照就不许覆盖（覆盖 = 断缓存），返回旧的那份——这是"不靠自觉"的兜底：
+    有人绕过 locked_prefix 直接调渲染，也换不掉发出去的字节。解锁点先清空再重新锁。
+    """
+    key = prefix_key(context_ref, variant)
+    m = _holder_map(holder, "cap_effective_prefix")
+    existing = m.get(key)
+    if isinstance(existing, dict) and isinstance(existing.get("text"), str):
+        return existing["text"]
+    m[key] = {
+        "text": text,
+        "hash": hashlib.sha256(text.encode()).hexdigest(),
+        "at": int(time.time()),
+    }
+    _prune_prefix_map(m)
+    _set_holder_map(holder, "cap_effective_prefix", m)
+    return text
+
+
+def _prune_prefix_map(m: dict) -> None:
+    """只留最近用过的 `PREFIX_SNAPSHOT_LIMIT` 条。
+
+    一个 AI 可能进很多群/私信，每个会话一条快照（约 14KB 文本）。从不解锁、也不再被使用的
+    会话会一直躺在 JSONB 里——不设上限就是慢性膨胀。丢弃不影响正确性：那条会话下次请求
+    重新渲染一份再锁上（前缀本来按会话拼，别的会话的字节与它无关）。
+    """
+    if len(m) <= PREFIX_SNAPSHOT_LIMIT:
+        return
+    ordered = sorted(m.items(), key=lambda kv: (kv[1] or {}).get("at") or 0)
+    for k, _ in ordered[:len(m) - PREFIX_SNAPSHOT_LIMIT]:
+        m.pop(k, None)
+
+
+def clear_frozen_prefix(holder, context_ref: str) -> None:
+    """解锁点清空：前缀马上要按最新内容重拼，下次请求渲染一份新的再锁上。
+
+    按会话键前缀扫着删：人格变体各有各的快照，解锁一次要把它们全部作废。
+    """
+    m = _holder_map(holder, "cap_effective_prefix")
+    base = f"{context_ref}|{PREFIX_SOURCE}"
+    stale = [k for k in m if k == base or k.startswith(base + ":")]
+    if stale:
+        for k in stale:
+            m.pop(k, None)
+        _set_holder_map(holder, "cap_effective_prefix", m)
+
+
 def scope_covers(scope: str | None, state: str | None, foci=None) -> bool:
     """这条版本的作用域覆盖不覆盖该状态——决定变更通知该不该送到这个状态。
 
@@ -725,6 +831,11 @@ async def mark_prefix_fresh(
         write_progress(holder, "cap_known_versions", state, source, latest.version)
     # 名单与版本同进同退：解锁之后按此刻的状态/开关重新算一次
     clear_frozen_allowed(holder, state)
+    # 前缀文本快照同理，而且更长线：它锁的是**发出去的字节**，只要有人宣布"前缀换新了"，
+    # 那份旧快照就必须作废，否则下次请求还会把旧字节端回来（锁定态拒绝覆盖，见 freeze_prefix）。
+    # 放在这里而不是只放解锁清单里：世界侧也会走这条"会话起点对齐"，一处漏清就永远换不掉。
+    if state:
+        clear_frozen_prefix(holder, state)
 
 
 # ═══════════════════════════════════════════════════════════════

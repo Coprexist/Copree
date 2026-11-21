@@ -10,6 +10,8 @@
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 METER_TOTAL = "total"
 METER_BILLABLE = "billable"
 METER_MODES = (METER_BILLABLE, METER_TOTAL)
@@ -20,6 +22,12 @@ DEFAULT_LIMIT_TOKENS = 1_000_000
 # 超限后同一个对话的自动回复节流：每 10 分钟最多一句。
 # 不节流的话，一个被刷屏的群会每来一条就回一句"额度用完"，等于自己在刷自己的屏。
 BLOCKED_NOTICE_INTERVAL_SECONDS = 600
+
+# 自动重置周期：空 = 不自动重置（手动重置，或一直累计）。
+# hour / day / 2days / week 都是「窗口」：算账时只看当前窗口里的用量，不需要定时任务清账——
+# 窗口起点由 (周期, 锚点, 当前时间) 算出来，所以重启、改设置、换时区都不会丢账。
+RESET_PERIODS = ("", "hour", "day", "2days", "week")
+DEFAULT_RESET_ANCHOR = "00:00"
 
 # 被拦下时默认发出去的官方口吻说明（用户可换成自己的，policy.blocked_reply_text）
 DEFAULT_BLOCKED_REPLY = (
@@ -81,6 +89,68 @@ def blocked_reply_text(custom: object) -> str:
     text = str(custom or "").strip()
     return text or DEFAULT_BLOCKED_REPLY
 
+
+def normalize_reset_period(value: object) -> str:
+    """认不出的周期按「不重置」处理：宁可不自动清零，也不要意外把额度还回去"""
+    period = str(value or "").strip().lower()
+    return period if period in RESET_PERIODS else ""
+
+
+def normalize_anchor(value: object) -> str:
+    """把 'H:M' / 'HH:MM' / 空 归一成 HH:MM；非法回落到 00:00"""
+    parts = str(value or "").strip().split(":")
+    if len(parts) != 2:
+        return DEFAULT_RESET_ANCHOR
+    try:
+        hour, minute = int(parts[0]), int(parts[1])
+    except (TypeError, ValueError):
+        return DEFAULT_RESET_ANCHOR
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return DEFAULT_RESET_ANCHOR
+    return f"{hour:02d}:{minute:02d}"
+
+
+def window_start(now: datetime, period: object, anchor: object = DEFAULT_RESET_ANCHOR) -> datetime | None:
+    """当前计数窗口的起点；period 为空返回 None（= 不自动重置）。
+
+    now 必须带时区：锚点是墙上时间「几点几分」，用哪个时区算由调用方决定
+    （服务层按平台展示时区算，前端看到的就是它）。窗口起点是**算**出来的，
+    不是存下来的「上次重置时间」——所以重启、改设置、换时区都不会丢账。
+    """
+    mode = normalize_reset_period(period)
+    if not mode:
+        return None
+    hour, minute = (int(x) for x in normalize_anchor(anchor).split(":"))
+    if mode == "hour":
+        # 按小时 = 每个整点换窗口（时间点只对"每天及以上"有意义，所以不看锚点）
+        return now.replace(minute=0, second=0, microsecond=0)
+    at = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if mode == "day":
+        return at if now >= at else at - timedelta(days=1)
+    if mode == "2days":
+        # 以 1970-01-01 为基准：锚点的时分套在基准日上，边界就落在同一时刻的每 2 天
+        base = datetime(1970, 1, 1, tzinfo=now.tzinfo).replace(hour=hour, minute=minute)
+        steps = int((now - base) // timedelta(days=2))
+        return base + timedelta(days=2 * steps)
+    # week：以周一为基准（1970-01-05 是周一）
+    base = datetime(1970, 1, 5, tzinfo=now.tzinfo).replace(hour=hour, minute=minute)
+    steps = int((now - base) // timedelta(days=7))
+    return base + timedelta(days=7 * steps)
+
+
+def window_end(now: datetime, period: object, anchor: object = DEFAULT_RESET_ANCHOR) -> datetime | None:
+    """下一次重置的时刻（界面显示「每天 04:00 重置」用）；不自动重置返回 None"""
+    start = window_start(now, period, anchor)
+    if start is None:
+        return None
+    mode = normalize_reset_period(period)
+    span = {
+        "hour": timedelta(hours=1),
+        "day": timedelta(days=1),
+        "2days": timedelta(days=2),
+        "week": timedelta(days=7),
+    }[mode]
+    return start + span
 
 def conversation_key(kind: str, target: int | str) -> str:
     """对话键：group:<Copro 群 id> / dm:<会话 id>。

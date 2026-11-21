@@ -56,6 +56,10 @@ async def ensure_auto_providers(db: AsyncSession) -> list[str]:
     added: list[str] = []
     for preset in PRESETS.values():
         key = str(preset["key"])
+        # 只补 LLM：语音预设（kind="voice"）不是模型厂商配置项，补进去会变成一条
+        # 没有 chat_model 的空配置（见 provider_presets.ProviderPreset 的 kind 说明）
+        if (preset.get("kind") or "llm") != "llm":
+            continue
         if not preset.get("auto_config") or key in have or key in dismissed:
             continue
         providers = upsert_provider(providers, build_provider_config(
