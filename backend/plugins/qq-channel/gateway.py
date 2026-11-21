@@ -187,8 +187,14 @@ class GatewayMixin:
             logger.debug(f"QQ 心跳结束：{e}")
 
 
+def _read_bytes(path: str) -> bytes:
+    """同步读文件；调用方丢进线程池跑（十几 MB 的图在事件循环里读会卡住别的会话）"""
+    with open(path, "rb") as f:
+        return f.read()
+
+
 class QqClient:
-    """官方 API v2 的最小客户端：取凭证 / 拿网关 / 发消息。"""
+    """官方 API v2 的最小客户端：取凭证 / 拿网关 / 发消息（文本与图片）。"""
 
     def __init__(self, app_id: str, client_secret: str) -> None:
         self.app_id = app_id
@@ -196,6 +202,9 @@ class QqClient:
         self._token = ""
         self._expire_at = 0.0
         self._http: httpx.AsyncClient | None = None
+        # 上传过的媒体：官方给的 file_info 有 ttl，同一张图在同一条会话里反复发就复用它
+        # （key = (会话 scope, 目标, 内容哈希, file_type)，value = (file_info, 过期时刻)）
+        self._media_cache: dict[tuple[str, str, str, int], tuple[str, float]] = {}
 
     async def _client(self) -> httpx.AsyncClient:
         if self._http is None:
@@ -236,17 +245,19 @@ class QqClient:
             raise RuntimeError(f"取网关地址失败（HTTP {res.status_code}）：{data}")
         return url
 
-    async def _post(self, path: str, body: dict) -> dict:
+    async def _post(self, path: str, body: dict, *, what: str = "发 QQ 消息",
+                    timeout: float | None = None) -> dict:
         http = await self._client()
         res = await http.post(
-            path, json=body, headers={"Authorization": f"QQBot {await self.token()}"}
+            path, json=body, headers={"Authorization": f"QQBot {await self.token()}"},
+            timeout=timeout,
         )
         try:
             data = res.json()
         except Exception:
             data = {}
         if res.status_code >= 400 or data.get("code"):
-            raise RuntimeError(f"发 QQ 消息失败（HTTP {res.status_code}）：{data}")
+            raise RuntimeError(f"{what}失败（HTTP {res.status_code}）：{data}")
         return data
 
     async def _send_rich(
@@ -314,6 +325,79 @@ class QqClient:
         return await self._send_rich(
             f"/v2/users/{user_openid}/messages", content, msg_id, msg_seq,
             force_type=force_type, wakeup=wakeup,
+        )
+
+    # ── 富媒体（图片消息）───────────────────────────────────────
+    async def upload_media(self, kind: str, target: str, path: str, file_type: int,
+                           file_name: str = "") -> str:
+        """把一份本地文件传成 QQ 的媒体引用，返回发消息要用的 `file_info`
+
+        为什么不走 Markdown 内嵌图（`![](url)`）：那要求机器人有 MD 权限、客户端也得会
+        渲染 MD，有的 QQ 端根本不显示。图片消息（`msg_type=7` + `file_info`）是普通消息
+        类型，与正文格式无关，纯文本模式下照样发、对面照样看得见。
+
+        同一份内容在同一个会话里只传一次：官方给的 `file_info` 带 ttl，重复上传纯属浪费
+        （一张图被反复 @ 出来是常见事）。
+        """
+        import base64
+        import hashlib
+        import os
+
+        from .media import MAX_UPLOAD_BYTES
+
+        size = os.path.getsize(path)
+        if size > MAX_UPLOAD_BYTES:
+            raise RuntimeError(
+                f"图片 {size // 1024 // 1024}MB 超过 QQ 单次上传上限 "
+                f"（{MAX_UPLOAD_BYTES // 1024 // 1024}MB）"
+            )
+        data = await asyncio.to_thread(_read_bytes, path)
+        digest = hashlib.sha1(data).hexdigest()
+        key = (kind, target, digest, int(file_type))
+        cached = self._media_cache.get(key)
+        if cached and cached[1] > time.time():
+            return cached[0]
+        body: dict[str, Any] = {
+            "file_type": int(file_type),
+            "srv_send_msg": False,          # 只上传、不直接发：发送由 send_media 决定顺序
+            "file_data": base64.b64encode(data).decode(),
+        }
+        if file_name:
+            body["file_name"] = file_name[:120]
+        scope = "groups" if kind == "group" else "users"
+        uploaded = await self._post(
+            f"/v2/{scope}/{target}/files", body, what="上传 QQ 媒体", timeout=60.0,
+        )
+        file_info = str(uploaded.get("file_info") or "")
+        if not file_info:
+            raise RuntimeError(f"上传 QQ 媒体没有拿到 file_info：{uploaded}")
+        ttl = int(uploaded.get("ttl") or 0)
+        if ttl > 60:
+            # ttl 是"这份引用还能用多久"；留 60 秒余量，别卡在过期那一刻
+            if len(self._media_cache) >= 256:
+                self._media_cache.pop(next(iter(self._media_cache)))
+            self._media_cache[key] = (file_info, time.time() + ttl - 60)
+        return file_info
+
+    async def send_media(self, kind: str, target: str, file_info: str,
+                         msg_id: str | None = None, msg_seq: int = 1,
+                         wakeup: bool = False) -> dict:
+        """发一条图片/视频消息（`msg_type=7`）
+
+        被动回复的规矩与文本一致：带 msg_id 时每次发送都要占一个 msg_seq（群 5 次、私聊 4 次），
+        所以"先文本后图片"的图片同样吃这份额度——顺序与额度都在 outbound 那一层算。
+        """
+        extra: dict[str, Any] = {"msg_seq": msg_seq} if msg_id else {}
+        if msg_id:
+            extra["msg_id"] = msg_id
+        elif wakeup:
+            # 私聊召回：与 msg_id 互斥（与文本消息同一条规矩）
+            extra["is_wakeup"] = True
+        scope = "groups" if kind == "group" else "users"
+        return await self._post(
+            f"/v2/{scope}/{target}/messages",
+            {"msg_type": 7, "media": {"file_info": file_info}, **extra},
+            what="发 QQ 媒体消息",
         )
 
     async def delete_group_message(self, group_openid: str, message_id: str) -> dict:

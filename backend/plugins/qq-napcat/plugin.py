@@ -37,10 +37,10 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.services.plugin.api import ServicePlugin, service
 from app.services.plugin.tasks import PluginTasks
+from app.utils.pure.channel_landing import parse_group_map
 from app.utils.pure.qr import png_b64
 from app.utils.text import check_mention
 from .accounts import load_account, save_account
-from .panel import entry as _panel_entry, rewrite as _panel_rewrite
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +194,21 @@ _MEDIA_PLACEHOLDER = {
     "poke": "[戳一戳]",
 }
 
+# 模型自己吐出来的 CQ 码：出站前一律转义（见 _neutralize_cq）
+_CQ_TOKEN = re.compile(r"\[CQ:([^\]]*)\]")
+
+
+def _neutralize_cq(text: str) -> str:
+    """把文本里的 [CQ:…] 变成字面量，堵住提示词注入直接指挥协议端的口子
+
+    出站的 message 是普通字符串，协议端会把其中的 [CQ:…] 当指令执行：模型只要写出
+    [CQ:at,qq=all] 就能 @ 全体，写出 [CQ:image,file=…] 就能发图。所以模型给的原文
+    先转义成 &#91;CQ:…&#93;（CQ 标准转义，客户端显示为字面量）。
+
+    平台自己要发的 @ 不经过这里：它由 _translate_mentions 在转义之后拼接。
+    """
+    return _CQ_TOKEN.sub(lambda m: f"&#91;CQ:{m.group(1)}&#93;", text)
+
 
 def _http_base(ws_url: str) -> str:
     """ws://127.0.0.1:3000/ws → http://127.0.0.1:3000
@@ -211,6 +226,19 @@ def _split_list(raw: Any) -> set[str]:
     """逗号分隔（中英文逗号都认）→ 集合"""
     text = str(raw or "").replace("，", ",")
     return {item.strip() for item in text.split(",") if item.strip()}
+
+
+def _event_images(event: dict) -> list[dict]:
+    """事件里能取的图片：正文里的 [图片] 只是"有人发了图"，字节得单独取"""
+    out: list[dict] = []
+    for seg in event.get("message") or []:
+        if not isinstance(seg, dict) or seg.get("type") != "image":
+            continue
+        data = seg.get("data") or {}
+        url = str(data.get("url") or "").strip()
+        if url:
+            out.append({"url": url, "filename": str(data.get("file") or "").strip()})
+    return out
 
 
 def _read_parts(message: Any, self_id: str) -> tuple[str, bool]:
@@ -254,10 +282,12 @@ class NapCatClient:
     只走一处 _post，token 只进请求头不进日志：排查时贴日志不会泄凭据。
     """
 
-    def __init__(self, http_base: str, access_token: str = "") -> None:
+    def __init__(self, http_base: str, access_token: str = "", *, ws_call=None) -> None:
         self._base = str(http_base or "").rstrip("/")
         self._token = access_token or ""
         self._http: httpx.AsyncClient | None = None
+        # 不为 None 时出站走 WebSocket（见 _post）：协议端只开 WS 的部署不用再开 HTTP 端口
+        self._ws_call = ws_call
 
     async def _client(self) -> httpx.AsyncClient:
         if self._http is None:
@@ -270,6 +300,10 @@ class NapCatClient:
             self._http = None
 
     async def _post(self, action: str, payload: dict) -> dict:
+        # 出站优先走已经连上的 WebSocket：同一台协议端只开 WS 时也能发，
+        # 不必再为 HTTP API 单开一个端口（两套地址、两套 token 才是最麻烦的部署）。
+        if self._ws_call is not None:
+            return await self._ws_call(action, payload)
         http = await self._client()
         headers = {"Authorization": f"Bearer {self._token}"} if self._token else {}
         res = await http.post(f"{self._base}/{action}", json=payload, headers=headers)
@@ -441,9 +475,15 @@ def _endpoint_schema() -> dict:
             "type": "string", "title": "协议端控制台地址", "required": True,
             "title_en": "Protocol console URL", "title_ja": "プロトコル端末コンソール",
             "default": _DEFAULT_WEBUI_URL or None,
-            "description": "协议端 WebUI 地址，如 http://napcat:6099；扫码登录和登录状态都走它",
-            "description_en": "The endpoint WebUI URL, e.g. http://napcat:6099 - QR sign-in and login state go through it",
-            "description_ja": "プロトコル端末の WebUI アドレス（例 http://napcat:6099）。QR ログインと状態取得に使います",
+            "description": "协议端 WebUI 地址，如 http://napcat:6099；平台的扫码登录与登录状态都走它。"
+                           "这个地址只给平台后端用（容器内网名）——控制台的端口和域名归协议端自己，"
+                           "你要打开控制台就在浏览器里直接访问它，用协议端自己的口令登录；平台不代管、也不转发",
+            "description_en": "The endpoint WebUI URL, e.g. http://napcat:6099 - QR sign-in and login state go through it. "
+                              "Only the platform backend reaches it (a container-internal name): the console's port and "
+                              "domain belong to the endpoint, so open it in a browser with the endpoint's own token",
+            "description_ja": "プロトコル端末の WebUI アドレス（例 http://napcat:6099）。QR ログインと状態取得に使います。"
+                              "これはプラットフォームのバックエンドだけが使う内部名で、コンソールのポートとドメインは"
+                              "プロトコル端末側のものです。自分で開くときはそのアドレスをブラウザで直接開いてください",
         },
         "webui_token": {
             "section": _SEC_CONNECT,
@@ -587,9 +627,23 @@ _SEC_DM = {"key": "dm", "title": "私聊", "title_en": "Direct messages", "title
             "description": "平台填。认人按 id，名字只用来显示：AI 改名不影响通道",
         },
         "copree_group_id": {
-            "type": "string", "title": "接入的 Copree 群 ID", "required": True,
-            "title_en": "Landing Copree group ID", "title_ja": "接続先 Copree グループID",
-            "description": "QQ 群消息落到哪个 Copree 群",
+            "type": "string", "title": "兜底落点群（可不填）",
+            "title_en": "Fallback landing group (optional)",
+            "title_ja": "予備の着地グループ（任意）",
+            "description": "一个 QQ 群对一个 Copree 群：某个 QQ 群第一次说话时，自动认领同名的已有群，"
+                           "认不到就新建一个它自己的。这个只给接不住的群兜底，留空也行。",
+            "description_en": "One Copree group per QQ group: on a QQ group's first message the channel "
+                              "claims an existing group with the same name or creates its own. "
+                              "This is only a fallback for groups that cannot be landed; leave it empty.",
+            "description_ja": "QQ グループごとに 1 つの Copree グループ。初回メッセージ時に同名グループを"
+                              "引き継ぐか、専用のグループを新規作成します。これは着地できなかった場合の"
+                              "予備で、空欄でも構いません。",
+        },
+        "group_map": {
+            "type": "string", "title": "QQ 群 → Copree 群", "managed": True,
+            "title_en": "QQ groups to Copree groups",
+            "title_ja": "QQグループ → Copreeグループ",
+            "description": "通道自己维护：每个 QQ 群第一次说话时占一个自己的 Copree 群，映射记在这里。",
         },
         "qq_group_allowlist": {
             "type": "string", "title": "允许接入的 QQ 群号",
@@ -631,18 +685,6 @@ class QqNapcatPlugin(ServicePlugin):
             token = str(cfg.get("webui_token") or "").strip()
         self._panel = _qr_client(url, token)
         return self._panel
-
-    async def panel_client(self) -> NapCatWebUI:
-        """"打开协议端控制台"用的客户端：反代拿它的地址与鉴权头"""
-        return await self._webui()
-
-    def panel_entry(self, ticket: str) -> str:
-        """控制台入口（相对平台反代基路径）：NapCat WebUI 在 webui/ 下"""
-        return _panel_entry(ticket)
-
-    def panel_rewrite(self, text: str, base: str) -> str:
-        """把 WebUI 页面里的绝对路径补上反代基路径（平台只管转发，改写口径在这里）"""
-        return _panel_rewrite(text, base)
 
     async def login_account(self) -> dict[str, Any]:
         """我的页要的账号视图：这个实例现在挂的是哪个号（从没挂过就都是空）"""
@@ -698,6 +740,9 @@ class QqNapcatPlugin(ServicePlugin):
     def __init__(self) -> None:
         self._task: asyncio.Task | None = None
         self._client: NapCatClient | None = None
+        # 当前这条 WS 连接与在飞 action（出站走 WS 时按 echo 配对响应）
+        self._ws: Any | None = None
+        self._pending_actions: dict[str, asyncio.Future] = {}
         # 生效中的配置（start() 时读取；改配置后重启这个实例生效）
         self._ws_url = ""
         self._http_base = ""
@@ -706,6 +751,10 @@ class QqNapcatPlugin(ServicePlugin):
         self._webui_token = ""
         self._panel: NapCatWebUI | None = None
         self._copree_group_id = 0
+        # 落点：QQ 群号 → Copree 群 id（与官方通道同一份配置键 group_map）。
+        # 一个 QQ 群一个 Copree 群，不把一堆群塞进同一个群；建出来的群 origin_channel=通道 kind。
+        self._group_map: dict[str, int] = {}
+        self._landing_locks: dict[str, asyncio.Lock] = {}
         self._target_agent = ""
         self._target_agent_id = 0
         self._target_user_id = 0
@@ -775,7 +824,6 @@ class QqNapcatPlugin(ServicePlugin):
             label for label, value in (
                 ("NapCat WebSocket 地址", ws_url),
                 ("AI", agent_id),
-                ("Copree 群 ID", group_raw),
             ) if not value
         ]
         if missing:
@@ -784,11 +832,11 @@ class QqNapcatPlugin(ServicePlugin):
             return False
 
         try:
-            self._copree_group_id = int(group_raw)
+            self._copree_group_id = int(group_raw or 0)
         except ValueError:
-            self.last_error = f"Copree 群 ID 不是数字：{group_raw}"
-            logger.warning(f"QQ 通道(NapCat)[{self.instance}] 启动中止：{self.last_error}")
-            return False
+            # 兜底群只是个可选项：填错了不该拦住整条通道，接不住的群照样在建群时落地
+            self._copree_group_id = 0
+            logger.warning(f"QQ 通道(NapCat)[{self.instance}] 兜底群 ID 不是数字，忽略：{group_raw}")
 
         try:
             await self._bind_target(agent_id)
@@ -800,14 +848,16 @@ class QqNapcatPlugin(ServicePlugin):
 
         self._ws_url = ws_url
         self._http_base = _http_base(ws_url)
-        self._access_token = str(cfg.get("access_token") or "").strip()
+        # 配置里没填就用部署给的那个：单协议端部署（compose 里只有一台 napcat）不用填 token，
+        # 协议端开着鉴权时这里为空会让它连上就回 1403 并断开——不是"没连上"，是连上后被拒。
+        self._access_token = str(cfg.get("access_token") or "").strip() or _DEFAULT_WS_TOKEN
         # 控制面地址留空时退回部署默认的那一个：单协议端部署不用填
         self._webui_url = webui_url
-        self._webui_token = webui_token
+        self._webui_token = webui_token or _DEFAULT_WEBUI_TOKEN
         self._allow = _split_list(cfg.get("qq_group_allowlist"))
         self._dm_policy = (str(cfg.get("dm_policy") or "pairing").strip().lower() or "pairing")
         await self._quota_gate().sync_policy(cfg)
-        self._client = NapCatClient(self._http_base, self._access_token)
+        self._client = NapCatClient(self._http_base, self._access_token, ws_call=self._ws_send)
         self.last_error = ""
         self.connected = False
         self.started_at = time.time()
@@ -906,6 +956,7 @@ class QqNapcatPlugin(ServicePlugin):
         ) as ws:
             self.connected = True
             self.last_error = ""
+            self._ws = ws
             logger.info(f"QQ 通道(NapCat)[{self.instance}] 已连接，开始收事件")
             try:
                 async for raw in ws:
@@ -914,9 +965,44 @@ class QqNapcatPlugin(ServicePlugin):
                     except Exception:
                         logger.warning(f"QQ 通道(NapCat) 收到非 JSON 帧，已忽略：{str(raw)[:120]}")
                         continue
-                    await self._on_payload(payload if isinstance(payload, dict) else {})
+                    if not isinstance(payload, dict):
+                        continue
+                    echo = payload.get("echo")
+                    if echo:
+                        # action 的响应（status/retcode/data），不是事件：交给等待中的调用方
+                        waiter = self._pending_actions.pop(str(echo), None)
+                        if waiter is not None and not waiter.done():
+                            waiter.set_result(payload)
+                        continue
+                    await self._on_payload(payload)
             finally:
                 self.connected = False
+                self._ws = None
+                for waiter in self._pending_actions.values():
+                    if not waiter.done():
+                        waiter.set_exception(RuntimeError("WebSocket 连接已断开，请求未完成"))
+                self._pending_actions.clear()
+
+    async def _ws_send(self, action: str, payload: dict) -> dict:
+        """通过已连上的 WS 调一个 OneBot action，等 echo 配对的响应（超时按 HTTP_TIMEOUT）"""
+        ws = self._ws
+        if ws is None:
+            raise RuntimeError(f"WebSocket 未连接，无法调用 {action}")
+        echo = f"{self.key}:{action}:{time.time_ns()}"
+        waiter: asyncio.Future = asyncio.get_running_loop().create_future()
+        self._pending_actions[echo] = waiter
+        try:
+            await ws.send(json.dumps({"action": action, "params": payload, "echo": echo}))
+            data = await asyncio.wait_for(waiter, HTTP_TIMEOUT)
+        finally:
+            self._pending_actions.pop(echo, None)
+        try:
+            retcode = int(data.get("retcode") or 0)
+        except (TypeError, ValueError):
+            retcode = -1
+        if retcode != 0:
+            raise RuntimeError(f"调用 NapCat {action} 失败：{data.get('message') or data.get('wording') or data}")
+        return data
 
     # ── 入站：OneBot 事件 → Copree ─────────────────────────────
     async def _on_payload(self, payload: dict) -> None:
@@ -965,6 +1051,67 @@ class QqNapcatPlugin(ServicePlugin):
             kind = self._channel_kind = catalog.channel_kind(self.id)
         return kind
 
+    async def _reload_group_map(self) -> dict[str, int]:
+        """现读一份配置里的 group_map：卡片上改过落点要立刻生效，不能等重启实例"""
+        from app.database import async_session
+        from app.services.plugin.config import get_config
+
+        try:
+            async with async_session() as db:
+                cfg = await get_config(self.id, self.instance, db=db)
+        except Exception as e:
+            logger.debug(f"重读通道配置失败（继续用内存里的）: {type(e).__name__}: {e}")
+            return self._group_map
+        parsed, _bad = parse_group_map(cfg.get("group_map"))
+        self._group_map = parsed
+        return self._group_map
+
+    async def _landing_for(self, qq_group: str) -> int:
+        """这个 QQ 群落进哪个 Copree 群：映射表命中 → 否则新建一个它自己的群
+
+        一个 QQ 群一个 Copree 群，且**只新建、不认领**：不会因为同名就接到主站里已有的群上，
+        主站群列表不会被动过。新建的群 origin_channel 是本通道 kind，AI 由 attach_landing
+        加进群并写进 group_map，后续消息走映射。落点建不出来才退回兜底的 copree_group_id。
+        """
+        known = self._group_map.get(qq_group) or (await self._reload_group_map()).get(qq_group)
+        if known:
+            return int(known)
+        lock = self._landing_locks.setdefault(qq_group, asyncio.Lock())
+        async with lock:
+            known = (await self._reload_group_map()).get(qq_group)
+            if known:
+                return int(known)
+            from app.database import async_session
+            from app.models.agent import Agent
+            from app.services.plugin.channel import agent_id_of, attach_landing, create_landing_group
+
+            agent_id = agent_id_of(self.instance)
+            if agent_id is None:
+                return 0
+            try:
+                async with async_session() as db:
+                    agent = await db.get(Agent, agent_id)
+                    if agent is None:
+                        return 0
+                    # 不认领同名群：来一个 QQ 群就建一个自己的群，绝不接到主站已有的群上
+                    created = await create_landing_group(
+                        db, agent_id=agent_id, user_id=int(agent.owner_id), name="",
+                        origin_channel=self.channel_kind,
+                    )
+                    group_id = await attach_landing(
+                        db, plugin_id=self.id, agent_id=agent_id, origin=qq_group,
+                        group_id=int(created["id"]),
+                    )
+            except Exception as e:
+                self.last_error = f"给 QQ 群安排落点群失败：{type(e).__name__}: {e}"
+                logger.warning(
+                    f"QQ 群 …{qq_group[-6:]} 落点解析失败，退回兜底群：{e}", exc_info=True
+                )
+                return 0
+            self._group_map[qq_group] = int(group_id)
+            logger.info(f"QQ 群 …{qq_group[-6:]} 首次说话 → 落点群 #{group_id}")
+            return int(group_id)
+
     async def _on_group(self, d: dict) -> None:
         qq_group = str(d.get("group_id") or "")
         user_id = str(d.get("user_id") or "")
@@ -977,6 +1124,13 @@ class QqNapcatPlugin(ServicePlugin):
         # （官方通道会把见过的群报给卡片好让用户填白名单；本骨架暂时不做这一步）
         if self._allow and qq_group not in self._allow:
             logger.debug(f"QQ 群 {qq_group} 不在白名单，忽略")
+            return
+
+        # 落点：这个 QQ 群自己的 Copree 群（首次说话时认领/新建），解析不出来才用兜底群
+        landing = await self._landing_for(qq_group) or self._copree_group_id
+        if not landing:
+            self.last_error = f"QQ 群 {qq_group} 没有可用落点：既没接上也没兜底群"
+            logger.warning(f"QQ 群 {qq_group} 没有可用落点，消息忽略")
             return
 
         sender = d.get("sender") or {}
@@ -1001,7 +1155,7 @@ class QqNapcatPlugin(ServicePlugin):
             f"QQ 群消息[{self.instance}]: 群={qq_group} 用户={user_id} "
             f"昵称={sender.get('card') or sender.get('nickname') or '(空)'} 唤醒={wake}"
         )
-        await self._deliver_to_group(qq_group, user_id, sender, content, wake)
+        await self._deliver_to_group(qq_group, user_id, sender, content, wake, landing, _event_images(d))
 
     async def _on_private(self, d: dict) -> None:
         user_id = str(d.get("user_id") or "")
@@ -1019,7 +1173,7 @@ class QqNapcatPlugin(ServicePlugin):
         content, _mentioned = _read_parts(d.get("message"), self.self_id)
         if not content:
             return
-        session_id = await self._deliver_to_dm(user_id, sender, content)
+        session_id = await self._deliver_to_dm(user_id, sender, content, _event_images(d))
         if session_id:
             self._remember_dm_route(session_id, {"qq": user_id})
 
@@ -1111,8 +1265,42 @@ class QqNapcatPlugin(ServicePlugin):
         except Exception as e:
             logger.info(f"额度说明没发出去（{kind}）：{str(e)[:120]}")
 
+    async def _store_images(self, db: Any, images: list[dict], sender_id: int) -> list[dict]:
+        """QQ 图片 -> 站内附件（AI 的多模态上下文才拿得到字节）
+
+        失败一律降级：正文里的 [图片] 占位还在，AI 至少知道有人发了图；
+        一条图抓不到不该挡住整条消息落库。
+        """
+        from app.services.content.file_service import upload_file
+        from app.utils.channel_media import download
+
+        out: list[dict] = []
+        for index, item in enumerate(images, start=1):
+            got = await download(str(item.get("url") or ""), logger=logger)
+            if got is None:
+                continue
+            body, mime = got
+            ext = {"image/png": ".png", "image/gif": ".gif", "image/webp": ".webp"}.get(mime, ".jpg")
+            try:
+                meta = await upload_file(
+                    db, "attachments/qq/", f"napcat-{index}-{time.time_ns()}{ext}", body, mime,
+                    "human", int(sender_id),
+                )
+            except Exception as e:
+                logger.warning(f"QQ 入站图片存档失败：{type(e).__name__}: {e}")
+                continue
+            out.append({
+                "file_id": int(meta.id),
+                "name": os.path.basename(meta.path),
+                "path": meta.path,
+                "size": int(meta.size or 0),
+                "mime_type": getattr(meta, "mime_type", None) or mime,
+            })
+        return out
+
     async def _deliver_to_group(
-        self, qq_group: str, user_id: str, sender: dict, content: str, wake: bool
+        self, qq_group: str, user_id: str, sender: dict, content: str, wake: bool, landing: int,
+        images: list[dict] | None = None,
     ) -> None:
         """把 QQ 群消息当作一次正常的群发言落库，并走与网页端完全相同的投递链路"""
         from app.chat.gm import send_gm_message
@@ -1129,8 +1317,8 @@ class QqNapcatPlugin(ServicePlugin):
 
         async with async_session() as db:
             if not await self._quota_gate().admit(
-                db, kind="group", target=self._copree_group_id,
-                copree_group_id=self._copree_group_id,
+                db, kind="group", target=landing,
+                copree_group_id=landing,
                 notify=lambda text: self._send_quota_notice(
                     kind="group", text=text, qq_group=qq_group),
             ):
@@ -1143,36 +1331,40 @@ class QqNapcatPlugin(ServicePlugin):
                 origin=user_id,
                 display_name=str(sender.get("card") or sender.get("nickname") or f"QQ{user_id}"),
                 origin_channel=self.channel_kind[:16],
-                join_group=self._copree_group_id,
+                join_group=landing,
                 # 投递链路在 fanout/broadcast 之后统一 commit，这里不能提前落盘
                 commit=False,
             )
             if ensured is None:
                 return
             sender_id, _peer_name = ensured
+            attachments = await self._store_images(db, images or [], sender_id)
             message = await send_gm_message(
                 db,
-                group_id=self._copree_group_id,
+                group_id=landing,
                 sender_type="human",
                 sender_id=sender_id,
                 content=content,
+                attachments=attachments or None,
                 via=self.channel_kind,     # 群里要能看出这条是从哪条通道来的
             )
             await db.flush()
             # 序列化一次，两处共用：AI 成员（fanout）和群里的人（broadcast）
             msg_data = await message_view(db, message)
-            await fanout_group_message(db, self._copree_group_id, message, content, msg_data)
-            await broadcast_group_message(self._copree_group_id, msg_data)
+            await fanout_group_message(db, landing, message, content, msg_data)
+            await broadcast_group_message(landing, msg_data)
             await db.commit()
-            await forward_group_message_federated(self._copree_group_id, msg_data, db)
+            await forward_group_message_federated(landing, msg_data, db)
             if wake:
-                wake_group_ai(self._copree_group_id, message, content)
-            await maybe_vectorize_group_message(db, self._copree_group_id, message)
+                wake_group_ai(landing, message, content)
+            await maybe_vectorize_group_message(db, landing, message)
             # 群回复回到最近一次来消息的那个 QQ 群（多群共用一个 Copree 群时的已知取舍）
-            self._route[self._copree_group_id] = {"qq": qq_group}
-            logger.info(f"QQ 群 {qq_group} 的消息已进入 Copree 群 #{self._copree_group_id}（msg {message.id}）")
+            self._route[landing] = {"qq": qq_group}
+            logger.info(f"QQ 群 {qq_group} 的消息已进入 Copree 群 #{landing}（msg {message.id}）")
 
-    async def _deliver_to_dm(self, user_id: str, sender: dict, content: str) -> str | None:
+    async def _deliver_to_dm(
+        self, user_id: str, sender: dict, content: str, images: list[dict] | None = None
+    ) -> str | None:
         """QQ 私聊 → 与该 AI 的私信会话（私信落库后同样走共用分发；涉及 AI 免好友校验）"""
         from app.chat.dm import get_or_create_dm_session, send_dm_message
         from app.chat.dm_delivery import fanout_dm_message, forward_dm_federated, wake_dm_ai
@@ -1203,7 +1395,10 @@ class QqNapcatPlugin(ServicePlugin):
             ):
                 await db.commit()
                 return None
-            payload = await send_dm_message(db, session_id, sender_id=sender_id, content=content)
+            attachments = await self._store_images(db, images or [], sender_id)
+            payload = await send_dm_message(
+                db, session_id, sender_id=sender_id, content=content, attachments=attachments or None,
+            )
             await fanout_dm_message(session_id, payload, sender_id)
             await db.commit()
             wake_dm_ai(session_id, payload, sender_id=sender_id, sender_type="human")
@@ -1218,7 +1413,7 @@ class QqNapcatPlugin(ServicePlugin):
         必须 fire-and-forget：这个 sink 在 send_gm_message 里、commit 之前被调用，
         等一次 HTTP 往返会把"发消息"本身拖慢。
         """
-        if not self._copree_group_id or group_id != self._copree_group_id:
+        if not group_id:
             return
         if getattr(message, "sender_type", None) != "ai":
             return
@@ -1285,6 +1480,8 @@ class QqNapcatPlugin(ServicePlugin):
 
         # 彩色标签是站内语法，QQ 客户端不认：出站先脱标签留文字
         text = strip_color_markup(text)
+        # 模型原文里的 CQ 码不能有指挥权：先转义，平台自己的 @ 在之后才拼
+        text = _neutralize_cq(text)
         client = self._client
         target = str(route.get("qq") or "")
         if client is None or not target:

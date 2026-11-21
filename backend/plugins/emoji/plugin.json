@@ -1,0 +1,10 @@
+{
+  "id": "emoji",
+  "name": "表情",
+  "description": "内置表情图（微笑、撇嘴、强…）。AI 可以写 :id: 或 [表情:名字]，站内一律画成这张图；名字是中文情绪词，别的通道发来的同名表情也会落成同一张。",
+  "category": "emojipack",
+  "version": "2.0.0",
+  "author": "Copree",
+  "icon": "Smile",
+  "default_enabled": true
+}

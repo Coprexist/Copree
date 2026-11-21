@@ -27,6 +27,7 @@ from .common import (
     logger,
 )
 from .format import _parse_group_map, format_channel_origin, humanize_faces
+from .media import event_attachments
 
 
 class InboundMixin:
@@ -225,12 +226,16 @@ class InboundMixin:
             f"元素类型={[e.get('message_type') for e in elements if isinstance(e, dict)]}",
         )
 
+
         # 事件里的 union_openid 常常是空的（官方也写了"可能为空"），跨机器人认人只能按需补拉一次
         await self._fill_union(qq_group, author)
         try:
             delivered = await self._deliver_to_group(
                 landing, qq_group, author, content, msg_id, str(ext.get("msg_idx") or ""), quoted_ref,
                 qq_facts=facts,
+                # 图片在落库时下下来存成站内附件：正文里的 [图片] 只是"有人发了图"，
+                # 图本身得进 messages.attachments，AI 的多模态上下文才拿得到字节
+                media=event_attachments(d),
             )
             peer_user_id, peer_name, copree_msg_id = delivered or (0, "", 0)
             self._remember_delivered(msg_id, copree_msg_id, content)
@@ -263,10 +268,14 @@ class InboundMixin:
         if not content:
             return
         try:
-            session_id = await self._deliver_to_dm(openid, author, content, channel_msg_id=msg_id)
+            session_id = await self._deliver_to_dm(
+                openid, author, content, channel_msg_id=msg_id, media=event_attachments(d),
+            )
             if session_id:
                 self._remember_dm_route(session_id, {
                     "qq": openid, "msg_id": msg_id, "seq": 0, "ts": time.time(),
+                    # 账本便签（"这句话/这张图没发出去"）要知道往哪个会话里写
+                    "session_id": session_id,
                 })
         except Exception as e:
             self.last_error = f"私信入站失败：{type(e).__name__}: {e}"

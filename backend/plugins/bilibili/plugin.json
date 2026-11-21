@@ -24,6 +24,11 @@
         "text_en": "The login is your own Bilibili account: the AI can see what you see after logging in. Credentials are stored encrypted and never echoed back"
       },
       {
+        "text": "按昵称搜人、按关键词搜视频不需要登录；搜索接口有限流，连打会被 B 站回 412，隔几秒重试即可",
+        "text_en": "User and video search need no login; the search endpoint is rate-limited (HTTP 412 on rapid repeats), retry after a few seconds",
+        "text_ja": "ユーザー検索・動画検索は未ログインで使えます。検索 API はレート制限があり、連続で叩くと 412 が返るので数秒おいて再試行してください"
+      },
+      {
         "text": "动态接口需要登录态（未登录时 B 站直接回风控/-412）；视频、热门、粉丝数、直播状态不需要登录",
         "text_en": "Dynamic feed endpoints require a login session (without it Bilibili answers -412/anti-bot). Video info, popular list, follower counts and live status work without login"
       },
@@ -53,5 +58,42 @@
         "text_ja": "ログインするとニックネームが表示され、Bilibili ツールが使えるようになります"
       }
     ]
+  },
+  "frames": {
+    "bilibili_browse": {
+      "title": "刷 B 站",
+      "title_en": "Browsing Bilibili",
+      "title_ja": "Bilibili を見る",
+      "tools": [
+        "bili_account",
+        "bili_video",
+        "bili_hot",
+        "bili_user",
+        "bili_search_user",
+        "bili_search_video",
+        "bili_user_videos",
+        "bili_comments",
+        "bili_danmaku",
+        "bili_subtitle",
+        "bili_shot",
+        "bili_comment",
+        "bili_dm",
+        "bili_inbox",
+        "bili_like",
+        "bili_live",
+        "bili_dynamics",
+        "bili_subscribe",
+        "compress_context",
+        "set_alarm",
+        "pop_state",
+        "list_states",
+        "finish_frame",
+        "end_turn",
+        "push_state",
+        "cross_state_note",
+        "recall_memory",
+        "store_memory"
+      ]
+    }
   }
 }

@@ -7,8 +7,11 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
-from typing import Any
+from typing import Any, Sequence
+
+from app.utils.message_serializer import normalize_attachments
 
 from .common import (
     DM_MAX,
@@ -30,12 +33,39 @@ from .format import (
     recall_period,
     split_message,
 )
+from .media import (
+    MEDIA_FILE,
+    MEDIA_IMAGE,
+    MEDIA_VOICE,
+    download,
+    filename_of,
+    is_sendable_image,
+    is_sendable_voice,
+    mime_of,
+)
+
+
+def _attachment_file(relative: str) -> str | None:
+    """站内附件（相对路径）→ 磁盘上的物理文件；不存在或路径越界都返回 None
+
+    路径由平台的文件服务写进 `messages.attachments`，是 `attachments/...` 这样的相对路径
+    （与 app/utils/multimodal.py 读图同一个口径）；越界的（`..`）一律不读。
+    """
+    from app.services.content.file_service import disk_path
+
+    rel = str(relative or "").strip().lstrip("/")
+    if not rel or ".." in rel.split("/"):
+        return None
+    # 拼接口径只在 file_service 一处（附件、AI 文件、下载预览共用）
+    path = disk_path(rel)
+    return path if os.path.isfile(path) else None
 
 
 class OutboundMixin:
     async def _deliver_to_group(
         self, group_id: int, qq_group: str, author: dict, content: str, channel_msg_id: str = "",
         channel_ref_idx: str = "", quote_ref: str = "", qq_facts: dict[str, Any] | None = None,
+        media: Sequence[dict] = (),
     ) -> tuple[int, str, int] | None:
         """把 QQ 群消息当作一次正常的群发言落库，并走与网页端完全相同的投递链路。
 
@@ -91,6 +121,8 @@ class OutboundMixin:
             sender_id, peer_name = ensured
             await self._sync_group_name(db, group_id, qq_facts)
             reply_to = await self._resolve_quoted(db, group_id, qq_group, quote_ref)
+            # 图片先落成站内附件再落库：AI 要看到图本身，不能只看到正文里的 [图片]
+            attachments = await self._store_inbound_media(db, media, sender_id)
             message = await send_gm_message(
                 db,
                 group_id=group_id,
@@ -98,6 +130,7 @@ class OutboundMixin:
                 sender_id=sender_id,
                 content=content,
                 reply_to=reply_to,      # 对方在 QQ 里引用着某条 → 站内也画成引用
+                attachments=attachments or None,
                 via="qq",          # 群里要能看出这条是从 QQ 来的
             )
             if channel_msg_id:
@@ -128,7 +161,7 @@ class OutboundMixin:
             return sender_id, str(peer_name or ""), int(message.id)
 
     async def _deliver_to_dm(self, openid: str, author: dict, content: str,
-                             channel_msg_id: str = "") -> str | None:
+                             channel_msg_id: str = "", media: Sequence[dict] = ()) -> str | None:
         """QQ 私聊 → 与该 AI 的私信会话（私信落库后同样走共用分发；涉及 AI 免好友校验）"""
         from app.chat.dm import get_or_create_dm_session, send_dm_message
         from app.chat.dm_delivery import fanout_dm_message, forward_dm_federated, wake_dm_ai
@@ -149,13 +182,50 @@ class OutboundMixin:
             ):
                 await db.commit()
                 return None
-            payload = await send_dm_message(db, session_id, sender_id=sender_id, content=content)
+            attachments = await self._store_inbound_media(db, media, sender_id)
+            payload = await send_dm_message(
+                db, session_id, sender_id=sender_id, content=content,
+                attachments=attachments or None,
+            )
             await fanout_dm_message(session_id, payload, sender_id)
             await db.commit()
             wake_dm_ai(session_id, payload, sender_id=sender_id, sender_type="human")
             await forward_dm_federated(session_id, payload)
             logger.info(f"QQ 私聊已进入会话 {session_id}（AI {self._target_agent}，msg {payload.get('id')}）")
             return session_id
+
+    async def _store_inbound_media(self, db: Any, media: Sequence[dict], sender_id: int) -> list[dict]:
+        """QQ 带过来的图片 → 站内附件（AI 才看得见图本身）
+
+        失败一律降级：正文里那几个 `[图片]` 占位还在，AI 至少知道"有人发了图"；
+        一条图抓不到不该挡住整条消息落库。
+        """
+        from app.services.content.file_service import upload_file
+
+        out: list[dict] = []
+        for index, item in enumerate(media or [], start=1):
+            if not isinstance(item, dict):
+                continue
+            got = await download(str(item.get("url") or ""))
+            if got is None:
+                continue
+            content, mime = got
+            try:
+                meta = await upload_file(
+                    db, "attachments/qq/", filename_of(item, index, mime), content, mime,
+                    "human", int(sender_id),
+                )
+            except Exception as e:
+                logger.warning(f"QQ 入站图片存档失败：{type(e).__name__}: {e}")
+                continue
+            out.append({
+                "file_id": int(meta.id),
+                "name": os.path.basename(meta.path),
+                "path": meta.path,
+                "size": int(meta.size or 0),
+                "mime_type": getattr(meta, "mime_type", None) or mime,
+            })
+        return out
 
     def _route_for_outbound(self, group_id: int, openid: str) -> dict[str, Any] | None:
         """AI 的这条消息该发到哪个 QQ 群：优先它回的那个会话，其次该群里最近来消息的那个。
@@ -251,7 +321,9 @@ class OutboundMixin:
         if getattr(message, "sender_type", None) != "ai":
             return
         text = str(getattr(message, "content", "") or "").strip()
-        if not text:
+        # 只有图、没有字也算一条（AI 常见的"发张图/表情包"就是这种）
+        attachments = normalize_attachments(getattr(message, "attachments", None)) or []
+        if not text and not attachments:
             return
         origin = await self._message_origin(db, message)
         carrier = self._carrier(
@@ -282,7 +354,7 @@ class OutboundMixin:
             text = strip_leading_mention(
                 text, str(route.get("peer_name") or ""), int(route.get("peer_user_id") or 0) or None
             ).strip()
-            if not text:
+            if not text and not attachments:
                 return
         # 正文里剩下的 <@!平台id> 翻成 QQ 的真 @（会 @ 到人、会提醒）
         self._enqueue_reply(
@@ -291,6 +363,7 @@ class OutboundMixin:
                 route, text, kind="group", link_mentions=True,
                 message_id=getattr(message, "id", None),
                 reply_to=getattr(message, "reply_to", None),
+                attachments=attachments,
             ),
             f"{self.key} 群回复",
         )
@@ -305,20 +378,25 @@ class OutboundMixin:
             return                      # 只转发这个 AI 的回复
         # 同上：正文格式在 _deliver 里统一施加（群与私聊同一份配置）
         text = str(msg.get("content") or "").strip()
-        if not text:
+        attachments = normalize_attachments(msg.get("attachments")) or []
+        if not text and not attachments:
             return
         self._enqueue_reply(
             str(route.get("qq") or ""),
-            lambda: self._prepare_reply(route, text, kind="dm", message_id=msg.get("id")),
+            lambda: self._prepare_reply(route, text, kind="dm", message_id=msg.get("id"),
+                                        attachments=attachments),
             f"{self.key} 私信回复",
         )
 
     async def _prepare_reply(self, route: dict, text: str, kind: str, *, link_mentions: bool = False,
-                             message_id: int | None = None, reply_to: int | None = None):
+                             message_id: int | None = None, reply_to: int | None = None,
+                             attachments: Sequence[dict] = ()):
         """发送前的准备（并发跑）→ 返回"真正发出去"的那个协程。
 
         link_mentions：群回复才翻真 @（要查一次库认人）；私聊没有 @ 这回事，也就不查。
         message_id：站内那条消息的 id——发成功后要把通道侧的 id 记回去，撤回才找得到它。
+        attachments：站内附件（`{file_id, path, mime_type, …}`）——里面能发的图片会被传成
+            QQ 图片消息；发送顺序在 _send_on_route 里定（文本在前、图片在后）。
         """
         if link_mentions:
             try:
@@ -329,7 +407,7 @@ class OutboundMixin:
                 logger.warning(f"QQ 群 @ 映射失败，按原文发送：{type(e).__name__}: {e}")
         text = await self._emoji_to_chars(text)
         reference_id = await self._reply_reference(reply_to, kind, route)
-        return lambda: self._post_reply(route, kind, text, reference_id, message_id)
+        return lambda: self._post_reply(route, kind, text, reference_id, message_id, attachments)
 
     async def _send_reply(self, route: dict, text: str, kind: str, *, link_mentions: bool = False,
                           message_id: int | None = None, reply_to: int | None = None) -> None:
@@ -342,11 +420,12 @@ class OutboundMixin:
         await send()
 
     async def _post_reply(self, route: dict, kind: str, text: str, reference_id: str,
-                          message_id: int | None) -> None:
+                          message_id: int | None, attachments: Sequence[dict] = ()) -> None:
         """真正发出去（按会话排队，前一条发完才轮到这条）：失败没人接得住，只能记进状态。"""
         try:
             # 正文格式由 _deliver 统一施加（群与私聊一致；留空 = 先 Markdown、没权限降级纯文本）
-            result = await self._deliver(route, kind, text, reference_id=reference_id)
+            result = await self._deliver(route, kind, text, reference_id=reference_id,
+                                         attachments=attachments)
         except Exception as e:
             self.last_error = f"发送失败：{type(e).__name__}: {e}"
             logger.warning(
@@ -361,6 +440,16 @@ class OutboundMixin:
         if result.get("unsent"):
             await self._report_unreachable(
                 kind, route, f"消息太长，被动回复次数用完了，末尾 {result['unsent']} 字没发出去",
+            )
+        if result.get("media_skipped"):
+            # 文字到了、图没到：这跟"整条没发出去"不是一回事，措辞要分开——
+            # AI 会照着这句话决定要不要在下一轮补一句"图没发出去"或换个方式再说
+            await self._report_unreachable(
+                kind, route, f"这条回复里有 {result['media_skipped']} 张图没发出去（额度或上传失败）",
+                ai_text=(
+                    f"⚠️ 你刚发的那条回复里，有 {result['media_skipped']} 张图没能送到 QQ"
+                    "（被动回复额度不够或上传失败）；文字部分已经送达。"
+                ),
             )
         # 记下通道侧那条消息的 id（撤回要用）与引用索引（引用要用）
         response = result.get("response") or {}
@@ -378,12 +467,17 @@ class OutboundMixin:
         target = str(route.get("qq") or "")
         return f"{kind}:{target or route.get('copree_group_id') or ''}"
 
-    async def _report_unreachable(self, kind: str, route: dict, reason: str) -> None:
-        """这条发不到 QQ → 通知 AI 主人。
+    async def _report_unreachable(self, kind: str, route: dict, reason: str,
+                                  ai_text: str = "") -> None:
+        """这条发不到 QQ → 通知 AI 主人，同时**告诉 AI 自己**。
 
         为什么不能只写日志：QQ 那边没收到的时候，人在 Copree 里只看到 AI 说得热闹，
         不知道该去 QQ 里再 @ 一次。提示只能走系统会话发给主人——群消息表的 sender_type
         只认 human/ai，插一条"系统"会被约束拒掉；冒充人说话又会惊动群里的 AI。
+
+        为什么还要往 AI 的账本里落一条：AI 以为自己已经发出去了，下一轮就会接着聊，
+        像什么都没发生。主人看得见而 AI 不知道，这一侧的错位只能靠一条系统便签抹平
+        （见 _note_ai）。
         """
         target = str(route.get("qq") or "")
         key = self._notice_key(kind, route)
@@ -407,6 +501,44 @@ class OutboundMixin:
                 await db.commit()
         except Exception as e:
             logger.warning(f"QQ 通道[{self.instance}] 站内提示发送失败：{type(e).__name__}: {e}")
+        await self._note_ai(
+            kind, route,
+            ai_text or f"⚠️ 你刚才发往 QQ 的回复没有送达：{reason}。QQ 那边看不到这句话；"
+                       "等对方再说话后可以再试一次。",
+        )
+
+    async def _note_ai(self, kind: str, route: dict, text: str) -> None:
+        """把"这条没发出去"写进 AI 自己的账本（一条系统便签），让它下一轮就知道
+
+        为什么走账本而不是私信：AI 的上下文只由账本 + 本轮请求组成（见 app/services/history），
+        往主人的私信里写它不会读到；账本条目是它下一轮一定会看见的那份。
+        失败上报自己不能再抛——上报失败不是发送失败。
+        """
+        agent_id = int(self._target_agent_id or 0)
+        if not agent_id:
+            return
+        from app.database import async_session
+        from app.services.history import history_service
+        from app.services.history.context_sync import context_ref
+
+        if kind == "group" and route.get("copree_group_id"):
+            ref = context_ref(group_id=int(route["copree_group_id"]))
+        elif kind == "dm" and route.get("session_id"):
+            ref = context_ref(session_id=str(route["session_id"]))
+        else:
+            return
+        try:
+            async with async_session() as db:
+                await history_service.append(db, agent_id, ref, [{
+                    "kind": "note",
+                    "actor": "system",
+                    "content": text,
+                    # 解锁重写时可以随旧账本丢掉：这是"就这一轮"的提示，不是长期事实
+                    "flags": {"drop_on_unlock": True},
+                }])
+                await db.commit()
+        except Exception as e:
+            logger.warning(f"QQ 通道[{self.instance}] 账本便签写入失败：{type(e).__name__}: {e}")
 
     async def _notify_owner(self, db: Any, text: str) -> None:
         """提示 AI 主人（系统用户 ↔ 主人的会话，与执行器的系统通知同一条路）"""
@@ -439,10 +571,12 @@ class OutboundMixin:
             pass                        # 推不到就下次刷新看见，不该因此算发送失败
 
     async def _emoji_to_chars(self, text: str) -> str:
-        """站内表情发往 QQ：有 unicode 的换成字符，仅图片的去掉。
+        """站内表情发往 QQ：只留字符
 
-        官方 API 不回传富媒体，图片表情在本通道无法显示；保留短码则会把内部写法暴露给对方。
-        写法归一复用 catalog.resolve_emoji_text（与站内同一契约），此处只加通道策略。
+        图片表情在上游入口就变成**附件**了（图片消息通道，见 catalog.take_image_emoji_attachments），
+        这里不再碰它——通道只管把字和附件发出去，不需要认识"表情"。
+        剩下两件小事：字符表情统一成 unicode（历史/其它来源的消息可能还带写法）；
+        兼容写法 [表情:名](url) 只可能来自历史消息，原样发出会显示成一串中文括号，去掉。
         """
         if not text or ("[表情:" not in text and ":" not in text):
             return text
@@ -456,12 +590,12 @@ class OutboundMixin:
             logger.warning(f"取表情包失败，按原样发：{type(e).__name__}: {e}")
             return text
         text = catalog.resolve_emoji_text(text, packs)
-        # 已登记但只有图的表情去掉；未登记的短码可能是正文自带的冒号词，原样保留
+        # 未登记的短码可能是正文自带的冒号词，原样保留；已登记的图片表情不该再出现
+        # （上游已变附件），万一漏了也只是空串，不会把内部写法发给对方
         known = {face["id"] for pack in packs for face in pack["faces"]}
         text = catalog.EMOJI_SHORTCODE_RE.sub(
             lambda m: "" if m.group(1) in known else m.group(0), text
         )
-        # 兼容写法只可能来自历史消息，原样发出会显示成一串中文括号，去掉
         return catalog.EMOJI_LEGACY_RE.sub("", text)
 
     async def _reply_reference(self, reply_to: int | None, kind: str, route: dict | None = None) -> str:
@@ -704,7 +838,7 @@ class OutboundMixin:
         return lock
 
     async def _deliver(self, route: dict, kind: str, text: str, *, passive_only: bool = False,
-                       reference_id: str = "") -> dict:
+                       reference_id: str = "", attachments: Sequence[dict] = ()) -> dict:
         """把一条消息发到 route 指向的会话（频控与被动回复窗口都在这里）
 
         正文格式（self._msg_type）在这里统一施加：群与私聊共用同一份配置，
@@ -724,10 +858,12 @@ class OutboundMixin:
         async with self._send_lock(target):
             return await self._send_on_route(
                 route, kind, text, passive_only=passive_only, reference_id=reference_id,
+                attachments=attachments,
             )
 
     async def _send_on_route(self, route: dict, kind: str, text: str, *,
-                             passive_only: bool = False, reference_id: str = "") -> dict:
+                             passive_only: bool = False, reference_id: str = "",
+                             attachments: Sequence[dict] = ()) -> dict:
         """_deliver 的实体：拿到会话锁之后才进来，msg_seq 这本账从这里开始算。"""
         client = self._client
         if client is None or not self._task or self._task.done():
@@ -830,6 +966,54 @@ class OutboundMixin:
             if len(piece) > self._max_chars:
                 # 平台认了这一段：它就是"认过的长度"，下次二分时当下界用
                 self._max_chars = len(piece)
+        # 文本先、媒体后。媒体消息（msg_type=7）是普通消息类型，与正文格式无关——纯文本模式
+        # 照样发得出去（有的 QQ 端压根不渲染 Markdown，所以不把图嵌进 MD）。它同样占被动
+        # 回复额度：一条回复里"两句字 + 一张图"就是 3 次，额度用完就如实记下没发的媒体。
+        #
+        # 语音走同一条路：mp3 直接以 file_type=3 上传就能播（2026-11-14 私聊实测）。客户端
+        # 不收时接口也可能回 200（静默失败，探测不出来），所以真发失败才降级成文件
+        # （file_type=4，带文件名，对面能下载听）——顺序一次写好，不是每轮试探。
+        media_sent = 0
+        media_skipped = 0
+        for index, att in enumerate(attachments or [], start=1):
+            voice = is_sendable_voice(att)
+            if not voice and not is_sendable_image(att):
+                continue
+            path = _attachment_file(str(att.get("path") or ""))
+            if path is None:
+                logger.warning(
+                    f"QQ 通道[{self.instance}] 附件不在磁盘上，跳过发媒体：{att.get('name') or att.get('path')}"
+                )
+                media_skipped += 1
+                continue
+            if mode == "passive" and not (msg_id and seq + attempts < limit):
+                media_skipped += 1
+                continue
+            file_name = filename_of(att, index, mime_of(att))
+            # 语音先试语音消息、失败退成文件；图片只走图片。每次尝试各占一次回复额度。
+            for file_type in ((MEDIA_VOICE, MEDIA_FILE) if voice else (MEDIA_IMAGE,)):
+                try:
+                    file_info = await client.upload_media(kind, target, path, file_type, file_name)
+                    media_data = await client.send_media(
+                        kind, target, file_info, msg_id=msg_id, msg_seq=seq + attempts + 1,
+                        wakeup=wakeup,
+                    )
+                except Exception as e:
+                    # 发不出去不等于这条回复失败：字已经发出去了，这里只留痕、不抛
+                    attempts += 1
+                    logger.warning(
+                        f"QQ 通道[{self.instance}] 发媒体失败（file_type={file_type}，"
+                        f"{att.get('name') or path}）：{type(e).__name__}: {e}"
+                    )
+                    continue
+                attempts += 1
+                media_sent += 1
+                data = media_data
+                break
+            else:
+                media_skipped += 1
+        if media_skipped:
+            logger.info(f"QQ 通道[{self.instance}] 有 {media_skipped} 个媒体没发出去（额度用尽或发送失败）")
         if msg_id:
             # 每一次尝试都占一次回复额度（含被拒的那次）；少记了会让下一个 seq 撞车。
             # 只许往前：另一条回复可能已经把这本账推到更前了，拿旧基数回写会把它拽回来
@@ -841,7 +1025,10 @@ class OutboundMixin:
         else:
             self.dm_replies += 1
         self.last_error = ""
-        return {"mode": mode, "response": dict(data or {}), "unsent": unsent}
+        return {
+            "mode": mode, "response": dict(data or {}), "unsent": unsent,
+            "media_sent": media_sent, "media_skipped": media_skipped,
+        }
 
 
     # ── 互动召回记账 ───────────────────────────────────────────
