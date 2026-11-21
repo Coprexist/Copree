@@ -29,10 +29,34 @@ SELECT relid::regclass::text FROM refs
 """
 
 
+_TEST_DB_SUFFIXES = ("_test",)
+
+
+async def _assert_test_db(db) -> str:
+    """删库前先认库名：只允许 *_test。
+
+    2026-11-05 的事故：一个探针脚本只设了 `TEST_DATABASE_URL`，而 `app.database` 读的是
+    `DATABASE_URL`——两个环境变量都指向同一个引擎，漏设一个就落到生产库上，
+    `clear("users", "agents", ...)` 按外键闭包一次清掉 53 张表。
+    保护放在这里而不是调用点：只要想删，就必须先过这道名。
+    """
+    name = (await db.execute(text("SELECT current_database()"))).scalar_one()
+    if not str(name).endswith(_TEST_DB_SUFFIXES):
+        raise RuntimeError(
+            f"拒绝清库：当前库是 {name!r}，不是测试库。"
+            f"这个助手会删掉外键闭包里的全部数据（{_TEST_DB_SUFFIXES} 才放行）——"
+            "先确认 DATABASE_URL/TEST_DATABASE_URL 指向测试库")
+    return str(name)
+
+
 async def clear(db, *roots: str) -> None:
-    """清空 roots 及其外键闭包里的全部表（等价 TRUNCATE roots CASCADE，但快三个数量级）。"""
+    """清空 roots 及其外键闭包里的全部表（等价 TRUNCATE roots CASCADE，但快三个数量级）。
+
+    只在测试库上可用：库名不以 `_test` 结尾一律拒绝（见 `_assert_test_db`）。
+    """
     if not roots:
         return
+    await _assert_test_db(db)
     roots_sql = ", ".join("'" + r.replace("'", "") + "'" for r in roots)
     names = [row[0] for row in (await db.execute(text(_CLOSURE_SQL.format(roots=roots_sql)))).all()]
     await db.execute(text("SET LOCAL session_replication_role = replica"))

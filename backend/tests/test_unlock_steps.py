@@ -36,6 +36,7 @@ def test_unlock_steps_is_the_agreed_set():
         "apply_pending_config",
         "apply_pending_changes",
         "apply_environment",
+        "reset_frame_roster",
     )
 
 

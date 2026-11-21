@@ -118,9 +118,11 @@ async def test_exhausted_rounds_get_a_closing_round_and_an_honest_record(migrate
             ), "要有一轮明确告诉它可以说话了"
 
             # ③ 截断如实入账 + 没走 end_turn 时思考留痕
+            # 成功的读类工具不进账本（ledger_worthy_tools：只留失败与有持久副作用的），
+            # 所以这里的 list_states 只留收尾说明与思考，别把 tool 条目当成必然。
             entries = await hs.read(db, 1, ref)
             kinds = [e["kind"] for e in entries]
-            assert "tool" in kinds and "notice" in kinds and "thinking" in kinds, kinds
+            assert "notice" in kinds and "thinking" in kinds, kinds
             notice = [e for e in entries if e["kind"] == "notice"][0]
             assert notice["content"].startswith("[本轮收尾] 工具轮次用尽")
             assert "一条消息都没发出去" in notice["content"]
@@ -183,10 +185,11 @@ async def test_a_cancelled_run_still_seals_what_it_did(migrated_db):
 
             entries = await hs.read(db, 1, ref)
             kinds = [e["kind"] for e in entries]
-            assert kinds == ["tool", "notice", "thinking"], kinds
-            assert entries[0]["content"].startswith("[本轮工具] list_states(ok)")
-            assert "被平台取消" in entries[1]["content"]
-            assert entries[2]["content"].startswith("[本轮思考]")
+            # list_states 是成功的读类调用，按 ledger_worthy_tools 的口径不进账本；
+            # 被取消这一轮该留住的是「怎么断的」和「它在想什么」。
+            assert kinds == ["notice", "thinking"], kinds
+            assert "被平台取消" in entries[0]["content"]
+            assert entries[1]["content"].startswith("[本轮思考]")
 
             await hs.clear(db, 1, ref)
             await db.commit()

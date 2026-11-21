@@ -200,3 +200,40 @@ async def test_slow_plugin_is_cut_off_by_the_time_gate():
         assert time.monotonic() - started < 2.5, "超时闸没生效"
     finally:
         PluginRegistry.get, channel_mod.served_instances = old_get, old_served
+
+
+async def test_environment_is_read_from_the_conversation_frame_only(migrated_db):
+    """环境只挂在会话那一帧上：读路径不往历史帧里找。
+
+    旧版本每轮给会话新建一条帧（agent 1 的 group:66 攒了 167 条），锁留在更早那条上。那种
+    形状由迁移 0109 一次性并到现帧；读的时候再扫一遍历史，等于为已经修好的形状常年付费，
+    还让"这段会话有没有基线"永远说不清。当前帧没有锁就是没建基线。
+    """
+    import json
+
+    from sqlalchemy import text
+
+    from app.database import async_session
+    from app.services.agent.state_stack_service import read_frame_env
+
+    locked = {"channel": "qq", "origin_name": "Poem", "member_num": 21}
+    stack = [
+        {"id": "legacy000001", "type": "group_chat", "context_ref": REF, "status": "ended",
+         "created_at": "2026-11-01T00:00:00+00:00", "last_active_at": "2026-11-01T00:00:00+00:00",
+         "env_locked": locked, "env_notified": locked},
+        {"id": "legacy000002", "type": "group_chat", "context_ref": REF, "status": "active",
+         "created_at": "2026-11-09T00:00:00+00:00", "last_active_at": "2026-11-09T00:00:00+00:00"},
+    ]
+
+    async with async_session() as db:
+        await _seed(db)
+        await db.execute(
+            text("UPDATE agents SET state_stack = CAST(:s AS jsonb) WHERE id = 47"),
+            {"s": json.dumps(stack)},
+        )
+        await db.commit()
+
+        have, locked_now, _notified = await read_frame_env(db, 47, REF)
+        assert not have, "当前帧没有锁就是没建基线，不认历史帧上的锁"
+        assert locked_now is None
+

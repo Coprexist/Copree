@@ -34,29 +34,31 @@ def test_free_round_says_it_does_not_count():
     assert "7/6" in text and "赠送轮" in text and "不占额度" in text
 
 
-def test_set_round_budget_rewrites_the_same_block():
-    """读数写进尾部那块：重复写不能堆成多段，时间与锁定段都不动"""
+def test_set_round_budget_never_rewrites_earlier_messages():
+    """读数只往末尾长：前面发出去过的一条都不许动（前缀缓存按字节算，改一个字节全废）。
+
+    2026-11-06 线上：原地改写「## 当前时间」那条，轮内工具结果把它挤到中间后，
+    每轮把"它之后的所有工具结果"重算一遍——18 轮多花了 25 万 token。
+    """
     from app.ai.llm import set_round_budget
-    from app.utils.pure.round_budget import HEADER
 
-    messages = [
-        {"role": "system", "content": "锁定段"},
-        {"role": "system", "content": "## 当前时间\n2026-09-26 21:12 Asia/Shanghai\n"},
-    ]
+    head = {"role": "system", "content": "锁定段"}
+    time_block = {"role": "system", "content": "## 当前时间\n2026-09-26 21:12 Asia/Shanghai\n"}
+    messages = [head, time_block, {"role": "user", "content": "在吗"}]
+    before = [m["content"] for m in messages]
 
+    assert set_round_budget(messages, round_no=1, total=6) is True
+    messages.append({"role": "assistant", "content": ""})
+    messages.append({"role": "tool", "content": "工具结果"})
     assert set_round_budget(messages, round_no=2, total=6) is True
-    assert set_round_budget(messages, round_no=3, total=6) is True
 
-    assert messages[0]["content"] == "锁定段"
-    assert messages[1]["content"].count(HEADER) == 1, "重复写不能把读数堆成多段"
-    assert "3/6" in messages[1]["content"] and "2/6" not in messages[1]["content"]
-    assert "## 当前时间" in messages[1]["content"], "时间那段不能被动"
+    assert [m["content"] for m in messages[:3]] == before, "前面已经发出去的那几条被改写了"
+    assert "1/6" in messages[3]["content"], "第一轮的读数应在末尾"
+    assert "2/6" in messages[-1]["content"], "第二轮的读数要跟在工具结果后面"
+    assert time_block["content"] == before[1], "尾部动态块也不再被改写"
 
 
-def test_set_round_budget_without_tail_is_a_no_op():
+def test_set_round_budget_without_messages_returns_false():
     from app.ai.llm import set_round_budget
 
-    messages = [{"role": "system", "content": "锁定段"}]
-
-    assert set_round_budget(messages, round_no=1, total=6) is False
-    assert messages[0]["content"] == "锁定段"
+    assert set_round_budget([], round_no=1, total=6) is False

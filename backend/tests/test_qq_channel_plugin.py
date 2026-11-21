@@ -6,6 +6,8 @@ QQ 事件 → Copree（与网页端同一条投递链路）→ AI 回复 → 回
 import asyncio
 import importlib.util
 import json
+import os
+import time
 from pathlib import Path
 
 from sqlalchemy import text
@@ -78,6 +80,18 @@ class FakeClient:
                           "wakeup": wakeup})
         return {"id": "fake"}
 
+    async def upload_media(self, kind, target, path, file_type, file_name=""):
+        """上传媒体：只记"传了哪份"（真实实现要把字节 base64 后 POST /files）"""
+        digest = os.path.basename(str(path))
+        self.sent.append({"kind": "upload", "target": target, "path": path,
+                          "file_type": file_type, "name": file_name})
+        return f"FILE-INFO:{kind}:{digest}"
+
+    async def send_media(self, kind, target, file_info, msg_id=None, msg_seq=1, wakeup=False):
+        self.sent.append({"kind": "media", "target": target, "file_info": file_info,
+                          "msg_id": msg_id, "seq": msg_seq, "wakeup": wakeup})
+        return {"id": "fake-media"}
+
     async def member_info(self, group_openid, member_openid):
         self.member_calls.append((group_openid, member_openid))
         if self.member_error:
@@ -98,6 +112,25 @@ class FakeClient:
     async def aclose(self):
         # 停止流程会在在飞回复之后调它：顺序错了请求就打到已关闭的客户端上
         self.closed = True
+
+
+async def _enable_emoji_pack(pack_id: str = "emoji") -> None:
+    """测试要把表情包打开：直接改 DB 会绕过路由层的缓存失效，这里手动同步 + 失效
+
+    以前靠"上一个用例刚把缓存填上"侥幸通过（30 秒 TTL），换一支用例顺序就红——测试不该
+    依赖这种时序。见 catalog.invalidate_caches。
+    """
+    from app.database import async_session
+    from app.models.plugin import Plugin
+    from app.services.plugin import catalog
+
+    async with async_session() as db:
+        await catalog.sync_plugins_to_db(db)
+        row = await db.get(Plugin, pack_id)
+        if row is not None and not row.enabled:
+            row.enabled = True
+            await db.commit()
+    catalog.invalidate_caches()
 
 
 async def _seed():
@@ -142,6 +175,8 @@ async def _make_plugin(instance: str = "bot-a"):
     plugin.instance = instance
     plugin._copree_group_id = GROUP_ID
     plugin._target_agent = "浮生"
+    # agents.id=7 是 _seed() 里那只 AI；账本按 agents.id 记账（_bind_target 里就是它）
+    plugin._target_agent_id = 7
     plugin._target_user_id = AGENT_USER
     plugin._client = FakeClient()
     plugin._sink_handle = register_sink(
@@ -1759,7 +1794,7 @@ async def test_reply_task_drained_before_client_close(migrated_db):
     client = plugin._client
     finished = []
 
-    async def _slow_post(route, kind, text, reference_id, message_id):
+    async def _slow_post(route, kind, text, reference_id, message_id, attachments=()):
         await asyncio.sleep(0.05)
         finished.append(text)
 
@@ -1859,6 +1894,7 @@ async def test_qq_quote_becomes_a_copree_quote(migrated_db):
     ext_info.ref_idx 写在同一个字段上，所以"被引用的是哪条"一条 where 就找得回来。
     """
     await _seed()
+    await _enable_emoji_pack()      # 入站的 <face…> 会变成 [表情:害羞]，归一要有包可查
     plugin = await _make_plugin()
     plugin._copree_group_id = GROUP_ID
     try:
@@ -1876,8 +1912,8 @@ async def test_qq_quote_becomes_a_copree_quote(migrated_db):
         assert len(rows) == 2, rows
         assert rows[0][3] == "IDX-1", "入站要把自己的 msg_idx 记在 channel_ref_idx 上"
         assert rows[1][2] == rows[0][0], f"引用要落到站内那条消息上：{rows[1]}"
-        # QQ 的表情标记入站 → 入口归一成 unicode 字符入库（库里不再留自造写法）
-        assert rows[1][1] == "你还能信用我的话吗😳", rows[1][1]
+        # QQ 的表情标记入站 → 入口归一：图片表情落成附件，正文只留字（库里不再留自造写法）
+        assert rows[1][1] == "你还能信用我的话吗", rows[1][1]
     finally:
         _cleanup(plugin)
 
@@ -1926,26 +1962,19 @@ async def test_quote_of_a_message_we_never_saw_stays_unquoted(migrated_db):
         _cleanup(plugin)
 
 
-async def test_emoji_markers_become_chars_on_the_qq_side(migrated_db):
-    """站内的 [表情:名字] 到 QQ 只能是字符：对得上的换掉，对不上的丢掉。
+async def test_emoji_markers_do_not_leak_internal_syntax_to_qq(migrated_db):
+    """站内的表情写法发到 QQ 前要摘干净。
 
-    对不上的若原样发，QQ 那边看到的是 [表情:某某] 这种内部写法——把存储格式漏给了对方。
+    内置包只有图：图片表情在上游入口就变成附件了（见 catalog.take_image_emoji_attachments），
+    走到这里的是"没启用包"或历史消息留下的写法。对不上的若原样发，QQ 那边看到的是
+    [表情:某某] / :shy: 这种内部写法——把存储格式漏给了对方。
     """
-    from app.database import async_session
-    from app.models.plugin import Plugin
-    from app.services.plugin import catalog
-
     await _seed()
+    await _enable_emoji_pack()
     plugin = await _make_plugin()
     try:
-        async with async_session() as db:
-            await catalog.sync_plugins_to_db(db)
-            row = await db.get(Plugin, "emoji-qq")
-            row.enabled = True
-            await db.commit()
-
-        assert await plugin._emoji_to_chars("你好 [表情:害羞] 再见") == "你好 😳 再见"
-        assert await plugin._emoji_to_chars("你好 :qq_shy: 再见") == "你好 😳 再见", "短码也认"
+        assert await plugin._emoji_to_chars("你好 [表情:害羞] 再见") == "你好  再见"
+        assert await plugin._emoji_to_chars("你好 :shy: 再见") == "你好  再见", "已登记的图片短码不留"
         assert await plugin._emoji_to_chars("这个 [表情:没这个] 丢掉") == "这个  丢掉", "旧写法不留痕"
         assert await plugin._emoji_to_chars("正文里的 :没这个: 别动") == "正文里的 :没这个: 别动", \
             "未登记的短码可能是正文自带内容，保留"
@@ -2846,5 +2875,263 @@ async def test_ready_remembers_the_session_for_resume():
     assert channel._session_id == "SESSION-2"
     assert channel.connected is True
     assert channel.bot_name == "大肥鱼"
+
+
+# ── 图片：入站落成站内附件，出站先文本后图片 ──────────────────────
+
+def test_media_picks_only_pictures_that_have_a_url():
+    """事件里只挑"带 url 的图片"：语音/文件这轮不做，正文里的占位是它们的兜底"""
+    media = _plugin_module("media")
+    assert media.is_sendable_image({"content_type": "image/png"})
+    assert not media.is_sendable_image({"content_type": "image/svg+xml"}), "官方图片接口不收 svg"
+    assert media.mime_of({"content_type": "image/jpeg; charset=binary"}) == "image/jpeg"
+    assert media.mime_of({"name": "cat.GIF"}) == "image/gif", "站内附件那份描述不一定带 mime"
+
+    picked = media.event_attachments({"attachments": [
+        {"content_type": "image/jpeg", "url": "https://gchat.qpic.cn/a.jpg", "filename": "a.jpg"},
+        {"content_type": "voice", "url": "https://multimedia.nt.qq.com.cn/v.silk"},
+        {"content_type": "image/png"},                     # 没有 url：取不到
+        "not-a-dict",
+    ]})
+    assert [a["filename"] for a in picked] == ["a.jpg"], picked
+
+
+async def test_upload_media_is_reused_and_the_picture_message_is_type_7():
+    """图片消息（msg_type=7）：与 markdown 无关，纯文本模式的号也发得出去
+
+    同一份内容在同一个会话里只传一次——官方给的 file_info 带 ttl，重复上传纯属浪费。
+    """
+    import tempfile
+
+    module = _load_plugin_module()
+    client = module.QqClient("app-id", "secret")
+    calls: list[dict] = []
+
+    async def fake_post(path, body, *, what="发 QQ 消息", timeout=None):
+        calls.append({"path": path, "body": body, "what": what})
+        if path.endswith("/files"):
+            return {"file_info": "FILE-INFO", "file_uuid": "u-1", "ttl": 3600}
+        return {"id": "m-1"}
+
+    client._post = fake_post
+    workdir = tempfile.mkdtemp(prefix="qq-media-")
+    picture = os.path.join(workdir, "cat.png")
+    with open(picture, "wb") as f:
+        f.write(b"png-bytes" + b"0" * 32)
+
+    assert await client.upload_media("group", "GROUP-1", picture, 1, "cat.png") == "FILE-INFO"
+    upload = calls[0]
+    assert upload["path"] == "/v2/groups/GROUP-1/files"
+    assert upload["body"]["file_type"] == 1
+    assert upload["body"]["srv_send_msg"] is False, "只上传：发不发、什么时候发由发送层定"
+    assert upload["body"]["file_data"], "图片要 base64 带上去"
+    assert upload["body"]["file_name"] == "cat.png"
+
+    assert await client.upload_media("group", "GROUP-1", picture, 1, "cat.png") == "FILE-INFO"
+    assert len(calls) == 1, f"同一份内容不该传第二次：{calls}"
+
+    await client.send_media("group", "GROUP-1", "FILE-INFO", msg_id="M-1", msg_seq=2)
+    sent = calls[-1]
+    assert sent["path"] == "/v2/groups/GROUP-1/messages"
+    assert sent["body"]["msg_type"] == 7
+    assert sent["body"]["media"] == {"file_info": "FILE-INFO"}
+    assert (sent["body"]["msg_id"], sent["body"]["msg_seq"]) == ("M-1", 2)
+
+
+async def test_reply_sends_text_first_and_the_picture_after_it():
+    """顺序按主人定的：先文本、再图片。图片同样占被动回复额度，所以 seq 顺延一位。
+
+    这个运行器没有 pytest 的 monkeypatch/tmp_path（只认它自己的 fixture），
+    所以临时目录自己建、改过的模块属性自己还原。
+    """
+    import tempfile
+
+    from app.config import settings
+
+    plugin = await _make_plugin()
+    plugin._msg_type = 0                      # 正文固定成纯文本：图片照样要发得出去
+    original_dir = settings.data_dir
+    workdir = tempfile.mkdtemp(prefix="qq-media-")
+    settings.data_dir = workdir
+    os.makedirs(os.path.join(workdir, "attachments", "qq"))
+    with open(os.path.join(workdir, "attachments", "qq", "cat.png"), "wb") as f:
+        f.write(b"png-bytes" + b"0" * 32)
+    route = {"qq": "GROUP-OPENID", "msg_id": "M-1", "seq": 0, "ts": time.time()}
+    try:
+        result = await plugin._deliver(
+            route, "group", "看图",
+            attachments=[{
+                "path": "attachments/qq/cat.png", "name": "cat.png", "mime_type": "image/png",
+            }],
+        )
+    finally:
+        settings.data_dir = original_dir
+        _cleanup(plugin)
+
+    kinds = [item["kind"] for item in plugin._client.sent]
+    assert kinds == ["group", "upload", "media"], kinds
+    assert plugin._client.sent[0]["force_type"] == 0, "正文按纯文本发"
+    assert plugin._client.sent[1]["file_type"] == 1
+    assert plugin._client.sent[2]["seq"] == 2, "图片排在文本之后，占下一个 msg_seq"
+    assert result["media_sent"] == 1 and result["media_skipped"] == 0
+
+
+async def test_reply_sends_mp3_as_a_voice_message():
+    """mp3 直接当语音消息发（file_type=3）：2026-11-14 私聊实测客户端能播，不转 silk。"""
+    import tempfile
+
+    from app.config import settings
+
+    plugin = await _make_plugin()
+    plugin._msg_type = 0                      # 正文固定纯文本：语音照样要发得出去
+    original_dir = settings.data_dir
+    workdir = tempfile.mkdtemp(prefix="qq-voice-")
+    settings.data_dir = workdir
+    os.makedirs(os.path.join(workdir, "attachments", "qq"))
+    with open(os.path.join(workdir, "attachments", "qq", "hello.mp3"), "wb") as f:
+        f.write(b"ID3" + b"0" * 64)
+    route = {"qq": "GROUP-OPENID", "msg_id": "M-1", "seq": 0, "ts": time.time()}
+    try:
+        result = await plugin._deliver(
+            route, "group", "听我说",
+            attachments=[{
+                "path": "attachments/qq/hello.mp3", "name": "hello.mp3",
+                "mime_type": "audio/mpeg",
+            }],
+        )
+    finally:
+        settings.data_dir = original_dir
+        _cleanup(plugin)
+
+    assert [item["kind"] for item in plugin._client.sent] == ["group", "upload", "media"]
+    assert plugin._client.sent[1]["file_type"] == 3, "mp3 走语音消息，不另外转码"
+    assert plugin._client.sent[2]["seq"] == 2, "语音排在文本之后，占下一个 msg_seq"
+    assert result["media_sent"] == 1 and result["media_skipped"] == 0
+
+
+async def test_voice_message_rejected_falls_back_to_file():
+    """语音发不出去时退成文件（file_type=4）：接口 200 不代表客户端会播，兜底得真发一次。"""
+    import tempfile
+
+    from app.config import settings
+
+    plugin = await _make_plugin()
+    plugin._msg_type = 0
+    original_dir = settings.data_dir
+    workdir = tempfile.mkdtemp(prefix="qq-voice-fallback-")
+    settings.data_dir = workdir
+    os.makedirs(os.path.join(workdir, "attachments", "qq"))
+    with open(os.path.join(workdir, "attachments", "qq", "hello.mp3"), "wb") as f:
+        f.write(b"ID3" + b"0" * 64)
+    original = plugin._client.send_media
+    tries = {"n": 0}
+
+    async def flaky(kind, target, file_info, msg_id=None, msg_seq=1, wakeup=False):
+        tries["n"] += 1
+        if tries["n"] == 1:
+            raise RuntimeError("客户端不收这条语音")
+        return await original(kind, target, file_info, msg_id=msg_id, msg_seq=msg_seq,
+                              wakeup=wakeup)
+
+    plugin._client.send_media = flaky
+    route = {"qq": "GROUP-OPENID", "msg_id": "M-1", "seq": 0, "ts": time.time()}
+    try:
+        result = await plugin._deliver(
+            route, "group", "听我说",
+            attachments=[{
+                "path": "attachments/qq/hello.mp3", "name": "hello.mp3",
+                "mime_type": "audio/mpeg",
+            }],
+        )
+    finally:
+        settings.data_dir = original_dir
+        _cleanup(plugin)
+
+    uploads = [item for item in plugin._client.sent if item["kind"] == "upload"]
+    assert [u["file_type"] for u in uploads] == [3, 4], "先语音，失败再按文件传"
+    assert result["media_sent"] == 1 and result["media_skipped"] == 0
+
+
+async def test_inbound_picture_lands_as_an_attachment(migrated_db):
+    """QQ 发来的图要落成站内附件：只留 [图片] 占位的话，AI 永远看不到图本身。"""
+    import tempfile
+
+    from app.config import settings
+
+    original_dir = settings.data_dir
+    workdir = tempfile.mkdtemp(prefix="qq-inbound-")
+
+    async def fake_download(url):
+        return b"png-bytes" + b"0" * 32, "image/png"
+
+    await _seed()
+    plugin = await _make_plugin()
+    # 插件包是每次 _load_plugin_module() 重新组装的：不能按模块名 import 了再打补丁
+    # （那样打到的是另一份模块对象），直接改这个方法自己看得见的那份全局表。
+    store_globals = plugin._store_inbound_media.__func__.__globals__
+    original_download = store_globals["download"]
+    store_globals["download"] = fake_download
+    settings.data_dir = workdir
+    event = dict(GROUP_EVENT, attachments=[{
+        "content_type": "image/png",
+        "url": "https://gchat.qpic.cn/cat.png",
+        "filename": "cat.png",
+    }])
+    try:
+        await plugin._on_group_at(event)
+        rows = await _messages(GROUP_ID)
+    finally:
+        store_globals["download"] = original_download
+        settings.data_dir = original_dir
+        _cleanup(plugin)
+
+    assert len(rows) == 1, rows
+    from app.database import async_session
+    async with async_session() as db:
+        stored = (await db.execute(text(
+            "SELECT attachments FROM messages WHERE group_id = :g"
+        ), {"g": GROUP_ID})).scalar()
+    assert stored, "图片没落成附件，AI 那边只剩 [图片] 占位"
+    assert stored[0]["mime_type"] == "image/png", stored
+    assert stored[0]["path"].startswith("attachments/qq/"), stored
+    assert os.path.isfile(os.path.join(workdir, stored[0]["path"])), "物理文件没落地"
+
+
+async def test_send_failure_is_written_into_the_ai_ledger(migrated_db):
+    """发不出去不能只让主人知道：AI 的上下文只有账本，它得看到"这句没到"才不会当作已发"""
+    await _seed()
+    plugin = await _make_plugin()
+    try:
+        await plugin._report_unreachable(
+            "group", {"copree_group_id": GROUP_ID, "qq": "UP-AAA"}, "被动回复窗口已过",
+        )
+        entries = await _ledger(7)
+    finally:
+        _cleanup(plugin)
+
+    notes = [e for e in entries if e.get("kind") == "note" and e.get("actor") == "system"]
+    assert notes, entries
+    assert any("没有送达" in str(e.get("content") or "") and "被动回复窗口已过" in str(e.get("content") or "")
+               for e in notes), notes
+
+
+async def test_picture_that_did_not_go_out_is_told_to_the_ai(migrated_db):
+    """文字到了、图没到：AI 要收到的是"图没送到"，不是"整条没发出去" """
+    await _seed()
+    plugin = await _make_plugin()
+    route = {"qq": "GROUP-OPENID", "copree_group_id": GROUP_ID,
+             "msg_id": "M-1", "seq": 0, "ts": time.time()}
+    try:
+        # 附件指向一个不存在的文件：上传这一步就失败，文字那条仍算发出去了
+        await plugin._post_reply(route, "group", "看图", "", None, [{
+            "path": "attachments/qq/missing.png", "name": "missing.png", "mime_type": "image/png",
+        }])
+        entries = await _ledger(7)
+    finally:
+        _cleanup(plugin)
+
+    assert [item["kind"] for item in plugin._client.sent] == ["group"], plugin._client.sent
+    notes = [e for e in entries if e.get("kind") == "note"]
+    assert any("张图没能送到 QQ" in str(e.get("content") or "") for e in notes), notes
 
 

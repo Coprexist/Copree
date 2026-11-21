@@ -68,8 +68,12 @@ def test_frame_tail_keeps_long_last_message():
     assert "已截断" in tail[0] and len(tail[0]) < 700
 
 
-def test_frame_tail_default_window_carries_a_promised_contract():
-    """默认窗口要装得下"约好的事"：实测里暗号契约在倒数第 3 个用户轮上，2 轮窗口装不下"""
+def test_frame_tail_default_window_is_narrow():
+    """默认只抄 2 轮：原文负责「最后说到哪」，那一场干过什么交给经历行。
+
+    旧默认 4 轮是为「暗号契约在第 3 个用户轮上」留的；收缩后这类契约由 key_note /
+    便签承担（见 test_experience_experience.py），这里只钉住「默认确实是 2 轮」。
+    """
     from app.utils.pure.state_stack import frame_tail
 
     msgs = _msgs(
@@ -83,8 +87,27 @@ def test_frame_tail_default_window_carries_a_promised_contract():
     )
     tail = frame_tail(msgs)
 
-    assert any("约个暗号" in t for t in tail), tail
+    assert len(tail) <= 4, tail
+    assert not any("约个暗号" in t for t in tail), "默认不回溯到第 1 轮：那是 key_note 的活"
     assert tail[-1].endswith("那我现在在群里说一句少宇")
+
+
+def test_frame_tail_window_is_wide_enough_when_asked():
+    """需要更宽的窗口时显式给轮数（runtime 配置也走这条）：契约能被装回来"""
+    from app.utils.pure.state_stack import frame_tail
+
+    msgs = _msgs(
+        ("user", "约个暗号：说「少宇」你要回「牛逼！…」"),
+        ("assistant", "记下了"),
+        ("user", "另外道具也写进提示词"),
+        ("assistant", "好"),
+        ("user", "身份这条别加"),
+        ("assistant", "明白"),
+        ("user", "那我现在在群里说一句少宇"),
+    )
+    tail = frame_tail(msgs, max_exchanges=4)
+
+    assert any("约个暗号" in t for t in tail), tail
 
 
 def test_handoff_tail_says_do_not_answer_elsewhere():
@@ -157,7 +180,7 @@ async def test_frame_turn_context_stores_then_consumes_once():
 
 
 async def test_frame_turn_context_does_not_write_to_other_conversation_frame():
-    """栈顶是别的会话时不许硬写尾巴（切换没走完时会把 A 的原文记成 B 的）"""
+    """当前帧是别的会话时不许硬写尾巴（切换没走完时会把 A 的原文记成 B 的）"""
     from app.services.agent import state_stack_service as sss
 
     stored = {"stack": [{"id": "f1", "type": "group_chat", "context_ref": "group:7", "tail": ["群的旧尾巴"]}]}

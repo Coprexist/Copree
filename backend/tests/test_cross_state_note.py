@@ -131,7 +131,7 @@ async def test_sync_delivers_once_then_records_lose_all_power_over_it():
 
 
 async def test_sync_delivers_only_live_notes_from_other_conversations():
-    """投谁：别人写的 + 还活着的；自己写的不投给自己；栈顶不是本会话时一概不动"""
+    """投谁：别人写的 + 还活着的；自己写的不投给自己；当前帧不是本会话时一概不动"""
     from app.services.agent import cross_state_note_service as svc
     from app.utils.pure.cross_state_note import make_note
 
@@ -143,7 +143,7 @@ async def test_sync_delivers_only_live_notes_from_other_conversations():
         got = await svc.sync_frame_notes(object(), 1, "group:64")
         assert [c["id"] for c in got] == [theirs["id"]] and state["writes"] == 1
 
-        state["frame"]["context_ref"] = "dm:1_40"   # 栈顶不是本会话（切换没走完）
+        state["frame"]["context_ref"] = "dm:1_40"   # 当前帧不是本会话（切换没走完）
         assert await svc.sync_frame_notes(object(), 1, "group:64") == []
     finally:
         restore()

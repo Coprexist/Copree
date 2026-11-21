@@ -34,6 +34,16 @@ def test_over_long_summary_keeps_the_identity():
     assert parse_state_summary(summary) == {"type": "group_chat", "label": "群「诗」"}
 
 
+def test_budget_line_does_not_break_the_readback():
+    """预算行插在摘要里（插件帧每轮复述一次），首行身份仍是解析的唯一依据"""
+    summary = format_state_stack_summary(
+        [_frame(label="刷 B 站", doing="看一条视频")],
+        budget_line="本轮上限 50 次 · 今天 8/100 次",
+    )
+    assert "预算: 本轮上限 50 次 · 今天 8/100 次" in summary
+    assert parse_state_summary(summary) == {"type": "group_chat", "label": "刷 B 站"}
+
+
 def test_request_body_reads_the_injected_block():
     body = [
         {"role": "system", "content": "你是……"},

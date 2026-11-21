@@ -102,6 +102,8 @@ async def _make_plugin(instance: str = "bot-a"):
     plugin.id = "qq-napcat"
     plugin.instance = instance
     plugin._copree_group_id = GROUP_ID
+    # 落点表：这个 QQ 群已经接到 GROUP_ID（"已接好的群"走映射路径，不落库、不建群）
+    plugin._group_map = {str(QQ_GROUP): GROUP_ID}
     plugin._target_agent = "浮生"
     plugin._target_user_id = AGENT_USER
     plugin._client = FakeClient()
@@ -350,6 +352,30 @@ async def test_outbound_mentions_become_cq_at(migrated_db):
         _cleanup(plugin)
 
 
+async def test_outbound_neutralizes_model_supplied_cq(migrated_db):
+    """模型原文里的 [CQ:…] 一律转义成字面量：否则它可以越过平台直接指挥协议端"""
+    from app.chat.gm import send_gm_message
+    from app.database import async_session
+
+    await _seed()
+    plugin = await _make_plugin()
+    plugin._route[GROUP_ID] = {"qq": str(QQ_GROUP)}
+    try:
+        async with async_session() as db:
+            await send_gm_message(db, group_id=GROUP_ID, sender_type="ai", sender_id=AGENT_USER,
+                                  content="收到 [CQ:at,qq=all] 和 [CQ:image,file=a.jpg]")
+            await db.commit()
+        await _wait_sent(plugin)
+
+        sent = plugin._client.sent[-1]["message"]
+        # 原文里没有一个 [CQ:…] 能被协议端当成指令
+        assert "[CQ:" not in sent, sent
+        assert "&#91;CQ:at,qq=all&#93;" in sent, sent
+        assert "&#91;CQ:image,file=a.jpg&#93;" in sent, sent
+    finally:
+        _cleanup(plugin)
+
+
 async def test_only_target_ai_group_reply_is_forwarded(migrated_db):
     """出口只转发绑定群里 AI 说的话：人说的不外流"""
     from app.chat.gm import send_gm_message
@@ -430,6 +456,9 @@ async def test_multi_instance_one_channel_per_ai(migrated_db):
     from app.services.plugin.config import set_config
 
     await _seed()
+    # 先让模块跑一遍 @service 声明：set_config 只认已声明的 config_schema，
+    # 而生产里那是 bootstrap 的后台任务干的——测试不能赌它刚好先跑完
+    _load_plugin_module()
     async with async_session() as db:
         db.add(Plugin(id="qq-napcat", name="QQ 通道（NapCat）", category="service", enabled=True, builtin=True))
         await db.commit()
@@ -618,5 +647,95 @@ async def test_contacts_only_look_up_asked_ids(migrated_db):
             user_ids=[mine[0], other[0], 999999],
         )
     assert contacts == {mine[0]: "111"}, contacts
+
+
+
+
+async def test_first_message_creates_own_group(migrated_db):
+    """来一个没接过的 QQ 群 -> 新建它自己的 Copree 群（不认领、不并进兜底群），映射落进 group_map"""
+    from app.database import async_session
+    from app.services.plugin.config import get_config
+
+    await _seed()
+    async with async_session() as db:
+        # set_config 要 plugins 行（生产由 bootstrap 写入）
+        await db.execute(text(
+            "INSERT INTO plugins (id, name, category, enabled, builtin) "
+            "VALUES ('qq-napcat', 'QQ 通道（NapCat）', 'service', true, true) "
+            "ON CONFLICT (id) DO NOTHING"
+        ))
+        await db.commit()
+    plugin = await _make_plugin(instance="agent-7")
+    plugin._group_map = {}          # 这个 QQ 群还没接过
+    try:
+        await plugin._on_payload(dict(GROUP_EVENT))
+        async with async_session() as db:
+            rows = (await db.execute(text(
+                "SELECT id FROM groups WHERE origin_channel = 'qq-napcat' ORDER BY id"
+            ))).all()
+            assert len(rows) == 1, rows
+            new_id = int(rows[0][0])
+            assert new_id != GROUP_ID
+            cfg = await get_config("qq-napcat", plugin.instance, db=db)
+        landed = await _messages(new_id)
+        assert len(landed) == 1, landed
+        assert str(new_id) in str(cfg.get("group_map") or ""), cfg.get("group_map")
+
+        # 同一个群再来一条：走映射，不再建第二个群
+        await plugin._on_payload({**GROUP_EVENT, "message_id": 9002})
+        async with async_session() as db:
+            again = (await db.execute(text(
+                "SELECT id FROM groups WHERE origin_channel = 'qq-napcat'"
+            ))).all()
+        assert len(again) == 1, again
+        assert len(await _messages(new_id)) == 2
+    finally:
+        _cleanup(plugin)
+
+
+async def test_inbound_image_is_stored_as_attachment(migrated_db):
+    """QQ 图片 -> 站内附件：正文里的 [图片] 只是占位，字节得进 messages.attachments"""
+    import app.utils.channel_media as channel_media
+    from app.database import async_session
+    from app.services.content import file_service
+
+    await _seed()
+    plugin = await _make_plugin(instance="agent-7")
+    plugin._group_map = {str(QQ_GROUP): GROUP_ID}
+    original_download, original_upload = channel_media.download, file_service.upload_file
+
+    async def fake_download(url, **kw):
+        return b"\x89PNG\r\n\x1a\n" + b"0" * 64, "image/png"
+
+    class FakeMeta:
+        id = 1
+        path = "attachments/qq/fake.png"
+        size = 72
+        mime_type = "image/png"
+
+    async def fake_upload(*args, **kwargs):
+        return FakeMeta()
+
+    channel_media.download = fake_download
+    file_service.upload_file = fake_upload
+    try:
+        await plugin._on_payload({
+            **GROUP_EVENT,
+            "message_id": 9101,
+            "message": [
+                {"type": "at", "data": {"qq": SELF_ID, "name": "机器人"}},
+                {"type": "image", "data": {"file": "a.png", "url": "https://gchat.qpic.cn/x.png"}},
+            ],
+        })
+        async with async_session() as db:
+            row = (await db.execute(text(
+                "SELECT attachments FROM messages WHERE group_id = :g ORDER BY id DESC LIMIT 1"
+            ), {"g": GROUP_ID})).first()
+        assert row is not None and row[0], row
+        assert "fake.png" in str(row[0]), row[0]
+    finally:
+        channel_media.download = original_download
+        file_service.upload_file = original_upload
+        _cleanup(plugin)
 
 

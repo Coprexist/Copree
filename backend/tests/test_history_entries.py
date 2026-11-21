@@ -349,3 +349,29 @@ async def test_a_notice_is_dropped_only_after_it_was_delivered(migrated_db):
         await db.commit()
         assert "notice" not in [e["kind"] for e in await hs.read(db, 1, ref)], "投过了就该离场"
 
+
+async def test_notify_agent_is_the_one_step_entry(migrated_db):
+    """一条调用就落账：谁、在哪、说了什么；返回 False 时调用方不该推进游标。"""
+    from app.database import async_session
+    from app.services.history import history_service as hs
+    from app.services.plugin.api import notify_agent
+
+    async with async_session() as db:
+        await _seed(db)
+
+    # 群：会话键从工具 context 里取，插件不用自己拼 group:<id>
+    assert await notify_agent(1, "有人回复了你的评论", context={"group_id": 64},
+                              ref="bilibili:inbox:7") is True
+    async with async_session() as db:
+        rows = await hs.read(db, 1, "group:64")
+    assert rows[0]["kind"] == "notice" and rows[0]["ref"] == "bilibili:inbox:7"
+    assert rows[0]["flags"] == {"drop_on_unlock": True}, "一次性通知的旗子由平台打"
+
+    # 私信：context 里有 session_id 就落那一段
+    assert await notify_agent(1, "私信里的一句话", context={"session_id": "40_90"}) is True
+    async with async_session() as db:
+        assert (await hs.read(db, 1, "40_90"))[0]["content"] == "私信里的一句话"
+
+    # 写不进去就说 False：agent 不存在、正文是空的
+    assert await notify_agent(999, "谁会看到") is False
+    assert await notify_agent(1, "   ") is False

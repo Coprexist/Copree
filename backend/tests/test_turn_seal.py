@@ -63,9 +63,21 @@ async def test_seal_turn_writes_tools_handoff_and_thinking(migrated_db):
 
         entries = await hs.read(db, 1, ref)
         assert [e["kind"] for e in entries] == ["tool", "handoff", "thinking"]
-        assert "send_gm(ok)" in entries[0]["content"] and "view_unread(失败：超时)" in entries[0]["content"]
+        # 只留失败与持久副作用：发送成功已经在消息表里，账本再记一遍 "send_gm(ok)" 没有信息量
+        assert "view_unread(失败：超时)" in entries[0]["content"]
+        assert "send_gm(ok)" not in entries[0]["content"]
         assert entries[1]["content"] == "[上一轮交接] 改的是 executor", "落库的是最终字节（去空白）"
         assert entries[2]["actor"] == "self"
+
+        # key_note 同时落成一行经历：换到别的会话，那边的自己能想起「改的是 executor」
+        from sqlalchemy import select
+
+        from app.models.agent_experience import AgentExperience
+
+        exp = (await db.execute(select(AgentExperience))).scalars().one()
+        assert exp.scene_key == ref and exp.source == "key_note"
+        assert exp.summary == "改的是 executor"
+        assert "send_gm(ok)" in exp.tools, "工具总账跟着这一行走，回查时不用再翻账本"
 
         # 没工具、没交接、不留思考 → 一条都不写（不制造噪音条目）
         await _seal_turn(db, agent, group_id=999001, session_id=None, conversation_type="group",
@@ -75,6 +87,35 @@ async def test_seal_turn_writes_tools_handoff_and_thinking(migrated_db):
 
         await hs.clear(db, 1, ref)
         await db.commit()
+
+async def test_seal_turn_records_unsent_text(migrated_db):
+    """没发出去的那句话要留在账本里：它只活在当轮 messages，没有这一笔就彻底没了。"""
+    from app.ai.executor import _seal_turn
+    from app.database import async_session
+    from app.models.agent import Agent
+    from app.services.history import history_service as hs
+
+    async with async_session() as db:
+        await _seed(db)
+        agent = await db.get(Agent, 1)
+        ref = "group:999003"
+
+        await _seal_turn(
+            db, agent, group_id=999003, session_id=None, conversation_type="group",
+            tool_log=[], settlement={}, reasoning="",
+            unsent=("听过，咕——早睡早起身体好。", "文字不会自动发出去。"),
+        )
+        await db.commit()
+
+        entries = await hs.read(db, 1, ref)
+        assert [e["kind"] for e in entries] == ["note"]
+        assert "【没发出去的话】" in entries[0]["content"]
+        assert "听过，咕——早睡早起身体好。" in entries[0]["content"]
+        assert entries[0]["actor"] == "system"
+
+        await hs.clear(db, 1, ref)
+        await db.commit()
+
 
 async def test_seal_turn_records_the_cutoff_honestly(migrated_db):
     """轮次用尽被平台收尾时补一条系统通知：上一轮不是 AI 自己收的尾
@@ -93,7 +134,7 @@ async def test_seal_turn_records_the_cutoff_honestly(migrated_db):
 
         await _seal_turn(
             db, agent, group_id=999002, session_id=None, conversation_type="group",
-            tool_log=[{"name": "web_fetch", "note": "ok"}],
+            tool_log=[{"name": "web_fetch", "note": "失败：404"}],
             settlement={"keep_thinking": True},
             reasoning="在核版本号",
             cutoff="工具轮次用尽，本轮由平台结束，没走 end_turn。一条消息都没发出去。",

@@ -4,7 +4,12 @@
 def test_alias_targets_are_current_names():
     from app.services.agent.provider_presets import MODEL_ALIASES, PRESETS
 
-    known = {m["value"] for p in PRESETS.values() for m in p["models"]}
+    # 只看 LLM 预设：语音预设（kind="voice"）没有 models，混进来会 KeyError
+    known = {
+        m["value"]
+        for p in PRESETS.values() if (p.get("kind") or "llm") == "llm"
+        for m in p.get("models") or []
+    }
     for old, new in MODEL_ALIASES.items():
         assert old not in known, f"{old} 已经改名，就不该再留在下拉列表里"
         assert new in known, f"{old} → {new}：目标不在任何预设的模型列表里"

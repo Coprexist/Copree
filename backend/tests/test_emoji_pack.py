@@ -73,16 +73,21 @@ def test_other_categories_are_not_emoji_packs():
     assert catalog.get_emoji_pack(manifest) == {}
 
 
-def test_builtin_qq_pack_is_well_formed():
-    """内置包随代码走，AI 照它的名字发表情——名字写错就会显示成文字"""
+def test_builtin_emoji_pack_is_well_formed():
+    """内置包随代码走：每个表情都得真的有图，缺一张站内就是一张破图"""
+    from pathlib import Path
+
     from app.services.plugin import catalog
 
-    pack = catalog.get_emoji_pack(catalog.scan_disk()["emoji-qq"])
+    manifest = catalog.scan_disk()["emoji"]
+    pack = catalog.get_emoji_pack(manifest)
 
     assert len(pack["faces"]) >= 40, len(pack["faces"])
     assert pack["usage"], "插件要自带用法说明，否则只能靠模型自己猜场合"
     assert len({f["id"] for f in pack["faces"]}) == len(pack["faces"])
-    assert all(f["name"] and (f["emoji"] or f["file"]) for f in pack["faces"])
+    root = Path(manifest["_dir"])
+    missing = [f["file"] for f in pack["faces"] if not f["file"] or not (root / f["file"]).is_file()]
+    assert not missing, f"这些表情没有图：{missing[:5]}"
     assert any(f["name"] == "害羞" for f in pack["faces"]), "QQ 来的 [表情:害羞] 要能对上"
 
 
@@ -96,16 +101,16 @@ async def test_enabled_packs_follow_the_global_switch(migrated_db):
         await clear(db, "plugins", "user_plugin_prefs")
         await catalog.sync_plugins_to_db(db)
         catalog.invalidate_caches()           # 换库/换目录后要清缓存，生产由 toggle/装卸钩子负责
-        assert any(p["id"] == "emoji-qq" for p in await catalog.enabled_emoji_packs(db))
+        assert any(p["id"] == "emoji" for p in await catalog.enabled_emoji_packs(db))
 
-        row = await db.get(Plugin, "emoji-qq")
+        row = await db.get(Plugin, "emoji")
         row.enabled = False
         await db.commit()
-        assert any(p["id"] == "emoji-qq" for p in await catalog.enabled_emoji_packs(db)), \
+        assert any(p["id"] == "emoji" for p in await catalog.enabled_emoji_packs(db)), \
             "30 秒缓存内不该读到关闭——失效钩子才是真相变化的入口"
 
         catalog.invalidate_caches()
-        assert not any(p["id"] == "emoji-qq" for p in await catalog.enabled_emoji_packs(db))
+        assert not any(p["id"] == "emoji" for p in await catalog.enabled_emoji_packs(db))
 
 
 def test_resolve_emoji_text_leaves_code_untouched():
@@ -136,13 +141,13 @@ def test_long_emoji_is_ignored_instead_of_truncated():
     # 带肤色的四口之家 11 个 codepoint：旧实现按 8 字符截断，正好切在 ZWJ 上
     family = "👨🏽‍👩🏽‍👧🏽‍👦🏽"
     assert len(family) > 8
-    assert catalog._emoji_face({"id": "fam", "name": "一家", "emoji": family})["emoji"] == family
+    assert catalog.emoji_face({"id": "fam", "name": "一家", "emoji": family})["emoji"] == family
 
     too_long = "🙂" * 40
-    assert catalog._emoji_face({"id": "long", "name": "太长", "emoji": too_long}) is None
-    kept = catalog._emoji_face({"id": "long2", "name": "太长", "emoji": too_long, "file": "x.png"})
+    assert catalog.emoji_face({"id": "long", "name": "太长", "emoji": too_long}) is None
+    kept = catalog.emoji_face({"id": "long2", "name": "太长", "emoji": too_long, "file": "x.png"})
     assert (kept["emoji"], kept["file"]) == ("", "x.png"), kept
-    assert catalog._emoji_face({"id": "space", "name": "带空格", "emoji": "a b"}) is None
+    assert catalog.emoji_face({"id": "space", "name": "带空格", "emoji": "a b"}) is None
 
 
 def test_skin_vars_reject_non_hex():
@@ -188,8 +193,8 @@ async def test_cached_packs_are_handed_out_as_copies(migrated_db):
 
     # 磁盘扫描同样交副本：调用方 pop 掉一个插件不该影响下一次扫描
     disk = catalog.scan_disk()
-    disk.pop("emoji-qq", None)
-    assert "emoji-qq" in catalog.scan_disk(), "scan_disk 也要交副本"
+    disk.pop("emoji", None)
+    assert "emoji" in catalog.scan_disk(), "scan_disk 也要交副本"
 
 
 async def test_sync_plugins_takes_both_session_and_repository(migrated_db):
@@ -246,7 +251,11 @@ def test_resolve_emoji_text_follows_the_contract():
 
 
 async def test_entry_normalizes_emoji_before_storing(migrated_db):
-    """入口归一：落库的正文只有字符或标准短码，下游（AI 上下文、导出、通道出口）不用再解析"""
+    """入口归一：纯图表情在入口就变成附件，正文里不留标记
+
+    内置包只有图没有字符，[表情:害羞] 与 :shy: 都会落成一张附件——站内渲染、通道投递、
+    历史回看都只认附件，下游不必再各认一遍表情写法。
+    """
     from sqlalchemy import text
 
     from app.chat.gm import send_gm_message
@@ -271,19 +280,21 @@ async def test_entry_normalizes_emoji_before_storing(migrated_db):
             "VALUES (900, 'human', 900, 'owner')"
         ))
         await catalog.sync_plugins_to_db(db)
-        row = await db.get(Plugin, "emoji-qq")
+        row = await db.get(Plugin, "emoji")
         row.enabled = True
         await db.commit()
         catalog.invalidate_caches()
 
         both = await send_gm_message(
             db, group_id=900, sender_type="human", sender_id=900,
-            content="[表情:害羞] 和 :qq_shy:",
+            content="[表情:害羞] 和 :shy:",
         )
         unknown = await send_gm_message(
             db, group_id=900, sender_type="human", sender_id=900, content=":没这个:",
         )
         await db.commit()
 
-        assert both.content == "😳 和 😳", both.content
+        # 纯图表情不进正文：标记被摘成附件，正文只剩上下文（两条写法都认，各出一张图）
+        assert both.content.strip() == "和", both.content
+        assert len(both.attachments or []) == 2, both.attachments
         assert unknown.content == ":没这个:", unknown.content

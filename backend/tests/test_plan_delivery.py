@@ -272,3 +272,21 @@ async def test_switch_off_delivers_nothing(migrated_db):
         agent = await db.get(Agent, 24)
         await _add_alarm(db)
         assert await deliver_plans(db, agent, "group:1") == []
+
+
+async def test_no_alarm_rows_short_circuits_before_reading_the_ledger(migrated_db):
+    """一条闹钟行都没有：板上永远不会有内容，连账本都不用读（开关对全量打开后的每轮开销）。"""
+    from app.database import async_session
+    from app.models.agent import Agent
+    from app.services.agent.plan_service import deliver_plans
+    from app.services.history import history_service
+
+    async with async_session() as db:
+        await _seed(db)
+        agent = await db.get(Agent, 24)
+        assert await deliver_plans(db, agent, "group:1") == []
+        assert await history_service.read(db, 24, "group:1") == [], "短路的旁证：没落条目"
+
+        # 取消/已执行的行都还在——"零行"不等于"曾经投过、后来都取消了"
+        await _add_alarm(db, status="cancelled")
+        assert await deliver_plans(db, agent, "group:1") == []

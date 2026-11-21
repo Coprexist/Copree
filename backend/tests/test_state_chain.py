@@ -1,4 +1,4 @@
-"""状态链：运行集合的双向链表（节点只存 id）
+"""状态链：一条双向链表（节点只存 id）
 
 两件事分开测：
 1. **纯指针算术**（attach / move_to_tail / detach / window / reconcile）——一个字典，不碰 DB；
@@ -251,6 +251,56 @@ async def test_pop_detaches_the_node_but_keeps_the_frame(migrated_db):
         assert len(await get_frames(db, 1)) == 2, "帧记录不删"
 
 
+async def test_pop_returns_to_the_frame_he_was_called_away_from(migrated_db):
+    """写代码时被群里叫走 → pop：回到写代码那帧。
+
+    链上只有链尾在跑，其余帧地位相同；拉帧是 move_to_tail，所以被顶下来的那帧恒在被拉帧的
+    前一位——pop 结束链尾之后，新链尾自然就是"他刚从哪儿来"，不需要另记来源字段。
+    """
+    from app.database import async_session
+    from app.services.agent.state_stack_service import get_chain, get_frames, pop_state
+
+    async with async_session() as db:
+        await _seed(db)
+        await _open(db, 1)                     # 在写代码
+        await _open(db, 2)                     # 群里叫他，切过去
+        ids = {f["context_ref"]: f["id"] for f in await get_frames(db, 1)}
+        assert (await get_chain(db, 1))["current"] == ids["group:2"]
+
+        await pop_state(db, 1)                 # 回完话，收工
+        await db.commit()
+
+        frames = {f["id"]: f for f in await get_frames(db, 1)}
+        assert (await get_chain(db, 1))["current"] == ids["group:1"], "回到写代码那帧"
+        assert frames[ids["group:2"]]["status"] == "ended"
+
+
+async def test_pop_with_a_target_leaves_the_frames_in_between_alone(migrated_db):
+    """游戏 → 写代码 → 群聊，发现其实是叫上号：结束群聊并回到游戏。
+
+    写代码那帧只是挂着（不结束、顺序不变）；"目标与当前之间"的帧在链里没有特殊地位，
+    不该被连带结束——这条是「pop 只弹当前这一帧」的反例守卫。
+    """
+    from app.database import async_session
+    from app.services.agent.state_stack_service import get_chain, get_frames, pop_state
+
+    async with async_session() as db:
+        await _seed(db)
+        for n in (1, 2, 3):
+            await _open(db, n)                 # 游戏 → 写代码 → 群聊
+        ids = {f["context_ref"]: f["id"] for f in await get_frames(db, 1)}
+        assert await _queue(db) == [ids["group:3"], ids["group:2"], ids["group:1"]]
+
+        await pop_state(db, 1, target_frame_id=ids["group:1"])   # 结束群聊，回到游戏
+        await db.commit()
+
+        frames = {f["id"]: f for f in await get_frames(db, 1)}
+        assert (await get_chain(db, 1))["current"] == ids["group:1"]
+        assert frames[ids["group:3"]]["status"] == "ended"
+        assert frames[ids["group:2"]]["status"] != "ended", "中间那帧（写代码）不该被连带结束"
+        assert await _queue(db) == [ids["group:1"], ids["group:2"]], "其余帧顺序不变"
+
+
 async def test_close_detaches_the_last_node(migrated_db):
     from app.database import async_session
     from app.services.agent.state_stack_service import close_state, get_chain, get_frames
@@ -313,7 +363,7 @@ async def test_execution_window_is_a_column_on_the_chain(migrated_db):
 
 
 async def test_a_legacy_agent_gets_its_chain_built_in_the_stored_order(migrated_db):
-    """改造前没有链的 AI：第一次写栈时按当时的运行集合现建，当前帧不变。"""
+    """改造前没有链的 AI：第一次落库时按当时在跑的帧现建，当前帧不变。"""
     import json
 
     from app.database import async_session

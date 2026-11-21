@@ -1,8 +1,8 @@
 """无 pytest 环境下的最小运行器。
 
-后端容器不含 pytest。本脚本只实现现有用例实际用到的两件事 —— pytest.fixture 与
-pytest.mark —— 外加 conftest 中的 migrated_db。需要参数化、插件或覆盖率统计时请安装
-pytest，不要扩展本脚本。
+后端容器不含 pytest。本脚本只实现现有用例实际用到的三件事 —— pytest.fixture、
+pytest.mark 与 pytest.raises —— 外加 conftest 中的 migrated_db。需要参数化、插件或
+覆盖率统计时请安装 pytest，不要扩展本脚本。
 
 用法（在后端容器内，指向测试库）：
 
@@ -18,6 +18,7 @@ pytest，不要扩展本脚本。
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import importlib.util
 import time
 import inspect
@@ -49,6 +50,25 @@ class _MarkRegistry:
         return _Marker(name)
 
 
+class _ExceptionInfo:
+    """pytest.raises 的返回值：用例只用到 .value"""
+
+    value = None
+
+
+@contextlib.contextmanager
+def _raises(expected, match: str | None = None):
+    info = _ExceptionInfo()
+    try:
+        yield info
+    except expected as exc:
+        if match is not None and match not in str(exc):
+            raise AssertionError(f"{exc!r} 不包含 {match!r}") from exc
+        info.value = exc
+    else:
+        raise AssertionError(f"DID NOT RAISE {expected}")
+
+
 def _install_pytest_stub() -> None:
     """必须在导入 conftest 之前调用（conftest 顶部即 import pytest）。"""
     pytest = types.ModuleType("pytest")
@@ -60,6 +80,7 @@ def _install_pytest_stub() -> None:
 
     pytest.mark = _MarkRegistry()
     pytest.fixture = fixture
+    pytest.raises = _raises
     sys.modules["pytest"] = pytest
 
 

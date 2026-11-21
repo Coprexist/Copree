@@ -284,6 +284,26 @@ async def test_group_settings_accept_discovery_flags(migrated_db):
         await db.rollback()
 
 
+async def test_group_settings_accept_proxy_rules(migrated_db):
+    """PATCH 链路：决策代理规矩与公告可见性进白名单，且只有群主/管理员改得动"""
+    from app.chat.gm import update_group_settings
+    from app.database import async_session
+
+    async with async_session() as db:
+        await _seed(db, auto_approve_join=True, approve_invites=False)
+        await expect_value_error(
+            update_group_settings(db, GROUP_ID, 3, {"proxy_rules": "随便写"}),
+            "仅群主或管理员")
+
+        group = await update_group_settings(db, GROUP_ID, 5, {
+            "proxy_rules": "这是角色扮演闲聊群，气氛话也该接",
+            "proxy_announcement": False,
+        })
+        assert group.proxy_rules == "这是角色扮演闲聊群，气氛话也该接", "规矩要能存下来"
+        assert group.proxy_announcement is False, "公告可见性要能关"
+        await db.rollback()
+
+
 async def test_group_settings_accepts_concurrent_ai_limit(migrated_db):
     """PATCH 链路：AI 并发数也要进白名单——面板发得出去、库里存得下、响应里回得来
 

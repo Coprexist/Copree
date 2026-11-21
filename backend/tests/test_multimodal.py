@@ -188,6 +188,43 @@ def test_strip_image_parts_leaves_plain_messages_untouched():
     assert degraded == messages
 
 
+def test_with_transcripts_fills_attachment_text():
+    """文稿的家在 file_metadata：渲染账本前按 file_id 补进附件快照，AI 才读得到语音说了什么"""
+    from app.utils.multimodal import with_transcripts
+
+    atts = [{"file_id": 199, "mime_type": "audio/mpeg", "name": "v.mp3"}]
+    assert with_transcripts(atts, {199: "晚自习别熬太晚。"})[0]["transcript"] == "晚自习别熬太晚。"
+    assert with_transcripts(atts, {})[0] == atts[0], "没有文稿时原样返回"
+    assert with_transcripts(atts, None)[0] == atts[0]
+    assert with_transcripts([], {199: "x"}) == [], "空附件列表不受影响"
+
+    own = [{"file_id": 199, "transcript": "快照里已经带了"}]
+    assert with_transcripts(own, {199: "库里的"})[0]["transcript"] == "快照里已经带了", "不覆盖已有值"
+
+
+def test_attachment_marks_show_voice_transcript():
+    """语音的标记要用它念出来的那句话，不是文件名。
+
+    AI 的语音就是它自己的文字念出来的，transcript 现成（send_voice 写入）；没有它，
+    AI 回看历史只看到 voice_xxx.mp3，等于对说过的话失忆。人的语音在转写前退回 [语音]。
+    """
+    from app.utils.multimodal import attachment_marks
+
+    said = attachment_marks([{
+        "file_id": 199, "name": "voice_20261114033204_49.mp3", "size": 103296,
+        "mime_type": "audio/mpeg", "transcript": "晚自习别熬太晚。",
+    }])
+    assert said == "[语音] 晚自习别熬太晚。", said
+
+    bare = attachment_marks([{"file_id": 200, "name": "voice_x.mp3", "mime_type": "audio/mpeg"}])
+    assert bare == "[语音]", bare
+    assert "voice_x.mp3" not in bare, "语音标记里不该出现文件名"
+
+    long = attachment_marks([{"mime_type": "audio/mpeg", "transcript": "嗯" * 300}])
+    assert len(long) == len("[语音] ") + 200, "文稿进上下文要截到 200 字"
+    assert long.endswith("…")
+
+
 def test_is_vision_unsupported_error_matches_real_wording():
     for text in (
         "400 Invalid image_url: this model does not support image input",

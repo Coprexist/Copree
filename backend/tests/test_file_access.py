@@ -28,6 +28,10 @@ async def _seed(db):
         "(1, 'agents/49/shu_ai/graph_ai.py', 'ai', 49, 9569, 'text/x-python', 'solo'), "
         # 早期数据：owner_id 存的是 AI 的虚拟账号 id，而不是 agent.id
         "(2, 'agents/49/shu_ai/README.md', 'ai', 120, 2714, 'text/markdown', 'solo')"))
+    # 显式写了 id，序列并不知道：不推进的话，后面任何一次自增插入都会撞上这两行。
+    # 2026-11-14 实测：套件连着跑（本文件排在 test_qq_channel_plugin 前面）时，
+    # QQ 入站落图那步就炸在 file_metadata_pkey 的 duplicate key 上——单跑绿、连着跑红。
+    await db.execute(text("SELECT setval(pg_get_serial_sequence('file_metadata', 'id'), 100)"))
     await db.commit()
 
 
@@ -49,6 +53,42 @@ async def test_unrelated_user_is_denied_not_crashed(migrated_db):
     async with async_session() as db:
         await _seed(db)
         assert await check_file_access(db, 1, "human", 49) is None
+
+
+async def test_ai_sending_its_own_file_is_not_a_forward(migrated_db):
+    """AI 发**自己的**文件不该记转发引用。
+
+    文件 owner_id 记 agents.id（agent 49），而消息 sender_id 是它的虚拟账号 users.id（120）；
+    旧代码直接比数字，于是每次发自己的附件都落一条 forward，把自己的配额算掉一份
+    （2026-11-14 真机：file 214 是 ai:120 自己的语音，发送时却记了 forward ai:120）。
+    """
+    from sqlalchemy import text as sa_text
+
+    from app.database import async_session
+    from app.models.file import FileMetadata
+    from app.services.content.file_service import is_file_owner, track_forward_reference
+
+    async with async_session() as db:
+        await _seed(db)
+        meta = await db.get(FileMetadata, 1)          # 属于 agent 49
+        assert await is_file_owner(db, meta, "ai", 120), "虚拟账号 120 就是它自己"
+        assert await is_file_owner(db, meta, "ai", 49), "工具路径传的是 agents.id"
+
+        assert await track_forward_reference(db, 1, "ai", 120) is False
+        await db.commit()
+        rows = (await db.execute(sa_text(
+            "SELECT count(*) FROM file_references WHERE file_id = 1 AND ref_type = 'forward'"
+        ))).scalar()
+        assert rows == 0, "自己的文件不占配额"
+
+        # 真的别的 AI 转发它，才要留痕（用它自己的虚拟账号，别和 agent 49 的 id 撞号）
+        await db.execute(sa_text(
+            "INSERT INTO users (id, username, password_hash, type) VALUES (501, '旁观AI账户', 'x', 'ai')"))
+        await db.execute(sa_text(
+            "INSERT INTO agents (id, owner_id, name, user_id, discoverable) VALUES (500, 1, '旁观AI', 501, true)"))
+        await db.commit()
+        assert await track_forward_reference(db, 1, "ai", 501) is True
+        await db.commit()
 
 
 async def test_legacy_owner_id_stored_as_virtual_account_id(migrated_db):

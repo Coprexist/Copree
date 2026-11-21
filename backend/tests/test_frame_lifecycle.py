@@ -1,8 +1,8 @@
 """状态帧的生命周期：全量保留 + 指针排队
 
 存储 = agents.state_stack 整个数组（形状不变，只增不删）；
-运行集合 = 数组里 status 处于 active/paused/suspended 的那串指针（"栈"只剩它）。
-出运行集合有三种：pop/close（ended）、容量超限（retired）、会话解散（retired）。
+链上 = 数组里 status 处于 active/paused/suspended 的那串帧（"栈"只剩它）。
+出链有三种：pop/close（ended）、容量超限（retired）、会话解散（retired）。
 记录只在**他交接完后事**（finish_frame）之后才删——那是唯一删除点。
 """
 import pytest
@@ -45,7 +45,7 @@ async def test_pop_keeps_the_record_and_shrinks_the_running_set(migrated_db):
         await db.commit()
         frames = await get_frames(db, 1)
 
-        assert len(frames) == 2, "记录不许丢：pop 只是让它出运行集合"
+        assert len(frames) == 2, "记录不许丢：pop 只是让它出链"
         assert [f["status"] for f in frames] == ["ended", "active"], frames
         assert frames[-1]["context_ref"] == "group:1", "回到上一层，当前帧仍在末尾"
         assert [f["context_ref"] for f in running(frames)] == ["group:1"]
@@ -83,6 +83,37 @@ async def test_overflow_retires_the_least_recently_active_frame(migrated_db):
         assert [f["context_ref"] for f in pend] == ["group:1"], frames
         assert pend[0].get("retired_at"), "挂起要留时间戳（谁被挂起过、什么时候）"
         assert len(frames) == 3, "挂起不删记录"
+
+
+async def test_the_finish_frame_tool_also_lands_the_notice(migrated_db):
+    """工具那条路（不只是服务）：销完还要往账本落一条「已处置」。
+
+    这条当初炸在 append_events 收 agent 对象而不是 agent_id 上——而且是在**销帧成功之后**炸，
+    于是 AI 只看到"销不掉"，帧其实已经没了。
+    """
+    from app.database import async_session
+    from app.tools.self_management.finish_frame import FinishFrame
+
+    async with async_session() as db:
+        await _seed(db)
+        await db.execute(text("UPDATE agents SET frame_capacity = 2 WHERE id = 1"))
+        await db.commit()
+        await _open(db, 1)
+        await _open(db, 2)
+        await _open(db, 3)
+
+        from app.services.agent.state_stack_service import get_frames
+
+        frames = await get_frames(db, 1)
+        pend = next(f for f in frames if f["status"] == "retired")
+
+        result = await FinishFrame().execute(db, 1, 1, {"frame_id": pend["id"]}, {})
+        await db.commit()
+
+        assert result.get("success") is True, result
+        rows = (await db.execute(text(
+            "SELECT content FROM agent_history_entries WHERE kind = 'notice' ORDER BY id"))).all()
+        assert any("后事已交接完毕" in r[0] for r in rows), "销完要留一条已处置，不然下一轮它以为自己没销"
 
 
 async def test_finish_frame_is_the_only_delete_point(migrated_db):
@@ -132,6 +163,30 @@ async def test_finished_frame_can_be_revived_by_its_stable_id(migrated_db):
         await db.commit()
         assert revived["id"] == fid and revived["status"] == "active"
         assert current(await get_frames(db, 1))["id"] == fid
+
+
+async def test_rebuilt_frame_parks_the_previous_one(migrated_db):
+    """闹钟指向的帧早已不在了：按 id 重建时，上一帧必须被压成挂起。
+
+    踩过：新建帧带着 make_state_frame 默认的 active 进数组，_pull 靠"此刻谁是 active"
+    认原来那帧，于是认成了自己——上一帧留在 active，状态链里两个 active，执行窗口只有 1。
+    重建帧要先按挂起入数组，再由 _pull 提成当前帧。
+    """
+    from app.database import async_session
+    from app.services.agent.state_stack_service import get_frames, restore_frame
+
+    async with async_session() as db:
+        await _seed(db)
+        await _open(db, 1)
+        before = (await get_frames(db, 1))[0]
+
+        rebuilt = await restore_frame(db, 1, "gone-frame", "group:9")
+        await db.commit()
+        assert rebuilt["id"] == "gone-frame" and rebuilt["status"] == "active"
+
+        frames = await get_frames(db, 1)
+        assert [f["status"] for f in frames].count("active") == 1, frames
+        assert next(f for f in frames if f["id"] == before["id"])["status"] == "suspended"
 
 async def test_retired_backlog_has_a_hard_floor(migrated_db):
     """挂起也不能无限堆积：超过 capacity×2，平台代销最旧的，并在当前帧留一条待投递通知
@@ -268,6 +323,39 @@ async def test_duplicate_frames_are_merged_at_the_write_point(migrated_db):
         assert ended[0]["merged_into"] == new["id"], "归并要留痕：它不是他自己结束的"
 
 
+async def test_merge_does_not_move_metadata_markers(migrated_db):
+    """归并不搬标记字段：merged_into / retired_at 只属于被并的那条帧
+
+    被并帧若被按 id 复活、再归并一次，标记跟着搬就会变成"幸存者说自己是被并的"或
+    "幸存者被标成待交接"——两种都是会误导容量闸与后事投递的脏状态。
+    """
+    from app.database import async_session
+    from app.services.agent.state_stack_service import _save, get_frames
+    from app.utils.pure.state_stack import context_frames, make_state_frame
+
+    async with async_session() as db:
+        await _seed(db)
+        keeper = make_state_frame(type_="group_chat", context_ref="group:1", doing="活的")
+        keeper["status"] = "active"
+        keeper["last_active_at"] = "2026-02-01T00:00:00+00:00"
+        copy = make_state_frame(type_="group_chat", context_ref="group:1", doing="副本")
+        copy["status"] = "suspended"
+        copy["last_active_at"] = "2026-01-01T00:00:00+00:00"
+        copy["merged_into"] = "ghost"
+        copy["retired_at"] = "2026-01-02T00:00:00+00:00"
+
+        await _save(db, 1, [copy, keeper])
+        await db.commit()
+
+        frames = await get_frames(db, 1)
+        live = context_frames(frames, "group:1")
+        assert [f["id"] for f in live] == [keeper["id"]], "当前帧优先留下来"
+        assert "merged_into" not in live[0], "幸存者不能说自己是被人并掉的"
+        assert "retired_at" not in live[0], "幸存者不能继承别人的待交接标记"
+        merged = next(f for f in frames if f["id"] == copy["id"])
+        assert merged["merged_into"] == keeper["id"], "留痕记的是真正的幸存者"
+
+
 async def test_merge_keeps_temporary_facts(migrated_db):
     """归并不丢临时事实：pending_notices / notes / tail 与交接包的原文尾巴取并集"""
     from app.database import async_session
@@ -301,8 +389,8 @@ async def test_merge_keeps_temporary_facts(migrated_db):
 async def test_a_finished_frame_does_not_block_the_next_one_in_the_same_group(migrated_db):
     """同一个群上一次已经收工（帧 ended 还躺在数组末尾）时，再来消息必须重新压帧。
 
-    回归：栈顶判定原来只比 context_ref、不看 status，于是这个会话再也压不出帧——
-    运行集合一直空着，那几轮对话既没有状态身份（日志全落「无状态」），也没有交接摘要。
+    回归：当前帧判定原来只比 context_ref、不看 status，于是这个会话再也压不出帧——
+    状态链一直空着，那几轮对话既没有状态身份（日志全落「无状态」），也没有交接摘要。
     """
     from app.database import async_session
     from app.services.agent.state_stack_service import (
@@ -323,3 +411,69 @@ async def test_a_finished_frame_does_not_block_the_next_one_in_the_same_group(mi
         assert len(live) == 1 and live[0].get("context_ref") == "group:69", live
         assert live[0].get("status") == "active", live
         assert (await get_state_stack_summary(db, 1)).strip(), "重新压帧后摘要不能为空"
+
+async def test_the_same_conversation_revives_its_own_frame(migrated_db):
+    """这个状态的帧出了链，消息再来时也要把它拉起来，不能另建一条。
+
+    帧 id 是闹钟/计划板记着的长期指针，换一条等于让指针指向空气；环境锁、帧清单、
+    便签副本、原文尾巴也都挂在那一条上——新建一条等于把这段会话的状态清零重来。
+    """
+    from app.database import async_session
+    from app.services.agent.state_stack_service import (
+        close_state, ensure_active_frame, get_frames, read_frame_env, write_frame_env,
+    )
+
+    async with async_session() as db:
+        await _seed(db)
+        await _open(db, 1)
+        first = (await get_frames(db, 1))[0]
+        ref = first["context_ref"]
+        await write_frame_env(db, 1, ref, locked={"channel": "qq", "member_num": 21},
+                              notified={"channel": "qq", "member_num": 21})
+        await db.commit()
+
+        await close_state(db, 1)                      # 他关掉这段会话：出链，记录留着
+        await db.commit()
+        assert (await get_frames(db, 1))[0]["status"] == "ended"
+
+        await ensure_active_frame(db, 1, "group_chat", ref, "群1", "某人")   # 外界又有人说话
+        await db.commit()
+
+        frames = await get_frames(db, 1)
+        assert len(frames) == 1, "同一个状态不该攒出第二条帧"
+        assert frames[0]["id"] == first["id"], "拉起的必须是原来那条，帧 id 不变"
+        assert frames[0]["status"] == "active"
+        assert "外界环境改变" in frames[0]["why"], frames[0]["why"]
+        assert (await read_frame_env(db, 1, ref))[1] == {"channel": "qq", "member_num": 21}, \
+            "环境锁跟着那条帧回来，头部字节不变"
+
+
+async def test_push_state_revives_the_conversation_frame_instead_of_pushing_another(migrated_db):
+    """他自己切回同一段会话，也认那一条帧：push 不是"再造一帧"。
+
+    切会话（ensure_active_frame）、他自己压帧（push_state）、插件代建（enter_frame）认帧
+    走同一个口（pure.frame_of），所以三条路径谁都不会为同一段会话另起一条。
+    """
+    from app.database import async_session
+    from app.services.agent.state_stack_service import close_state, get_frames, push_state
+    from app.utils.pure.state_stack import make_state_frame
+
+    async with async_session() as db:
+        await _seed(db)
+        await _open(db, 1)
+        first = (await get_frames(db, 1))[0]
+        await close_state(db, 1)
+        await db.commit()
+
+        pushed = make_state_frame(
+            type_="group_chat", context_ref=first["context_ref"],
+            label='群「群1」', why="回去看看", doing="在群里等回复",
+        )
+        await push_state(db, 1, pushed)
+        await db.commit()
+
+        frames = await get_frames(db, 1)
+        assert len(frames) == 1, "同一段会话只该有一帧"
+        assert frames[0]["id"] == first["id"], "复活的是原来那条，帧 id 不变"
+        assert frames[0]["status"] == "active"
+        assert frames[0]["doing"] == "在群里等回复", "这次给的字段要写回那一帧"
