@@ -18,6 +18,8 @@
 | [写一个通道插件](./channel-plugins.md) | 外部平台怎么接：`channel` 块、出站三条、@ 翻译、通道自测、全量事件、信任边界 |
 | [世界工具插件开发](./world_tools_plugin.md) | 给群视界加一个工具：契约、注册、展示文案、外部目录、性能（中英双语） |
 | [环境上报接口](./environment-api.md) | 插件向平台上报会话环境的公共契约：一个方法、扁平返回、一条判定、`text` 覆盖渲染 |
+| [插件帧](./plugin-frames.md) | 插件替 AI 建状态帧：manifest 的 `frames` 声明、命名空间边界、四个接口；帧仍归 AI，它自己的状态工具照常管 |
+| [插件存储](./plugin-storage.md) | 申请自己的表：`migrations/NNNN_*.py`、表名前缀与 63 字节预算、只前滚与 checksum、卸载默认保数据 |
 
 ## 建议阅读顺序
 

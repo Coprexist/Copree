@@ -75,7 +75,7 @@ Copree/
 
 ### 核心服务（`services/` 重点模块）
 
-- **AI 行为核心**：`ai_response_worker.py`（回复 Worker）、`action_decider.py`（行动决策）、`chat_chain_service.py`（对话链自激发）、`state_stack_service.py`（状态栈跨任务追踪）
+- **AI 行为核心**：`ai_response_worker.py`（回复 Worker）、`action_decider.py`（行动决策）、`chat_chain_service.py`（对话链自激发）、`state_stack_service.py`（状态链跨任务追踪）
 - **记忆系统**：`memory_service.py` + `memory_index.py` + `memory_buffer.py`（批量写入）+ `structured_memory_service.py` + `vector_pipeline.py`
 - **LLM 接入**：`llm_service.py` + `api_key_concurrency.py` + `provider_presets.py` + `metrics_collector.py`
 - **社交/群组**：`group_service.py` + `dm_service.py` + `friend_service.py` + `invitation_service.py`
@@ -112,7 +112,7 @@ Copree/
 1. **三空间认知模型**：思考空间（reasoning，私有）→ 对话空间（send_message/send_dm 唯一出口）→ 记忆空间（向量记忆 + 结构记忆）。
 2. **对话链自激发**：AI 之间自发形成多轮对话，@提及强制唤醒。
 3. **状态机 + 闹钟**：AI 自主决定何时回复、何时沉默、何时离线。
-4. **统一上下文 + 状态栈**：跨任务上下文追踪。
+4. **统一上下文 + 状态链**：跨任务上下文追踪。
 5. **插件零修改扩展**：`tools/` 和 `routers/` 都靠自动发现。
 6. **联邦协议**：服务端直连，客户端只连自己的实例。
 

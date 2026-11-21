@@ -22,10 +22,13 @@
 ## 原文尾巴
 
 - 位置：切会话那一轮的尾部（历史之后、当前时间之前），只出现一次。
-- 窗口：**4 轮对话 / 1200 字**（`app/utils/pure/state_stack.py: frame_tail`）。
-  实测：那次跨对话测试的契约落在倒数第 3 个用户轮上，2 轮/1200 字装不下（3 条，不含契约）；
-  4 轮/1200 字装得下（7 条、1136 字、含契约原文）；4 轮/2000 字结果**完全一样**——
-  多给的字数是浪费，别拿 token 换保底。
+- 窗口：**2 轮对话 / 400 字**（`app/utils/pure/state_stack.py: frame_tail`；两个数在 runtime
+  配置里可调：`handoff_tail_exchanges` / `handoff_tail_chars`）。
+  **2026-11-01 修订**：此前是 4 轮 / 1200 字，理由是实测里那次契约落在倒数第 3 个用户轮上
+  （见本文末尾的实验记录）。现在改为由**经历行**承担「那一场干过什么」——切场第一轮会把
+  刚离开那一场的 `key_note` 行补进账本（见 `docs/dev/conversation_history.md` §5.1），
+  原文只负责「最后说到哪」。代价是契约原文的保底变薄：约定与暗号要靠 `key_note`
+  与跨状态便签带过去，不能再指望原文窗口。
 - 存放：会话的状态帧（`agents.state_stack` 的 `tail` 字段），切走时随交接打包带走
   （`handoff.tail`），注入后清空。
 - 标签写两条边界（`format_handoff_tail`）：**别串台**（不要在群里回应私信的内容）+
@@ -101,6 +104,11 @@
 - 便签投递后：第一轮 prompt index 1 = 便签块，第二轮两轮公共前缀 26 条、便签在 index 1 之内
   （即**在缓存前缀里**）、字节一致；记录过期或删除后本会话那份都还在（过户后归锁管）。
 
+> **2026-11-01 后续**：窗口已改回 2 轮 / 400 字。上面第 1 条原因（契约落在窗口外）不再由原文
+> 兜底——切场第一轮会把刚离开那一场的经历行补进账本（`docs/dev/conversation_history.md` §5.1），
+> 由 `key_note` 里写下的「下一步 / 待办」接住；本文件那次的教训仍然成立：**契约必须写进
+> key_note 或便签**，只靠原文窗口会丢。
+
 ## 相关代码
 
 - `app/utils/pure/state_stack.py`：`frame_tail` / `format_handoff_tail` / 帧字段白名单
@@ -109,8 +117,11 @@
 - `app/utils/pure/cross_state_note.py` / `app/services/agent/cross_state_note_service.py`：
   便签纯逻辑与投递
 - `app/tools/self_management/cross_state_note.py`：AI 侧工具
-- `app/ai/llm.py`：`_inject_cross_state_context`（尾巴，尾部）、`_deliver_frame_notes`（便签，账本一次性条目）、
-  `_deliver_friend_requests`（好友申请，挂在 `_collect_injection_events` 里）
+- `app/ai/llm.py`：`_inject_cross_state_context`（尾巴，尾部）、`_deliver_recollection`（记忆 + 经历，账本条目）、
+  `_deliver_frame_notes`（便签，账本一次性条目）、`_deliver_friend_requests`（好友申请，挂在 `_collect_injection_events` 里）
+- 经历侧：`app/models/agent_experience.py`、`app/utils/pure/experience_entry.py`、
+  `app/services/experience/`（写与投递；世界侧在 `world_experience.py`）、
+  `app/tools/self_management/note_experience.py`、`app/tools/world/note_experience.py`
 - **待处理好友申请**（本批新增，`_collect_injection_events` 的一个来源）：`_deliver_friend_requests` 群聊与私信
   两条链路共用；一条申请 = 账本里一条 notice（ref `friend_request:<id>`，带申请 id 与留言），只投一次；
   处理掉 / 对方撤回后补一条作废通知（`drop_on_unlock`，只活到解锁）；幂等依据是账本自己的 ref，

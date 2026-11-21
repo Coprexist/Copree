@@ -23,7 +23,7 @@
 
 | 事实 | 数据 | 含义 |
 |------|------|------|
-| 状态栈是 `agents.state_stack` 一列 JSON，同时装两类帧 | 全站 39 帧**全是情景帧**（dm/group_chat），任务帧 0 个；`paused`/`completed`/`closed` 一个都没有 | `push_state`/`close_state` 这套从上线到现在没被真正用过 |
+| 状态链是 `agents.state_stack` 一列 JSON，同时装两类帧 | 全站 39 帧**全是情景帧**（dm/group_chat），任务帧 0 个；`paused`/`completed`/`closed` 一个都没有 | `push_state`/`close_state` 这套从上线到现在没被真正用过 |
 | **帧 id 长期有效**（现状） | 帧全量保留：`pop_state` / `close_state` 只改 status，只有 `finish_frame`（他交接完）与平台代销会删记录 | 闹钟绑 `frame_id` 因此稳定；重建只发生在"这个 id 从来没存在过"时 |
 | 帧容量 31 | `agents.frame_capacity`（默认 31，AI 可配）；超限按档位处置**最久没被调用**的非当前帧——接手后事的（`retire_handover_self` 开）挂起待交接，不接手的平台代销；`push_state` 不再拒绝 | 本机最深 5 层；触发条件是「同一 AI 在 32 个以上会话里还有帧」 |
 | `agent_alarms` 是**可变行** | `update_alarm` 就地改 wake_at/task，cancel/fire 改 status | 没有版本列、没有事件表：所以「变没变」只能投递时比渲染文本现算（§3.2），而不是查版本号 |
@@ -66,18 +66,21 @@
 ### 3.4 唤醒与状态
 
 唤醒侧保持薄：**说清「你被哪条闹钟唤醒、当初要做什么」+ 把状态恢复回去**，不做别的。
-- 恢复按 `alarm.frame_id`（该唤醒谁）：帧还在栈里 → 回跳到它；已离栈 → 按 `origin_context_ref` 重建同型帧压栈，再跑任务。
+- 恢复按 `alarm.frame_id`（该唤醒谁）：帧还在链上 → 回跳到它；已出状态链 → 按 `origin_context_ref` 重建同型帧挂上链尾，再跑任务。
   这样「叫醒的是那个状态下的他」，任务描述里的上下文才成立。
 - 归属只记两个事实，都在闹钟行上（单一来源）：`origin_context_ref`（谁拉起的，口径就是账本会话键：群 `group:{id}`、
   私信 `session_id`）、`frame_id`（该唤醒谁）。
   **「该通知谁」不落列**——它是这两者推出来的两类读者（本会话的、排给别处的），存一份就是第二份真相。
-- 帧退出运行集合（`pop_state` / `close_state`）时**不静默删计划**：记一条「状态 X 已关闭，名下还有 N 条没到点」，
+- 帧退出状态链（`pop_state` / `close_state`）时**不静默删计划**：记一条「状态 X 已关闭，名下还有 N 条没到点」，
   让 AI 下次醒着时自己改派或取消。静默删等于丢东西。（帧本身还在存储里，等他交接完再 `finish_frame` 删。）
 
 ### 3.5 开关
 
 - `agents.plan_injection_enabled`（**普通布尔列**，不加进 `context_config`：那份 JSON 现在前后端都没有 API 和 UI，塞进去等于把开关藏起来）。
-- 进 `utils/pure/presets.py` 的 `_STRONG_BOOL_PARAMS`；`CONFIG_PROFILES` 三档默认：chat 关 / immersive 关 / digital_life 开。
+- 进 `utils/pure/presets.py` 的 `_STRONG_BOOL_PARAMS`；`CONFIG_PROFILES` 三档默认**全开**（2026-11-05 从「chat 关 /
+  immersive 关 / digital_life 开」改成全开）：解锁点之后 AI 得知道「自己还有哪些闹钟」，跟帧清单同一个理由。
+  代价不随轮数涨——一条闹钟行都没有的 AI 查一次 `agent_alarms` 就返回（不读账本、不落条目），
+  有闹钟的只在板子真的变了时才落一条。要关就单独改这一列。
 - **细档也要给默认值**：细档（`chat_low_power` / `immersive_roleplay` / `digital_thinker` …）是**前端概念**，
   后端只认三档 `config_profile`，所以默认值要同时写进 `frontend/src/components/agent-create/presets.ts` 的 `SUB_OPTIONS[i].params`。
 - UI：`AgentSettingsModal.tsx` 加一格、`CreateAgentModal.tsx` 同步；三语文案加在 `frontend/src/i18n/translations.ts` 的 `preset.*` 附近。
@@ -150,12 +153,19 @@
 ## 七、可选前置与后续（不做也能上）
 
 1. **情景帧与任务帧分家**：现在两类帧挤在一个数组、共用 10 层上限，而情景帧本该按会话长期保留。
-   做了它，帧 id 才可能是长期标识；不做，就靠 3.4 的离栈通知兜底。
+   做了它，帧 id 才可能是长期标识；不做，就靠 3.4 的离链通知兜底。
 2. **`make_entry` 的 kind 兜底**：现在是 `message`（未声明/未知的 kind 会被改写成它），建议改成通用 `system` 类。
    kind 只活在账本里（`entries_to_messages` 投影只留 role + content，前端日志读的是投影后的 messages），加 kind 不影响前端显示。
 3. **唤醒提示词里也摆一次计划板**：闹钟唤醒走的是独立提示词（不读账本、不进历史），所以那一轮看不见板子。
    要做就在 `_process_alarm_event` 里按 `origin_context_ref` 渲染一次、当尾部 system 块塞进去（与它现在注入记忆的方式同形）。
    本次没做：唤醒轮本来就是冷启动，而板子已经会在那个状态的下一次正常轮次里出现。
+4. **一个环境多个帧，由代理决策挑醒哪一帧**：现在是"身份 = context_ref"，一个环境只有一帧。
+   往后再放开：同一个环境（同一段群聊 / 世界）按"他在做的不同事情"可以有多个帧（群里闲聊 vs 在群里排计划），
+   代理决策（`services/brain/proxy_judge.py`）出来时由它决定先醒哪一帧，专注度就落在选中
+   那一帧上。这会推翻"身份 = context_ref"这条不变式，身份键要重新设计（context_ref + 焦点 /
+   用途），到时候再复议。
+   位置已经留好：认帧只有 `pure.frame_of` 一个口，改成"按焦点挑"不必动调用点；0109 只清历史
+   重复帧，不往库里加唯一约束，放开时不必先拆约束。本次不做。
 
 ## 八、顺带记录：记忆注入那一半的现状
 

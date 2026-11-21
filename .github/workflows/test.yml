@@ -102,3 +102,14 @@ jobs:
       #（用户看到 admin.addProvider 这种源码串），这里用静态检查兜住
       - name: i18n keys
         run: npm run i18n:check
+
+      # UI 标准棘轮：手写按钮 / 输入框只减不增（基线见 frontend/ui-baseline.json）。
+      # 迁完一批跑 npm run ui:check:update 下调基线；新代码多写一个手写控件就红。
+      - name: UI standards
+        run: npm run ui:check
+
+      # proxy 前缀对账：后端「浏览器直接访问的挂根路径」（browser_paths.py）必须与服务端
+      # 转发规则一一对应。少一条，浏览器就落进 SPA fallback 看到自制的 404——协议端控制台
+      # 从 /qq-napcat 改成 /channels 之后就是这么坏的（vite 还留着旧键，新键没人转发）。
+      - name: Proxy prefixes
+        run: npm run proxy:check

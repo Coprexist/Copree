@@ -24,7 +24,8 @@
 2. **生命周期复用**：service 插件的 `start/stop/get_status` 直接用现有 `ServicePlugin`/`PluginRegistry`，不新造
 3. **装好即可用**：目录出现 → 登记 → 按期望状态启动；关闭/删目录 → 先 `stop()` 再回收，不留后台残余
 4. **凭据有地方放**：插件级配置有唯一存储与唯一读取入口，机密加密落库、永不回显
-5. **概念最少**：作者只写一个 `plugin.py`，声明 + 行为 + 配置 schema 合一（延续 v2 原则）
+5. **概念最少**：作者只写一个入口文件，声明 + 行为 + 配置 schema 合一（延续 v2 原则）；代码多到
+   一个文件放不下时，可以按普通 Python 包拆成同目录多文件（见 3.1.1），平台两边都支持
 
 ## 3. 契约
 
@@ -33,12 +34,31 @@
 ```
 plugins/
   qq-channel/
-    plugin.json      # 展示元数据（category: "service"）
-    plugin.py        # @service 装饰器：声明 + 行为 + config_schema 合一
+    plugin.json      # 展示元数据（category: "service"；可选 "entry"）
+    plugin.py        # 入口：@service 装饰器，声明 + 装配
+    gateway.py       # 可选：同目录兄弟模块，入口用相对导入取用
 ```
 
 行为入口按 v2 规则推断：`plugin.py` 存在即为行为插件（`catalog.ENTRY_FILE` 仍只登记 JSON 载荷的 skin/skill，
-service 不进 `ENTRY_FILE`——那是个 `json.loads` 表）。
+service 不进 `ENTRY_FILE`——那是个 `json.loads` 表）。入口文件名可用 `plugin.json` 的 `"entry"` 改，
+缺省就是 `plugin.py`。
+
+#### 3.1.1 多文件插件（可选）
+
+平台把插件目录按普通 Python 包导入（包名 `copree_plugins.<插件 id>`），所以入口之外的文件直接写
+相对导入即可：
+
+```python
+# plugins/qq-channel/plugin.py
+from .gateway import QqClient          # 同目录的 gateway.py
+```
+
+规则与边界：
+
+- 子模块放在插件目录内即可，嵌套目录也能用（`from .protocol.frames import …`）；
+- 重扫会把包连同子模块一起重新导入：改过的兄弟文件立刻生效，不用重启后端；
+- 单文件插件不用改：没有相对导入，就不会去找子模块；
+- 入口文件之外的文件同样随插件包分发与安装，不分两套机制。
 
 ### 3.2 plugin.py（QQ 通道将来的样子）
 
@@ -237,7 +257,9 @@ class QqChannelPlugin(ServicePlugin):
 
 ## 13. 阶段二：QQ 通道插件（已实现）
 
-`backend/plugins/qq-channel/` —— 一个目录 + 一个 `plugin.py`（含 `plugin.json`），走官方 QQ 机器人 API v2：
+`backend/plugins/qq-channel/` —— 一个目录 + `plugin.py` 入口（含 `plugin.json`；大了可以按职责拆同目录模块，
+它现在是 `common` / `inbound` / `outbound` / `identity` / `format` / `gateway` / `spec` 加一个装配入口），
+走官方 QQ 机器人 API v2：
 
 | 方向 | 做法 |
 |---|---|
@@ -246,7 +268,7 @@ class QqChannelPlugin(ServicePlugin):
 | 出 Copree | 注册到 `chat.outbound` 的出口；只转发绑定群里 **AI** 发的消息 |
 | 发 QQ | 群 `POST /v2/groups/{openid}/messages`、私聊 `POST /v2/users/{openid}/messages`；优先被动回复（带 `msg_id`：群 5 分钟/5 次、私聊 60 分钟/4 次），超时/超次转主动消息，并按 20/关系/分钟、60/Bot/分钟 限频 |
 
-配置项（每个实例一份，加密项走插件配置表）：`app_id`、`client_secret`(secret)、`target_agent`、
+配置项（每个实例一份，加密项走插件配置表）：`app_id`、`client_secret`(secret)、`target_agent_id`（认人）、`target_agent`（显示名）、
 `copree_group_id`（可留空 = 只做私聊）、`qq_group_allowlist`、`dm_policy`、`dm_allowlist`。
 **多实例**：一个实例 = 一个 QQ 机器人 + 它背后的那个 AI；「每个 AI 绑自己的机器人」就是加几个实例
 （见 §13.5）。私聊见 §13.6。
@@ -264,7 +286,8 @@ class QqChannelPlugin(ServicePlugin):
 ### 已知限制（v1，写在插件文件头，免得被当成 bug）
 
 - 多个 QQ 群共用一个 Copree 群时，**群**回复回到最近一次来消息的那个 QQ 群（私聊不受影响）
-- 富媒体不回传；收到的图片/语音/文件转成文字占位（语音优先用官方给好的 `asr_refer_text`）
+- 图片双向通了（入站落站内附件、出站发 `msg_type=7` 图片消息，见 channel-plugins.md §4.8）；
+  语音/视频/普通文件仍是文字占位（语音优先用官方给好的 `asr_refer_text`）
 - 私聊不校验"是不是 AI 的创造者"：QQ 侧没有身份锚，认人要靠绑定流程（下一步）
 - 改配置需要重启这个实例（凭据在 `start()` 时读取并生效）
 

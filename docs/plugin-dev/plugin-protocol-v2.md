@@ -126,6 +126,13 @@ process.stdin.on('data', async (buf) => {
 - `register_action_handler(type, owner=None)` / `register_inject_handler(type, owner=None)` 签名扩展
 - 2 处分发查找：`entry = table.get(type); handler = entry[1] if entry else None`
 - 内置 handler owner=None，永不回收；插件 handler owner=plugin_id，停用精确回收
+- 工具（`ToolRegistry`）同理，但归属**按类的模块来源判定**、不看加载上下文：
+  定义在 `app.tools.*` 下的一律 `owner=""`（平台内置，卸载任何插件都带不走），
+  其余归当时加载的那个插件（插件加载器用 `_aisc_plugin_<id>` 导入）。
+  为什么不能读上下文：插件 `import app.tools` 会触发内置工具模块**首次导入**，那一刻
+  上下文正是该插件，整包内置工具会被打上它的 owner——之后重扫/卸载这个插件就把它们一起
+  回收了（2026-11-06 线上：重扫 bilibili 回收了 94 个工具，`send_gm` / `end_turn` /
+  `pop_state` / `set_alarm` 全没了，进程里只剩插件自己那 18 个）。
 
 ## 6. skill_bridge 改动（加载/卸载，单一来源）
 
@@ -182,12 +189,23 @@ def _unload_plugin(plugin_id: str) -> None:
 两条规矩由此而来：
 
 1. **平台内部状态别自己拼**：账本条目的 `flags`（`drop_on_unlock` / `seen` / `compressible`）是
-   平台语义位。要留通知就走公共面 `api.report_notice(db, agent, context_ref, text, ref=…, transient=…)`：
+   平台语义位。要留通知就走公共面，两层任选其一：
+   - `api.notify_agent(agent_id, text, ref=…, context=ctx)` —— **一步到位**：自己开会话、查 agent、
+     从工具 `execute()` 拿到的 `context`（`group_id` / `session_id`）里拼会话键、提交。
+     返回 True = 真写进去了；把「推进游标 / 记已读」绑在这个返回值上，「标成已读的一定还能翻到」就是句实话。
+   - `api.report_notice(db, agent, context_ref, text, ref=…, transient=…)` —— 已经有 `db`、
+     要把这条通知和自己那笔写放同一个事务时用（只写不提交，事务边界留给调用方）。
    插件只说「哪段会话、说了什么、是不是投一次就够」，条目长什么样、`seen` 什么时候打由平台定。
    这也是 JS 插件唯一走得通的路——**跨执行器同一面**。
 2. **业务数据别塞进平台字段**：幂等锚点写条目的 `ref`（如 `channel_mode:full`），`flags` 不承担
    业务含义。`append` 写入时会剥离调用方传的 `seen`——那不是安全闸（同进程绕得过去），
    是别让照抄示例的人把语义写反。
+3. **写库的事务要短，尤其是别把「等外部 I/O」包进去**：插件自己开会话写库是允许的
+   （`notify_agent` 就是这么做的），但那笔事务必须在拿到外部结果之后才开、写完立刻提交；
+   反过来，**不要在事务开着的时候去等网络**（抓 B 站、等模型都不行）。平台侧已经从另一头补上：
+   回合在派发工具前、调模型前先提交（见 `docs/dev/conversation_history.md` §13「第六批」）。
+   两边都守住，才不会有 2026-11-07 那种「回合等工具、工具等回合」的互等——那次工具为了写账本
+   自己开了第二个会话，撞在回合未提交的唯一索引上，全站 AI 队列跟着停了 12 小时。
 
 ## 10. 为什么这是优雅的
 

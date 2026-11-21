@@ -634,5 +634,381 @@ GetAllUsers 前端在调但服务端是 404），硬做只能重启协议端再�
 **验证**：`test_qq_channel_plugin` 77/77、五个通道套件 **119/119**；容器内按生产同一条加载路径
 （`packages.load`）导入通过。仍是工作区改动，未提交、未重启。
 
+> 2026-11-14 复审更正：上面那层 `_plugin_class()` 懒取是多余的——`_readable_content` /
+> `_scene_ext` 与调用方同在 `inbound.py`，直接 `InboundMixin.…` 调即可，已去掉这个间接层。
 
+## 2026-11-14 · QQ 侧图片双向：入站落站内附件、出站发图片消息
+
+**现象**：QQ 侧收发不了图片/表情。入站 `_readable_content` 把所有附件压成 `[图片]`/`[语音]`/
+`[文件]` 占位，图片内容完全丢失；出站只有正文（Markdown 或纯文本），没有任何上传或发图能力。
+主人还点了另一条约束：**有的 QQ 客户端不渲染 Markdown**，所以"把图嵌进 MD"这条路不能指望。
+
+**改法**：
+
+- 入站（`inbound.py` → `outbound._deliver_to_group / _deliver_to_dm`）：`media.event_attachments(d)`
+  挑出**带 url 的图片**，下载后 `file_service.upload_file` 存到 `attachments/qq/`，把
+  `{file_id, path, name, size, mime_type}` 塞进 `send_gm_message / send_dm_message(attachments=…)`。
+  多模态上下文只认 `messages.attachments`（`app/utils/multimodal.py`）：图不落库，AI 就永远只
+  看得到 `[图片]`。下载只放行 `multimedia.nt.qq.com.cn` / `gchat.qpic.cn`，20 秒超时、15MB 上限，
+  失败就降级（占位还在，消息照落）。
+- 出站（`gateway.py`）：`upload_media` → `POST /v2/{groups|users}/{target}/files`
+  （`file_type=1`、`srv_send_msg=false`、`file_data` 为 base64）拿 `file_info`；`send_media` →
+  `{msg_type: 7, media: {file_info}}`。图片消息是**普通消息类型**，与正文格式无关，纯文本模式
+  照样发、对面照样看得见——这是选它而不选 Markdown 内嵌图的全部理由。
+- 顺序与额度：**文本先、图片后**（主人定）。图片同样占被动回复额度（群 5 次 / 私聊 4 次），
+  `msg_seq` 顺延；额度不够或发失败只记日志并计入 `media_skipped`，不把整条回复判失败。
+- 复用：同一份内容在同一条会话里按 sha1 复用 `file_info`（官方 ttl），不重复上传；上传前按
+  15MB 卡一道（官方 20MB，base64 后 ×4/3）。
+- 出错要**告诉 AI 自己**：原来只有 `_report_unreachable` 往主人私信里写系统通知，AI 的上下文
+  只有账本，它读不到——于是它以为已经发了，下一轮接着聊。现在同一个入口再往 AI 的账本落一条
+  `kind="note"/actor="system"` 便签（`_note_ai`，群用 `group:{id}`、私信用 session_id），
+  并按"整条没发出去"与"文字到了图没到"分别措辞。
+- 边界：语音（要转 silk）、视频（要转码）、普通文件（要带 `file_name`）没做，正文里仍是占位；
+  NapCat 侧这轮不动，留给 `CQ:image` 那条路。
+- 拆文件：`media.py` 只管 QQ 的媒体口径（mime → file_type、取图、大小上限），`gateway.py` 管两个
+  协议调用，`outbound.py` 管"什么时候发、按什么顺序"。
+
+**验证**：`test_qq_channel_plugin` **83/83**（新增 6 个：mime/挑图口径、`upload_media` 复用 +
+`msg_type=7`、先文本后图片与 seq 顺延、入站图落成附件、整条失败落 AI 账本、图片没到落 AI 账本）；
+五个通道套件 **125/125**。
+真机未验（要一条真 QQ 图片消息 + 一次 AI 发图），下次上线后补看 `上传 QQ 媒体` /
+`发 QQ 媒体消息` 两行错误码。仍是工作区改动，未提交。
+
+## 2026-11-14 · QQ 图"看得见却看不见内容"、AI 收不进自己空间
+
+**现象**：群里先发一张图、紧接着一句「发了，收到了吗」，AI 回「还是只有[图片]，我这边没收到内容」。
+
+**排查**（真机 + 库 + 日志）：**入站是成功的**。群 81 的消息 5140 有
+`attachments=[{file_id:190, path:attachments/qq/5F4AD139….png, size:279373}]`，物理文件也在；
+07:42 那次请求日志里有 `已注入图片: …png (275KB)`。真正的坑有两层，第一层是**决策代理没让 AI 醒**：
+
+```
+23:45:04 decision=none, priority=55,
+         reason=AI Deepseek 大肥鱼 代理判断不打扰：只是发图，没叫我或派活
+23:46:13 decision=reply, priority=60,
+         reason=代理判断该醒：书爱在确认我能否收到图片，接话即可
+```
+
+代理只读文本，而正文里图片早被压成 `[图片]`——它看到的是一条"没有内容"的消息，判"不用打扰"
+完全合理。第二层是注入时机：`_attach_attachments_to_message` 只给"最后一条用户消息"注入真图
+字节，AI 被后面那句文字唤醒时最新一条是纯文字，图退化成历史里的 `[图片]` 标记——07:45/07:46
+两次请求都没有 `已注入图片` 行。另外同一条消息里 `[图片]` 会出现两次（正文占位 + 附件标记）。
+教训：先看"有没有开轮"，再看"开了轮给了什么"——只看请求日志会漏掉根本没发生的请求。
+
+**改法**：
+
+- 代理判定先拿到附件事实：`_attachment_note`（`app/ai/decider.py`）从消息行算出「（这条带了
+  1 张图片、1 个文件（稿子.pdf））」塞进判定上下文，判定准则里补一条"同伴发来图片或文件
+  （哪怕没配文字）通常是给你看东西，值得起身看一眼"。
+- **代理终于看得懂自己说的话**：原来 `build_context` 直接渲染账本 actor，AI 自己那几行标成
+  `- self：…`——模型读成一个叫 self 的群成员，于是"你随便发一张，我当场念给你听"这句等于没
+  说过，下一张图自然判"没叫我"。现在映射成人话（`self → 你`、`user → 群成员`），并在准则里
+  写明「你：」开头的是自己说过的话、新消息在接你的话通常该起身。
+- 去重按 **消息 id** 而不是正文：`recent_ledger` 原来用"待判正文出现在最后一条里"来去重，
+  图片那条正文就是 `[图片]`，很容易误删上一条真历史。现在 `message_id` 对齐 `ref` 才删。
+- 注入范围从"最后一条用户消息"扩成"**本轮**（最后一条 AI 消息之后）里最近的一张带图消息：
+  `_turn_image_of` 往回找，仍只注入一张、不跨轮。先图后文、连发两张都覆盖；token 与 prompt
+  cache 的账没变（还是一条图）。
+- 顺手补 AI 的"收进自己空间"：平台工具 `file_fetch`（`app/tools/file_operations/file_fetch.py`）
+  + `file_service.ai_fetch_attachment`。群聊/私信都能收、任何文件类型都收；**硬链接**到
+  `agents/{id}/inbox/`，不复制字节，原件仍归发送者。不带 `file_id` 时取当前会话最近一条带附件的消息。
+- 修了一个权限换算 bug：`_file_attached_to_visible_message` 用 `agents.id` 去查群成员表/私信参与方，
+  而那里记的是 AI 的虚拟账号 `users.id`——于是"附在它自己群里的附件"被判无权（`file_fetch` 第一次
+  跑就撞上）。现在两层身份都认。
+
+**验证**：新增 `test_attachment_fetch`（群聊收纳、私信收纳、别的 AI 收不到）3 条 +
+`test_attachments_in_context` 的"先图后文"回归 1 条 + `test_proxy_judge` 的附件事实 2 条；
+`test_proxy_judge / test_attachment_fetch / test_attachments_in_context / test_file_access /
+test_qq_channel_plugin` 合计 **114/114**。仍是工作区改动，未提交。
+
+## 2026-11-14 · 附件与图片链路的重复实现收口（行为不变）
+
+表情包要按"资源插件 + 平台使用"做，先把底层会被三套写法复制的点收成一处，否则新功能会再长出一版。
+
+- **路径拼法**：`file_service.disk_path(rel)` 成为唯一拼法。之前 `multimodal._read_data_url`、
+  `routers/files.py`（创建目录）、QQ 出站取图各写一遍 `data_dir + 相对路径`。
+  （重命名时踩了一个真坑：原想叫 `physical_path`，但多处函数里已有同名局部变量，
+  `physical_path = physical_path(...)` 直接变成 UnboundLocalError。换了 `disk_path` 才干净。）
+- **附件引用记账**：`file_service.track_attachments(...)` 收口，`chat/gm.py` 与 `chat/dm.py` 不再各抄一段
+  `track_forward_reference` 循环——两处一旦漂离，配额和去重就算到不同人头上。
+- **AI 文件查找**：`file_service.ai_file(db, agent_id, ref)` 收口"前缀 + 查元数据"，`send_file` 不再自己
+  拼 `ai_stored_path` 再查；"归不归它所有"仍由调用方按 metadata 判（读共享文件的路径不受影响）。
+- **`[图片]` 不再叠两次**：`attachment_marks(attachments, said=正文)`——正文已经写了占位就不再补标记。
+  真机上 AI 收到「[图片] [图片]」两个标记，回"只有[图片]两个字"。
+- **图片 mime 一套**：`app/utils/mime.py:IMAGE_MIMES`，多模态（`VISION_MIMES` 沿用旧名）与 QQ 媒体层
+  都从这里取，不再各写一份同样的集合。
+
+**验证**：`test_attachments_in_context / test_multimodal / test_file_access / test_channel_files /
+test_qq_channel_plugin / test_attachment_fetch` 合计 **121/121**（新增标记去重 1 条）。
+仍是工作区改动，未提交。
+
+## 2026-11-14 · 图片表情：入口归一成附件，QQ 发图片消息
+
+按"资源归插件、使用归平台"的分层落地第二步：让**纯图片表情**真的能发出去。
+
+- **入口归一**（`catalog`）：`take_image_faces` 把正文里的 `:id:` / `[表情:名]`（仅图片的那一类）
+  摘掉并收集；`take_image_emoji_attachments` 把它们变成 attachments。`chat/gm.py` 与 `chat/dm.py`
+  各调一次——**唯一入口**，下游（站内渲染、QQ 图片消息、历史标记、file_fetch）只认附件。
+- **资源落成平台文件**（`emoji_asset_file`）：插件里的图**硬链接**到 `data/emoji/<pack>/<file>`
+  并登记 `file_metadata(owner_type="system", owner_id=0, collaboration="open")`；重复调用复用同一行。
+  这样"表情"在平台看来就是一张普通图片，不需要任何新消息类型。
+- **通道做减法**：QQ `_emoji_to_chars` 不再负责"图片表情怎么办"（上游已变附件），只留字符表情
+  与历史兼容写法的清理；顺手把那句"官方 API 不回传富媒体"的过期注释改掉。
+  不在本步：NapCat 的 `CQ:image`（下一步）。
+- **缓存**：`sync_plugins_to_db` 变更后 `invalidate_caches()`；测试里直接改 DB 开关的地方补
+  `_enable_emoji_pack()` 手动失效——两个表情用例以前靠 30 秒缓存空窗侥幸通过，换顺序就红。
+
+**验证**：新增 `test_emoji_image_send`（纯函数摘标记、硬链接+登记幂等、群消息带附件）3 条；
+`test_emoji_image_send / test_qq_channel_plugin / test_attachments_in_context / test_multimodal /
+test_file_access / test_channel_files / test_attachment_fetch` 合计 **124/124**。仍是工作区改动，未提交。
+
+## 2026-11-14 · 表情包成为"平台资源插件"：大肥鱼导入 + AI 级白名单 + 商城类别
+
+按"资源归插件、使用归平台"补上第 3 步：装一个包，AI 在正文里写 `:id:` 就能发图。
+
+- **导库脚本**（`scripts/import_dsh_meme_pack.py`，只用标准库）：读 dsh-meme 的
+  `manifest.json` + `index.db`，把 caption/keywords/tag 原样搬成 `emoji.json` 的 face 字段，
+  图复制进 `<data>/plugins/<pack-id>/`。重跑即更新（图按来源覆盖、旧图清掉）。
+  本次已导入 24 张 → `data/plugins/emoji-dafeiyu`（`license=personal`，不进仓库、不进商城）。
+- **face 多了三段给 AI 读**：`caption` / `keywords` / `mood`（`catalog._emoji_face`），
+  `list_emoji_faces` 一并列出——AI 靠这三段挑"这一句该发哪张图"。
+- **AI 级开关**：新表 `agent_emoji_packs`（migration `0111`）+ `settings.emoji_pack_mode`
+  （默认 `whitelist`）。`catalog.packs_for_agent / packs_for_sender / set_agent_pack` 是唯一入口：
+  入口归一按"谁在说"过滤（AI 只能用被允许的包），`list_emoji_faces` 只列它可用的。
+  人类/系统消息不受 AI 偏好限制——他们写下的表情是平台资源。
+- **接口**：`GET /agents/{id}/emoji-packs`（列表 + 当前开关）与 `PUT …/{pack_id}`（只有主人能改）。
+- **商城类别**：市场 schema 早就支持 `emojipack`，缺的是界面——商城列表加类别筛选（表情包单独一类）、
+  已安装插件的筛选补上 `emojipack`。装包/卸载沿用原有 zip 导入与 `invalidateEmojiPacks()`。
+- **未做**（下一步）：创建者自己上传/制作表情包（需要用户级上传入口与审核口径）、NapCat 的 `CQ:image`、
+  前端 AI 设置页的勾选界面（接口已就绪）。
+
+**验证**：新增 `test_emoji_packs`（白名单默认关、黑名单默认开、AI 发言只带被允许的包）3 条；
+`test_emoji_packs / test_emoji_image_send / test_qq_channel_plugin / test_attachments_in_context /
+test_multimodal / test_file_access / test_channel_files / test_attachment_fetch / test_proxy_judge`
+合计 **142/142**。前端 `tsc -b` 通过。仍是工作区改动，未提交。
+
+> 迁移号踩坑：一开始随手起名 `0105`，与已有的 `0105_proxy_judgements` 撞了 revision id——
+> Alembic 报 "Revision 0105 is present more than once" 并降级成多 head，prestart 迁移失败，
+> 容器进入重启循环。改名 `0111`（down_revision=`0110`）后一次通过。以后加迁移先查 head。
+
+## 2026-11-14 · 表情包落到用户自己手里：AI 设置页勾选 + 创建者自制
+
+前两步把"平台装包、AI 用包"打通，这一步补上两件用户看得见的事。
+
+- **AI 设置页的表情包页签**（`AgentDetailPage` + `EmojiPacksPanel`）：上半是平台装好的包与开关
+  （只有主人能改，非主人只读），下半是"我的表情包"。默认白名单下没勾 = 这个 AI 不用；勾选走
+  已有的 `PUT /agents/{id}/emoji-packs/{pack_id}`，脚本侧仍由 `catalog.packs_for_agent` 一处算。
+- **创建者自制表情包**：`app/services/plugin/emoji_packs.py` + `app/routers/emoji_packs.py`。
+  写出来的就是一个 emojipack 插件（`plugins/<id>/plugin.json + emoji.json + 图`），归属记在
+  manifest 的 `owner_user_id`；id 形如 `emoji-u<用户>-<包名>`，表情短码从包 id 派生
+  （`u12-cat_1`），在全局命名空间里不会撞。接口：`GET /emoji-packs/mine`、`POST /emoji-packs`、
+  `POST /{id}/faces`、`DELETE /{id}/faces/{face_id}`、`DELETE /{id}`。
+- **caption 必填**：一个只有名字的表情，AI 拿不出"什么时候该发"的判断，等于没装——所以上传时
+  必须写一句给 AI 看的说明（关键词/情绪可选）。图走与头像同一条校验
+  （新增 `app/utils/image_validate.py`：类型白名单 + Pillow 解码，谎报成 image/png 的 SVG 拒收），
+  单张 ≤ 4MB，单包 ≤ 256 个表情，每人 ≤ 20 个包。
+- **删包 = 插件卸载**：目录仍走 `store.uninstall_plugin`（拒绝内置包、拒绝越界路径），再清掉
+  `agent_emoji_packs` 里这个包的开关记录——否则同名包重建会"凭空打开"。
+- **顺手收口**：`catalog._emoji_face` → `emoji_face`、`store._slug_ok` → `slug_ok`（写入与扫描
+  共用同一份校验）；"这是不是一张真图"的判定从头像上传里搬进 `utils/image_validate`。
+- **用例顺序坑**：`test_file_access` 显式写 file_metadata id 却不推进序列，套件连着跑时 QQ 入站
+  落图会撞 `file_metadata_pkey`（单跑绿、连着跑红）——补 `setval` 到 100。
+
+**验证**：新增 `test_emoji_pack_upload` 6 条（写盘形状、caption/真图校验、短码→附件、归属、
+删除清理、路由 multipart+权限）；`test_channel_pairing / test_plugin_frames / test_plugin_protocol_v3 /
+test_channel_files / test_file_access / test_attachments_in_context / test_qq_channel_plugin /
+test_emoji_pack* / test_attachment_fetch` 合计 **159/159**；前端 `tsc -b` 与 `i18n:check` 通过；
+容器里实跑一遍建包 → 传图 → 列表 → 静态图 200 → 删包（目录与插件行都无残留）。仍是工作区改动，未提交。
+
+## 2026-11-14 · SVG 文件预览 + 下载格式可选（矢量原图 / PNG）
+
+表情包那条链只收光栅图（同源免鉴权地址不收可执行 XML，见上一条），所以缺的不是「让 SVG 进表情包」，
+而是把用户手上的 SVG **变成** PNG 的那一步。补在文件预览里，两个入口都走同一个弹窗（聊天里的图、
+存储页的文件都从这里打开）。
+
+- **预览本来就支持 SVG**（image/svg+xml 走 img）；这把补了两个真实缺口：只有 viewBox、没有
+  width/height 的 SVG 在弹窗里可能塌成一条线（补 min-w/min-h 120px），以及这种图没有 naturalWidth
+  时缩放会失效（useImageZoom 退到量一次的渲染尺寸当基准）。
+- **下载格式二选一**：FilePreviewModal 的下载按钮在 SVG 上变成菜单——「SVG 原图（矢量）」走原地址，
+  「PNG 图片（尺寸可选）」开一个小弹窗：快捷档位 256/512/1024/2048、原尺寸，或直接填长边像素
+  （16–4096），弹窗里实时显示输出尺寸；上次选过的长边记在 localStorage，常用尺寸一键复用。
+- **为什么在前端转**：后端要光栅化得引入 cairosvg/librsvg 这类重依赖，而预览本来就是浏览器画的；
+  同一个渲染器出图，导出的样子才跟预览一致（PNG 保留透明；默认按 2× 出图、夹在 512–2048，
+  可改成任意长边像素）。
+  不是直接 drawImage 一张 0×0 的 SVG：先按 width/height → viewBox → 512 兜底定尺寸，再改写根元素
+  的 width/height 后重画，矢量才不会糊、也不会得到空白画布。
+- **失败不挡路**：导出炸了在弹窗里报一句，让人改下 SVG 原图——那条永远能用。
+- **「？」帮助统一成一个组件**（components/ui/HelpTip.tsx）：点开小浮层、点外面或 ESC 关；
+  全站原来只有 IconButton 的 title（只能悬浮看，手机上出不来）。已换用：预览弹窗的两处说明、
+  群视界输入栏的计费说明。
+
+### 补记：导出的 PNG "没有透明"是怎么回事
+
+headless Chrome 实测确认导出本身**是保留 alpha 的**（纯透明 SVG 导出后角落 alpha=0、65536 像素里 32238 个透明），
+问题出在文件自己身上：Figma / Illustrator / 图标站导出时经常顺手加一层满幅底色。站内已上传的两张就是：
+coprexist-icon.svg 是 32×32 的 #0d0a17 圆角底，pixel_ruomeng.svg 是 16×16 viewBox 里的 #fdf6ec 满幅底。
+浅色主题下这层白/浅色底与透明分不出来，只会在导出后才暴露。
+
+- **导出面板会检测并给出开关**：直接子节点里「铺满画布 ≥99%、实色填充、不透明、无 transform/filter/mask/clip-path」
+  的矩形算背景层；检测到就在面板**最底下**给「去掉 SVG 自带的满幅底色（#xxxxxx）」，**默认不勾**、标红「不推荐」——
+  这层底往往就是图标本身（coprexist 图标就是深色圆角底），勾了会整块消失、只剩上层图形（用户当场指出了这次误删）。
+- **预览加棋盘格**（.bg-checker）：SVG 预览铺 16px 棋盘格，文件自带的底色与真正的透明一眼可辨。
+- **坐标单位坑**：判定必须用 viewBox 的用户单位比较，不能用渲染像素——pixel_ruomeng.svg 是
+  width=256 height=256 viewBox="0 0 16 16"，按像素比会把 16×16 的满幅底当成「小块」漏掉（实测漏过一次）。
+
+**验证**：headless Chrome 跑真实两张图——icon 默认导出 3300/65536 透明 → 勾掉背景 55790/65536；
+pixel 默认 0 透明 → 勾掉背景 31232/65536（角落 alpha=0）。
+- i18n：filePreview 新增 downloadFormat / downloadAsSvg / downloadAsPng / exportPngTitle /
+  exportPngNatural / exportPngOriginal / exportPngLongestSide / exportPngOutput / exportPngSave /
+  exportPngFailed 三语。
+
+**验证**：前端 tsc -b 与 i18n:check 通过；Vite dev server 对 svgRaster.ts 与 FilePreviewModal.tsx 的
+转译都正常（HMR 已更新）。纯前端改动，没有新增后端接口，仍是工作区改动、未提交。
+
+
+
+
+
+
+
+
+## QQ 语音消息与平台侧语音（TTS）能力（2026-11-14）
+
+**先纠正一个假设：QQ 不需要转 silk。** 实测（2026-11-14 10:49，agent-49 机器人私聊用户）：
+mp3 原文件直接 POST /v2/users/{openid}/files（file_type=3、srv_send_msg=false）拿
+file_info，再 msg_type=7 发消息，客户端**能正常播放**。接口层与客户端都验过了，
+所以平台侧不必背 silk 编码器；silk-wasm（MIT）只 vendor 在插件里当兜底，默认不用。
+
+**降级链（一次性写好顺序，不是每轮试探）**：mp3 当语音（file_type=3）→ 失败退成
+文件（file_type=4，带文件名，对面能下载听）→ 再失败只发文字并在 AI 账本留一条
+「这次没发出去」。注意：客户端不收时接口**仍可能回 200**，这类静默失败只能人耳验证，
+验过的结论要记下来，别反复盲试。
+
+**qq-channel**：media.py 新增 VOICE_MIMES（只认实测过的 mp3）与 is_sendable_voice；
+outbound.py 的媒体循环按图片/语音分流，每次尝试各占一次回复额度（msg_seq 递推），
+两次都失败才计入「没发出去」。用例：test_reply_sends_mp3_as_a_voice_message、
+test_voice_message_rejected_falls_back_to_file（85 条全绿）。
+
+**预设清单**（provider_presets.py）：引入 kind = llm | voice，新增 breeze /
+minimax-cn / minimax-intl 三条语音预设（MiniMax 国内站与国际站互不相通，拆两条让用户选，
+不做自动猜站）。get_all_presets() 默认只返回 LLM —— 遍历预设去取 chat_model 的老代码
+（bootstrap / model_upgrade / world 回退）全部按 kind 过滤，否则语音预设会让它们 KeyError。
+
+**平台侧**：agent_voice_configs（1:1 挂 AI，key 走 Fernet，检测结论一并落库，任何字段
+一改就作废旧结论）；voice_probe.py 按家判定（Breeze 走 GET /v1/api-keys/current，
+200 即合法、额度 0 也算合法；MiniMax 先 /models、404 退成 max_tokens=1 的极小 chat，
+**同时解析 base_resp**，HTTP 200 也可能是 1008/2049）；voice_tts.py 统一产 mp3
+（MiniMax 的 data.audio 是 hex，要解码）；send_voice 工具发**独立一条**语音消息
+（与 send_file 同路：先落站内附件再发）；门控只有一处——没配或没测通，工具不进工具表，
+模型不知道有这功能。
+接口：GET /agents/voice-presets、GET|PUT /agents/{id}/voice、
+POST /agents/{id}/voice/test、POST /agents/{id}/voice/preview（试听，唯一花钱的动作）。
+
+**验证**：后端 131 条相关用例全绿（voice_presets / voice_probe / voice_tts / voice_config /
+api_probe / qq_channel / channel_files）；迁移 0112 已在线上库建表；前端 tsc -b 与
+i18n 闸门（42 命名空间 / 2363 调用点）通过。改动仍全部留在工作区、未提交。
+
+## 本轮线上问题修复（2026-11-14，聊天滚动与「首条未读」定位）
+
+- **往上翻，加载出来的是几周前的零散旧消息**（群 81 真机）：`get_gm_messages()` 的 `before_id` 分支
+  只加了 `Message.id < :before_id`、**没有 ORDER BY**，SQL 给的是物理顺序（≈最早那一批），
+  前端排完序就是「旧消息夹在最新几条上面」。同一函数里 `after_id` 早就按 id 升序，这个镜像分支漏了。
+  复现：`where group_id=81 and id < 5184 limit 20` → `4081 / 3723 / 3537 / 4606 …`；
+  补 `order by id desc` 后 → `5183 … 5154`。
+  修法：`before_id` 补 `desc(Message.id)`；首屏（else 分支）也从 `desc(created_at)` 改成
+  `desc(Message.id)`——三种取法同一口径，同秒插入的两条（AI 回复和人类消息常挤在同一秒）顺序才稳。
+  验证：首屏 20 条 `5198..5217`、往前两页 `5154..5183` / `5144..5163`，三页都严格递增。
+- **刷新后视口落到一周前，中间一大段够不着**：两处叠加。① `loadInitialMessages` 无条件
+  `catchUpFrom(lastReadId)`，把中间那段最多 50 页一口气回填，回填到的第一条又被当成「首条未读」
+  钉到视口——首页就停在一周前；② `loadMessages` 把 `newestIdRef` 写成「这一页的最后一条」，
+  于是每翻一页，下一次追新都从那一页的位置再往前追，存下的已读位置也被一起污染。
+  修法：游标 ref 收敛成**一个**镜像 effect（`messages` 一变才写 oldest/newest，任何加载路径都不再
+  自己写）；首屏不再自动补中间段；`lastRead` 取 `messages` 末条（镜像 effect 在 useLayoutEffect
+  之后才跑，此刻 ref 还是 null）；定位门槛 `AUTO_LOCATE_RECENT = 10`——「首条未读」离末尾超过
+  10 条就不抢视口，直接落到最新。顺带修掉一个老问题：拿不到未读那行元素时以前会停在
+  `scrollTop = 0`（视口在最上面）。
+- **未读为 0 却画出「新消息」分割线**：首屏拿不到 `lastRead` 时，满页分支会凭空
+  `setFirstUnreadId(fetched[0].id)`，把这一页第一条当成未读边界。该分支删掉——没有 `lastRead`
+  就是没有分割线。「跳到首条未读」仍是往前一页 + 200ms 后重定位，要真正跳到更早的未读、
+  并按新行高重算视口，还没做。
+- **同一类缺口（未修，先记下）**：私信分页 `_get_messages()` 两个游标仍按 `created_at` 排序
+  （`backend/app/chat/dm.py`），与群聊修前是同一个病。影响面小（私信天然单线、同秒两条少见），
+  但口径不一致迟早显形；要改就连首屏一起改成 id。
+- **代理把「@ 别人」读成「点名让我」，起身替人接话**（群 77 化学老师，2026-11-14 17:10）：
+  书爱 `<@!120>`（大肥鱼）让他发条语音，化学老师（users 40）跟着回了一句。查下去：
+  开关全开着（`proxy_wake_enabled` / `proxy_wake_enforce` 为真，留白名单只有群 66），
+  这条确实走了代理——`proxy_judgements #464`：wake=t、urgency=normal、fallback=f、
+  deepseek-flash、448ms，理由「点名让我发语音，接我的话」。根因是喂给代理的正文是**裸令牌**
+  （`<@!120> 那你在这里发条语音吧……`，响应日志 `content_preview` 同形），没有任何"这 @ 的是谁"，
+  模型看到一个 @ 就把自己代入；同一套裸输入在 09:05 对另一只 AI 判的却是「叫的是大肥鱼，与我无关」
+  ——不是规则问题，是它在猜。
+  修法：交给代理的正文里把 @ 就地注成 `<@!id>（名字）（不是你）`——代理只会在「没点名本人」
+  时才被问到，所以"不是你"是事实不是推断；名字由 `decider._mention_annotated` 现算
+  （`message_serializer.mention_names` → `display_names`，与账本同一份），渲染复用
+  `render_mention_with_names(extra=…)`，不新增上下文块、也不新增 `judge()` 参数。
+  花销：**+19 字**，只落在带 @ 的消息上（最近 7 天 43/592 = 7.3%）。
+  验证：同一条消息重跑代理——修前 `wake=True why=点名让我发语音，接我的话`，修后
+  `wake=False why=话是对别人说的，没叫我`。用例
+  `test_proxy_judge::test_mention_annotated_marks_who_and_not_you`（把 `extra` 去掉即转红）。
+- **记忆表被写进两种 id 口径，已造成跨用户泄漏**（2026-11-14 排查文件归属时撞见）：
+  `rough_memories.owner_id` 在 AI 侧一律记 `agents.id`（8 处读取都按它过滤、281/283 行也是），
+  但一条遗留的 HTTP 端点（`POST /memories/rough`）让人类/虚拟账号直接往同一张表写、用的是
+  `users.id`，`owner_type` 还标着 `'ai'`。后果两头都坏：AI 写进去的记忆 HTTP 读不到；
+  编号一撞就串门——实测 `agent 3 梦希` ↔ `user 3`、`agent 25 浮生` ↔ `user 25` 都能互读。
+  修法（选的是「这张表只属于 AI」）：整组删掉 `routers/memories.py` 与只给它用的
+  `schemas/memory.py`（全仓 0 调用方，只有历史规格书 `cpec.md` 提过）；存量由迁移 `0115`
+  归正——只改「不是任何 agents.id、但等于某个 agent 虚拟账号」的行，实测 2 行
+  （id 89/90 → `owner_id=25` 浮生），281 行 agents.id 一个字节没动。
+  验证：`/memories/*` 路由已不在 `app.routes`；记忆相关用例 13 条全绿
+  （`test_focus_tools` / `test_memory_anchors` / `test_group_disband`）+ `test_file_access` 5 条。
+- **AI 发自己的文件也被记成「转发」，自己的配额被算掉一份**（2026-11-14 语音批暴露）：判「是不是
+  他的文件」的代码全是 `meta.owner_id == requester_id` 直接比数字，而 `file_metadata.owner_id`
+  记 `agents.id`、消息的 `sender_id` 是虚拟账号 `users.id`——两个号段永不相等（见
+  [id 语义](./id_semantics.md)）。证据：file 214 是 ai:120（agent 49）自己的语音，发送时落了一条
+  `forward ai:120`。修法：判据收敛成一处 `file_service.is_file_owner()`（两种写法都认），
+  `check_file_access` / `delete_file` / `track_forward_reference` / 协作模式与协作者管理
+  五处统一改用它；迁移 `0114` 清存量。实测：`forward` 行 43 → human 27 / ai 3
+  （AI 那 13 条是它发自己文件的误记）。用例
+  `test_file_access::test_ai_sending_its_own_file_is_not_a_forward`（放回旧判据即转红）。
+- **语音不能被 AI 自己转发**（能力缺口，不是故障）：`send_voice` 落在公共 `attachments/voice/`，
+  `send_file` 只认 `agents/{id}/…`，所以要它转发自己的语音必然落空。绕法与改法写在
+  [文件存储与协作系统 §12.5](../文件存储与协作系统.md)。
+- **会话列表的预览不认撤回、不脱彩色标签**（2026-11-14 用户实测：撤回后侧栏还显示原话）：
+  侧栏那一行与站内浮窗都在拼「给人看的一版」，但各走各的——列表直接把原文截断，于是
+  ① 撤回后预览仍挂着原话（刷新也甩不掉，因为 `last_message_preview` 根本不看 `revoked_at`）；
+  ② `[blue]123[/blue]` 显示成标签字面量（`make_preview` 只脱 HTML 尖括号，站内彩色文法没脱）；
+  ③ 纯语音显示成 `voice_20261114104640_1.mp3`。
+  修法：这条口径收成一份 `message_serializer.text_preview()`（@ 换名字 → `plainify_markdown`
+  脱 Markdown 与彩色标签 → 截断 + 附件占位），会话语义再包一层 `preview_of()`（撤回 →
+  「撤回了一条消息」），`gm.list_groups` / `dm.list_dm_sessions` / 浮窗 `message_toast`
+  三处统一改用它；附件占位补 `audio/*` → `[语音]`。前端：撤回成功后刷一次会话列表
+  （私信广播按 `exclude_user_id` 排除发起者，会话连接不会替它改），别人撤你的随
+  `message_revoked` 一起刷。
+  验证：库里 5087/5075（已撤回）→「撤回了一条消息」、5088（`[blue]123[/blue]`）→「123」、
+  1_4 语音 →「[语音]」；`test_message_preview` 4 条新用例 +
+  `test_message_revoke` / `test_list_query_count` / `test_dm_unread` / `test_gm_dm_symmetry` 全绿。
+- **语音在列表里没有时长**（同一天的追问：为什么不是 `[语音 1'42"]`）：attachments 快照里
+  只有文件名与大小。时长是**文件的不可变属性**，于是加 `file_metadata.duration_ms`（迁移 `0116`）：
+  上传音频时 `utils/audio_probe.audio_duration_ms()` 探一次（mp3 读帧头——CBR 按码率、
+  VBR 读首帧 Xing/Info 的帧数；wav 按 byte_rate；都不引 ffmpeg/mutagen），探测失败留空。
+  判据沿用 transcript 那次的结论但**方向相反**：会变的（文稿）只存一处、读时按 id 取；
+  不会变的（时长）可以随快照走一份，列表预览因此不必为每条会话再查库——`send_voice`
+  写快照时带上 `duration_ms`，`make_preview` 的语音分支用 `voice_label()` 拼成
+  `[语音 42"]` / `[语音 1'42]`，没时长就退回 `[语音]`（不写 0'00"）。
+  历史那批（12 个音频、9 条 AI 语音）元数据与快照都没有时长，用
+  `scripts/backfill_voice_duration.py` 一次性按磁盘文件补齐（幂等，迁移之后跑）。
+  验证：`test_audio_probe` 5 条（手工构造的合法 CBR/VBR 帧、ID3 跳过、wav）+ 预览 5 条全绿；
+  真机 12 个 mp3 探出的时长与逐帧走查一致（`voice_20261114033204_49.mp3` = 269 帧 × 576 / 24000
+  = 6.456s，探出 6456ms）。
+- **列表里那条撤回说不清是谁撤的**（同日追问，方案改了两次）：先是想按"你/对方/名字"三分，
+  用户随后定了更省事的口径——**一律写名字**，完整名字不截前 5 字，也不特判"你/对方"，
+  免得胶囊与侧栏两处口径对不齐。修法：`revoked_preview(name)` 一处拼串；列表多给一个
+  `last_message_revoked_name`（撤回时才有），前端把名字与「撤回了一条消息」分成两段渲染——
+  宽度不够时先缩名字（`truncate`）、后半句 `shrink-0` 不动。胶囊（`chat:revokedSuffix`）与
+  侧栏 `PreviewText` 同一套做法。
+- **AI 合成语音的那几秒界面上没动静**：活动条只有「思考中 / 输入中」。现在
+  `ai/executor.py` 的 `_TOOL_ACTIVITY_STATE` 把 `send_voice` 映射成 `speaking`，随同一个
+  `ai_typing` 事件多带 `state` 发出去；前端 `ChatView` 分到独立的 `speakingAgents`，
+  `ActivityBar` 优先级 说话 > 输入 > 思考，文案 `chat:speaking`（录音中…／Recording…／録音中…）。
+  清除：新一轮思考、消息落地、轮末各清一次，外加 30 秒兜底。
 

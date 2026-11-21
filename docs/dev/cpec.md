@@ -703,7 +703,13 @@ CREATE TABLE system_logs (
 - `POST /groups/{id}/vector/approve` → 群主审批（人或 AI 的工具调用）/ Group owner approves (human or AI tool call)
 
 #### 记忆 / Memory
-- `POST /memories/rough` → 存储粗略记忆 / Store rough memory
+
+> 2026-11-14：本节这组 HTTP 记忆接口**已移除**（规格书原文保留只为追溯设计）。记忆是 AI 独有的资源
+> （`rough_memories.owner_id` 记 `agents.id`），而这条 HTTP 写入口用的是 `users.id`——同一张表两种
+> 口径、编号撞上就串门。记忆的存取现在只有 AI 侧一条路（`services/memory/*` + `tools/memory/*`），
+> 见 [id 语义](./id_semantics.md) 与迁移 `0115`。
+
+- ~~`POST /memories/rough`~~ → 存储粗略记忆 / Store rough memory
 - `POST /memories/detail` → 存储详细记忆 / Store detail memory
 - `GET /memories/search` → 检索记忆（参数 query, scope, group_id）/ Search memory (params: query, scope, group_id)
 

@@ -1,15 +1,15 @@
-# 状态栈 × 情感记忆 × 工具隔离 设计（v0.1）
+# 状态链 × 情感记忆 × 工具隔离 设计（v0.1）
 
 > **日期**：2026-08-08
 > **状态**：阶段 1 已实现（情感向量/跨状态同步/工具隔离/分状态调用计数/配置开关）；记忆衰减（rough_memories importance）与长期情感记忆表留阶段 2
-> **相关文档**：`brain_controller_design.md`（状态栈 §4.3/4.4）、`memory_system_design.md`（双重记忆）
+> **相关文档**：`brain_controller_design.md`（状态链 §4.3/4.4）、`memory_system_design.md`（双重记忆）
 
 ---
 
 ## 一、背景与目标
 
 现状：
-- **状态栈**（已实现）：push/pop/close/resume，帧含 why/doing/todo/plan/journal，摘要注入 prompt——任务的**精确交接**已完整
+- **状态链**（已实现）：push/pop/close/resume，帧含 why/doing/todo/plan/journal，摘要注入 prompt——任务的**精确交接**已完整
 - **双重记忆**（已实现）：System 1 向量情节 + System 2 结构语义
 - **缺口**：状态切换只交接"任务"，不交接"情感"；工具集全局统一，不随状态分化；记忆衰减用现实时间，与 AI 本体论不符
 
@@ -31,7 +31,7 @@
 | 情感衰减 | mood homeostasis（情绪回归基线）；**创新点：用 API 调用次数作时间尺度**（AI 无真实时间感，经历量=被调用量） |
 | 跨状态情感同步 | Mood vs Emotion 区分：mood 慢变跨情境保持，emotion 瞬时 |
 
-> 单点均有先例；「状态栈×情感向量×跨状态同步×工具隔离×拟人开关」的组合为原创设计。
+> 单点均有先例；「状态链×情感向量×跨状态同步×工具隔离×拟人开关」的组合为原创设计。
 
 ---
 
@@ -93,7 +93,7 @@ class StateFrame:  # 扩展字段
 ### 摘要格式（注入 prompt）
 
 ```
-📋 状态栈（底→顶）
+📋 状态链（底→顶）
 ▸▶ [group_chat](group:2): 当前活跃任务  TODO: xxx
    🎭 情感: 开心 0.4 · 专注(文字描述: "平静")  ← 来源(写作): 开心 0.2
 ```
@@ -124,7 +124,7 @@ decay_score = base_decay × Δcalls − access_reward − emotion_bonus
 ## 六、工具/技能按状态隔离
 
 - 状态帧 `tools`/`skills` 白名单：push 时可指定，None=继承全局
-- LLM 构建工具时：按**栈顶帧**的 tools/skills 过滤（llm.py 工具清单构建处）
+- LLM 构建工具时：按**当前帧**的 tools/skills 过滤（llm.py 工具清单构建处）
 - 跨界：AI 调 push_state 切到新类型帧（工具集随之切换）
 - 默认映射（type → 工具集，可配）：
   | 帧类型 | 工具集 |
@@ -148,9 +148,9 @@ decay_score = base_decay × Δcalls − access_reward − emotion_bonus
 
 ### 阶段 1（本次）
 1. **迁移**：`agent_state_stack` 帧结构扩展（emotion/emotion_text/source_emotion/tools/skills 字段，JSONB）+ agents 表 `emotion_vectorized` + `llm_call_count`（衰减计数）
-2. **状态栈服务**：push/pop 情感携带（push 记录 source_emotion；pop 恢复）、摘要格式扩展（情感行）
+2. **状态链服务**：push/pop 情感携带（push 记录 source_emotion；pop 恢复）、摘要格式扩展（情感行）
 3. **情感工具**：`update_emotion(delta|vector|word)` 工具（AI 可调）；概括词映射表
-4. **工具隔离**：llm 工具构建按栈顶帧 tools/skills 过滤 + type→默认映射
+4. **工具隔离**：llm 工具构建按当前帧 tools/skills 过滤 + type→默认映射
 5. **情感衰减**：LLM 调用后按 agent 计数衰减记忆 importance（简化版）
 6. **配置**：agents 配置界面勾选开关
 
@@ -162,13 +162,13 @@ decay_score = base_decay × Δcalls − access_reward − emotion_bonus
 
 ## 十、交接体系（已实现）
 
-**核心语义：状态栈是“交接驱动”的，不是“历史渲染”的**
+**核心语义：状态链是“交接驱动”的，不是“历史渲染”的**
 
 - **摘要只注入「当前帧 + 本次交接」**：旧交接已在 LLM 对话历史里出现过（工具调用参数保留），不重复注入——省 token、不冗余
 - **切换时一次性打包交接**：push 时帧记 `handoff`（从哪来/在干嘛/为什么/回去继续 todo）
 - **pop 选择性回跳**：`pop_state(target_frame_id)` 可指定目标层，中间帧归档（completed + journal）并在摘要汇报「跳过层（未完成）」，由 AI 决定是否继续
 - **pop 回来注入「回来的交接」**：恢复帧记 `completed_handoff`（刚完成啥 + 跳过了谁），摘要顶部 `📝 刚完成` 展示——回来的自己天然知道出去干了啥
-- **嵌套提示**：栈深 > 1 时摘要给「⏸ 另有 N 帧未完成（可 list_states 查看）」；新增 list_states 工具
+- **嵌套提示**：链深 > 1 时摘要给「⏸ 另有 N 帧未完成（可 list_states 查看）」；新增 list_states 工具
 - **摘要格式**：
   ```
   ## 📋 当前状态

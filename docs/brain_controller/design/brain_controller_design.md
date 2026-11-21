@@ -172,7 +172,7 @@ class StateFrame:
     status: str              # active / paused / cancelled
 ```
 
-### 4.4 状态栈
+### 4.4 状态链
 
 ```python
 class StateStackManager:
@@ -185,7 +185,7 @@ class StateStackManager:
 
 ### 4.5 状态帧缓存 ID（待设计，2026-08-04 提出）
 
-**背景**：状态栈每个帧 = 一种任务上下文。帧间切换会让 system prompt 变化（状态栈摘要不同），
+**背景**：状态链每个帧 = 一种任务上下文。帧间切换会让 system prompt 变化（状态链摘要不同），
 影响 provider 侧 prompt 缓存命中（DeepSeek cached_tokens 按前缀匹配）。
 
 **设想**：
@@ -340,12 +340,12 @@ class SkillEventBus:
 |------|------|
 | `backend/app/services/brain_controller.py` | 薄大脑核心逻辑 |
 | `backend/app/services/heartbeat_manager.py` | 心跳管理 |
-| `backend/app/services/state_stack_manager.py` | 状态栈管理 |
+| `backend/app/services/state_stack_manager.py` | 状态链管理 |
 | `backend/app/services/conflict_arbiter.py` | 冲突仲裁 |
 | `backend/app/services/resource_manager.py` | 资源调度 |
 | `backend/app/services/skill_event_bus.py` | 事件总线 |
 | `backend/app/models/personality_anchor.py` | 人格锚点 ORM |
-| `backend/app/models/agent_state_stack.py` | 状态栈 ORM |
+| `backend/app/models/agent_state_stack.py` | 状态链 ORM |
 
 ---
 
@@ -367,7 +367,7 @@ class SkillEventBus:
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | `/brain/health` | 获取 AI 健康状态 |
-| GET | `/brain/state/{agent_id}` | 获取 AI 状态栈 |
+| GET | `/brain/state/{agent_id}` | 获取 AI 状态链 |
 | POST | `/brain/heartbeat/{agent_id}` | 手动触发心跳 |
 | POST | `/brain/switch-state/{agent_id}` | 切换 AI 状态 |
 | GET | `/brain/personality/{agent_id}` | 获取人格锚点 |

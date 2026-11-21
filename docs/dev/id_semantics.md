@@ -38,6 +38,16 @@ user 49，而文件归属的 agent 49 的 id 就是 49）。因此：
 - 一个字段只存一种 id，不写 `id == X OR user_id == X`——一次命中两行，
   `scalar_one_or_none` 抛 `MultipleResultsFound`（文件预览/下载整片 500 就是这么来的）。
 - 需要兼容历史数据时，归一只有一个入口（`file_service._owner_agent`），不要散落到各查询。
+- **记忆只有一种归属**：`rough_memories.owner_id`（`owner_type='ai'`）一律是 `agents.id`。
+  曾经有一条遗留的 HTTP 端点（`POST /memories/rough`）让人类/虚拟账号直接写同一张表、
+  却用 `users.id`，于是同一张表出现两种口径、编号撞上就串门（agent 3 ↔ user 3、
+  agent 25 ↔ user 25 实测撞号）。那个端点全仓没有调用方，2026-11-14 整组删除，
+  存量由迁移 `0115` 归正（只改「不是 agents.id、但等于某个 agent 虚拟账号」的行）。
+  要「用户自己的记忆」，那是另一张表的事，不要再挤进 AI 的记忆表。
+- **判「这份文件是不是他的」也只有一个入口**：`file_service.is_file_owner()`——它同时认
+  `agents.id`（工具/文件路径传的）与虚拟账号 `users.id`（消息 `sender_id` 传的）。直接比数字
+  会把「AI 发自己的文件」认成别人的文件：2026-11-14 真机，file 214 是 ai:120 自己的语音，
+  发送时却落了一条 `forward ai:120`，把自己的配额算掉一份（迁移 `0114` 清了存量）。
 
 ## 存量归正
 

@@ -109,7 +109,7 @@ node scripts/build.mjs        # rebuild the manifest hashes
 | `pluginSourceDir` | `""` | Source directory for the self-update endpoints. Empty falls back to the install origin recorded in the profile. |
 | `bridgeEnabled` | `true` | Master switch for the reverse bridge feature. The Copree access switch is still required before anything is exposed. |
 | `bridgeSecret` | `""` | Shared secret with the Copree backend (`DSH_BRIDGE_SECRET`). Empty disables the bridge entirely. |
-| `bridgeAdvertiseUrl` | `""` | Address the Copree backend calls back on. Empty disables the bridge entirely. |
+| `bridgeAdvertiseUrl` | `""` | Address the Copree backend calls back on. Empty disables the bridge entirely. It must be **reachable from the container** the backend runs in (the host's docker-bridge address, with that proxy binding after docker starts), otherwise the console reports "registered but unreachable". Topology and boot ordering: `docs/DSH接入指南.md` §3.6. |
 | `bridgeHeartbeatMs` | `20000` | Bridge heartbeat interval. Copree's registration TTL is three times this value, and consent changes take effect within one interval. |
 
 Config is read from `cordis.patch.yml` or a profile override; restart the Host after changing it.

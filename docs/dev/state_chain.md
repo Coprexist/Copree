@@ -1,4 +1,4 @@
-# 状态链：运行集合是一条双向链表
+# 状态链：一条双向链表
 
 > **单一来源**：状态帧「谁在跑、接下来跑谁」只在这里维护。
 > 帧怎么存、容量闸、同会话归并见[帧、锁与重建点](./frame_lifecycle.md)。
@@ -11,7 +11,7 @@
 
 | 症状 | 改造前 | 改造后 |
 |---|---|---|
-| 切一次会话 | 重排整份栈（最大的一份 126 帧 / 546 KB） | **≤4 行指针更新**，与链长无关 |
+| 切一次会话 | 重排整份帧数组（最大的一份 126 帧 / 546 KB） | **≤4 行指针更新**，与链长无关 |
 | 帧 id → 队列位次 | O(n) 扫数组 | 唯一键 `(agent_id, frame_id)`，**O(1)** |
 | 「当前帧 + 整条队列」 | 读整份数组再找 active（5.4 ms） | 读两张小表（**0.75 ms**） |
 
@@ -67,7 +67,7 @@ erDiagram
 
 - `UNIQUE(agent_id, frame_id)` —— 就是「帧 id → 链节点」的 O(1) 索引，也是「一帧不可能挂两个节点」的硬约束；
 - `(agent_id, prev_id)` / `(agent_id, next_id)` —— 反向找邻居；
-- `head_id` / `tail_id` **不设外键**：节点会随帧出运行集合被删，外键会把「删节点」和「改链」绑成一件事，
+- `head_id` / `tail_id` **不设外键**：节点会随帧出链被删，外键会把「删节点」和「改链」绑成一件事，
   反而更容易写出「删了行、链还指着」的半吊子。完整性交给对账。
 
 ## 4. 指针算法
@@ -99,7 +99,7 @@ flowchart TD
 
 已经在链尾就是幂等空操作（一条补丁都不出）。原位置在链头也走同一段逻辑，头指针自动后移。
 
-### 4.3 帧出运行集合：detach
+### 4.3 帧出链：detach
 
 ```mermaid
 flowchart LR
@@ -117,7 +117,7 @@ flowchart LR
 stateDiagram-v2
     state "排队（窗口外）" as QUEUE
     state "在跑（窗口内）" as RUN
-    state "已出运行集合（ended / retired）" as ENDED
+    state "已出链（ended / retired）" as ENDED
     [*] --> QUEUE : 压入链尾
     QUEUE --> RUN : 成为链尾（窗口内）
     RUN --> QUEUE : 被新帧顶到后面
@@ -137,8 +137,8 @@ flowchart LR
 
 ## 6. 谁维护链：一个写入点
 
-`push_state` / `pop_state` / `close_state` / `restore_frame` / `ensure_active_frame`
-**都只改帧的 `status`，一行不动链**。链由 `_save`（帧的唯一写入点）里的对账统一维护：
+`push_state` / `pop_state` / `close_state` / `pull_frame` / `restore_frame` /
+`ensure_active_frame` **都只改帧的 `status`，一行不动链**。链由 `_save`（帧的唯一写入点）里的对账统一维护：
 
 ```mermaid
 sequenceDiagram
@@ -158,9 +158,24 @@ sequenceDiagram
 
 这条纪律的收益：任何新加的切帧路径都**不会**因为忘了动链而把顺序搞乱。
 
+## 6.1 跳帧只有一种实现：`pull_frame`
+
+"跳到某帧"在链上就是把那帧拉到链尾，所以只有一份实现（`state_stack_service.pull_frame`）：
+
+- **目标还在链上** → 重新移位置（指针由上面的对账改，这里只把 status 置 `active`）；
+- **目标已出链**（`ended` / `retired`）→ 复活再接入链尾；
+- **被顶下来的那一帧**只有一个选择：`leave="suspend"`（挂着，目标 pop 之后回到它）
+  或 `leave="end"`（结束，退出链）。
+
+调用方都是薄壳：`pop_state(target)` = `pull_frame(..., leave="end")`；
+`enter_state` / `restore_frame`（闹钟、进世界）= `leave="suspend"`，其中
+`restore_frame` 多一条"帧被销过就按原 id 重建"。`pop_state()` 不带目标就只结束当前帧，
+新链尾由链序给出——拉帧是 `move_to_tail`，所以被顶下来的那帧恒在被拉帧的前一位，
+**pop 回到的正是"他刚从哪儿来"**，不需要另记来源字段。
+
 ## 7. 不变量与自愈
 
-`problems()` 每次写栈体检一次，四条：
+`problems()` 每次落库体检一次，四条：
 
 1. `head.prev` 与 `tail.next` 都是空；
 2. 每个节点的 prev/next 双向一致；
@@ -169,7 +184,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    W["_save 写栈"] --> C{"problems() 非空？"}
+    W["_save 落库"] --> C{"problems() 非空？"}
     C -- 否 --> OK["正常对账"]
     C -- 是 --> RE["整条重建：DELETE 全部节点，按还读得出的位次重挂"]
     RE --> WARN["WARNING 日志留痕（不静默）"]
@@ -181,7 +196,7 @@ flowchart LR
 
 ## 8. 实测
 
-126 帧 / 774 KB 的一份栈（贴着线上最大那份）：
+126 帧 / 774 KB 的一份帧数组（贴着线上最大那份）：
 
 | 动作 | 耗时 | SQL 条数 |
 |---|---|---|
@@ -190,7 +205,7 @@ flowchart LR
 | 一次 `_save`（位次没变） | 15.6 ms | 6，**链一条都没写** |
 | 一次 `_save`（切会话） | 16.6 ms | 8，链只多 2 条 |
 
-**诚实的那条边界**：排序与查询已经是常数条，但一次写栈的大头仍是把整份 `state_stack` 重写一遍
+**诚实的那条边界**：排序与查询已经是常数条，但一次落库的大头仍是把整份 `state_stack` 重写一遍
 （15 ms 里占绝大部分）——那是存储层的代价，链没有、也不该替它付。真要降它，下一步是把帧从
 「一个大 JSON」拆成「一帧一行」。
 
@@ -209,5 +224,5 @@ flowchart LR
 
 1. **别在业务路径里直接动链**——改 `status` 就行，`_save` 会对账；
 2. **别给帧加前后指针**——链节点只存 id 是有意的（帧改内容不会让链失效）；
-3. **老 AI 没有链是常态**：`_ensure_chain` 会在它第一次写栈时按当时的运行集合现建，当前帧不变；
+3. **老 AI 没有链是常态**：`_ensure_chain` 会在它第一次落库时按当时在跑的帧现建，当前帧不变；
 4. **改 `move_to_tail` 必须同步改 `problems()`**：一个是写法，一个是体检，两者说的必须是同一套不变量。

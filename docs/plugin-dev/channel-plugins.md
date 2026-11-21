@@ -417,28 +417,71 @@ class MyChannelPlugin(ServicePlugin):
 **指数回避**：5 分钟起逐次翻倍，封顶 5 天一条；哪次真发出去了就清零，下次再失败从 5 分钟重新
 起算（`_report_unreachable`、`UNREACHABLE_NOTICE_BASE` / `UNREACHABLE_NOTICE_MAX`）。
 
-## 4.7 控制台反代（可选）
+## 4.7 协议端控制台：平台不代管
 
-有的通道自带一个运维面板（NapCat 的 WebUI 能换号、改 WS、装插件）。这种面板不该暴露到公网，
-也不该让每个用户手里攥一份面板 token；平台的 `app/routers/channel_panel.py` 把它挂在
-`/channels/{plugin_id}/panel/{instance}/...` 下，用户只拿到一条带票据的路径。
+有的通道自带一个运维控制台（NapCat 的 WebUI 能换号、改 WS、装插件）。**控制台归协议端自己**：端口、
+域名、登录方式、要不要暴露到公网，都是协议端与部署方的事。平台只保留一件最小的事——**后端要能访问它**，
+也就是设置里的「协议端 WebUI 地址」（`webui_url`，通常是容器内网名 `http://napcat:6099`）：扫码登录、
+登录状态、一键拉起都走它。
 
-平台不知道这个面板长什么样，三个钩子都由插件给（都是插件实例上的方法，加一条通道不需要改
-平台代码）：
+所以通道插件**不需要**任何 `panel_*` 钩子，平台也**不提供**「打开控制台」入口：
 
-| 钩子 | 必填 | 干什么 |
-| --- | --- | --- |
-| `async panel_client()` | 是 | 面板基地址与鉴权：`.base`、`.configured`、`async auth_headers()` |
-| `panel_entry(ticket) -> str` | 是 | 票据落地路径，相对反代基路径（NapCat 是 `webui/?t=...`） |
-| `panel_rewrite(text, base) -> str` | 否 | 文本（HTML/CSS）里的绝对路径补上 `base`；不想改就返回原样，平台透传 |
+- **不反代**：把路由基路径写死在构建产物里的前端（NapCat 的 `basename="/webui/"`）挂到子路径下只会白屏。
+  绕过它有两条路，都不该走——改上游那份 JS 常量是给别人的产物打补丁（上游一换打包方式就静默失效）；
+  每实例一个子域则要求部署方有泛域名与泛证书，还把「单入口」拆成多入口。
+- **不代管凭据**：控制台的 token 能改协议端的一切，让它留在协议端自己的 `webui.json` 里，比让平台
+  保管并代为打开更安全——平台前端一旦暴露到公网，这条链路也不该跟着一起露。
+- **不占平台端口**：那会把「平台怎么发布」和「协议端怎么暴露」两件事缠在一起。
 
-没有 `panel_client` / `panel_entry` 的通道，`POST /me/agents/{agent_id}/channels/{plugin_id}/panel`
-直接 404，卡片上也就没有"打开控制台"这个按钮。票据按 `(plugin_id, instance)` 签——换条通道或
-换个实例都不认；验完换成 Path 限定在基路径下的 HttpOnly cookie，之后浏览器自动带上。
+主人要打开控制台，就在浏览器里直接访问那个地址、用协议端自己的口令登录。要挂到公网，是**部署层**的
+事（宿主反代按路径或子域分流 + HTTPS + 来源限制），仓库零改动；做好之后也不需要回通道设置里改什么。
 
-写适配时记三件事：**只该看见面板根之下的路径**（`..` 段平台会拒）；**文本之外的响应
-（图片、字体、SSE）原样流过去**，改写里别碰字节；**WebSocket 升级不通**（`upgrade` 是被剥掉的
-逐跳头），面板的实时更新得走 SSE 或轮询——NapCat WebUI 用的就是 SSE。
+> 历史：平台曾实现过两代入口——通用反代 `/channels/<plugin>/panel/<instance>/…`（票据换 cookie、
+> 文本改写、`panel_rewrite` 补前缀）与「直连地址」（`panel_login_url` 返回 `{对外地址}/webui/?token=…`）。
+> 前者只在「控制台前端能在子路径下工作」时成立，后者等于平台替协议端维护一个对外地址；两者都已下线，
+> 连同前端的 `panel_*` 钩子与 `webui_public_url` 配置项。
+
+## 4.8 图片：入站落附件、出站发图片消息
+
+平台这一层的契约很简单：**附件就是 `[{file_id, path, name, size, mime_type}]`**，入站塞进
+`send_gm_message / send_dm_message(attachments=…)`，出站从消息的 `attachments` 里读。
+频道插件要做的是"通道侧怎么取、怎么发"，两段都不该写进平台：
+
+- **入站**：事件里的图片先下载再 `file_service.upload_file`（落在 `attachments/<通道>/`），
+  把 file_id 带进 attachments。只写正文里的 `[图片]` 占位等于 AI 永远看不到图——多模态上下文
+  只认 `messages.attachments`（见 `app/utils/multimodal.py`）。下载失败要降级：占位还在，
+  消息照落。
+- **出站**：从消息的 attachments 里取图片，先文本、再图片。平台不关心通道怎么发。
+
+QQ 官方通道的具体口径（照抄可用，见 `plugins/qq-channel/media.py`）：
+
+```
+POST /v2/groups/{group_openid}/files   （私聊是 /v2/users/{openid}/files）
+     {file_type: 1图片 2视频 3语音 4文件, srv_send_msg: false, file_data: base64, file_name?}
+  →  {file_info, file_uuid, ttl}
+POST /v2/groups/{group_openid}/messages
+     {msg_type: 7, media: {file_info}, msg_id?, msg_seq?}     # 图片消息
+```
+
+两条经验：**别用 Markdown 内嵌图（`![](url)`）代替它**——那要机器人有 MD 权限、客户端也得会
+渲染 MD，有的 QQ 端根本不显示，而 `msg_type=7` 是普通消息类型，纯文本模式照样发；**图片同样占
+被动回复额度**（群一条消息最多 5 次、私聊 4 次），"两句字 + 一张图"就是 3 次，额度不够就如实
+记下没发的图，别把整条回复判失败。单次上传上限 20MB（base64 后 ×4/3，插件里按 15MB 卡）；
+`file_info` 带 ttl，同一份内容在同一条会话里可以复用，别重复上传。
+
+**发不出去要告诉 AI 自己，不只是告诉主人**：AI 的上下文只有账本（`app/services/history`），
+往主人私信里写它读不到。失败时用 `history_service.append(db, agent_id, context_ref(...), [{"kind": "note",
+"actor": "system", "content": …}])` 落一条系统便签，AI 下一轮就知道"这句/这张图没到 QQ"，不会当作已发。
+整条没发出去和"文字到了图片没到"要分开措辞：后者只说图没到，别让它以为整句丢了。
+
+**AI 要"留住"这张图，走平台工具 `file_fetch`**（`app/tools/file_operations/file_fetch.py`）：
+频道无关，群聊/私信都能收，任何文件类型都收；底层 `file_service.ai_fetch_attachment` 把同一份
+物理文件**硬链接**到 `agents/{id}/inbox/`（不复制字节），原件仍归发送者。权限判定用
+`check_file_access` 里那条"附在可见消息上"的兜底——注意它要认 AI 的两层身份：入参是
+`agents.id`，群成员表与私信参与方记的是它的虚拟账号 `users.id`。
+
+语音（要转 silk）、视频（要转码）、普通文件（要带 `file_name`）这三条还没做，正文里仍是
+`[语音]`/`[文件]` 占位。
 
 ## 5. 信任边界（写清楚，别误会）
 

@@ -17,6 +17,11 @@
 
 预检把所有判据一次列全（`✔ / ✘ / ·`），不用逐条试。**它只读，不动 git**；打 tag 是单独一步。
 
+写 CHANGELOG 不是发版动作，是平时每改一次就写一条：`scripts/changelog.py` 是它的唯一写入入口
+（`add` 追加到分节末尾、`check` 校验重复分节/版本倒序/空节/空行、`merge` 合并重复分节、`dedupe`
+合并重复版本块）。`release.py archive` 归档前会先跑一次它的 check，结构不合格就不归档——归档进历史
+之后更难改。分类与 Keep a Changelog 六类的对照写在 `CHANGELOG.md` 开头。
+
 ## 版本号只有一个出处
 
 `backend/app/config.py::app_version`。它同时是：`/health` 返回的版本、更新检查与最新 tag 比较的对象、

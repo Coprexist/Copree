@@ -183,6 +183,48 @@ flowchart TD
    解锁（compact/clear）时这两类条目随账本重写离场。
    机制见 [会话历史与前缀缓存](./conversation_history.md) §13 b-3b、[跨状态交接](./cross_state_context.md)
 
+### 锁的是**发出去的字节**，不是渲染代码的自觉（2026-11-14）
+
+上面两把锁（`cap_effective_versions` / `cap_effective_allowed`）锁的都是**输入**：版本号、工具名单。
+但前缀里的技能目录、表情包清单、记忆索引是**渲染出来的文字**，渲染代码里任何一处现算都会改字节——
+版本号没变、名单没变，锁等于没锁。
+
+实测（2026-11-14）：当天上 `send_voice`、`file_fetch`、"大肥鱼"表情包，一天里目录段变了三次，
+活跃会话的前缀从第 0 字节失效 7 次，多付约 283k 未命中（当天命中率因此从 98% 跌到 85.7%）。
+同一份 diff 里只有 `可用工具：94 个 → 95 个` 与新增的一行 `send_voice(...)`。
+
+所以增锁**输出**：`agents.cap_effective_prefix`（JSONB，迁移 `0117`）
+
+- 键 `{会话键}|prefix[:{人格变体}]`（与进度键同口径）→ `{text, hash}`；人格变体 =
+  `agent-prompt-{id}[-u{uid}]`，per-user 覆盖是两版本不同字节，共用一条快照会让 B 读到 A 的人设
+- **唯一读写口**：`ai/prefix.py` 的 `locked()` —— 首见把这一份钉住，之后一律返回旧字节；
+  锁定态已有快照时**换不掉**（写入侧根本走不到）
+- **换新的唯一入口**：`mark_prefix_fresh`（compact/clear 时由 `apply_pending_changes` 调）→
+  `clear_frozen_prefix` 按会话键前缀全删（所有变体），下一次请求重新渲染并锁上
+- **每 AI 最多 64 条**（`PREFIX_SNAPSHOT_LIMIT`，约 14KB/条）：进很多群也不会慢性膨胀，
+  超出按最近使用丢弃最旧的；丢弃只让那条会话下次重拼一次，不影响正确性
+
+**不靠后来者自觉的三件套**（`ai/prefix.py`）：
+
+| 东西 | 管什么 | 谁在钉它 |
+|---|---|---|
+| `SECTIONS` | 前缀有哪些段、每段是"有版本源"还是"仅锁定" | `test_prefix_contract` 对账 `ContextConfig`，加段漏登记就红 |
+| `locked()` | 锁定态只发旧字节 | 写路径绕不过去（内部才有 `freeze_prefix`） |
+| `guard()` | 有人在 `locked()` 之后又往前缀里塞东西 → 抛 `PrefixDrift` | 两条 `messages[0]` 构造点各一道 |
+| `notice_sources()` | 变更通知要比对的能力源**只有这一份** | 有源的段必须在里面（同上测试） |
+
+**探测与渲染是一条路径**（刻意）：各段的构建函数同时负责版本登记，"变了要发通知"与"渲染出字节"
+共用同一份内容，不存在两套真理线。代价是命中快照时这些构建仍会跑一遍——实测每次唤醒净增
+**1 次查询**（表情包源那次 latest），占单次唤醒查询量的约 3%，换的是零漂移。真到峰值 Postgres
+吃紧时，可只把最贵的 tools 段在命中时跳过（约 3 次查询），届时表情包源的登记要挪到包启停处。
+
+**表情包源是 2026-11-14 补的缺口**：此前它既不在版本链也不在通知源里，加"大肥鱼"24 张，
+前缀变了却零通知。现在 `emoji-packs` 与人格/记忆索引/平台工具并列，加包删包都会发通知。
+
+代价与口径：引擎修 bug、目录新增都不立刻进活跃会话，要等一次 compact——这正是"以通知为准"那条
+不变式的另一面。测试见 `backend/tests/test_prefix_freeze.py`（端到端：改目录段渲染后第二轮字节不变）
+与 `backend/tests/test_prefix_contract.py`（段清单、源清单、守卫）。
+
 ### 锁定态里"只告知"指什么
 
 指**字节**不变，不指 AI 行为不变：通知头写明"以下变更**立即生效**：与系统提示 / 工具描述里的旧表述
@@ -205,6 +247,7 @@ flowchart TD
 5. ✅ world_chat_service：前缀组装改为 effective 快照 + 变更检测写新版本 + 尾部 changelog（世界 AI 三个源：world-prompt-{id} / forced-prompt / world-name-{id}）
 6. ✅ compact_context / clear_context：调用 apply_pending_changes 解锁（三源 + ai-skills 一起对齐）
 7. ✅ 主站 agent 同样接入（build_messages / build_dm_messages 的 personality 段走 `agent-prompt-{id}` 源；per-user 覆盖走 `agent-prompt-{id}-u{uid}`；executor compact 解锁，两处都按"这一轮有没有覆盖"取同一个源）
+8. ✅ 前缀字节快照 `agents.cap_effective_prefix`（2026-11-14）：锁"输出"而不只锁"输入"，渲染代码怎么变都进不了活跃会话；解锁点由 `mark_prefix_fresh` 统一清空
 
 > 2026-08-12 记的是"构建函数通过了真实 DB 端到端验证"——**这个结论当时是错的**：
 > 验证调的是 `build_messages(...)`（不带覆盖参数），而线上两个调用点每次都把**解析好的本体人格**
@@ -276,7 +319,7 @@ flowchart TD
   + 告知（算差异决定通知什么）。通知已**落成历史条目**（`append_events`），不再是当轮 append 即丢。
 - **投递式内容**（跨状态便签）= 锁的另一种用法：不是"等解锁才生效"，而是"落进账本（历史属于前缀）后在锁内保持不变"；
   和变更通知条目互补：前者要长期留在上下文，后者只告知一次（写入一次，活到解锁）
-- 动态块的落位纪律：状态栈摘要 / 当前任务 / 私信会话列表都**不进 message 0**，
+- 动态块的落位纪律：状态链摘要 / 当前任务 / 私信会话列表都**不进 message 0**，
   一律沉到历史之后的尾部（前缀 = 静态段 + 历史，缓存才稳）。**通道规矩**反过来——它是不变事实，
   由 `channel_rules` 进锁定前缀（变更只落通知、解锁点对齐）；**好友申请**落账本通知（只投一次）；
   当前任务只在闹钟真的派了任务时才有。

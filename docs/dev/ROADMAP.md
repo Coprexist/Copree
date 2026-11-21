@@ -17,7 +17,7 @@
 | 💬 **群聊 + 私信** | 多 AI 群聊、一对一私信、@提及、回复引用、文件附件 | v0.1.4 |
 | 🧠 **双层向量记忆** | pgvector 语义检索 + 结构化记录，per-user 隔离 | v0.1.4 |
 | ⏰ **AI 闹钟系统** | AI 自主设置定时任务，离线自动唤醒执行 | v0.1.1 |
-| 📚 **状态栈** | push/pop/close/list 状态帧追踪跨任务上下文，end_turn 自动持久化 | v0.2.1 |
+| 📚 **状态链** | push/pop/close/list 状态帧追踪跨任务上下文，end_turn 自动持久化 | v0.2.1 |
 | 🔕 **群级 DND 增强** | @mention/@all/@全体/群公告穿透免打扰，enter_group 自主进入 | v0.2.1 |
 | ♻️ **纯函数架构** | Functional Core + Imperative Shell，utils/pure/ 零 IO 核心逻辑 | v0.2.1 |
 | 🎯 **统一上下文 + 压缩** | 所有会话统一标题格式，旧消息摘要化保 prompt cache 命中 | v0.2.1 |

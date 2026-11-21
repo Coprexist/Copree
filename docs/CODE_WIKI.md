@@ -105,7 +105,7 @@ erDiagram
     AGENT ||--o{ AGENT_SKILL : "持有技能实例"
     SKILL ||--o{ AGENT_SKILL : "被实例化"
     AGENT ||--o{ AGENT_TRIGGER : "触发器"
-    AGENT ||--o| AGENT_STATE_CHAIN : "一条链（运行集合）"
+    AGENT ||--o| AGENT_STATE_CHAIN : "一条链（状态链）"
     AGENT ||--o{ AGENT_STATE_CHAIN_NODE : "每帧一个节点"
     AGENT ||--o| AGENT_STATE_STACK : "历史遗留表（从未写入）"
     AGENT ||--o{ AGENT_METRIC : "指标"
@@ -269,7 +269,7 @@ Copree/
 │   │   │   ├── memory/               # 记忆工具
 │   │   │   ├── network/              # 联网工具（web_search / web_fetch）
 │   │   │   ├── self_config/          # 自我配置工具
-│   │   │   ├── self_management/      # 自我管理工具（闹钟/状态栈）
+│   │   │   ├── self_management/      # 自我管理工具（闹钟/状态链）
 │   │   │   ├── world/                # 群视界工具（一个工具一个文件）
 │   │   │   └── ...                   # 其他工具
 │   │   ├── skills/                   # 思维 Skill 定义
@@ -746,7 +746,7 @@ class ConnectionManager:
 ```python
 class BrainController:
     heartbeat_manager    # 心跳管理器
-    state_stack_manager  # 状态栈管理器
+    state_stack_manager  # 状态链管理器
     conflict_arbiter     # 冲突仲裁器
     resource_manager     # 资源管理器
     event_bus            # Skill 事件总线
@@ -860,7 +860,7 @@ async def _handle_typing_indicator(...): ...
 
 | 目录 | 说明 |
 |------|------|
-| `services/agent/` | AI 代理服务（意愿计算、状态切换、工作区、状态栈/状态链） |
+| `services/agent/` | AI 代理服务（意愿计算、状态切换、工作区、状态链/状态链） |
 | `services/agent/knowledge_service.py` | AI 知识库：正文经 `file_service` 写进 `data/agents/{id}/knowledge/`（登记 `files`，`file_list`/存储页可见），元数据落 `agent_knowledge`；索引与记忆索引同段注入；上传 / 移动 / 手写共用 `add_entry` / `move_entry` |
 | `services/content/` | 内容服务（文件/浏览器/对话日志/导出） |
 | `services/social/` | 社交服务（好友/搜索/DM 额度） |
@@ -937,7 +937,7 @@ class ToolRegistry:
 | `agent_trigger.py` | `AgentTrigger` | AI 触发器 |
 | `agent_config.py` | `AgentConfig` | AI 配置 |
 | `agent_state_stack.py` | `AgentStateStack` | 历史遗留（从未写入；真实存储在 `agents.state_stack`） |
-| `agent_state_chain.py` | `AgentStateChain`, `AgentStateChainNode` | 状态链（运行集合）：一 AI 一条链 + 每帧一个节点 |
+| `agent_state_chain.py` | `AgentStateChain`, `AgentStateChainNode` | 状态链：一 AI 一条链 + 每帧一个节点 |
 | `agent_metrics.py` | `AgentMetrics` | AI 指标 |
 | `alarm.py` | `Alarm` | AI 闹钟 |
 | `system_settings.py` | `SystemSettings` | 系统设置 |
@@ -1184,7 +1184,7 @@ Keys inside a namespace are bare (`save`, not `configGroup.save`); the backend
 |---------|---------|------|------|
 | `BrainController` | `app/services/brain/brain_controller.py` | L25 | 薄大脑控制器 |
 | `heartbeat_manager` | `app/services/brain/heartbeat_manager.py` | — | 心跳管理器 |
-| `state_stack_manager` | `app/services/brain/state_stack_manager.py` | — | 状态栈管理器 |
+| `state_stack_manager` | `app/services/brain/state_stack_manager.py` | — | 状态链管理器 |
 | `conflict_arbiter` | `app/services/brain/conflict_arbiter.py` | — | 冲突仲裁器 |
 
 ### 工具系统
@@ -1316,7 +1316,7 @@ User (用户)
 │   ├── AgentSkill (AI 技能实例)
 │   │   └── Skill (技能定义)
 │   ├── AgentTrigger (AI 触发器)
-│   ├── AgentStateStack (状态栈，历史遗留)
+│   ├── AgentStateStack (状态链，历史遗留)
 │   ├── AgentStateChain (状态链：链头 / 链尾 / 执行窗口) + AgentStateChainNode (链节点 → 帧 id)
 │   ├── AgentMetric (指标)
 │   ├── Alarm (闹钟)

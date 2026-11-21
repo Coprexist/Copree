@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-10-31T15:35:43Z",
+  "updated_at": "2026-11-15T03:12:51Z",
   "packages": [
     {
       "id": "bilibili",
@@ -19,19 +19,19 @@
       "channel_kind": "bilibili"
     },
     {
-      "id": "emoji-qq",
-      "name": "QQ 表情",
-      "description": "QQ 经典表情的名字与写法（害羞、流泪、呲牙、强…）。AI 可以在消息里用 [表情:名字]，站内渲染成对应表情，QQ 侧收到的也是同一个表情。",
+      "id": "emoji",
+      "name": "表情",
+      "description": "内置表情图（微笑、撇嘴、强…）。AI 可以写 :id: 或 [表情:名字]，站内一律画成这张图；名字是中文情绪词，别的通道发来的同名表情也会落成同一张。",
       "category": "emojipack",
       "author": "Copree",
-      "version": "1.0.0",
+      "version": "2.0.0",
       "source": "Coprexist/Copree@v0.4.16",
-      "asset": "emoji-qq-1.0.0.zip",
-      "sha256": "6163e0db07c23676e23acf00417a125f381e0809f3b5f3ad7217733254f69182",
+      "asset": "emoji-2.0.0.zip",
+      "sha256": "4f9a22591a876d5ebf34dbf823bb6a0f0d0e4b6ae1ac0f08b3e250eb4adaf58e",
       "tier": "verified",
-      "source_path": "backend/plugins/emoji-qq",
+      "source_path": "backend/plugins/emoji",
       "reviewed_by": "Copree",
-      "reviewed_at": "2026-10-31"
+      "reviewed_at": "2026-11-15"
     },
     {
       "id": "keyword-autoreply",

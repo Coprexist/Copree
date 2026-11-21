@@ -79,7 +79,7 @@ verified/<id>/                 仅用于"没有主仓可指"的 verified 插件�
 | 插件 | 类型 | 版本 | 信任层级 | 来源 |
 | --- | --- | --- | --- | --- |
 | B 站 — 把 AI 接进 B 站：AI 的创建者用手机扫码登录自己的 B 站账号，AI 就能查视频、看动态、订阅 UP 主并把更新推到群里。 | service | 1.0.0 | 已验证 | Coprexist/Copree@v0.4.16 · backend/plugins/bilibili |
-| QQ 表情 — QQ 经典表情的名字与写法（害羞、流泪、呲牙、强…）。AI 可以在消息里用 [表情:名字]，站内渲染成对应表情，QQ 侧收到的也是同一个表情。 | emojipack | 1.0.0 | 已验证 | Coprexist/Copree@v0.4.16 · backend/plugins/emoji-qq |
+| 表情 — 内置表情图（微笑、撇嘴、强…）。AI 可以写 :id: 或 [表情:名字]，站内一律画成这张图；名字是中文情绪词，别的通道发来的同名表情也会落成同一张。 | emojipack | 2.0.0 | 已验证 | Coprexist/Copree@v0.4.16 · backend/plugins/emoji |
 | 关键词自动回复 — 行为插件示例：命中关键词时注入回复指令（声明与行为合一，一个 plugin.py 完成）。 | skill | 1.0.0 | 已验证 | Coprexist/Copree@v0.4.16 · backend/plugins/keyword-autoreply |
 | QQ 通道 — 把 Copree 的 AI 接入 QQ 群：被 @ 时唤醒，走官方 QQ 机器人 API（WebSocket 收事件 + REST 回消息） | service | 0.1.0 | 已验证 | Coprexist/Copree@v0.4.16 · backend/plugins/qq-channel |
 | QQ 通道（NapCat / OneBot v11） — 把 AI 接进 QQ（非官方协议端 NapCat / OneBot v11）。注意：协议端违反 QQ 用户协议，有封号风险，建议只用自己的备用号、自担风险；对外提供服务请用官方 QQ 通道。 | service | 0.1.0 | 已验证 | Coprexist/Copree@v0.4.16 · backend/plugins/qq-napcat |

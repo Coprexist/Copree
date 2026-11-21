@@ -166,6 +166,104 @@ node scripts/update-test.mjs   # 换入 / 幂等 / 篡改拒绝 / restart 判定
 node scripts/smoke.mjs         # Host 半挂到 mock webServer，验代理与插件端点
 ```
 
+### 3.6 反向桥接（Copree 管理端 → DSH 会话）
+
+插件默认只服务「DSH 访问 Copree」这一个方向。另有一个反向方向：在 Copree 管理端的
+「DSH 对话」里直接操作 DSH 会话（列会话、投消息、回答审批、跑斜杠命令）。它要求人先在
+**DSH 设置 → Copree** 点同意接入；之后插件每 20 秒向 Copree 发一次心跳，把「回连我该用
+哪个地址」一并报过去（`bridgeAdvertiseUrl`）。闸门只有一个，且在 DSH 侧。
+
+#### 为什么中间必须有一层反代
+
+DSH 出于 RCE 风险，`dsh web` 只允许绑回环（`--host 127.0.0.1`）。而 Copree 后端通常跑在
+docker 里，容器的 `127.0.0.1` 是它自己，回连不到宿主的 DSH。于是链路是：
+
+```
+Copree 后端容器 ──► <docker 网桥网关>:3082 ──► 127.0.0.1:3080 (DSH)
+                       宿主 nginx 反代
+```
+
+三个条件缺一不可：
+
+1. 反代监听在**容器可达**的地址上（docker 网桥网关，不是 127.0.0.1）；
+2. `bridgeAdvertiseUrl` 填的正是这个地址，且 `bridgeSecret` 与后端 `DSH_BRIDGE_SECRET` 同值；
+3. 开机时**先有网桥地址、再 bind**——最容易漏的一条，见下。
+
+> 不要为了让容器连得上就改成 `listen 0.0.0.0:3082`：那等于把 DSH 暴露到局域网，换来的
+> 只是省一次配置。绑网桥地址 + 下面的开机排序就够了。
+
+#### 配置示例
+
+插件侧（`~/.dsh/profiles/web/cordis.patch.yml`）：
+
+```yaml
+- insert:
+    - id: dsh-copree
+      name: dsh-copree
+      config:
+        bridgeEnabled: true
+        bridgeSecret: "<与后端 DSH_BRIDGE_SECRET 同值>"
+        bridgeAdvertiseUrl: "http://<docker 网桥网关>:3082"
+```
+
+网关地址按部署现取（每个部署网段都不一样，不要照抄）：
+
+```bash
+docker network inspect \
+  "$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}' ai_group_backend)" \
+  --format '{{(index .IPAM.Config 0).Gateway}}'
+```
+
+宿主反代（`/etc/nginx/sites-enabled/dsh-bridge`）：
+
+```nginx
+server {
+    listen <docker 网桥网关>:3082;
+    location / {
+        proxy_pass http://127.0.0.1:3080;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;   # 会话流与 job 输出走长连接
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host <DSH 信任的主机名>;  # 对应 dsh web --trusted-host
+        proxy_read_timeout 3600s;
+    }
+}
+```
+
+#### 开机顺序（必做）
+
+`listen` 绑的是 docker 网桥地址，而该地址由 docker 启动时创建。开机瞬间 nginx 若先起，
+会直接失败：
+
+```
+nginx: [emerg] bind() to <网关>:3082 failed (99: Unknown error)
+```
+
+发行版的 `nginx.service` 既没有 `After=docker.service`，又是 `Restart=no`（外加 10 秒 5 次的
+start-limit），于是一次抢跑就永久 failed。管理端表现为**「注册了但连不上」**——心跳
+（插件 → Copree）照常出去，回连（Copree → 插件）全断，两个方向恰好对得上。
+
+用 drop-in 修，不动发行版 unit（升级不回滚这份配置）：
+
+```ini
+# /etc/systemd/system/nginx.service.d/dsh-bridge.conf
+[Unit]
+Wants=docker.service
+After=docker.service
+StartLimitIntervalSec=0    # 地址比 nginx 慢一步时不要判死
+
+[Service]
+Restart=on-failure         # bind 失败 = 退出 = 重试，直到地址出现
+RestartSec=5s
+```
+
+```bash
+systemctl daemon-reload && systemctl restart nginx
+```
+
+为什么不写成 `ExecStartPre` 轮询 `ip addr`：那要自定义超时与睡眠，而 `Restart=on-failure`
+本身就是 systemd 对「条件不满足就再来一次」的原生表达。
+
 ---
 
 ## 4. 世界工作区（核心特性）
@@ -284,6 +382,9 @@ $DSH_HOME/copree-worlds/Copree群视界-<世界名>/
 | 命令列表空但会话有命令 | 命令挂在**活动会话**的 agent 上；先选一条会话（页面会提示"先选一条会话"），被清理掉的旧会话要先续接 |
 | 装插件报 `ERR_PNPM_UNEXPECTED_STORE` | 见下方「DSH_HOME 是符号链接时的两个坑」第 1 条 |
 | 装插件报 `ENOENT ... /data_s001/tmp/...` 或 `.../relocated/dsh-session-recovery` | 见下方第 2 条 |
+| 管理端显示「注册了但连不上」 | 心跳出去了、回连进不来。先在**后端容器里**探一次：`docker exec <后端容器> curl -s -o /dev/null -w '%{http_code}' http://<advertiseUrl>/copree-bridge/status` —— `000` = 反代没起或地址不对（见 §3.6「开机顺序」）；`401` = 链路通（无 token 被拒，正常） |
+| 管理端显示「未检测到」 | 插件根本没发心跳：DSH 设置 → Copree 未点同意，或 `bridgeEnabled=false` / `bridgeSecret` 为空 |
+| 重启机器后桥接必坏一次 | nginx bind 到 docker 网桥地址，开机瞬间该地址还不存在 → 见 §3.6 的 systemd drop-in |
 
 ### 8.1 DSH_HOME 是符号链接时的两个坑
 

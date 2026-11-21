@@ -1,7 +1,29 @@
 # CHANGELOG
 
-本 CHANGELOG 遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/) 规范，
-版本号遵守 [语义化版本](https://semver.org/lang/zh-CN/)。
+本 CHANGELOG 遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/) 的结构：未发布段在最上、版本按发布时间倒序、日期用 ISO 8601、一条改动一个条目；版本号遵守[语义化版本](https://semver.org/lang/zh-CN/)。
+
+分类在 Keep a Changelog 的六类之上做了细分（读者按「加了什么 → 修了什么 → 内部调整」的顺序看）。
+分节名有两种写法：`类别`，或 `类别 — 主题`（前者决定归类与排序，后者只是给人看的标题后缀）：
+
+| 本文件的分类 | 对应 Keep a Changelog | 收录什么 |
+| --- | --- | --- |
+| ✨ 新增 | Added | 新功能、新能力 |
+| 🐛 修复 | Fixed | 修掉的问题，写清根因 |
+| 🔧 变更 | Changed | 行为或结构变化（混合类，归不进下面几类时用它） |
+| ⚡ 性能 | Changed | 更快、更省 |
+| ♻️ 重构 | Changed | 结构变化，行为不变 |
+| 🗑 移除 | Removed | 删掉的功能与入口 |
+| 🎨 界面与交互 | Changed | 外观、布局、操作 |
+| 🔒 安全 | Security | 安全相关 |
+| 🧹 清理 | Removed | 死代码与冗余 |
+| 🧪 测试 | Changed | 测试基建 |
+| 📝 文档与工程 | Changed | 文档、构建、流程 |
+| 🔧 开发工具与测试 | Changed | 本地工具链 |
+| 📦 依赖更新 | Changed | 依赖升级 |
+
+写入走 `scripts/changelog.py`（唯一入口）：`add` 按上表顺序插到该分节末尾，`check` 校验结构
+（重复分节、版本倒序、空分节、空行），`merge` 合并重复分节并排序，`rename` 把旧写法换成规范名，
+`dedupe` 合并重复版本块。
 
 > **当前阶段**：v0.4.16（0.4.x 线的收口版本）— 世界积木「色牌 · 抢灯」（大厅 + 四张桌子 + AI 对局）+ 灵魂档案 2.0（知识库原样进出、记忆不丢刻度）+ 私信被丢弃与世界事件账本两处根因修复 + Windows 安装器编码修复。
 >
@@ -9,75 +31,595 @@
 ## [未发布]
 
 ### ✨ 新增
-- **B 站通道插件**（`backend/plugins/bilibili`）：把一个 AI 接进 B 站，**一个 AI 一个 B 站账号**。
-  创建者在该 AI 的通道卡片上扫码登录（`passport.bilibili.com` 的二维码流程，状态驱动、
-  不需要新接口），Cookie 加密写回该实例的插件配置；工具按 `agent_id` 取**这个 AI 自己的**登录态。
-  提供视频详情、全站热门、UP 主粉丝数、直播状态、UP 主动态、订阅管理与推送；订阅推送以目标群里
-  某个 AI 的身份发出（`source="world"`，不触发群钩子），没有 AI 的群跳过不推。
-  未登录时动态接口会如实报「需要登录」，不静默降级。见 `docs/dev/bilibili_channel.md`。
-- **插件可以自带工具与技能段**：`ToolPlugin.owner` + `ToolRegistry.register_segment/unregister_owner`，
-  插件卸载时按 owner 精确回收自带工具与段（内置工具 owner 为空，永不被误删）。
-- **插件安装规则补三道**：符号链接/不安全条目由「跳过」改为**整包拒绝**（跳过会装出缺文件的半成品）；
-  版本规则显式化（更高=升级、相同=修复安装、更低=降级需 `allow_downgrade`）；新增压缩比上限
-  200:1（只限"解压后 20MB"挡不住高压缩比炸弹）。
-- **B 站扫码登录的二维码直接进通道卡片**：卡片只能渲染 `detail.hosted_endpoint`（QQ/NapCat 共用
-  的契约），而 B 站原先只报 `detail.login`，界面上一个码都没有。现在按 `hosted_endpoint` 报
-  `qr_png`（PNG 的 base64）+ `qr_url`，前端每 5 秒自动重拉、后端每次取状态顺手 poll 一次，
-  手机确认后自动写入 Cookie、卡片切到「已登录」。二维码由插件自带的 qrcode 实现绘制
-  （镜像里没这个库、容器又连不上 PyPI，装包这条路在部署侧不可靠）。
-  另外 `hosted_status()` 现在接受 `agent_id`（旧实现无需改动），**保存配置前就能看到码**，
-  不必先对着空表单盲点保存。
-- **「每个 AI 每天花多少」矩阵**：新增 `GET /conversation-log/usage/matrix?days=N`（只算自己的 AI）
-  与 `GET /admin/usage/matrix`（管理台，可按用户/版面过滤），行 = AI、列 = 日期，缺失日期补 0 列。
-  `/me/usage` 页与管理台用量面板都加了这张表：一屏看完每个 AI 每天的 token 花费，
-  点数字可直接切到该 AI 的每日曲线。
-- **插件 README**：内置插件各自补了 README（做什么、要什么权限、平台限制），
-  社区索引校验清单第 4 条本来就这么要求，此前一直缺。
+
+- **文件日额度与撤回回收**：按「账户 + 实例时区日历日」限三样——日写入字节、日新增文件数、
+  每分钟操作次数，人与 AI 各一套（默认 2048 MB / 200 个 / 30 次，0 = 不限，在「设置 ›
+  运行时参数」改）。判据只认真的发生了什么：去重命中与硬链接收文件不写字节、同路径覆盖写
+  不新建 inode，所以都不记账；超限统一 429 + `Retry-After`。撤回消息改成「清附件快照 +
+  把 `reclaim_after` 定到一分钟后」，没被转发过的字节由每分钟扫一次的回收器带走——撤回
+  事务里不删盘，删失败能重试、能凑批。
+
+- **管理台设置收成一个分档**：原先散在「通用 / 能力 / 数据」三个工作区的配置页签收进新的
+  「设置」工作区，首项是设置总览（每域一张摘要卡 + 「详细设置 →」，表单本体只留在详情页，
+  避免同一表单两处渲染各自维护）；运行时参数、模型与嵌入从「系统设置」页底部拆成独立页签。
+  新增「监控 › 文件告警」页，把日额度 / 配额 / 清理三类系统消息单列一页（每类每天只记一条、
+  不分账户），总览「平台现状」的「文件告警」卡下钻到这里。
+
+- **表情包不再依赖本机 emoji 字体**：内置包原来把 76 个 QQ 经典表情映射成 Unicode 字符，
+  「长相」完全交给系统字体——Windows / macOS / Android 各画各的，字体缺彩色字形的（⚽ 这类）
+  还会掉成黑白符号甚至空白。现在插件改名为 `emoji`（显示名「表情」，短码从 `qq_shy` 这类
+  改成 `shy`），每个表情自带一张 128×128 透明底 PNG，站内一律画图；入口归一随之简化：
+  纯图表情在入口就落成附件（正文摘掉标记），与自建表情包走同一条路。图片取自
+  **Noto Color Emoji**（Apache 2.0，可商用），按 109px 位图字形逐字渲染，脚本可复现；
+  QQ 那边的名字由消息自带的 ext 文本给出，按名字落图，通道不必再存一份对照表。
+  已有 AI 的开关决定由迁移 `0118` 跟着旧 id 搬过去，旧 `plugins` 行删除。
+
+- **语音自带文稿**：AI 的语音本来就是它自己的文字念出来的，`send_voice` 现在把那段 `text` 写进
+  **`file_metadata.transcript`**（迁移 `0113`，唯一来源）。不塞进消息的 attachments 快照，是因为
+  文稿会变（先没有、转写完才有、重转还会改），进 N 条消息就是 N 份不一致，转发一次还会丢。
+  消息侧只留 `file_id`，读的时候按 id 补：账本渲染前 `context_sync` 批量查 + `with_transcripts()`，
+  前端语音条走 `GET /fs/transcripts`（只回你读得到的、拿到就缓存），转发按元数据重建后同样按 id 补。
+  于是三件事同时成立：AI 回看历史不再只看到 `[文件] voice_xxx.mp3（101KB）` 这行文件名（以前等于
+  对说过的话失忆）、其他 AI 也读得到、语音条下面直接显示这两行文字。
+  `utils/multimodal.attachment_marks()` 的音频标记从 `[文件] voice_x.mp3（101KB）` 变成
+  `[语音] 晚自习别熬太晚。`（进上下文截 200 字）。写入只有一处 `file_service.set_transcript()`，
+  人的语音将来由 ASR 写同一个字段——见 `docs/dev/TODO.md`「🎙 语音」。
+
+- **输入框改成悬浮玻璃胶囊，并把那份样式提成平台类**：聊天输入区去掉整条分隔线，改成浮在内容上的
+  圆角胶囊（半透明 + 模糊 + 软投影），与手机端底部导航同一个做法；这一份外观收进
+  `src/index.css` 的 `.glass-float`，两处共用，不再各自手拼 `rounded-[22px] border-black/[0.06]
+  backdrop-blur-lg shadow-[…]`。同期把胶囊里的工具按钮与发送按钮换回平台语义类
+  （`.icon-btn` / `.btn .btn-sm .btn-primary`），并补 `.icon-btn.is-active` 给开关态。
+  发送按钮与「回到底部」改成全圆角：新增 `.btn-pill` / `.icon-btn-pill` 变体类（工具类在本层
+  规则之前，元素上补 `rounded-full` 会被 `.btn` 盖掉）与 `.float-btn`（36px 圆形玻璃钮）。
+  顺带修掉「回到底部」按钮挂错父级的老问题——它原来挂在面板根上，`bottom-*` 量到的是含输入区
+  的整块面板，会落进输入框里。说明见 `docs/dev/ui_system.md`。
+
+- **输入区浮在消息之上，滚动条跟着收口**：输入区不再占布局空间（`absolute inset-x-0 bottom-0`），
+  消息一直滚到面板底、从玻璃胶囊下面过去；它自己的高度由 `ResizeObserver` 量出来写进
+  `--composer-inset`，滚动区底部留白与滚动条轨道都读这同一个值（与 `--mobile-nav-reserved` /
+  `.pb-nav` 同一套做法，不再各算一套）。手机断点内原生滚动条收起，改由
+  `components/MobileScrollbar.tsx` 画：给它加了 `containerRef` 参数以便在聊天页复用（原来只服务
+  底部导航），并让它**能拖能点**——外壳 16px 宽好按、`touch-none` 不带动页面、按滑轨即跳转、
+  拖动按「轨道可动长度 ↔ scrollHeight」换算。滚动期间**不进 React**：几何只在容器尺寸变时
+  `setState`，滑块位置直接写 `transform`、透明度直接写 `style`，每帧零重渲染（此前每帧
+  `getComputedStyle` 读变量还会强制样式重算，是「进度条卡卡的」的根因，改读 `data-composer-inset`）。
+  轨道浅紫 `primary-500/15`、滑块灰 `textMuted/70`。
+
+- **顶部条统一成一条浮条（`.top-bar`）**：以前每个页面各写一句 `border-b border-border bg-surface`，
+  边界淡到看不见、滚动时也没有层次；现在收成一个平台类——surface 底 + 一层普通的软阴影（不加发丝线、不用负扩散，否则细线只出现在左右两端），
+  页面头（PageShell/PageHeader）、应用侧栏头、会话列表头、设置页、控制台、抽屉、弹窗、预览页全部挂它，
+  高度统一 `h-14`（它自带 `position: relative; z-index: 10`——不抬层级时，下面不透明的卡片会把头部投下的阴影整段盖掉；吸顶的用 `top-bar-sticky`）。聊天头部另外从"贴边的白板"改成**浮在消息上的一条**（新组件
+  `components/shared/ChatHeader.tsx`，群聊与私信共用一份：32px 头像 + 名字 + 一行副标题 + `.icon-btn`
+  操作区；静音态用新的 `.icon-btn.is-alert`、头像走 `utils/avatar`、补了 `env(safe-area-inset-top)`）。
+  消息从条底下滚过去；条本身**不加渐变也不加模糊**——加了就和页面顶部条深浅不一（用户指出过三处顶部条颜色不同），
+  只留 `.top-bar` 那一层软阴影，于是全站顶部条只有一种样子。让位量（高度 3.5rem + 0.5rem 呼吸间距 + 刘海安全区）
+  单独放在 `components/shared/chatHeaderInset.ts`（组件文件只导出组件，免得 Fast Refresh 失效），
+  `.chat-scroll` 的顶部留白与 `MobileScrollbar` 的轨道上沿都按它收（滚动条改量 `[data-float="top"]` 的下沿）。
+  「跳至未读」「错误 Toast」「重连提示」与常驻的「在沉浸式界面打开」也随之落到条的下沿（后者不再占布局，
+  高度由 `--header-strip` 让位）。顺带修掉群聊头部把「在线人数」挤在标题旁的排法（改成一行副标题）
+  与私信头部写死头像渐变的老问题。
+
+- **群设置 / 私信设置的表单收口到平台类**：输入框与文本域原来是手写的
+  `bg-elevated border border-border rounded-control px-3 py-2 text-sm`——半径 12、38px，
+  而且 `:root:not(.dark) .bg-elevated` 还会给它们补一圈内描边，跟真边框叠成两条灰线，看着发糊。
+  现在统一成 `.field`（40px、半径 8、canvas 底、焦点紫圈），多行用 `textarea.field` 加新增的
+  `.field-noresize`；旁边的保存按钮也从手写的 `px-3 py-2 bg-primary-500 …`（同一个动作两种尺寸并存）
+  换成 `.btn .btn-md` / `.btn-sm`，与输入框严格等高。同时给 `.btn` 补了两个浅底变体
+  `.btn-tinted` / `.btn-tinted-danger`（"让 AI 重新生成"这类要区分语义但不想实心的动作），
+  并把 `:root:not(.dark) .bg-elevated` 的内描边排除表单控件——这是输入框发糊的根因，全站其余手写输入框
+  一并受益（还剩约 30 处没迁移到 `.field`，按 `docs/dev/ui_system.md` 的口径逐步换）。
+
+- **Copree 里的 DSH 对话页改用平台类**：这一页本来就在我们自己的前端里（`pages/DshChatPage.tsx`），
+  之前却是另写一套：`h-10 border-b` 的顶栏、`rounded-2xl border bg-elevated/40` 的输入卡片、
+  手拼的 `h-7 rounded-control` 发送按钮与分段控件。现在顶栏统一成 `.top-bar`（h-14，与聊天头部同高同阴影，
+  左右两栏的顶边也对齐了）、输入区改成和聊天页同一个 `.glass-float` 胶囊并去掉那条分隔线、
+  「回到底部」换成 `.float-btn`、发送与「排队/插队」换成 `.btn .btn-sm` 与
+  `.btn-outline.is-active`（分段控件只有这一种做法）、窄屏会话下拉换成 `.field-sm`、
+  新建会话换成新增的 `.btn-tinted`。
+
+- **卡片收口到 `.card`：我的 AI、群视界列表，以及 16 处手写卡片**：我的 AI 的卡片原来是
+  `bg-surface border border-border rounded-card` 加一堆手写徽章——状态是 `px-2 py-0.5 rounded-full` 自己拼的、
+  「共振 / 深度推理 / 已修改」两种深浅不一的色块、底部动作是四个 `px-2 py-1` 的裸文字按钮。现在卡片用
+  `.card .card-interactive`、状态统一走新增的 `STATE_CHIP`（active=chip-mint / dnd=chip-rose /
+  inactive=chip-muted / blocked=chip-accent，收在 `constants.ts` 与 `STATE_BADGE_COLORS` 并列）、
+  属性标签统一 `.chip`、动作行换成 `.btn-xs .btn-ghost`。**群视界列表改成一屏多个的卡片**
+  （`sm:grid-cols-2`）：名称 + id + 状态 chip + 两行简介 + 绑定信息，底部只留「设计」「打开」，
+  绑定 / 唤醒 / 删除收进右上 `···` 菜单（六个按钮挤一行原本会折成两行）；创建世界那两个输入框
+  顺带换成 `.field` / `textarea.field`。另外把 16 处 `bg-surface border border-border rounded-card`
+  直接换成 `.card`（半径同为 12px，纯去重、不动外观）。还剩 45 处 `bg-surface border border-border`
+  （多为 8px 的 `rounded-control` 小面板、以及带 `shadow-2xl` 的弹窗壳）没动——弹窗本身已经有投影，
+  再挂 `.card` 反而会把 `shadow-2xl` 压掉。**「同档位」的卡片再扫了一遍**：按"bg-surface + rounded-card + 单色描边"
+  的写法（不管类名顺序）又收了 67 处——我的页「我的 AI」小卡、AI 详情页那十来块面板、设置页各区、`ListPanel`……
+  集市条目卡与「我的 AI」小卡另外单独改（它们原来带 `hover:border`，改成 `.card-interactive` 的悬停底），
+  于是一屏里的卡片现在统一是同一档浮起。
+
+- **管理台「用量分析」页三处修整**：① 「每个 AI 每天花多少」与「按用户 · AI 用量明细」本来是两张独立的白卡（一张 `p-5`、一张 `overflow-hidden`），看着像两个数据源；现在并成一张卡，用**下划线分块**切换（新增 `usage:matrixTabShort` / `usage:byUserTab` 两个标签），矩阵那块移进「居民 AI」版面。② 矩阵最左的 AI 名在日间主题下会消失：sticky 单元格自带 `bg-surface` 白底、名字只靠继承取色；现在表格与单元格都显式写 `text-textPrimary`。③ 单 AI 每日柱状图原来把 prompt / completion / reasoning / cached 四种直接摞起来——prompt 里含着 cached、completion 里含着 reasoning，等于**重复计数**；现在拆成互不重叠的四段，自下而上「输出 → 深度推理 → 输入（未命中缓存）→ 输入（命中缓存）」，命中缓存压在最上层，配色换成紫系四档（`stackColors()`，深色另给一套），tooltip 标题带上当天总量。
+
+- **管理面板「概览」页收拾了一遍**：「需要你处理」不再是白卡，改成**通栏灯带**——没有圆角、描边、投影，横向铺满内容区（`left-1/2 w-screen -translate-x-1/2` + 外层 `overflow-x-hidden` 裁边，比给控制台外壳开一个全宽槽省事得多）。没事时整条是深绿渐变（mint-700 → 500），标题下面一句 `text-base` 的白字「暂无待处理，一切正常」当主语；有事时同一条换成琥珀渐变，条目用白字 + `bg-white/15` 的图标底。
+
+- **账本里的工具条目只留要紧的**：一轮的工具盘点原先整条落账本（`[本轮工具] send_gm(ok)；end_turn(ok)`），
+  成功的读类调用只回一个 ok，没有信息量；而压缩时这类事件条目原样搬运，只增不减（线上单段会话积了 164 条，
+  同一句重复 59 次）。现在只留**失败（带报错原因）**和**有持久副作用的工具结果**
+  （`set_alarm` / `update_alarm` / `cancel_alarm` / `store_memory` / `forget_memory` /
+  `note_experience`，靠工具上的 `persistent_effect` 声明）。已有的旧条目一个字不动——
+  改历史等于把它后面的前缀缓存全废。测试 `test_tool_ledger_entries.py`。
+
+- **同一句话不再在账本里落第二遍**：`[本轮工具]` 总账与平台通知（`kind` = `tool` / `notice`）
+  落账前先跟「同 kind、同 ref 的上一条」逐字节比，一样就不落。压缩时这类事件条目原样搬运、折不掉，
+  线上单段会话里同一条工具总账积了 59 条、`channel_mode` 通知同 ref 积了 9 条，同一句一直撑着上下文。
+  判据只在写入侧（`context_sync._fold_repeats` → `history_service.last_of`，纯逻辑
+  `pure/history.fold_repeats`），老条目一个字不动；消息、缺口、交接这类重复就是内容真的重复，不折。
+  测试 `test_ledger_repeat_fold.py`。
+
+- **计划板默认打开**：`plan_injection_enabled` 三档预设全开、存量 AI 一并打开（此前只有数字生命档开）。
+  解锁点之后 AI 得知道「自己还有哪些闹钟、排给了哪个状态」，跟帧清单同一个理由；条目带 `drop_on_unlock`，
+  compact 后重投一次。代价不随轮数涨——一条闹钟行都没有的 AI 查一次 `agent_alarms` 就返回，
+  有闹钟的只在板子真的变了时落一条。见 `docs/dev/plan_and_alarm.md` §3.5。
+
+- **B 站私信能看也能回了**（`bili_dm`）：进「刷 B 站」帧时那一遍收件箱只告诉 AI「有人私信你」，
+  却没有回话的出口——它照实说看不见/回不了。现在同一个工具管三件事：`list` 列最近的会话
+  （谁、几条未读、最后一句和它是谁说的）、`read` 读某个会话最近几条、`send` 用这个 AI 的 B 站账号真发一条
+  （`web_im/v1/web_im/send_msg`，CSRF 仍是 `bili_jct`）。「刷 B 站」帧的白名单只多这一个名字，
+  另外补回 `compress_context`——那一帧一轮能跑 50 次调用，长起来得让它自己提前压；
+  其余能力一个没塞。
+  认人先认**已有私信会话里的昵称**，全站搜人只认昵称完全一致——按昵称把私信发给陌生人是收不回的错；
+  发送前还有三道闸：创建者没开 `allow_interact` 不发、不给自己发、正文最多 500 字。
+  打桩测试 `test_bilibili_dm.py`，不往真人发消息。见 [B 站通道](docs/dev/bilibili_channel.md) §3.4。
+
+- **决策技能的启用前检验会回执"反例真的跑过了"**：写入成功不再只回 `success`，而是带
+  `verify.summary`（如「2 条样例全部符合预期：1 条正例都命中、1 条反例都没被吃掉（都真跑过了）」）、
+  `verify.counts` 与每条样例的实际结果；没给反例时明说"这只证明会命中，证明不了不误触"。
+  文案唯一出处 `_verify_summary`，agent 与群助手两条写入口共用。
+
+- **从没命中过的规则会留下"为什么没中"的证据**：`stats` 新增 `miss_count` / `last_miss_at` /
+  `miss_samples`（每条 `{at, event, content, why}`，`why` 与试跑同口径），只对 `hit_count=0` 的规则采样；
+  同一规则最少间隔 10 秒、同一正文不重复、进程内再挡一道。列表给最后 3 条，`list_decision_skills` 带 `name`
+  给全量（≤20 条）。改了 `when` 会清掉旧样例（那批证据描述的是旧条件），命中计数照旧保留。
 
 ### 🐛 修复
+
+- **滚动条不再并排出现两条**：iOS / iPadOS 的滚动指示器是系统 overlay，`scrollbar-width`
+  与 `::-webkit-scrollbar` 都关不掉（WebKit bug 236586），自绘条一画就是滚动时一深一浅两条——
+  现在这些设备只留系统那一条，桌面 Chrome / Android 仍用自绘条（轨道能止在悬浮输入区上沿、
+  由 scroll timeline 在合成线程跟随）。同批修掉：切页签后滑块停在上一页进度（内容容器没归零 +
+  滚动条没重挑容器）、移动端「列表 / 详情」与 URL 不一致导致返回按钮与系统返回键行为分叉。
+
+- **「注册了但连不上」不再只有一句 All connection attempts failed**：`bridge.py` 里 8 处
+  `DSH 不可达：{exc}` 是同一句话各写一遍，而这句话恰好丢掉了最有用的一半信息——连的是**哪个地址**。
+  现在收成一个 `_unreachable()`，文案带上实际回连地址并点名排查章节：地址填错（后端在容器里却填
+  `127.0.0.1`）、反代没起、DSH 真没起，三者在状态卡上从此分得开。
+
+- **一个 QQ 群一个 Copree 群**：qq-napcat 原来把所有 QQ 群的消息塞进同一个 `copree_group_id`，接十个群等于一个群。现在改成「某个 QQ 群第一次说话，就给它新建一个自己的 Copree 群」（`origin_channel=qq-napcat`，AI 自动入群，映射写进 `group_map`），**只新建、不认领**同名群，主站已有的群一个不动；`copree_group_id` 降级成兜底（留空也行，不再必填）。私聊本来就是每个 QQ 号各建一条私信会话，不需要改动。
+
+- **一个创建草稿只落一个 AI**：入口页把「已建好的草稿」当「继续上一次」时就埋下了这条路——
+  表单能原样恢复、创建按钮还能按，同一份表单提交两次就建出两个 AI（11-15 线上那位用户的
+  「初音未来」×2：两次 `POST /agents` 相隔 14 秒，除 `id`/`user_id` 外逐字段相同）。
+  现在 `POST /agents` 带 `draft_id`，并在**建号之前**对草稿行 `SELECT … FOR UPDATE` 排队：
+  同一草稿的并发请求只有一个真的去建，其余等锁后直接返回那条已建成的（实测四连发 = 1×201 + 3×200，
+  同一条 `id`）。这一锁顺带堵住并发建号的另一个坑——两个请求同时给 AI 起同名账号会撞
+  `users_username_key` 直接 500。草稿的 `status=created` 与 `agent_id` 改由后端在同一事务里写，
+  前端不再自己 PATCH。
+
+- **删除 AI 报「服务器内部错误」**：`delete_agent` 先删 `users` 行、后删 `agents` 行，而
+  `agents.user_id` 与 `dm_messages.sender_id` 对 `users.id` 都是 NO ACTION——这条 AI 只要有过
+  一条私信（建号时的开场白就够），整次删除就卡在 FK 上，正常状态下删也报 500。
+  现在顺序是：删 agent → 清掉它参与的私信会话（消息随 `session_id` 的 CASCADE 一起走）→ 删账号；
+  同时清掉一处查了两次却没人用的死查询。
+
+- **删 AI 会把它建的群和它名下的世界留成悬空**：`groups.owner_type/owner_id` 与 `worlds.owner_id`
+  都是多态裸 id（没有指向 `agents` 的 FK），删 AI 不会连带删群删世界，但会留下「群主是一个已经不存在的
+  AI」以及谁都不认领的群成员行（线上已积了 57 条指向已删 AI 的孤儿成员）。现在 `delete_agent` 先做一次
+  资产交还：它建的群改挂到它的主人名下（主人不在群里就先拉进来、给 `owner`），它自己的成员行随删除清掉；
+  影子账号名下若意外有世界，也一并改挂主人——宁可把资产留给主人，也不静默带走人类的群与世界。
+  实测：AI 建的群删后 `owner_type=human`、主人是唯一的 owner 成员，群与世界的行都还在。
+
+- **连续失败会主动报出来，不再靠用户发现**：worker 以前把异常吞成一行 `logger.error`——
+  11-15 那次私信全线哑火就是这么藏了 40 分钟。现在按 agent 记连续失败：同一 agent 连续 3 轮失败
+  就写一条 `worker_consecutive_failure` 到审计日志（带失败次数、持续时长、最后一条错误），
+  之后 30 分钟内不再重复；中间成功一轮就清零，偶发的坏消息不会误报。
+  看门狗本体是纯内存的 `app/ai/failure_watch.py`（阈值/冷却可注入，单测不用 sleep）。
+
+- **私信全部不回复：前缀校验漏了一个 import**：`build_dm_messages()` 末尾要调 `guard()` 核对前缀快照，
+  但这一支只局部 import 了 `locked`，`guard` 从未导入 —— 每条私信构造上下文都抛 `NameError`，
+  被 `response_worker` 吞成一行日志，表现就是「私信发了没回、连对话日志都没有」，线上跑了 40 分钟。
+  群聊走另一支、导入了 `guard`，所以只有私信坏。
+  修法不是补那句 import 就完事：两个 builder 以前各自在函数体里 import 两个名字，漏一个就是这种哑火。
+  现在 `llm.py` 只在模块顶部 import 一次（`guard` / `locked`），两条路径共用同一对全局名；
+  另加 `tests/test_prefix_lock_wiring.py` 检查两个 builder 的代码对象都引用了这两个名字 ——
+  将来谁再拆路径忘了接，这条测试直接红。
+
+- **「录音中」活不过 30 秒，合成到一半自己退回「思考中」**，合成到一半自己退回「思考中」**：前端给“正在说话”定的兜底是 30 秒，
+  而 send_voice 走外部 TTS，11-14 实测一条语音从调用到收尾 **136 秒**（14:45:40 → 14:47:56），
+  30 秒一到状态自己就撤了。更糟的是「思考中」的清除挂在一次性 1.5 秒定时器上，切会话/重连时
+  被 pendingTimers 一起清掉，于是它会**永久残留**；进会话的恢复接口 /groups|dm/{id}/activity
+  又只回放思考态，刷新一次正在合成语音的人就变回在想。
+  现在：兜底改成 5 分钟且每收到一次 state=speaking 就重新计时（按 AI 一条计时器，不是共用的一次性
+  定时器）；ai_typing 一到达就在同一批 setState 里摘掉 thinking；后端 _thinking_state 多一个 state
+  字段（thinking/typing/speaking），executor 广播工具活动时用 mark_activity_state() 同步，
+  activity_key() 收成会话键的唯一拼法，恢复接口三态回放。
+  顺带把活动指示条从消息滚动流里挪进输入区顶部——它原来挂在消息末尾、靠 sticky bottom 兜底，
+  会被消息带着跑（看起来夹在两条消息中间）；现在跟着输入区一起浮起，高度被 ResizeObserver 计进
+  composerH，消息区底部留白自动让开，不压最后一条。
+
+- **语音配置保存完，AI 还是哑的**：能不能发语音只看 probe_ok，而写回它的入口只有语音 tab 的
+  「测试」按钮——改任何字段都会把旧结论作废，用户改完忘了点测试，send_voice 就从工具表里消失
+  （模型不知道有这个工具，只能回一句“通道没测通”）。现在 PUT /agents/{id}/voice 保存后顺手测一次：
+  结论还有效（字段没变）就沿用、不重复打供应商；base_url 留空视为清空配置、跳过检测（状态退回
+  「还没测过」而不是「不可用」）。面板上保存按钮显示「测试中…」，返回直接给可用/不可用 + 原因。
+  测试本身不花合成额度（Breeze 走官方自检端点，MiniMax 只发 max_tokens=1）。
+
+- **B 站通道卡片点「获取登录二维码」报「bilibili 没有扫码登录」**：扫码逻辑在插件内部一直是通的
+  （_qr_start / _qr_poll / 二维码绘制都在），但卡片走的是平台统一接口，只认实例方法 request_login_qr
+  或类方法 refresh_login_qr，而 B 站通道两个都没暴露。现在补上 refresh_login_qr(agent_id)
+  （用户点下去那一刻重新要一张，倒计时从此刻算），并给 hosted_endpoint 补 qr_state / qr_expires_in
+  ——前端只有看到 qr_state === live 才会把码采纳进卡片，少了这两个字段，码拿到了也会被判成“已过期”、
+  卡片一直停在等待状态。
+
+- **聊天页的滚动条：桌面端先是一根都没有，后来变成两根**：.chat-scroll 收起原生条的规则写在
+  @media (max-width: 767px) 里，桌面端其实一直是那根 5px 原生条；统一改用 MobileScrollbar 之后
+  （新增 always），原生条与自绘条就同时出现了。现在原生条两端都收起，只留自绘条一根。
+  同时把它变轻：内容变高改由 ResizeObserver 盯滚动容器的子元素，只更新“可滚动距离”、不重渲染；
+  MutationObserver 缩到只看 main 的直接子节点（只捕捉“页面换了”），不再像以前那样递归盯整棵子树、
+  靠 250ms 节流兜住流式输出的每一帧；滚动回调里也不再读 scrollHeight/clientHeight（那是强制布局）。
+  滑块位置进一步交给 **CSS 滚动驱动动画**（滚动容器声明命名时间轴 + 滑块 animation-timeline，
+  timeline-scope 提升到 body 作用域），由合成线程按滚动进度直接算，内容动一帧、滑块跟一帧；
+  不支持的浏览器（Safari 26 前、Firefox 159 前）回退到原来的 JS 每帧写位移，两套写法写的是同一个
+  translate 属性，不会叠成两倍位移。随后又补了两处：内容高度变化时连**滑块长度与可走距离**一起重算
+  （之前只更新了“可滚动距离”，进场时内容还没加载完量出来的是一根满高的长条，之后内容长高它就不再变，
+  滑块按旧距离走、看着“变慢”了）；动画补 `animation-fill-mode: both`，否则滚到底那一格进度正好 100%、
+  动画算 finished 又把位移整个撤掉，滑块会弹回顶部（headless Chrome 137 实测：滚到 max 时 computed
+  translate 变回 none）。最后，动画终点放到 **100.1%**（keyframes 里位移相应乘 1.001）：进度一旦到
+  100% 动画就被判 finished，**合成器不再驱动它**，再往回滚虽然 playState 回到 running，帧率却掉回
+  主线程那条路——滑轮到底再往上就「又变慢了」。实测改后从顶到底全程 running，到底位移误差
+  < 0.01px。再往里一层：滑块拆成「可走距离 + 滑块」两层，动画挂在可走距离那一层、关键帧只写
+  静态的 0 → 100.1%，**不再引用实时变量**——断点切换、内容加载都会改这个距离，关键帧里引变量
+  意味着每次变化都要重解析一遍，滚动动画会被挪出合成线程（放大界面到手机断点后又变慢就是这个）。
+  滑块长短与可走距离仍直接写 DOM，流式输出时不进 React。
+
+- **工具目录一改，所有活跃会话的前缀从第 0 字节失效**：缓存命中率 11-12/13 还是 98.5%/98.2%，
+  11-14 掉到 85.7%。拆开看不是"没锁"——`cap_effective_versions` / `cap_effective_allowed`
+  锁的版本号与工具名单当天一次都没变，变的是**渲染出来的文字**：技能目录里的
+  `可用工具：93 个 → 94（send_voice）→ 95（file_fetch + 大肥鱼表情包）` 是每轮现算的，
+  于是 7 次整段失效、多付约 283k 未命中。
+  现在把**渲染结果**整段钉住：`agents.cap_effective_prefix`（JSONB，迁移 `0117`），
+  首见渲染一份存下（带 sha256），之后每轮发出去的就是这份字节，`_build_tools_segment` /
+  `_emoji_packs_note` / `_build_memory_index` 怎么改都进不了活跃会话。
+  唯一读写口是 `ai/prefix.py` 的 `locked()`（锁定态只发旧字节，换新只由 `mark_prefix_fresh`
+  在 compact / clear 时清空），键带人格变体（`agent-prompt-{id}[-u{uid}]`），否则群里 per-user
+  覆盖会让 B 读到 A 的人设。
+  配套三件"不靠后来者自觉"的东西：`SECTIONS`（前缀段清单，与 `ContextConfig` 对账，
+  漏登记就测试红）、`guard()`（有人在 `locked()` 之后又往前缀里塞东西 → 抛 `PrefixDrift`）、
+  `notice_sources()`（通知源清单只有一份，有源的段必须在里面）。
+  顺带补上一个真缺口：**表情包清单此前不在版本链里**，加"大肥鱼"24 张时前缀变了却零通知；现在
+  `emoji-packs` 与人格 / 记忆索引 / 平台工具并列，加包删包都会发【能力变更通知】。
+  每条快照约 14KB，**每 AI 最多留 64 条**（超出按最近使用丢弃最旧的），进很多群也不会慢性膨胀。
+  探测与渲染刻意保持一条路径（构建函数既登记版本又产出文本）：命中快照时会多跑一遍构建，
+  实测每次唤醒净增 1 次查询（约 3%），换零漂移。设计与取舍见
+  `docs/dev/capability_lazy_loading.md`「锁的是发出去的字节」。
+
+- **会话列表的预览不认撤回、不脱彩色标签**：侧栏那一行以前把原文直接截断给你看，于是
+  撤回后预览还挂着原话（刷新也甩不掉）、`[blue]123[/blue]` 显示成标签字面量、纯语音显示成
+  `voice_20261114104640_1.mp3`。现在"这条消息给人看的一行"只有一份实现
+  `message_serializer.text_preview()`（@ 换名字 → 脱 Markdown/彩色标签 → 截断），
+  会话语义再包一层 `preview_of()`（撤回 → 「撤回了一条消息」），侧栏与站内浮窗共用；
+  附件占位补上语音 → `[语音 0'42"]`（时长存 `file_metadata.duration_ms`，迁移 `0116`：
+  上传音频时 `utils/audio_probe` 读 mp3 帧头／wav 头探一次，不引解码器；时长不可变，所以
+  发送时同时写进附件快照，列表预览不必为每条会话再查库）。前端撤回成功后刷一次列表（私信广播按 `exclude_user_id`
+  排除了发起者，会话连接也不会替它改），别人撤你的则随 `message_revoked` 一起刷。
+
+- **记忆表被写进两种 id 口径，已造成跨用户泄漏**：AI 侧记 `agents.id`（8 处读取都按它、
+  281/283 行也是），但一条遗留的 HTTP 端点让人类/虚拟账号直接往同一张表写 `users.id`、
+  `owner_type` 还标 `'ai'`——AI 写的记忆 HTTP 读不到，编号一撞就串门（实测 agent 3 ↔ user 3、
+  agent 25 ↔ user 25 都能互读）。现在这张表只属于 AI：整组删掉 `/memories/*` 路由与只给它用的
+  schema（全仓 0 调用方，只有历史规格书提过），存量由迁移 `0115` 归正（2 行 id 89/90 →
+  `owner_id=25`，281 行 agents.id 未动）。要「用户自己的记忆」该另建表，别再挤进 AI 的记忆表。
+
+- **AI 发自己的文件也被记成「转发」，自己的配额被算掉一份**：判「这份文件是不是他的」那几处
+  都是 `owner_id == requester_id` 直接比数字，而文件的 `owner_id` 记 `agents.id`、消息的
+  `sender_id` 是虚拟账号 `users.id`，两个号段永不相等——AI 每发一次自己的附件就落一条
+  `forward`（2026-11-14 真机：file 214 是 ai:120 自己的语音）。现在判据只有一处
+  `file_service.is_file_owner()`（`agents.id` 与虚拟账号两种写法都认），权限检查、删除、
+  转发记账、协作模式与协作者管理五处统一用它；迁移 `0114` 清掉存量误记
+  （`forward` 行 43 → human 27 / ai 3）。用例
+  `test_file_access::test_ai_sending_its_own_file_is_not_a_forward`。
+
+- **代理把「@ 别人」读成「点名让我」，起身替人接话**：代理拿到的正文是入口归一后的裸令牌
+  （`<@!120> 那你在这里发条语音吧……`），「@ 的是谁」只能靠猜——2026-11-14 群 77 真机，
+  书爱 @ 的是大肥鱼，化学老师却判「点名让我发语音，接我的话」并接了话（`proxy_judgements #464`，
+  wake=true、448ms）。现在交给代理的正文里，@ 会就地注成 `<@!120>（Deepseek 大肥鱼）（不是你）`——
+  `decider._mention_annotated` 现算名字（`message_serializer.mention_names` → `display_names`，
+  与账本同一份来源），渲染复用 `render_mention_with_names(extra=…)`，与账本已有的
+  `<@!id>（名字）` 只差最后三个字。代理只在「没点名本人」时才被问到（`_proxy_applies`），
+  所以"不是你"是事实、不是推断；带 @ 的消息才加（近期 7.3%），**+19 字**。
+  同一条消息重跑：修前 wake=true「点名让我发语音」，修后 wake=false「话是对别人说的，没叫我」。
+
+- **聊天「往上翻」翻出的是几周前的零散旧消息，刷新还会直接落到一周前**（2026-11-14 群 81 真机）：
+  两个根因。① `get_gm_messages()` 的 `before_id` 分支只过滤 `id <`、**没有 ORDER BY**，
+  SQL 按物理顺序给回最早那批，前端排完序就是「旧消息夹在最新几条上面」（`after_id` 早有升序，
+  这个镜像分支漏了）；首屏一并从 `desc(created_at)` 改成 `desc(id)`，三种取法同口径，
+  同秒插入不再抖。② 首屏无条件 `catchUpFrom(lastRead)`，最多回填 50 页、又把回填到的第一条当成
+  「首条未读」钉在视口；而 `loadMessages` 把 `newestIdRef` 写成「这一页的最后一条」，每翻一页
+  下次追新就再往前退一页，存下的已读位置跟着被污染。修法：游标 ref 收敛成**一个**镜像 effect
+  （只有 `messages` 变了才写），首屏不补中间段，定位门槛 `AUTO_LOCATE_RECENT=10`（首条未读离末尾
+  超过 10 条就落到最新，不再把视口留在中间）。另修：未读为 0 时凭空画出的「新消息」分割线
+  （拿不到 `lastRead` 就把首屏第一条当边界）已删。复现与验证见
+  [线上修复记录](docs/dev/online_fixes.md)。
+
+- **重启慢的真凶是"停止"：容器 PID 1 是 sh，SIGTERM 送不到 uvicorn，每次都被 SIGKILL 硬杀**
+  （2026-11-07 夜）：`docker restart` 要 15.08s 才返回，其中 start→就绪只占 4.9s，剩下 ≈10s 在等停止，
+  而日志里一条 `[STOP]` / `Shutting down` 都没有。根因：`docker-compose.yml` 的
+  `sh -c "python prestart.py && uvicorn ..."` **没有 `exec`**，PID 1 是 sh；sh 在等前台子进程时不转发
+  SIGTERM，uvicorn 全程不知道要退出，Docker 等满 10s 超时后 SIGKILL——每次重启都在硬杀正在跑的回合。
+  修法：① compose 加 `init: true`（tini 当 PID 1，回收 chromium/世界子进程并转发信号）+ 命令加 `exec`
+  （uvicorn 取代 sh）；② `prestart.py` 加迁移指纹快速路径（迁移集合没变就跳过 `alembic upgrade head`，
+  省 1.5~2s），每行带时刻与相对耗时并 flush（stdout 块缓冲会让 docker 时间戳撒谎）；③ 向量维度自检挪到
+  bootstrap 后台任务，启动耗时改成无条件打日志；④ 关闭流程拆成每步限时+计时的 `_shutdown_step`
+  （总预算 ≤ graceful timeout，某步卡住不再拖到被硬杀）。
+  实测：`docker restart` 15.08s → **6.18s**，stop 阶段 10s → **1.0s 且全程有日志**，prestart 2.1s → 0.05s。
+
+- **测试清库助手加了库名闸**：`db_reset.clear()` 先查 `current_database()`，库名不以 `_test` 结尾
+  直接拒绝（`_assert_test_db`）。2026-11-05 一个绕过 conftest 的探针脚本只设了 `TEST_DATABASE_URL`、
+  漏设 `DATABASE_URL`，于是连到生产库并按其「外键闭包」语义清掉 53 张表（users / agents / 账本 /
+  闹钟 / 私信 / 世界聊天等，群与消息不在闭包里）；当日 11:00 全量备份已整库恢复。
+  闸放在助手内部而不是调用点，任何脚本想清库都得先过库名这一关。
+
+- **按帧 id 重建帧时上一帧没被挂起（运行集合里两个 active）**：`restore_frame` 在目标帧已被销掉时
+  新建一帧再交给 `_pull`，新帧带着 `make_state_frame` 默认的 `status="active"` 进数组，而 `_pull`
+  靠「此刻谁 active」认「原来那帧」——认成了刚造出来的自己，上一帧就永远压不下去。闹钟指向的帧
+  被销之后第一次重建起，两帧都算在跑（执行窗口只有 1），日志每轮刷「运行集合里有 2 帧是 active」，
+  被顶下来的那帧状态也不是真实状态。现在重建帧先按 `suspended` 入数组、由 `_pull` 提成当前帧
+  （`push_state` 走的是另一条路：`append` 之前先取 `prev`）。见 `docs/dev/frame_lifecycle.md`。
+
+- **群里说话时 AI 还在插件帧里，日志/经历都记错了场景**：栈顶是插件帧（如「刷 B 站」）或 AI
+  自己压的帧时，`ensure_active_frame` 以前直接不干预，于是群里的消息在插件帧里被处理——
+  那条日志按状态分桶落进「刷 B 站」，经历也记成插件场景，而回合实际是在回群里的人。
+  现在有人在会话里说话就回到那个会话的帧：插件帧改 `suspended`（不结束，`enter_state` 还能回去），
+  并在会话帧上留一条交接（来源 + 当时在做什么）。插件帧没有对话原文，交接判据因此从
+  「有原文」改成「有东西可讲」（`handoff_pending`）：没有原文也渲染一行「刚才你在别处（刷 B 站）」，
+  消费后置 `consumed`，下一轮不再重复注入。见 `docs/dev/frame_lifecycle.md`。
+
 - **同一句话被多台机器人各落一遍**：认亲（`_twin_message`）靠事务级咨询锁排队，锁的键却是
   `通道:QQ群openid:正文`——同一个 QQ 群在每台机器人那里的 openid 不同，等于每台各锁各的，
   并发送入时谁也看不见谁，同一条消息落了三四份（2026-10-31 真机）。键改成
   `(通道, 落点群, 归一正文)`：落点群是平台侧概念，几台机器人的判断一致。
+
 - **引用/撤回拿错实例的通道标识**（HTTP 400 `40034138`「引用消息越权」）：腾讯按 appid 隔离
   `group_openid` / `msg_id` / REFIDX，而合并成一条站内消息后只留了一份（先到先得）。新增
   `message_channel_refs`（迁移 `0099`，`(message_id, instance, conversation)` 唯一），入站、认亲合并、
   出站回写三处都按实例各存一份；出站引用/撤回只取**发送方自己那一份**，取不到就不引用。
   老列 `channel_msg_id` / `channel_ref_idx` 降级为兼容值（先查新表，查不到才退回老列且必须同会话）。
+
 - **@ 机器人时它判成"没点我"、整轮沉默**：全量事件里 `is_you` 就是"这条点到了我"，旧代码却跳过它
   （以为唤醒令牌会补），于是正文里留下别台渲染的影子 id（`<@!177>`）。现在 `is_you` 直接补自己的
   `users.id`；合并时把本条事件点到的 AI 令牌补回合并后那一行；唤醒令牌去重。另一台机器人按
   **agent 名**（= QQ 里的机器人昵称）认回真账号，认不出的才当外部成员建锚点。
+
 - **影子账号把 @ 永久带偏**：认不出自己人的年代给机器人建了 `鲸鱼娘 Deepseek#2` 这类外部锚点，
   `external_identities` 里 `(实例, openid) → 影子` 一旦写下，之后 @ 它就一直解析到影子。
   现在认回真身时顺手合并（`_adopt_bot_identity` → `merge_channel_accounts`），旧绑定收敛回本体；
   存量用 `data/scripts/heal_channel_identities.py`（默认只报告，`--apply` 执行），判据缺一不可：
   源账号 `external`、display_name 与 agent 名一字不差且该 agent 是 AI、**这个锚点从没说过话**。
 
-### ✨ 新增
-- **决策技能的启用前检验会回执"反例真的跑过了"**：写入成功不再只回 `success`，而是带
-  `verify.summary`（如「2 条样例全部符合预期：1 条正例都命中、1 条反例都没被吃掉（都真跑过了）」）、
-  `verify.counts` 与每条样例的实际结果；没给反例时明说"这只证明会命中，证明不了不误触"。
-  文案唯一出处 `_verify_summary`，agent 与群助手两条写入口共用。
-- **从没命中过的规则会留下"为什么没中"的证据**：`stats` 新增 `miss_count` / `last_miss_at` /
-  `miss_samples`（每条 `{at, event, content, why}`，`why` 与试跑同口径），只对 `hit_count=0` 的规则采样；
-  同一规则最少间隔 10 秒、同一正文不重复、进程内再挡一道。列表给最后 3 条，`list_decision_skills` 带 `name`
-  给全量（≤20 条）。改了 `when` 会清掉旧样例（那批证据描述的是旧条件），命中计数照旧保留。
+- **过期兑换码仍显示「可用」**：列表状态只看了 `used_by`，压根没比 `expires_at`，2026-08-23
+  就过期的码一直挂着「可用」（2026-11-01 管理页）。现在状态由后端算
+  （`expired` / `exhausted` / `available`），核销走同一套判断，过期码不再能兑出额度。
+
+- **AI 改个名，整条 QQ 通道就静默不启动**：通道认 AI 认的是名字（`target_agent`），
+  2026-11-02 线上把「鲸鱼娘 Deepseek」改成「Deepseek 大肥鱼」后，后端重启按名字在
+  Copree 群 #74 里找不到它，`start()` 直接失败、失败后也没有重试——通道从此不接任何消息，
+  用户在 QQ 里只看到平台那句「机器人…的服务异常，暂时无法响应」。现在**只按 id 认**：
+  `target_agent_id` 是平台保存通道时写入的托管字段，`target_agent`（名字）降级为标签、
+  只写不读；存量配置由迁移 `0106` 按实例名（`agent-<id>`）确定性补齐，运行时没有
+  "按名字找一次"的兼容分支。规则收成一个入口 `services/plugin/target_agent.py`，
+  qq-channel 与 qq-napcat 共用。见 [线上修复记录](docs/dev/online_fixes.md)；
+  测试 `test_channel_target_binding.py`。
+
+- **QQ 登录卡片上那张二维码永远是旧的**：卡片把 `qrcode.png` 原样交给前端，
+  可这张图从 2026-10-30 11:19 起就没再更新过——用户每次扫码都是"二维码已过期"，
+  扫多快都一样。QQ 授权码只有约 2 分钟寿命，协议端本来每 2 分钟换一张；
+  10-30 20:45 那次登录会话以 `ErrType:1 ErrCode:1` 终止后**出码任务停了**，
+  文件冻在原地，卡片照样把它渲染成"请扫码"。现在协议端侧的登录进度改成只报判定
+  （`qr_state`：够新鲜 / 等下一张 / 轮转已停）加剩余秒数，**只有够新鲜的才连图带
+  链接一起给**；卡片默认不摆码，点「获取登录二维码」才展示，展示时带倒计时，
+  轮转停了就直说要重启协议端——不会再有人对着几天前的死码扫。
+  （判停窗口收紧到 `QR_STALL=150`：健康轮转每 122 秒必换一张，之前给的 300 秒
+  让"扫码失败后轮转停掉"这种现象要空转 5 分钟才报停，界面一直显示"正在申请"。）
+  交互按用户口径定稿：**点了才向协议端要**、拿到后整张快照留着手动管理，
+  **过期不自动续**（协议端换了新票也不会顶掉手里那张），过期不收起只标「已过期」并压暗，
+  **刷新按钮常驻、一分钟最多 3 次**（冷却时显示剩余秒数），倒计时归零即过期。
+  判定改为 `live` / `expired` / `stalled`（`live` 才带图，并附剩余秒数）。
+  代码：`plugins/qq-napcat/plugin.py`（`_qr_state` / `_hosted_login`）、
+  `ChannelCard.tsx`；测试 `test_qq_napcat_qr_freshness.py`；
+  证据与阈值来由见 [线上修复记录](docs/dev/online_fixes.md)。
+
+- **点「转发」说已发送，对方却收不到文件**：`file_references` 的唯一键是
+  (file_id, referrer_type, referrer_id)——设计文档 §5.3 定的是"同一引用方只留一条、
+  重复引用只更新 `ref_type`"，但转发那条路自己 INSERT，于是"先预览过再转发"必撞唯一键
+  → 500 → 整个发送事务回滚，消息根本没落库；前端又只有一个 `done` 布尔，
+  失败也照报"已发送"。现在转发引用改为复用 `track_file_reference`（就地升级 `ref_type`），
+  并加 `_REF_RANK` 让 `ref_type` 只升不降（否则转发后预览一次就把配额还回去了）；
+  弹窗按 `{ok, fail}` 报结果，失败时标红且不自动关闭。
+  测试 `test_forward_reference_idempotent.py`，见 [线上修复记录](docs/dev/online_fixes.md)。
+
+- **缓存命中率的主漏点不在工具轮，在"换帧就把上下文头部重写一遍"**：写进锁定前缀的那份环境快照
+  （`env_locked`）存在状态帧上，而同一段会话会被反复开新帧（agent 1 的 174 帧里 167 个都是同一个群），
+  新帧没有基线，`environment_turn` 就按"首次建帧"拿当前环境重建——头部几个字节一变，整段前缀缓存作废。
+  10-20～11-10 的 287 轮里，message 0 与上一轮同会话逐字节相同的轮次命中 97.2%，变了的 78.6%，
+  后者只占 29% 的流量却贡献 64% 的 miss。现在 `read_frame_env` 在没有基线的帧上沿用同会话旧帧的
+  那一份（与 `frame_roster` 同一条规矩）：写入仍落当前帧，解锁点照旧对齐现值，环境真变了只多一条
+  账本通知。见 [线上修复记录](docs/dev/online_fixes.md)。
+
+- **会话帧出链后再来消息，拉起原来那条，不再新建**：`ensure_active_frame` 原先只在链上找本会话的帧，
+  找不到就 `make_state_frame` 新建一条——于是同一段会话每轮攒一条帧（线上 agent 1 的 `group:66` 攒了
+  167 条），新帧没有 `env_locked` / `roster_locked` / `notes` / `tail`，锁被重建、头部字节换掉、
+  整段前缀作废（起因见上一条）。现在没有链上帧时先去存储里找同 `context_ref` 的那条（可能已出链、
+  可能一直沉睡），把它拉起（`status=active`，`_save` 对账上链、归位到链尾），**帧 id 不变**：帧 id 是
+  闹钟、计划板记着的长期指针，换一条等于让它们指向空气。只有这段会话从没建过帧才新建。出链只是它
+  这会儿没在跑，不等于这个状态没了——触发来由写进 `why`：「由于外界环境改变，替他把帧拉起」。
+  同一批把「运行集合」的措辞统一成「状态链」（代码 65 处、文档 21 处，逐句改过句读，不是整词替换）。
+  测试 `test_frame_lifecycle::test_the_same_conversation_revives_its_own_frame`，见
+  [帧的生命周期](docs/dev/frame_lifecycle.md)。
+
+- **帧身份收到 `context_ref` 一个口上，存量重复帧由迁移 `0109` 归并**：上一条修好"唤醒不再新建"
+  之后，"一段会话至多一帧"仍靠三处各写一遍的挑选规则维持（`ensure_active_frame` 两段扫描、
+  `read_frame_env` 一段向后扫描、插件 `_frame_with_ref`）；规则要变就得改三处，而存储里的重复帧
+  一条没消。现在认帧只有 `pure.frame_of` 一个口（在跑的优先、都结束了取最近激活），切会话、
+  `push_state`、插件代建、进世界全走它；`read_frame_env` 退回只读当前帧，不再为"锁在更早那条帧上"
+  的存量形状留分支。迁移 `0109_one_frame_per_context`：同一 `context_ref` 只留一帧（当前帧优先、
+  其次最近激活），被并帧上还有内容的字段（环境锁、便签副本、待告知、原文尾巴、调用计数）并进幸存者，
+  指向被并帧的长期指针改到幸存者（`agent_alarms.frame_id`、`agent_state_chain_node`），然后把那几条帧
+  删掉；归并规则内联在迁移里，不 import 应用代码。用例 `test_frame_storage_migration`（4 条）与
+  `test_frame_lifecycle` 新增的 `push_state` 复活用例，见 [帧的生命周期](docs/dev/frame_lifecycle.md)。
+
+### 🗑 移除
+
+- **协议端控制台不再由平台代管**：撤掉整条控制台反代链路（`/channels/<plugin>/panel/<instance>/…`）
+  与「直连地址」两代实现，平台只保留后端需要的那一样东西——通道设置里的「协议端 WebUI 地址」，
+  扫码登录、登录状态、一键拉起都走它。为什么不做：① 反代一个把路由基路径写死在构建产物里的前端
+  （NapCat WebUI 的 `basename="/webui/"`）在子路径下只能白屏，绕过它的两条路——改上游那份 JS 常量、
+  或给每个实例子域——前者是给别人的产物打补丁（上游一换打包方式就静默失效），后者要求部署方有泛域名
+  与泛证书、还要多占一个端口，都不能当成开源项目的前提；② 让平台保管并代用控制台 token，等于把一把
+  能改协议端一切的钥匙交出去；③ 真正需要它的场合（换号、装插件）本来就是运维动作，协议端自己已有入口。
+  边界改成一句话：**控制台归协议端，平台只确保后端连得上它**；要暴露到公网是部署层的事（宿主反代 +
+  HTTPS + 来源限制），仓库零改动，也不需要回通道设置里补任何配置。
+  随之删掉：`app/routers/channel_panel.py`、`plugins/qq-napcat/panel.py`（里面还有一段给上游页面注入
+  fetch/XHR/EventSource shim 的运行时补丁）、`browser_paths.CHANNEL_PANEL` 与 vite 的 `/channels` 转发、
+  五个 `panel_*` 插件钩子、配置项 `webui_public_url`、以及通道卡片与「我的」页上的两个「打开控制台」按钮。
+
+### 🎨 界面与交互
+
+- **消息气泡的外观收进两个类**：卡片的渐变、边框、投影、以及各自夜间档原来散在 `MessageBubble.tsx`
+  的 className 里（对面一套、己方一套，顶面高光写两遍），改一个夜间色要在 `.css` 和 `.tsx` 各找一遍。
+  现在整张外观是 `index.css` 的 `.bubble-face`（对面）与 `.bubble-self`（己方），组件里只剩语义名 + 圆角方向。
+  顺带修了两处：深色下 `elevated` 比 `surface` **亮**，`from-surface to-elevated` 其实是「上暗下亮」（光从下面来，
+  看着贴地），已按主题反转；夜间黑色投影落在深底上等于没有，对面气泡底下换成两层灰白渐隐（近处 .10、远处 .06）。
+  己方日间描边改白（紫底上压紫边等于没有），夜间底色压深一档（`#5A3A99 → #4C2E82`）。
+
+- **顶部提示条统一成 `NoticeStack`**：重连条与「在沉浸式界面打开」以前各自 `absolute top: var(--header-inset)`，
+  两条同时出现就叠在一起，而且都比头部下沿低 0.5rem 的呼吸间距（看着是「条和顶部之间有空隙」）。现在位置、
+  顺序、让位都由一处算：`order` 决定先後，高度按条数 × `NOTICE_H` 写进 `--header-strip`，贴的是头部下沿。
+
+- **转发聊天记录**：解析器的标题正则写成了 `(.+?**聊的**聊天记录)`，而 QQ 的文本是「xxx 的聊天记录」，
+  于是所有转发都退化成纯文本（这功能等于没生效）。修正后渲染成 QQ 那种卡片：标题用原文整句 + 前 3 条预览 +
+  分隔线 + 「查看 N 条转发消息」，点开是弹窗（手机端全屏，`Modal` 新增 `mobileFullscreen`）。
+
+- **卡片消息**：不再套内层小卡片（框里套框），外壳直接用气泡；整张卡是一个链接、去掉下划线也不做 hover 变暗
+  （那两条是 `.bubble-content a` 给正文行内链接的样式，utilities 层压不过它，单独加了 `.channel-card` 覆盖）；
+  「原文」展开的 `pre` 挪到卡片下方，长 `jump_url` 不再撑出卡片。来源改用卡片自带的 `tag`（腾讯频道 / 哔哩哔哩）。
+
+- **按钮与输入框的尺寸档位收敛**：`.btn-sm` / `.btn-xs` 改胶囊圆角（这两档基本是工具条与页面头的小按钮），
+  `.field-sm` 同步胶囊 + 32px；系统设置里四张卡片各写各的手写按钮，统一成 `btn btn-sm btn-primary`，
+  输入框统一 `h-8` 与按钮等高，「兑换码」「批量应用」这类没对齐的都跟着对齐。
+
+- **按钮一律胶囊**：以前只有 xs/sm 是胶囊，md/lg 还是 8px 圆角，同一排里出现「一个方一个圆」。
+  现在四档都沿用 `.btn` 的胶囊圆角——形状不再随尺寸变，只有高度与内距在变；圆角这层语汇只留给
+  容器（卡片 / 弹窗）与输入框（大号单行、多行）。`.btn-pill` 因此变成冗余，仅作兼容保留。
+
+- **下拉框与单行输入统一到 `.field`**：44 处手写 `<select>` 里各写一套边框/内距/字号，现在全走 `.field`
+  （32px 胶囊，与输入框同形）；行内的 21 处加 `.field-inline`（宽度跟内容，不再因 `width:100%` 把同行的
+  「按段筛选：」挤成两行）。`.field` 的默认档改成 32px 胶囊后，多行 `textarea` 单独回到 40px + 8px 圆角
+  （多行不是「一行」），需要大号单行的地方用 `.field-lg` 配 `.btn-md`。
+
+- **尺度收成令牌：圆角与控件高度只在一处定义**：`index.css` 的 `:root` 现在有
+  `--r-sm/md/lg/pill`（8/12/16/胶囊）与 `--ctl-xs/sm/md/lg`（24/32/40/48），角色别名
+  `--r-control/--r-card/--r-dialog` 指向数值档；`.btn-xs/sm/md/lg`、`.field`、`.field-lg`、
+  `.icon-btn*`、`.card`、`.chip` 与 Tailwind 的 `rounded-control/card/dialog/pill` 全部读同一批变量。
+  单行输入（含 `.field-lg` 40px 档）一律胶囊——形状归「一行」这个语汇，不跟着高度变；多行 `textarea`
+  取 16px 大圆角（行数再多也只是四个角，不会鼓成药丸）。`9999px` 全站只出现在令牌定义里一次。
+
+- **手写控件按页迁移**：`check-ui.mjs` 新增 `--list`（可配 `--only=<路径片段>`）逐条列出存量，
+  迁移一页核对一页。`SettingsPage` 的 31 处清零（16 处换成语义类，12 处本就是卡片/导航行/入口行，
+  标 `ui-standard-ignore` 并写明原因）；设置弹窗里的基础信息多行框、兑换码（左侧带图标）、数字框、
+  「日志保留上限」「API Base URL」一并换成语义类；闸门基线 470 → 427。
+
+- **密钥 / Token 输入统一走 `SecretInput`**：以前这类框一律写 `type="password"`，浏览器就把 API Key
+  当账号密码管——自动填入保存的用户名密码、提交后弹「是否保存密码」、框边冒出密码管理器的钥匙图标。
+  现在 `components/ui/SecretInput` 是唯一实现：始终 `type="text"`，遮蔽靠 `-webkit-text-security: disc`（纯视觉，
+  浏览器不认它是密码），自带圆形显示/隐藏按钮与 `data-1p-ignore` 等忽略标记；25 处 Token 输入（联邦、API Key 池、
+  商城 GitHub、语音 Key、插件服务实例、配置组 secret、设置页、初始化向导）全部切换。真·账号密码（登录、重置/创建用户）
+  仍用原生 `type="password"`。闸门 `check-ui.mjs` 新增一条：`type="password"` 且没有 `ui-standard-ignore` 即报错。
+
+- **`Card` 补 `action` 槽、`Button` 补四种变体**：设置卡片右上角的开关以前每张卡各写一遍
+  `flex items-center justify-between` 的头；现在交给 `Card` 的 `action`。`Button` 补 `success`（确认/恢复）、
+  `link`（文字动作）、`tinted` / `tinted-danger` / `tinted-success`（浅底），这三类以前是各处手写的裸色值。
+  另加 `frontend/scripts/check-ui.mjs`：静态扫出「带内边距却没有 `.btn` / `.field`」的手写控件，
+  以及「挂了档位类又自己写 `rounded-*`」（形状归尺寸档位，不归元素）。
+  它走**棘轮**口径：`ui-baseline.json` 记着每个文件当前的存量，`npm run ui:check` 只允许不增加——
+  新代码多写一个手写控件立刻红，迁完一批用 `ui:check:update` 下调基线。已挂进 CI 的 frontend job。
+  存量 554 处（86 个文件）按页迁移，不再等清零才开闸。
+
+- **创建新 AI 页照群视界编辑界面重排**：以前是中间一条窄表单、创建助手挤在表单下面，宽屏上大半屏是空的。
+  现在通栏：左边表单自己滚，右边固定 360px 是创建助手（一条分隔线，输入框贴底）；窄屏拆成两屏，
+  顶部下划线标签切「填写配置 / 创建助手」，长表单不再和对话抢同一块高度。宽屏左右拉满（不再居中留白），
+  表单列自己滚、助手列固定 360 并带分隔线；底部动作右对齐定宽；分栏阈值定在 1024——768~1023 仍走
+  两屏切换，挤成三栏反而每列都放不下。入口页同样拉满，左边两个入口、右边未完成列表。
+  「跳过预设，手动配置」从三档卡片下面挪到动作按钮之下——先给主路径（选档 → 创建），再给旁路；
+  列表页的排序下拉自带浏览器原生箭头、页面又叠了一个自绘箭头（看着像两个指示），去掉自绘的那个。入口页的「开始新的创建」
+  提到「未完成的创建」列表之前——想开新的不必先滚过一串旧草稿。
+
+- **输入框全站一份**：创建助手底下的输入框原来自己写 `textarea` + 两个按钮，现在直接用聊天页那个 `ChatInput`
+  （玻璃胶囊卡片、Enter 发送、草稿按会话存在本地）。为此 `ChatInput` 补了 `placeholder` / `maxLength` /
+  `busy` + `onStop`（流式输出时同一位置换成「停止」，形状不变）/ `showTools`（没有附件与表情的场景
+  关掉左下工具行）——群聊与私信的用法一行没改。
+
+- **创建入口页把「已建好的」与「未完成的」分开**：已建好的草稿以前照样占着「继续上一次的创建」，
+  点进去表单原样恢复、创建按钮还在，再点一次就是又建一个 AI。现在它落在右边单独一组
+  「已建好的 AI」：卡片用薄荷绿从左淡出到透明的渐变填充、左侧一个勾选图标、副行写「已成功创建」，
+  只留删除；「未完成的创建」只列 `status='open'` 的草稿。
+
+- **已建好的创建记录可以重新打开**：那条薄荷绿记录以前只能删，「用同一份配置再建一个」得从头填。
+  现在点它能回到编辑器（顶部先挂一条提示：再保存会新建一个），保存时再弹窗确认——两处说的都是
+  「会新建一个 AI，原来那个不会被改动」；确认后另起一张草稿承接这次创建（草稿与 AI 始终一对一），
+  原来那条记录连同它指向的 AI 原样留着。
 
 ### 📝 文档与工程
+
+- **浏览器直连后端的路径收成一份清单，并加了守卫**：`/channels`、`/world`、`/federation`、`/ws` 这几条
+  不吃前端的 `/api` 前缀，靠服务端按前缀转发，各自的转发规则散在 `vite.config.ts` 里——面板前缀一改，
+  没人记得同步，就出上面那个 404。现在清单只在 `backend/app/utils/browser_paths.py` 写一份，后端拼路径
+  也引用它；`frontend/scripts/check-proxy-prefixes.mjs`（`npm run proxy:check`，已挂进 CI）拿它和 vite 的
+  proxy 表对账，"缺转发"与"已失效的旧键"都直接报出来。
+
+- **补上「反向桥接」的部署说明**：[DSH 接入指南](docs/DSH接入指南.md) 新增 §3.6——DSH 出于
+  RCE 风险只绑回环，而 Copree 后端在容器里，回连必须经宿主反代（网桥网关:3082 → 127.0.0.1:3080）；
+  写了网关地址怎么按部署现取、为什么不改成 `0.0.0.0`，以及最容易漏的开机顺序：`listen` 绑的是
+  docker 启动时才创建的网桥地址，发行版 nginx 又是 `Restart=no` + 10s/5 次 start-limit，
+  一次抢跑就永久 failed（现象正是「注册了但连不上」），配了 systemd drop-in 让它排在 docker 之后、
+  失败自愈。排障表补三条（注册了但连不上 / 未检测到 / 重启后必坏一次），插件两份 README 的
+  `bridgeAdvertiseUrl` 同步注明「须从容器可达」。
+
+- **「引用」长什么样只有一处实现了**：气泡里的回复引用与输入框上方的引用条原来各写一遍，
+  一改就漂——先是带图时竖线没跟着长高（父级 `items-start`，`h-full` 撑不开，改用 `self-stretch`），
+  接着是图片在名字前还是名字后两边不一致。现在抽成 `components/shared/QuotedMessage.tsx`：
+  顺序固定「竖线 → 名字 → 缩略图 → 文字」，深/浅两种配色与行数上限（气泡 2 行、输入框 1 行）是参数，
+  两处都只调这一个组件。顺带把两边的 `EmojiText` / `fileDownloadUrl` 重复引入清掉。
+
 - **关键词搜聊天记录**：新工具 `search_messages`——按 `query` 搜**AI 自己在的**群与私信，
   可带 `group_id` / `sender_id` / `days` / `limit`，回会话、消息 id、时间与命中片段（±24 字）。
   此前只有"按会话读最近 N 条"（`read_conversation`）与"按 id 展开"（`expand_message`），
   关键词检索是空的——用户说"你搜一下"时 AI 根本没有可调的工具。
+
 - 新增 [通道标识与多实例身份](docs/dev/channel_identity.md)：外部标识按实例隔离、`message_channel_refs` 模型、
   合并锁键、@ 解析的三条事实来源、影子账号自愈与不变量清单；[通道插件开发](docs/plugin-dev/channel-plugins.md)
   与[撤回](docs/dev/message_revoke.md)同步改写。决策层的 verify 回执、未命中样例与驱动口径写进
   [决策层](docs/dev/decision_layer.md)。
+
 - 新增 [工具记录与"我搜过了"](docs/dev/tool_truthfulness.md)：判"搜过没有"的三处证据（派发日志 /
   `tool_usage_daily` / 当轮 `tool_calls`），以及"账本没记 web_search 不等于没搜"的读法（搜索与回答可能不是同一轮）。
+
+- **CHANGELOG 统一成中文分类、结构受检**：合并了 v0.3.14 整块重复（两份逐字相同），清掉 6 个版本里重复的分节，
+  并把早期 124 个英文/旧写法的分节名统一成规范名（`Added` / `Changed` / `Fixed` / `Docs`，以及「每主题一节」的历史写法；
+  只改 `###` 行，正文一个字不动）。补了 `🔧 变更` 这一类，对应 Keep a Changelog 的 Changed——性能、重构、界面这几类
+  都是从它拆出去的，历史里的混合变更原本无处可归。分节名现在有两种写法：`类别` 或 `类别 — 主题`，前缀决定归类与排序，
+  后缀保留「这一版做了哪几件事」。为什么做：同一个版本块里分节出现两次时，读者不知道该看哪一段；分类名换过三代
+  （英文六类 → 中文八类 → 现在的十三类），每代都留下一批「只改了几处、其余照旧」的残留。现在「顺序、唯一性、空行、命名」
+  都是 `scripts/changelog.py` 的 check 规则（退出码 1），写入也由它按分节末尾追加，不再通读四千多行再手动对齐。
+
 ## [v0.4.16] - 2026-10-30
 
 ### ✨ 新增
+
 - **QQ 通道的对话额度**（qq-channel / qq-napcat 插件）：每个 QQ 群、每个 QQ 私聊单独记账，默认
   100 万**交涉 token**（未命中的输入 + 输出；也可切换成含缓存命中的全部 token）。额度用完这条通道
   不再把消息交给 AI，并可选自动回一句说明（默认开，同一对话 10 分钟内最多一次）。
@@ -149,6 +691,7 @@
   安装批处理必须是纯 ASCII + CRLF、快捷方式脚本必须带 UTF-8 BOM 且写 `IconLocation`。
 
 ### 🐛 修复
+
 - **发给 AI 的好友申请，服务层谁传都能接受**：`accept_friend_request` 只对发给人类的申请校验归属，
   目标是 AI 时完全不判——工具层自己补过一道，所以没出过事，但服务层这道门是虚的（路由 / 未来的调用方
   都能绕过）。判据收敛到 `_may_resolve_request` 一处：收件方本人能接受/拒绝，收件方是 AI 时认它自己的
@@ -218,18 +761,6 @@
   显式指定 `IconLocation`、调用 `ie4uinit` 刷新图标缓存，并顺手清掉桌面上名字带 `å`/`Ã` 的旧链接；
   「样式在 exe 里」的问题随重打包一起解决（ICO 九档齐全）。
 
-### 🔧 开发工具与测试
-- **发版从"一串靠记忆的命令"收成三步**：`scripts/release.py`（check / archive / tag / verify）。
-  版本号唯一出处定为 `backend/app/config.py::app_version`，预检一次列全判据：tag 未被占用、
-  CHANGELOG 有该版本段、发版关键文件没有未提交改动（可 `--allow-dirty` 显式放行，其它批次的脏文件
-  不会被误提交）、可一键跑全量测试。`tag --push` 推主仓 tag 后由新增的
-  `.github/workflows/release.yml` 校验 `tag == app_version` 再 `repository_dispatch` 通知发布仓构建，
-  **不再需要手工在两个仓库各打一次同名 tag**；`verify` 核对三平台产物与 `latest`。
-  流程、失败读法与"不许做的事"见 [发版（release）](docs/dev/release.md)；agent 的执行顺序放在本地
-  技能目录 `.dsh/skills/release/`（按 `.gitignore` 的约定不进版本库，公开知识只留在那份文档里）。
-
-### 🐞 修复（2026-10-30 重打包）
-
 - **通道对话额度从来没记上账**：`save_conversation_log` 的第一参数有的调用方传仓库、有的传裸
   `AsyncSession`，两者只差 `.session`，而额度那段要用它开 SAVEPOINT——于是每轮都炸在
   「累加通道对话用量失败 (agent=1): 'AsyncSession' object has no attribute 'session'」，
@@ -260,11 +791,24 @@
   （`--mobile-nav-reserved`，桌面 `md:bottom-0` 照旧贴底）。
 
 ### 📝 文档与工程
+
 - 色牌积木的引擎规则测试（27 条）与页面交互自检脚本（假 DOM，大厅→入座→出牌→回大厅）随积木入库。
+
+### 🔧 开发工具与测试
+
+- **发版从"一串靠记忆的命令"收成三步**：`scripts/release.py`（check / archive / tag / verify）。
+  版本号唯一出处定为 `backend/app/config.py::app_version`，预检一次列全判据：tag 未被占用、
+  CHANGELOG 有该版本段、发版关键文件没有未提交改动（可 `--allow-dirty` 显式放行，其它批次的脏文件
+  不会被误提交）、可一键跑全量测试。`tag --push` 推主仓 tag 后由新增的
+  `.github/workflows/release.yml` 校验 `tag == app_version` 再 `repository_dispatch` 通知发布仓构建，
+  **不再需要手工在两个仓库各打一次同名 tag**；`verify` 核对三平台产物与 `latest`。
+  流程、失败读法与"不许做的事"见 [发版（release）](docs/dev/release.md)；agent 的执行顺序放在本地
+  技能目录 `.dsh/skills/release/`（按 `.gitignore` 的约定不进版本库，公开知识只留在那份文档里）。
 
 ## [v0.4.15] - 2026-10-27
 
 ### ✨ 新增
+
 - **页面显示当前部署的版本号**：登录页左上角、侧栏品牌名（左上角）右侧各显示一处 `v0.4.15`，数据来自 `/health`
   的 `version`（即 `settings.app_version`，发版时与 tag 强校验）。不用构建期注入是有意的：前端与后端
   是两个产物，只有后端那一份是"当前部署的版本"，构建期塞进去的数字会随前端缓存过期而与后端分叉；
@@ -272,6 +816,7 @@
   更该让人看得见。拉取失败就不显示，绝不影响主流程。
 
 ### 🐛 修复
+
 - **桌面版一点开对话就整页崩（`g.map is not a function`）**：根因不在前端，而在**打包版独有的**
   `/api` 前缀中间件——它摘掉 `/api` 时顺手把 query 拼回了 `scope["path"]`。Starlette 按 path 匹配路由，
   于是 `/gm/12/messages?limit=20` 匹配不上，请求掉进 `/{full_path:path}` 的 SPA 兜底、拿回 index.html
@@ -290,171 +835,8 @@
 
 ## [v0.4.14] - 2026-10-26
 
-### 🐛 修复
-- **Windows 桌面版打开首页是状态 JSON 而不是页面**：启动器打开 `127.0.0.1:8000` 看到的是
-  `{"service":"AI群聊社交网络","version":"0.4.14","status":"running"}`。桌面版由后端自己托管
-  `frontend/dist`，而替换根路由时只改了 `route.endpoint`——Starlette 在 `Route.__init__` 里就用
-  `request_response(endpoint)` 建好了处理闭包，事后改字段不会重建，`GET /` 始终走后端自带的状态接口；
-  `/login` 等路径走 catch-all 所以正常，看起来像「只有首页坏」。改为替换整条路由对象
-  （发布仓库 `server_core.py`）。
-- **Windows 桌面版 browser 插件不可用**：`browser_service` 把浏览器可执行文件写死 `/usr/bin/chromium`、
-  PID 文件写死 `/tmp`、收尾用 `pkill`，Windows 上启动日志必然出现「Chromium 未安装」并让插件启动失败。
-  改为按平台查找 Chrome / Chromium / Edge（Windows 用系统自带 Edge 兜底，也可用 `CHROMIUM_BIN` /
-  `CHROME_BIN` 覆盖），PID 文件落到系统临时目录，仅 Linux 拉起 D-Bus 与做全局进程清理；headless 参数
-  换成 `--headless=new` 并显式指定临时 `user-data-dir`（Chrome 136 起禁止用默认数据目录开 CDP 端口）。
-- **Windows 上服务起不来：维护标记目录默认写死 `/tmp`**：`maintenance_dir` 默认 `/tmp`，Windows 没有这个目录，
-  `os.path.join` 还会拼出 `/tmp\maintenance_startup`，lifespan 一写标记就 `FileNotFoundError`，整个进程启动失败。
-  现在默认跟着数据目录走（`<data_dir>/maintenance`，显式 `MAINTENANCE_DIR` 仍然优先），`_set_marker` 写前
-  `makedirs`，任何平台首次启动都不会因为目录不存在崩。（issue #3 的第三条栈）
-- **等数据库超时只说"未就绪"，把根因吞掉**：`wait_for_db` 的 `except` 里不留任何异常信息，30s 后抛一句
-  「数据库在 30s 内未就绪」，认证失败、连接被重置、缺扩展全都无从判断。现在首次失败就打印异常类型与脱敏后的
-  DSN（`config.mask_dsn`），超时错误带最后一条异常并保留异常链。（issue #4）
-- **脱离 Docker 起前端，四个代理一律 `ENOTFOUND backend`**：dev server 的代理目标硬编码成 compose 服务名
-  `http://backend:8000`，看着像后端没启动。改为读 `VITE_PROXY_TARGET`，默认值不变。
-- **桌面安装包三个产物全部双击即退（发布仓库）**：入口 `run_packaged.py` 首行 `from gui import AIsChatGUI`，
-  而三个平台的拷贝清单只拷了 `gui_app`、从没拷过兼容入口 `gui.py`，于是 v0.4.1 的 exe / dmg / tar.gz 都报
-  `ModuleNotFoundError: No module named 'gui'`。发布仓库改用 `scripts/stage.sh` 统一清单并当场校验
-  `gui` / `gui_app` / `server_core` 能否解析，漏文件就地失败。
-- **审计日志清理从来没跑通过**：`postgres_backend.cleanup` 在 DELETE 上链了 `.limit()`——
-  SQLAlchemy 的 `Delete` 没这个方法（PostgreSQL 原生也不支持 `DELETE ... LIMIT`），于是 bootstrap
-  的清理循环每 5 分钟一条 `AttributeError: 'Delete' object has no attribute 'limit'`，审计表只长不缩。
-  现在分批改成「先挑 id 子查询、再按 id 删」，每批提交一次（表再大也不攒成一个巨型事务），
-  传入的 ISO 串在入口转成 `datetime`（asyncpg 不做隐式转换）。
-  另钉一条用例 `tests/test_audit_cleanup.py`：过期记录删得掉、保留期内不许动、换新连接查得到结果（证明真提交了）。
-  线上现有 68 条超过 90 天保留期的记录，按设计会在 03:00 的定时清理里被删。
-- **运行模式是整个世界一个、刷新就回到默认**：把某个对话切到「自动」后，新开一场对话、或刷新页面，
-  模式就跟着变——同一世界里随手问和大改只能互相将就。现在模式**跟着会话走**：记在
-  `config.sessions[<sid>].ai_mode`，切会话 / 新对话 / 刷新页面读的都是这一场自己的值
-  （`get_mode(world, session_id)` 是唯一读取口、`set_mode` 是唯一写入口；该会话没选过时回退世界级
-  `config.ai_mode`）。**默认档改为「计划」**：打开页面即计划，动手前先出计划过目（21 个没设置过的世界
-  一并生效；4 个显式设过的世界保留原值，直到用户重新选择）。前端切模式带 `session_id` 一起送，
-  切/新建会话的载荷里带回这一场自己的 `ai_mode`，刷新时由 `/chat/status` 带回。
-  用例 `tests/test_world_ai_guardrails.py::test_mode_follows_each_conversation`。
-- **计划弹窗只能整份通过**：用户只想做其中几件事时，弹窗里没有地方表达，AI 重新提交计划只能从
-  一句自由文本里猜「哪几条过了」。现在 `present_plan` 可以带 `items`（AI 自己分条），弹窗里
-  「**同意**」仍是整份通过（一步结束，不多点一次），另有「只做其中几条」展开勾选——提交时把勾选下标
-  随回执送后端（`ApprovalRequest.approved_items`），工具结果给出 `approved_items` / `skipped_items`
-  两张单子，没勾的条目 AI 一条都不许做。没带 `items` 的审批（下载/删除确认）与旧前端行为完全不变；
-  一条都没勾却提交 = 按不通过处理，不会悄悄变成「全部通过」。用例
-  `tests/test_world_ai_guardrails.py::test_only_picked_items_are_approved` 等 5 条覆盖
-  整份通过 / 部分通过 / 一条没勾 / 条目裁长封顶。
-- **世界 AI 做页面时踩到的四处工具摩擦力**（它自己列的清单，逐条钉了用例
-  `tests/test_world_file_tool_ergonomics.py`）：
-  ① `file_edit` 的 `str_replace` 只判定「有几处匹配」，两行只差两个空格缩进时直接打回，它只能往上贴更多上下文——
-  现在报错列出**每处所在行号**，并支持 `occurrence`（第 N 处 / 0 = 全部替换；主站同款工具一并声明，编辑核心本就共用）；
-  ② 改动摘要从「首处改动及后文摘录」换成**带行号的 −/+**（`diff` 字段）：验收看的是换了什么，删掉一行时摘录根本看不出删了什么；
-  ③ `file_grep` 把 JS 写法的 `\x{1F300}` 当普通子串静默搜，搜 emoji 得到 0 命中——它差点据此断定「世界里本来没有 emoji」。
-  现在 `\x{...}` 码点转义归一成 `\uXXXX / \U0001F300` 再编译（真实世界里 🪙/🎒/⛏ 这类都能搜到），
-  确实编译不成正则时才退子串，且结果里带 `pattern_fallback` + 说明；
-  ④ `file_list` 文件超量时把根目录藏成 `"(根目录)": 3`，`index.html`/`main.py` 只能靠 grep 反推——现在恒列 `root_files`。
-  另加一条它要的静态检查：`file_write`/`file_edit` 写 `.js` 时核对世界自己命名空间（`window.UI = {...}`）的键表与各处调用，
-  `UI.emptyBox` 这类导出名/调用名对不上当场回 `warnings`（**只提示不拦**；展开、计算键、`Object.assign`/`defineProperty`
-  这类判不准的一律不下结论——17 个真实世界跑下来零误报）。
-- **世界 AI 的收尾清单还在支它去找 world_push**：清单①写「本地镜像改完要 world_push 同步回世界」，与
-  同一份提示词里【文件即权威副本】（「没有推送这一步，不要去找 world_push」）正面打架——它照做过，
-  白烧一轮。现在①只说「落盘即生效」；预算段补上收尾两步怎么记账（`manage_records` 与查证记读取账、
-  `run_world_code` 真跑的自检算 1 轮改动），并明确建议动手前留 2 轮给收尾。
-- **绑定入口里，AI 拿到的是群类型的列表**：`group_types.json` 一份清单同时供给群聊与 AI，
-  `GET /worlds/{id}/group-types` 只按 `entity_type` 换计数、不换列表，于是 AI 侧原样列出群类型——
-  群场景的词（决斗公会）和关系词（宿敌）就这么出现在"选择 AI 类型"里。现在每个类型带 `applies_to`
-  （`group` 群聊类型 / `ai` AI 角色 / `both` 两者；旧数据没有该字段按群聊类型，历史上它只有这一个含义），
-  列表按入口过滤、绑定接口同样校验（选错回「是群聊类型，不能用来绑定 AI 入口」，不靠前端藏起来）；
-  `entity_type` 不传即全部（管理页一次看全两类），返回形状恒定（群/AI 两侧占用永远都给），
-  卡片标出适用对象、AI 角色不显示助手模板，新建时先选适用对象。
-  命名口径一并收紧：AI 角色是**结构身份**（玩家/NPC/裁判/店员，由世界自己定），决定这个身份拿到哪些 skill
-  （`skill.types` 与之对齐）；头衔与关系（宿敌/挚友/首席）不是角色——写进群视界机器人提示词与
-  `get_group_types`/`update_group_types` 的描述，设计文档 §8.5 同步。用例 `tests/test_world_entry_types.py`（5 条：
-  旧数据归属、两侧列表与恒定形状、服务端拒绝、保存落字段、提示词与工具口径）。
-- **知识库面板的输入框一片白底**：面板用了并不存在的 `.input` 类，而全站表单控件的唯一来源是
-  `.field`（多行 `textarea.field`），于是标题/说明/正文三个框都是浏览器原生样式。顺手把面板的三个
-  弹窗统一换成 `Modal`（标题栏、ESC、点遮罩关闭都由它提供，不再手写遮罩+卡片），并把 9 处手抄的
-  文件大小格式化收敛到 `utils/format.formatFileSize`（补上 GB 档）。
-- **配置保存后「热更新没生效」**：`app_config_service._refresh_settings` 以前是「新造一份
-  `Settings()` 再替换 `app.config.settings`」——全仓几十处 `from app.config import settings`
-  拿到的是旧对象的引用，DB 覆盖写进去了、界面显示已保存，正在跑的进程里这些模块读的还是旧值，
-  只有重启才生效。现在改为按新快照**就地**刷字段，引用不变、值全更新。全量测试里
-  `test_avatar_cleanup` 的偶发失败就是它的症状：前一个用例存过配置组，清理接口读到旧的
-  `avatars_dir`，扫了默认目录所以「一个都没清」。
-- **知识库改完，AI 被告知“你自己刚改的”**：`knowledge_service` 把界面上的改动也打了 `mark_self_change`
-  标记，于是下一次能力变更通知会把“知识库索引更新”说成它自己改的——它其实没动过。现在去掉这个标记，
-  版本链照常发正式变更通知。同一批收掉几处重复：`AI_TYPES` 成为创建与更新的唯一类型清单（创建路径
-  此前不校验，拼错的类型能直接进库）、知识库请求模型归位 `schemas/agent.py`、前端页签由 `TABS.map`
-  生成（不再手抄两遍）、skill 的 ctx 只建一个协议代理、删掉两处改动后留下的未用导入。
-- **设置面板里几项开关“保存了但没生效”**：`PUT /agents/{id}/config` 的请求 schema 少了
-  `ai_type`、`is_ai_editable`、`discoverable`、`api_credit_cost`、`is_paused`——Pydantic 默认丢弃
-  未知字段，于是 AI 类型（记忆隔离粒度 / 能否加群）、可自改、可发现这些在界面上改了、库里没变；
-  `update_agent_config` 也没有 `ai_type` 分支。现在字段进了 schema，类型只接受
-  `general|semi_general|resonance`（拼错直接 400），另外三个一起落库。用例
-  `tests/test_agent_config_update.py`（2 条：一个 PUT 全落地、非法类型被拒）。
-- **切换预设档位一点就崩**：`apply_config_profile` 依赖的 `_PRESET_ORDER` / `_STRONG_*` /
-  `_INDEPENDENT_PARAMS` 早已搬进 `utils/pure/presets.py`，函数里却没跟着导入——升级到
-  「数字生命档」（以及任何预览）都会 NameError，界面上这个开关等于不可用；`_INDEPENDENT_PARAMS`
-  本身还根本不存在。现在参数表在 `presets.py` 用公开名导出并补上 `INDEPENDENT_PARAMS`，
-  方向判断收进 `preset_direction(old, new)`，`agent_service` 只调它们。用例
-  `tests/test_agent_presets.py`（2 条：整档升级、预览只读）。
-- **群助手在消息里靠"负号"表示身份**：群助手是 `group_assistants` 独立表，消息里却写成
-  `sender_type="ai"、sender_id=-ga.id`——负号只是为了在同一个整数列里躲开 users 号段，读的人
-  （以及后来写代码的人）都得记住这条隐规则；更糟的是它与 users.id 同号时「群助手 3」和「用户 3」
-  分不开。现在改成 `sender_type="assistant"、sender_id=ga.id`：sender_type 就是"这个 id 属于哪张表"，
-  与 human/ai 指向 users 是同一套读法；DB 约束同步放宽（`legacy/migration._migrate_message_sender_types`，
-  幂等，历史库的两种约束名都清掉重建）。"谁在说话"收进 `display_name.sender_names`（键 =
-  `(sender_type, sender_id)`）：群消息列表、会话列表最后一条、导出、世界事件投递、AI 读历史
-  （`resolve_speaker_names`）全走它，不再各写一份"按 id 查 users / AI"的取名逻辑；
-  `group_delivery.message_view` 对群助手只取名字（它没有头像与在线状态）。发送侧只改
-  `group_assistant_service.say_in_group` 一处；群助手的发言也不唤醒 AI 成员（那是世界对群的回话，
-  不是有人来找他们，顺带防来回触发）。前端消息气泡对 assistant 头像不弹资料卡（它不在用户/AI 表里）。
-  用例 `test_world_group_voice::test_sender_names_reads_assistants_by_type`（群助手 id 与用户同号也认不错），
-  其余用例改为断言 assistant 身份。
-- **世界在群里说话借的是群主的身份**：`send_group_message`（世界程序与世界 AI 共用的那条路）
-  把世界的话记成 `sender_type="human"、sender_id=世界主人`——群里看着像群主在说，更要命的是
-  群历史里它就是群主说的话：读这段历史的 AI、导出、记忆检索全都会当成那个人在说，等于世界假扮了他。
-  世界 skill 的 `ctx.group.send` 更糟一层：`send_gm_message(db, gid, owner_id, content, sender_type=…,`
-  `sender_id=…)` 与位置参数重复、`WorldBinding.group_id` 这个列根本不存在，一调就抛异常。
-  现在世界在群里的发言身份统一是**本群群助手**（`group_assistants` 一行，消息里写
-  `sender_type="assistant"、sender_id=ga.id`，见上一条）：`services/world/group_assistant_service.say_in_group` 负责
-  落库 + 广播，世界工具、受控 API（`POST /world/{id}/api/group/messages`）与世界 skill 三处都只调它。
-  类型化绑定的群用它绑定时建的助手（如「残响记录员」）；没有类型的历史绑定在第一次发言时按世界的名字
-  补建（幂等，一世界一群一个身份，A 群的话不会记到 B 群的助手头上）。同一批把两处同源查询收成一份：
-  `world_service.bound_group_ids`（工具 / 受控 API / skill 都从这里取绑定群，「默认群」不再各排各的）；
-  `display_name.sender_names` 负责把助手 id 认成助手名（此前会渲染成一串编号），
-  `routers/gm.py` 的取名也改为调它，不再手抄一份 users/agents 的取名规则。用例
-  `tests/test_world_group_voice.py`：世界发消息记在助手名下、历史绑定补建且幂等、两个群各用
-  各的助手、按类型认人、skill 的 ctx.group.send 同身份。
-
-- **世界帧跟群聊焊死：进世界得先挑一个群，命令也只能借群消息投递**：`enter_world` 曾把
-  (世界, 通道群) 记进帧，`world_command` 的实现是「以 AI 名义往群里发一条消息」——于是三件事
-  同时出错：①手上没有群就进不去世界（哪怕世界直接绑了这个 AI）；②同一个 AI 从 A 群进、从 B 群进
-  会拿到两套技能（`_type_slugs` 拿通道群当类型来源）；③世界在群里的回话 AI 永远收不到——那是一条
-  `source="world"` 的群消息，不唤醒任何人，世界帧里也不读群历史，所以它只能看到一句「已交给世界
-  程序处理」。现在帧只认世界与自己那一份入场身份（`world_role`，取自绑定：AI 自己的绑定 > 进门
-  那个群 > 无），一个世界绑几个群都只有这一条帧；`enter_world` 不再要求群，准入只看「世界绑没绑
-  你 / 你所在的群」；命令由 `world_event_hook.deliver_command` 直接投给 `handle(event)`
-  （事件形状与群消息同一份，`source="ai"`、无群号，世界的解析器一行不用改），非常驻世界同步拿回
-  返回值——那就是世界的回话。`state_stack_service.current_context` 里那层「世界号 / 通道群」扫描
-  一并删掉（唯一消费者就是这两处）。用例 `tests/test_world_entry.py` 重写为 7 条，含「命令一件群
-  消息都不发」「一个世界从两个群进都是同一条帧」。
-
-- **解锁换完了前缀还要再发一条「变更通知」；老 AI 的工具列表被旧版本钉死**：`compact` 解锁时只推了
-  「生效进度」（`cap_effective_versions`），没推「告知进度」（`cap_known_versions`），于是下一轮必补一条
-  「v59→v60 已生效、系统提示全文会在下次 compact 时刷新」——而全文恰恰这次刚刷完，通知说的正好是反的。
-  两件事现在收进 `mark_prefix_fresh`（`app/services/capability_versioning.py`）：**换新的那一版就算已告知**，
-  解锁点（`history/context_unlock.py`）与世界侧的「会话起点对齐」（`world_chat_service.py`）都只调它，不再
-  各写一半。同一处还收掉了 `read_progress` 的「回落旧 agent 级扁平键」：它本来只该给告知进度当迁移起点，
-  却被生效进度共用，于是老状态的前缀永久停在出土版本（实测浮生的 platform 生效版本停在 v12——v12 只有
-  58 个工具、连 `enter_world` 都没有，而平台已到 v60）。现在进度只属于本状态，通知基线统一由
-  `notice_baseline`（= max(known, effective)：前缀装的那版也算「看过」）给出；新建 AI / 新建会话 /
-  新绑定的源一律首见结清、不补发历史，也不会再在第一轮收到一条描述它眼前内容的通知。
-  用例 `tests/test_capability_scope.py` 由 6 条增至 8 条（含「旧扁平 effective 不许钉住老状态」）。
-
-- **世界技能的能力变更通知以前根本没落账本**：拼【本群世界】那段自己 `build_change_notice` +
-  `messages.append` + `commit`，那条通知只存在于这一轮请求里，下一轮就没了——AI 继续按旧说法办事，
-  正是账本机制当初要修的病（`history/context_sync.py` 的说明写着：以前只 append 进当轮 messages，
-  说完就没了）。现在世界源与平台工具走同一个出口：`_collect_injection_events` 统一算、经 `append_events`
-  落条目（带 `drop_on_unlock`，解锁即弃）；「哪些世界该通知」也收进 `_bound_world_sources`（与拼
-  【本群世界】同一套绑定口径，第一版两边各查一遍还漏了 agent 直接绑定）。用例
-  `tests/test_capability_notice_ledger.py`。
-
 ### ✨ 新增
+
 - **世界页面横竖屏都能玩、能全屏**：给世界 AI 的硬性要求以前只管「320px 窄屏不溢出」，手机横过来（≈844×390 的
   矮视口）没人管，底部操作区/输入框常被裁掉。现在提示词与接口文档把「竖屏横屏都要能玩」列为硬要求（不锁定方向，也不要求单独做横屏版）
   （`@media (orientation: landscape)` + `max-height` 调布局、高度用 `100dvh`），并说明平台支持全屏；
@@ -669,27 +1051,171 @@
 - 开关 `plan_injection_enabled`：三档预设 chat 关 / immersive 关 / digital_life 开，存量 AI 一律关
   （迁移里 `server_default=false`）。前端开关与三语文案待定。
 
-### ⚡ 性能
-- **不变的文字搬进锁定段，事件搬进账本**（三档落位）：通道规矩（"这个群接进了 QQ、你只能被动回复……"）
-  原先每轮重拼在尾部，现在并进**环境快照**、写进 `message 0`——同一份取值两个渲染出口
-  （`render_environment` / `render_channel_rules`），帧内字节不变；管理员改绑通道只落一条
-  `【通道变化】…以这条为准` 的账本通知，解锁点才对齐（与环境同一条口径，`env_locked` 里多一条平台键，
-  插件写同名键会被覆盖）。待处理好友申请同一处理：不再每轮念一遍（申请挂几天就白付几天），
-  改成进账本一条 `notice`（带申请 id 与留言），处理掉或对方撤回后补一条作废通知——幂等依据是账本
-  自己的 `ref`，不另立游标表。留在尾部的只剩那条随群播报模式变的「@其他成员」规矩（问活着的实例才知道）。
-  同批还瘦了指令面：实测 5537 → 4932 字符，`message 0` 4573 → 4346，尾部时间块 348 → 39、
-  尾部工具失败块 68 → 0（失败原因账本里 `[本轮工具]` 已经记了一份）。
-- **记忆注入不再打掉整段历史的缓存**：记忆原本每轮重算、拼在系统提示与对话历史之间（`dynamic_readings`），
-  于是命中的永远只有「工具定义 + system 段」那约 17k token——实测某个 AI 从 190 条消息涨到 235 条，
-  `cached_tokens` 死钉在 17,280 不动，而 prompt 是 33,712。现在记忆走**账本条目**，落在当轮新消息之前：
-  位置固定、只追加，整段历史回到缓存里；命中率还会随上下文变长继续升高。
-  同时去掉了注入正文里的相似度数字（每轮都在变、对模型没用），并只在记忆**改过**时才补一条「以新的为准」
-  （去重键是 `mem:<id>@<内容指纹>`，权重衰减、被想起刷新时间这类写入不会误触发）。
-- **取消「当轮注入区」**：`message 0` 之后直接就是对话历史。那个插槽（`dynamic_readings`）里只剩技能注入一项，
-  而它自己的注释写着「检索词是当轮消息、沉到尾部读数」——代码与注释相反，技能激活/失效那一轮仍会把后面整段历史
-  从缓存里打掉。现在技能跟任务、状态栈摘要、当前时间一样沉尾部，开头只留走版本链冻结的锁定段。
-
 ### 🐛 修复
+
+- **Windows 桌面版打开首页是状态 JSON 而不是页面**：启动器打开 `127.0.0.1:8000` 看到的是
+  `{"service":"AI群聊社交网络","version":"0.4.14","status":"running"}`。桌面版由后端自己托管
+  `frontend/dist`，而替换根路由时只改了 `route.endpoint`——Starlette 在 `Route.__init__` 里就用
+  `request_response(endpoint)` 建好了处理闭包，事后改字段不会重建，`GET /` 始终走后端自带的状态接口；
+  `/login` 等路径走 catch-all 所以正常，看起来像「只有首页坏」。改为替换整条路由对象
+  （发布仓库 `server_core.py`）。
+- **Windows 桌面版 browser 插件不可用**：`browser_service` 把浏览器可执行文件写死 `/usr/bin/chromium`、
+  PID 文件写死 `/tmp`、收尾用 `pkill`，Windows 上启动日志必然出现「Chromium 未安装」并让插件启动失败。
+  改为按平台查找 Chrome / Chromium / Edge（Windows 用系统自带 Edge 兜底，也可用 `CHROMIUM_BIN` /
+  `CHROME_BIN` 覆盖），PID 文件落到系统临时目录，仅 Linux 拉起 D-Bus 与做全局进程清理；headless 参数
+  换成 `--headless=new` 并显式指定临时 `user-data-dir`（Chrome 136 起禁止用默认数据目录开 CDP 端口）。
+- **Windows 上服务起不来：维护标记目录默认写死 `/tmp`**：`maintenance_dir` 默认 `/tmp`，Windows 没有这个目录，
+  `os.path.join` 还会拼出 `/tmp\maintenance_startup`，lifespan 一写标记就 `FileNotFoundError`，整个进程启动失败。
+  现在默认跟着数据目录走（`<data_dir>/maintenance`，显式 `MAINTENANCE_DIR` 仍然优先），`_set_marker` 写前
+  `makedirs`，任何平台首次启动都不会因为目录不存在崩。（issue #3 的第三条栈）
+- **等数据库超时只说"未就绪"，把根因吞掉**：`wait_for_db` 的 `except` 里不留任何异常信息，30s 后抛一句
+  「数据库在 30s 内未就绪」，认证失败、连接被重置、缺扩展全都无从判断。现在首次失败就打印异常类型与脱敏后的
+  DSN（`config.mask_dsn`），超时错误带最后一条异常并保留异常链。（issue #4）
+- **脱离 Docker 起前端，四个代理一律 `ENOTFOUND backend`**：dev server 的代理目标硬编码成 compose 服务名
+  `http://backend:8000`，看着像后端没启动。改为读 `VITE_PROXY_TARGET`，默认值不变。
+- **桌面安装包三个产物全部双击即退（发布仓库）**：入口 `run_packaged.py` 首行 `from gui import AIsChatGUI`，
+  而三个平台的拷贝清单只拷了 `gui_app`、从没拷过兼容入口 `gui.py`，于是 v0.4.1 的 exe / dmg / tar.gz 都报
+  `ModuleNotFoundError: No module named 'gui'`。发布仓库改用 `scripts/stage.sh` 统一清单并当场校验
+  `gui` / `gui_app` / `server_core` 能否解析，漏文件就地失败。
+- **审计日志清理从来没跑通过**：`postgres_backend.cleanup` 在 DELETE 上链了 `.limit()`——
+  SQLAlchemy 的 `Delete` 没这个方法（PostgreSQL 原生也不支持 `DELETE ... LIMIT`），于是 bootstrap
+  的清理循环每 5 分钟一条 `AttributeError: 'Delete' object has no attribute 'limit'`，审计表只长不缩。
+  现在分批改成「先挑 id 子查询、再按 id 删」，每批提交一次（表再大也不攒成一个巨型事务），
+  传入的 ISO 串在入口转成 `datetime`（asyncpg 不做隐式转换）。
+  另钉一条用例 `tests/test_audit_cleanup.py`：过期记录删得掉、保留期内不许动、换新连接查得到结果（证明真提交了）。
+  线上现有 68 条超过 90 天保留期的记录，按设计会在 03:00 的定时清理里被删。
+- **运行模式是整个世界一个、刷新就回到默认**：把某个对话切到「自动」后，新开一场对话、或刷新页面，
+  模式就跟着变——同一世界里随手问和大改只能互相将就。现在模式**跟着会话走**：记在
+  `config.sessions[<sid>].ai_mode`，切会话 / 新对话 / 刷新页面读的都是这一场自己的值
+  （`get_mode(world, session_id)` 是唯一读取口、`set_mode` 是唯一写入口；该会话没选过时回退世界级
+  `config.ai_mode`）。**默认档改为「计划」**：打开页面即计划，动手前先出计划过目（21 个没设置过的世界
+  一并生效；4 个显式设过的世界保留原值，直到用户重新选择）。前端切模式带 `session_id` 一起送，
+  切/新建会话的载荷里带回这一场自己的 `ai_mode`，刷新时由 `/chat/status` 带回。
+  用例 `tests/test_world_ai_guardrails.py::test_mode_follows_each_conversation`。
+- **计划弹窗只能整份通过**：用户只想做其中几件事时，弹窗里没有地方表达，AI 重新提交计划只能从
+  一句自由文本里猜「哪几条过了」。现在 `present_plan` 可以带 `items`（AI 自己分条），弹窗里
+  「**同意**」仍是整份通过（一步结束，不多点一次），另有「只做其中几条」展开勾选——提交时把勾选下标
+  随回执送后端（`ApprovalRequest.approved_items`），工具结果给出 `approved_items` / `skipped_items`
+  两张单子，没勾的条目 AI 一条都不许做。没带 `items` 的审批（下载/删除确认）与旧前端行为完全不变；
+  一条都没勾却提交 = 按不通过处理，不会悄悄变成「全部通过」。用例
+  `tests/test_world_ai_guardrails.py::test_only_picked_items_are_approved` 等 5 条覆盖
+  整份通过 / 部分通过 / 一条没勾 / 条目裁长封顶。
+- **世界 AI 做页面时踩到的四处工具摩擦力**（它自己列的清单，逐条钉了用例
+  `tests/test_world_file_tool_ergonomics.py`）：
+  ① `file_edit` 的 `str_replace` 只判定「有几处匹配」，两行只差两个空格缩进时直接打回，它只能往上贴更多上下文——
+  现在报错列出**每处所在行号**，并支持 `occurrence`（第 N 处 / 0 = 全部替换；主站同款工具一并声明，编辑核心本就共用）；
+  ② 改动摘要从「首处改动及后文摘录」换成**带行号的 −/+**（`diff` 字段）：验收看的是换了什么，删掉一行时摘录根本看不出删了什么；
+  ③ `file_grep` 把 JS 写法的 `\x{1F300}` 当普通子串静默搜，搜 emoji 得到 0 命中——它差点据此断定「世界里本来没有 emoji」。
+  现在 `\x{...}` 码点转义归一成 `\uXXXX / \U0001F300` 再编译（真实世界里 🪙/🎒/⛏ 这类都能搜到），
+  确实编译不成正则时才退子串，且结果里带 `pattern_fallback` + 说明；
+  ④ `file_list` 文件超量时把根目录藏成 `"(根目录)": 3`，`index.html`/`main.py` 只能靠 grep 反推——现在恒列 `root_files`。
+  另加一条它要的静态检查：`file_write`/`file_edit` 写 `.js` 时核对世界自己命名空间（`window.UI = {...}`）的键表与各处调用，
+  `UI.emptyBox` 这类导出名/调用名对不上当场回 `warnings`（**只提示不拦**；展开、计算键、`Object.assign`/`defineProperty`
+  这类判不准的一律不下结论——17 个真实世界跑下来零误报）。
+- **世界 AI 的收尾清单还在支它去找 world_push**：清单①写「本地镜像改完要 world_push 同步回世界」，与
+  同一份提示词里【文件即权威副本】（「没有推送这一步，不要去找 world_push」）正面打架——它照做过，
+  白烧一轮。现在①只说「落盘即生效」；预算段补上收尾两步怎么记账（`manage_records` 与查证记读取账、
+  `run_world_code` 真跑的自检算 1 轮改动），并明确建议动手前留 2 轮给收尾。
+- **绑定入口里，AI 拿到的是群类型的列表**：`group_types.json` 一份清单同时供给群聊与 AI，
+  `GET /worlds/{id}/group-types` 只按 `entity_type` 换计数、不换列表，于是 AI 侧原样列出群类型——
+  群场景的词（决斗公会）和关系词（宿敌）就这么出现在"选择 AI 类型"里。现在每个类型带 `applies_to`
+  （`group` 群聊类型 / `ai` AI 角色 / `both` 两者；旧数据没有该字段按群聊类型，历史上它只有这一个含义），
+  列表按入口过滤、绑定接口同样校验（选错回「是群聊类型，不能用来绑定 AI 入口」，不靠前端藏起来）；
+  `entity_type` 不传即全部（管理页一次看全两类），返回形状恒定（群/AI 两侧占用永远都给），
+  卡片标出适用对象、AI 角色不显示助手模板，新建时先选适用对象。
+  命名口径一并收紧：AI 角色是**结构身份**（玩家/NPC/裁判/店员，由世界自己定），决定这个身份拿到哪些 skill
+  （`skill.types` 与之对齐）；头衔与关系（宿敌/挚友/首席）不是角色——写进群视界机器人提示词与
+  `get_group_types`/`update_group_types` 的描述，设计文档 §8.5 同步。用例 `tests/test_world_entry_types.py`（5 条：
+  旧数据归属、两侧列表与恒定形状、服务端拒绝、保存落字段、提示词与工具口径）。
+- **知识库面板的输入框一片白底**：面板用了并不存在的 `.input` 类，而全站表单控件的唯一来源是
+  `.field`（多行 `textarea.field`），于是标题/说明/正文三个框都是浏览器原生样式。顺手把面板的三个
+  弹窗统一换成 `Modal`（标题栏、ESC、点遮罩关闭都由它提供，不再手写遮罩+卡片），并把 9 处手抄的
+  文件大小格式化收敛到 `utils/format.formatFileSize`（补上 GB 档）。
+- **配置保存后「热更新没生效」**：`app_config_service._refresh_settings` 以前是「新造一份
+  `Settings()` 再替换 `app.config.settings`」——全仓几十处 `from app.config import settings`
+  拿到的是旧对象的引用，DB 覆盖写进去了、界面显示已保存，正在跑的进程里这些模块读的还是旧值，
+  只有重启才生效。现在改为按新快照**就地**刷字段，引用不变、值全更新。全量测试里
+  `test_avatar_cleanup` 的偶发失败就是它的症状：前一个用例存过配置组，清理接口读到旧的
+  `avatars_dir`，扫了默认目录所以「一个都没清」。
+- **知识库改完，AI 被告知“你自己刚改的”**：`knowledge_service` 把界面上的改动也打了 `mark_self_change`
+  标记，于是下一次能力变更通知会把“知识库索引更新”说成它自己改的——它其实没动过。现在去掉这个标记，
+  版本链照常发正式变更通知。同一批收掉几处重复：`AI_TYPES` 成为创建与更新的唯一类型清单（创建路径
+  此前不校验，拼错的类型能直接进库）、知识库请求模型归位 `schemas/agent.py`、前端页签由 `TABS.map`
+  生成（不再手抄两遍）、skill 的 ctx 只建一个协议代理、删掉两处改动后留下的未用导入。
+- **设置面板里几项开关“保存了但没生效”**：`PUT /agents/{id}/config` 的请求 schema 少了
+  `ai_type`、`is_ai_editable`、`discoverable`、`api_credit_cost`、`is_paused`——Pydantic 默认丢弃
+  未知字段，于是 AI 类型（记忆隔离粒度 / 能否加群）、可自改、可发现这些在界面上改了、库里没变；
+  `update_agent_config` 也没有 `ai_type` 分支。现在字段进了 schema，类型只接受
+  `general|semi_general|resonance`（拼错直接 400），另外三个一起落库。用例
+  `tests/test_agent_config_update.py`（2 条：一个 PUT 全落地、非法类型被拒）。
+- **切换预设档位一点就崩**：`apply_config_profile` 依赖的 `_PRESET_ORDER` / `_STRONG_*` /
+  `_INDEPENDENT_PARAMS` 早已搬进 `utils/pure/presets.py`，函数里却没跟着导入——升级到
+  「数字生命档」（以及任何预览）都会 NameError，界面上这个开关等于不可用；`_INDEPENDENT_PARAMS`
+  本身还根本不存在。现在参数表在 `presets.py` 用公开名导出并补上 `INDEPENDENT_PARAMS`，
+  方向判断收进 `preset_direction(old, new)`，`agent_service` 只调它们。用例
+  `tests/test_agent_presets.py`（2 条：整档升级、预览只读）。
+- **群助手在消息里靠"负号"表示身份**：群助手是 `group_assistants` 独立表，消息里却写成
+  `sender_type="ai"、sender_id=-ga.id`——负号只是为了在同一个整数列里躲开 users 号段，读的人
+  （以及后来写代码的人）都得记住这条隐规则；更糟的是它与 users.id 同号时「群助手 3」和「用户 3」
+  分不开。现在改成 `sender_type="assistant"、sender_id=ga.id`：sender_type 就是"这个 id 属于哪张表"，
+  与 human/ai 指向 users 是同一套读法；DB 约束同步放宽（`legacy/migration._migrate_message_sender_types`，
+  幂等，历史库的两种约束名都清掉重建）。"谁在说话"收进 `display_name.sender_names`（键 =
+  `(sender_type, sender_id)`）：群消息列表、会话列表最后一条、导出、世界事件投递、AI 读历史
+  （`resolve_speaker_names`）全走它，不再各写一份"按 id 查 users / AI"的取名逻辑；
+  `group_delivery.message_view` 对群助手只取名字（它没有头像与在线状态）。发送侧只改
+  `group_assistant_service.say_in_group` 一处；群助手的发言也不唤醒 AI 成员（那是世界对群的回话，
+  不是有人来找他们，顺带防来回触发）。前端消息气泡对 assistant 头像不弹资料卡（它不在用户/AI 表里）。
+  用例 `test_world_group_voice::test_sender_names_reads_assistants_by_type`（群助手 id 与用户同号也认不错），
+  其余用例改为断言 assistant 身份。
+- **世界在群里说话借的是群主的身份**：`send_group_message`（世界程序与世界 AI 共用的那条路）
+  把世界的话记成 `sender_type="human"、sender_id=世界主人`——群里看着像群主在说，更要命的是
+  群历史里它就是群主说的话：读这段历史的 AI、导出、记忆检索全都会当成那个人在说，等于世界假扮了他。
+  世界 skill 的 `ctx.group.send` 更糟一层：`send_gm_message(db, gid, owner_id, content, sender_type=…,`
+  `sender_id=…)` 与位置参数重复、`WorldBinding.group_id` 这个列根本不存在，一调就抛异常。
+  现在世界在群里的发言身份统一是**本群群助手**（`group_assistants` 一行，消息里写
+  `sender_type="assistant"、sender_id=ga.id`，见上一条）：`services/world/group_assistant_service.say_in_group` 负责
+  落库 + 广播，世界工具、受控 API（`POST /world/{id}/api/group/messages`）与世界 skill 三处都只调它。
+  类型化绑定的群用它绑定时建的助手（如「残响记录员」）；没有类型的历史绑定在第一次发言时按世界的名字
+  补建（幂等，一世界一群一个身份，A 群的话不会记到 B 群的助手头上）。同一批把两处同源查询收成一份：
+  `world_service.bound_group_ids`（工具 / 受控 API / skill 都从这里取绑定群，「默认群」不再各排各的）；
+  `display_name.sender_names` 负责把助手 id 认成助手名（此前会渲染成一串编号），
+  `routers/gm.py` 的取名也改为调它，不再手抄一份 users/agents 的取名规则。用例
+  `tests/test_world_group_voice.py`：世界发消息记在助手名下、历史绑定补建且幂等、两个群各用
+  各的助手、按类型认人、skill 的 ctx.group.send 同身份。
+
+- **世界帧跟群聊焊死：进世界得先挑一个群，命令也只能借群消息投递**：`enter_world` 曾把
+  (世界, 通道群) 记进帧，`world_command` 的实现是「以 AI 名义往群里发一条消息」——于是三件事
+  同时出错：①手上没有群就进不去世界（哪怕世界直接绑了这个 AI）；②同一个 AI 从 A 群进、从 B 群进
+  会拿到两套技能（`_type_slugs` 拿通道群当类型来源）；③世界在群里的回话 AI 永远收不到——那是一条
+  `source="world"` 的群消息，不唤醒任何人，世界帧里也不读群历史，所以它只能看到一句「已交给世界
+  程序处理」。现在帧只认世界与自己那一份入场身份（`world_role`，取自绑定：AI 自己的绑定 > 进门
+  那个群 > 无），一个世界绑几个群都只有这一条帧；`enter_world` 不再要求群，准入只看「世界绑没绑
+  你 / 你所在的群」；命令由 `world_event_hook.deliver_command` 直接投给 `handle(event)`
+  （事件形状与群消息同一份，`source="ai"`、无群号，世界的解析器一行不用改），非常驻世界同步拿回
+  返回值——那就是世界的回话。`state_stack_service.current_context` 里那层「世界号 / 通道群」扫描
+  一并删掉（唯一消费者就是这两处）。用例 `tests/test_world_entry.py` 重写为 7 条，含「命令一件群
+  消息都不发」「一个世界从两个群进都是同一条帧」。
+
+- **解锁换完了前缀还要再发一条「变更通知」；老 AI 的工具列表被旧版本钉死**：`compact` 解锁时只推了
+  「生效进度」（`cap_effective_versions`），没推「告知进度」（`cap_known_versions`），于是下一轮必补一条
+  「v59→v60 已生效、系统提示全文会在下次 compact 时刷新」——而全文恰恰这次刚刷完，通知说的正好是反的。
+  两件事现在收进 `mark_prefix_fresh`（`app/services/capability_versioning.py`）：**换新的那一版就算已告知**，
+  解锁点（`history/context_unlock.py`）与世界侧的「会话起点对齐」（`world_chat_service.py`）都只调它，不再
+  各写一半。同一处还收掉了 `read_progress` 的「回落旧 agent 级扁平键」：它本来只该给告知进度当迁移起点，
+  却被生效进度共用，于是老状态的前缀永久停在出土版本（实测浮生的 platform 生效版本停在 v12——v12 只有
+  58 个工具、连 `enter_world` 都没有，而平台已到 v60）。现在进度只属于本状态，通知基线统一由
+  `notice_baseline`（= max(known, effective)：前缀装的那版也算「看过」）给出；新建 AI / 新建会话 /
+  新绑定的源一律首见结清、不补发历史，也不会再在第一轮收到一条描述它眼前内容的通知。
+  用例 `tests/test_capability_scope.py` 由 6 条增至 8 条（含「旧扁平 effective 不许钉住老状态」）。
+
+- **世界技能的能力变更通知以前根本没落账本**：拼【本群世界】那段自己 `build_change_notice` +
+  `messages.append` + `commit`，那条通知只存在于这一轮请求里，下一轮就没了——AI 继续按旧说法办事，
+  正是账本机制当初要修的病（`history/context_sync.py` 的说明写着：以前只 append 进当轮 messages，
+  说完就没了）。现在世界源与平台工具走同一个出口：`_collect_injection_events` 统一算、经 `append_events`
+  落条目（带 `drop_on_unlock`，解锁即弃）；「哪些世界该通知」也收进 `_bound_world_sources`（与拼
+  【本群世界】同一套绑定口径，第一版两边各查一遍还漏了 agent 直接绑定）。用例
+  `tests/test_capability_notice_ledger.py`。
+
 - **对话日志的时间早了 8 小时**：库里是裸 UTC（`DateTime` 无 timezone，库时区也是 UTC），接口照原样
   序列化成 `"2026-10-20 09:39:15.314381"`，而日志页用 `fmtDateTime` 里的 `new Date(裸串)` 解析——
   JS 把这种不带时区标记的串当**本地时间**，于是本地 17:39 的一轮显示成 09:39（日期看着没错，时刻全错）。
@@ -1199,7 +1725,27 @@
   改由 conftest 把 `DATA_DIR` 指向临时目录。
   **已部署实例要 `docker compose up -d backend` 重建容器**——只 `restart` 不会重读环境变量。
 
-### ⚡ 优化
+### ⚡ 性能
+
+- **不变的文字搬进锁定段，事件搬进账本**（三档落位）：通道规矩（"这个群接进了 QQ、你只能被动回复……"）
+  原先每轮重拼在尾部，现在并进**环境快照**、写进 `message 0`——同一份取值两个渲染出口
+  （`render_environment` / `render_channel_rules`），帧内字节不变；管理员改绑通道只落一条
+  `【通道变化】…以这条为准` 的账本通知，解锁点才对齐（与环境同一条口径，`env_locked` 里多一条平台键，
+  插件写同名键会被覆盖）。待处理好友申请同一处理：不再每轮念一遍（申请挂几天就白付几天），
+  改成进账本一条 `notice`（带申请 id 与留言），处理掉或对方撤回后补一条作废通知——幂等依据是账本
+  自己的 `ref`，不另立游标表。留在尾部的只剩那条随群播报模式变的「@其他成员」规矩（问活着的实例才知道）。
+  同批还瘦了指令面：实测 5537 → 4932 字符，`message 0` 4573 → 4346，尾部时间块 348 → 39、
+  尾部工具失败块 68 → 0（失败原因账本里 `[本轮工具]` 已经记了一份）。
+- **记忆注入不再打掉整段历史的缓存**：记忆原本每轮重算、拼在系统提示与对话历史之间（`dynamic_readings`），
+  于是命中的永远只有「工具定义 + system 段」那约 17k token——实测某个 AI 从 190 条消息涨到 235 条，
+  `cached_tokens` 死钉在 17,280 不动，而 prompt 是 33,712。现在记忆走**账本条目**，落在当轮新消息之前：
+  位置固定、只追加，整段历史回到缓存里；命中率还会随上下文变长继续升高。
+  同时去掉了注入正文里的相似度数字（每轮都在变、对模型没用），并只在记忆**改过**时才补一条「以新的为准」
+  （去重键是 `mem:<id>@<内容指纹>`，权重衰减、被想起刷新时间这类写入不会误触发）。
+- **取消「当轮注入区」**：`message 0` 之后直接就是对话历史。那个插槽（`dynamic_readings`）里只剩技能注入一项，
+  而它自己的注释写着「检索词是当轮消息、沉到尾部读数」——代码与注释相反，技能激活/失效那一轮仍会把后面整段历史
+  从缓存里打掉。现在技能跟任务、状态栈摘要、当前时间一样沉尾部，开头只留走版本链冻结的锁定段。
+
 - **「改变量」逐条对齐**：一截之内删的第 i 条与增的第 i 条同一行（左右各一条消息、每行等高），不再左右
   各堆一大坨——缩放改变折行后也不会错位；`消失/新增 N 条` 收成两列表头。顺带修掉这条支路缺滚动/横向
   裁剪容器、长值直接画到面板外的问题（完整视图的滚动与裁剪在 `RequestBodyViewer` 内部，改变量没有那层）。
@@ -1277,7 +1823,8 @@
   `dismissed_providers`（那是"我不要这家"的账）。顺带修掉保存供应商时的双重编码：往 JSONB 列写
   `json.dumps(...)` 会把整份配置存成一个字符串，"已配置"随即读成空的（切供应商时踩到过）。
 
-### 📝 文档
+### 📝 文档与工程
+
 - **README 本地开发按代码现状重写**：补上建角色 / 建库 / 装 `vector` 扩展 → `backend/.env` → 后端（迁移自动执行）
   → 带 `VITE_PROXY_TARGET` 的前端；原文「Vite 将 /api/* 代理到 localhost:8000」与代码不符，删掉。
   Windows 安装程序链接原先钉在 v0.4.0 的 `Copree-Installer.exe`（该 release 的资产名是 `AIsChat-Installer.exe`，
@@ -1292,144 +1839,8 @@
 
 ## [v0.4.13] - 2026-10-03
 
-### 🐛 修复
-- **注入 prompt 的记忆正文不再被切成半个标记**：记忆正文按 300 字硬切，切在 `**加粗**` 中间
-  就把半个标记漏进 prompt，渲染出来是字面星号，看着像内容坏了；切点还常常落在句子中间。
-  现在收口到一个 `_clip_text`：优先贴行边界收（首行太短就不贴，免得白扔大半预算），
-  末尾若留着半个 `**` 先丢掉再补平，最后加省略号。同一文件里存记忆时的 500 字截断、
-  标题的 60 字截断也一起走这个函数。真实库里 10 条长正文 + 7 组边界用例全部通过。
-- **「更换头像」里的图片不再全是空白格子**：缩略图用 `<img>` 直接指 `/api/fs/download/{id}`，
-  而 `<img>` 带不上 Authorization 头，这一跳全是 401，于是十来个格子都只剩占位图标（点进去选却是好的，
-  因为那条路径自己带了头）。地址拼接原本在四处各写一遍，现在收敛到 api/client 的 fileDownloadUrl 一处
-  ——token 走 query，嵌入模式与桌面端的 base 差异也在那里处理。实测弹窗里 22 张缩略图全部 200 加载。
-- **收起后的块底下不再多一截**：块头与正文之间的 6px 间距挂在折叠容器内部，而网格的 0fr 压不掉
-  子项自己的 padding（换成 margin 也一样，实测都是 6px），于是收到底还剩一条空档。现在收到底改为
-  整块不再渲染（display: none），这 6px 随内容一起消失；展开动画仍是原来的高度过渡，导出件同理。
-- **日志正文里靠空格排版的层级不再被 Markdown 抹平**：记忆索引那种树状清单（admin_instructions/ 下面
-  缩进两层）是拿行首空格表示层级的，而正文走 Markdown 渲染——它会把段落续行的行首空白当排版噪音抹掉，
-  整棵树因此被拍平。现在按空行切段，段内有两行以上「行首缩进且不是列表/引用语法」的行时，
-  把该段的行首空白换成不换行空格再交给 Markdown：缩进留得住，段里的加粗 / 链接 / 行内代码照旧渲染。
-  一开始试过整段按原样等宽渲染，结果段里的 ** 全变成字面量，那是另一种失真，换掉了。
-- **下载 HTML 时按钮不再像失灵**：导出要先把分片渲染补完再落盘（394 块约 2 秒），
-  这段时间按钮显示「正在准备…」并禁用，落盘后复原；重复点击也不会叠出第二次导出。
-- **群视界入口弹窗认错了「高度」，也认错了群**：弹窗和遮罩原来挂在消息区上（`absolute inset-0`
-  相对 ChatView），于是同一块群聊面板里，面板顶部的标题栏（群名、成员、设置）露在遮罩外面，
-  弹窗也跟着偏下；更要紧的是切换群聊时这两个状态没跟着走——从绑定世界的群切到没绑定的群，
-  遮罩还盖着、按钮还指向上一个世界。现在门渲染进群聊面板容器（ChatArea 把面板节点交给
-  ChatView 当浮层宿主），遮罩与弹窗都以整个面板为界；切群时绑定状态与弹窗一起归零，
-  未绑定世界的群（`/worlds/by-entity` 回 404）自然什么都不出现。顺带补上少了的入口：
-  在世界门里选了「标准界面」之后，面板顶部常驻一条「去沉浸式界面」，否则这次进群就再也
-  找不到沉浸入口。四句文案一并收进 i18n（zh/en/ja）。
-- **看着 A 会话，B 发来消息时聊天列表一动不动**：侧栏靠 `chat-refresh` 事件刷新，而事件过去
-  只有 ChatView 在发——那条连接只订阅**当前**会话，别的会话来了消息它压根看不到（弹窗那条
-  常驻连接才收得到全部会话）。于是只有「正在看的那个会话」才会让侧栏更新，其余会话既没有新
-  预览也没有红数泡，直到你点进去才补上。现在常驻通知连接收到会话消息（群消息/私信/邀请卡）
-  就把那一条就地落到会话列表上（预览、时间、未读），与弹不弹窗无关——免打扰、正在看、
-  标签页在后台都只是不弹而已。
-- **会话列表收成一份，每条消息的列表请求从 6 次降到 0 次**：侧栏、标签页未读计数、站内弹窗
-  缓存三个消费者过去各自去拉 /groups + /dm/sessions，同一条消息惊动三家就是三倍请求；
-  而这两个接口并不便宜——实测这个账号（16 条私信）一轮 146 条 SQL、1.35 秒，也就是正在看的
-  会话每来一条消息就吃掉约 4 秒数据库时间。现在列表只有 hooks/useChatLists 一处：同一时刻
-  的多次调用合并成一次往返；新消息就地改那一份（零请求）；已读落库成功后清零那一项；只有
-  「列表本身可能变了」（建群、退群、收到新私信、自己发过消息、断线重连、窗口聚焦）才真的重拉。
-- **红数泡的口径改成「没在看」**：贴在一个会话的底部、窗口也看得见，那几条就是读了，红数泡
-  不该亮——而且**一瞬间也不该亮**。此前侧栏只照后端回传的未读数画：贴在底部收到新消息照样
-  先算未读，私信得离开再进来（拉消息顺带标已读）或者回一句才抹掉，群聊更只有进会话那一次
-  会标——未读清不清，跟你到底在看什么没关系。现在「正在读哪个会话」收在一个模块级真相里
-  （ChatView 上报「贴在这个会话底部」，切到后台就不算），侧栏据此对那一项直接按已读画
-  （是判定，不是等回传再抹），ChatView 据此把已读同步回后端：进会话、滚回底部、收到新消息、
-  标签页切回前台四条路径共用一个收口。私信补了 `POST /dm/{id}/read`，与群聊的
-  `/groups/{id}/read` 对称；私信的 UPDATE 也收成 `mark_dm_read` 一处（拉消息、拉详情、
-  主动同步三条路径共用）。顺带把 ChatView 里「贴底状态」的两处写法（state 与 ref 各写各的）
-  合成一个写入口，别再出现「看着在底部」和「其实翻走了」同时成立；程序化滚到底也如实记成贴底，
-  否则点完「回到底部」未读清不掉。
-- **管理台「清理文件」其实一直打不开**：cleanup_files 把结果行赋给了局部变量 settings，
-  遮蔽了模块级的那个 settings，于是函数开头第一句 settings.avatars_dir 直接
-  UnboundLocalError——这个按钮一按就是 500（也因此从没误删过任何东西）。改名修好。
-  同时把它的行为从"直接删"改成**搬进 avatars_trash/ 保留 7 天**：一张头像变"无引用"
-  往往只是瞬时状态（上传中的中间态、指针被清空但原图还在、三处入口漏写一处），真删掉
-  就再也捞不回来；刚动过 7 天的文件不碰，回收站过期自动清。搬进回收站时把时间戳重置为
-  "此刻"——os.replace 会保留原 mtime，否则旧文件会在同一轮里被自己的过期清理删掉。
-- **站内弹窗把会话号当人名**：私信弹窗上出现了「12_106」这种数字，那是**会话 id**
-  （两个用户 id 拼的）。弹窗侧读的字段是 `partner_name` / `peer_name`，而
-  `/dm/sessions` 返回的是嵌套的 `partner.name`（侧栏、转发弹窗读的都是它）——两个都不存在，
-  于是退回 `session_id`。现在与别处同一处读法取 `partner.name`，取不到就留空
-  （宁可不显示，也别把会话号顶在人名位上）；会话刚建立、列表缓存还没刷新时，
-  用推送里带的说话人名字兜底。
-- **i18n 静态检查漏了 logs 分区**：检查脚本的命名空间文件表里没有 `logs.ts`，
-  `logs:*` 的键全被报成「缺 zh/en/ja」（运行时其实是好的）——这份检查因此静默失效。
-  补进表里后恢复有效（23 个用到、37 条文案，无缺失）。
-- **同一个 AI 显示成"某某、某某 等2人"**：活动指示器（正在思考/输入中）在群里按 `agent.id` 存进
-  状态表、却按 `user_id` 广播出去，前端按 `user_id` 认人——进会话时 `/activity` 恢复进来的是
-  `agent.id` 那条、实时事件又加一条 `user_id`，同一个 AI 就占了两个位置，而且恢复出来的那条
-  永远清不掉。私信更直接：事件里发的是 `agent_id`，前端读 `user_id` 读到 undefined，恢复那条
-  一直挂着。现在两处（群 + 私信）统一按 **user_id** 存、按 user_id 发——与会话里其他地方的
-  "说话人"（`messages.sender_id`）同一把尺，并加了一条静态断言盯着这个 id 空间别再分叉。
-- **QQ 长消息后半段凭空消失**：单条有长度上限（超限**整条被拒**，错误码 40054007，不是截断），
-  旧代码按 `TEXT_LIMIT=1000` 一截了事（真机上 AI 那条 1733 字的消息只发出去前 1000 字），
-  AI 自己都发现"被截断了"。官方只给错误码、不给数字，所以**不猜死常量**：**整条先发**，平台说
-  超长才把这一段二分重发——在"认过的长度"和"刚被拒的长度"之间取中点，还没有认过的就砍半；两侧
-  边界都记下来，下一条比被拒的长度短就直接整条发，不再拿同一个长度撞第二次。发送端不再二次截断
-  （那会把整段悄悄吃掉一截）。拆出来的每段仍走同一次被动回复（同一个 msg_id、序号递增，官方允许
-  群 5 次 / 单聊 4 次），额度用完了会如实告诉 AI 主人"末尾 N 字没发出去"，不假装发全了；
-  实测到的两侧边界也随通道状态暴露。
-- **`union_openid` 只在成员信息接口里稳定返回**：事件载荷里那个字段常常是空的（官方也写了
-  "可能为空"，真机确认），所以收到群消息后若为空就按需调一次
-  `GET /v2/groups/{group}/members/{member}` 补拉并缓存一天（空结果也缓存——那接口只有 30 QPM）。
-  该接口**仅白名单机器人可用**（错误码 11253），没权限时记一次警告就不再撞，行为退回原样。
+### ✨ 新增
 
-### ⚡ 优化
-- **AI 详情页操作区六颗按钮不再高矮不一**：导出/复制/Token 三颗走的是统一按钮类，导入灵魂、更换头像、
-  删除 AI 三颗各写了一套 px-3 py-2 的裸样式，于是同一行里两种高度、两种内边距。现在六颗共用一份
-  `ACTION_BTN`（.btn .btn-sm .btn-outline），删除单独用新增的 `.btn-outline-danger` 描边变体；
-  实测六颗都是 32px 高、12px 字、8px 圆角。术语也一起对齐：它们操作的其实是同一份导出物
-  （文件名就是 soul_*.json），原来叫「下载导出 / 复制 JSON / 导入灵魂」三样说法，现在统一成
-  导出灵魂 / 复制灵魂 / 导入灵魂（zh/en/ja 同步，key 一并改成 exportSoul / copySoul）。
-- **长块的收放不再“唰”地一下**：动画时长原来固定 200ms，一块两千多像素的系统提示与一块几十像素的工具返回
-  用同一个时长，看着就是两种手感。现在时长随位移缩放：普通块仍是 200ms，之后每多 1000px 加 90ms、最多 420ms
-  （导出件的脚本共用同一组数值）。实测第 0 块（2481px）420ms 铺完、第 20 块（46px）仍 200ms，
-  曲线两端缓、中间快。
-- **打开长日志的那两三秒不再压住操作**：分片补渲染有两笔账——每补一片，React 会把已经铺好的块重新算一遍，
-  片越小、补的次数越多这笔越贵（实测把片从 16 降到 8 反而更慢：总时长 2.7s→3.1s、最长任务 369ms→474ms）。
-  现在块加了 memo，已铺好的不重算；每片大小按上一片实际耗时自适应（超过 120ms 减半、低于 40ms 加倍，4~32 块）。
-  394 块实测：铺完 2.6s、任务合计 1.8s、最长 340ms，折叠展开期间帧间隔稳定 16.7ms。
-- **折叠收尾不再像被拽一下**：曲线从 cubic-bezier(0.65,0,0.35,1) 换成 (0.4,0,0.2,1)，
-  末段每帧位移（千分比）从 78/43/21 降到 38/24/13，收起与展开用同一条；参数收进
-  components/shared/collapseMotion.ts 一份，站内 hook 与导出件的脚本共用（此前两处各写一遍字符串）。
-- **394 块的日志收放与滚动不再跟整篇长度较劲**：每个块加了 content-visibility: auto——视口外的块
-  既不布局也不绘制，没渲染过的按 135px 估高、滚过之后由浏览器记住实测高度（整篇高度只差 0.6%，
-  滚动条基本看不出在变）。同一份 394 块日志（headless Chrome 1440x900）：折叠时的布局准备
-  150ms→18ms、绘制 85ms→29ms、滚动绘制 179ms→109ms、滚动光栅 240ms→195ms。
-  正文本身按片渲染（首屏 16 块，其余在浏览器空闲时每 64ms 一片），打开不必等整篇铺完；
-  导出时改成每帧一片把整篇补齐再落盘，期间按钮显示「正在准备…」，页面不冻结。
-- **下载的日志 HTML 小了一多半**：原先有两笔浪费——整站样式表被原样抄进文件（生产构建就有 164 KB，
-  开发模式下更大），以及同一份 JSON 存了两遍（「原始 JSON」一份、每条的「原文」一份，合起来 60 KB 出头）。
-  现在样式表只留日志正文真用得上的规则（拿导出内容去试命中，伪类剥掉再试，判不出来的一律保留），
-  JSON 只存一份紧凑的，缩进版与每条原文都由打开文件时的脚本现算。导出时控制台会打印
-  「样式规则 N 条，保留 M 条」和懒生成省下的字符数，方便核对。
-- **聊天列表的两个接口不再逐条查**：`/groups` 与 `/dm/sessions` 原先每个群/每条私信各查一轮
-  （群成员资料、未读数、每个群最后一条、成员头像逐个查；私信则是对方资料 + 未读 + 最后一条 +
-  联邦标记），实测这个账号 25 个群 177 条 SQL、32 条私信 141 条 SQL。现在各自收成固定几条：
-  未读数按群/会话分组一次算、每个群最后一条用窗口函数排名取第一、成员头像先批量取成员再各一条
-  换头像、私信对方资料合成两条。同一批数据下逐字段对比，除了下面那条头像摆位，输出与改动前
-  完全一致。
-  实测（16 条私信 / 10 个群的账号，同一份数据、同一个进程里跑新旧两份实现）：
-  `/groups` 110ms→13ms、77→9 条 SQL；`/dm/sessions` 660ms→5ms、69→6 条 SQL；
-  25 个群那个账号 177→9 条 SQL。查询条数不再随会话数增长（有测试盯着）。
-  顺带：取成员头像时按入群时间排序（原先没有 ORDER BY，取哪几个成员本身是不确定的），
-  成员多的群头像摆位可能与以前略有不同。
-- **补齐聊天相关的索引，并把 AI 的未读聚合也收成整批查**：messages / dm_messages 过去只有主键，
-  按群/会话取消息、算未读、取每个群最后一条全是全表扫；「我加入了哪些群」「我参与的私信」
-  也各缺一条按人过滤的索引。migration 0077 补五条：`messages(group_id, created_at)`、
-  `group_members(member_id, member_type)`、`dm_sessions(user2_id)`、
-  `dm_messages(session_id, created_at)`、`dm_messages(session_id) WHERE read_at IS NULL`
-  （未读只占少数，部分索引更小）。模型里同步声明：新库 create_all 直接建、老库走迁移，
-  两条路一个结果；老库重启时 prestart 自动 upgrade，不用手动执行。
-  同族的两个 N+1 一并收掉：`check_unread`（AI 的群未读）原先每个群各查一次群名和最后一条、
-  `check_unread_dms`（AI 的私信未读）原先每条会话查三次，现在都改成各一次查完。
-  这一轮之后真实 HTTP：`/groups` 10-13ms、`/dm/sessions` 7-8ms。
-
-### ✨ 新增功能
 - **AI 对话日志可以下载 HTML 了**：日志的下载过去只有 json / md，两个都是后端拼的纯文本——
   markdown、公式、代码高亮到了文件里只剩字面量，打开是一堆星号和反引号。现在多一个「下载 HTML」：
   把页面上这块**已经渲染好的正文**连同当前主题与样式一起序列化成自包含文件，双击就能看、跟站内所见一致
@@ -1604,7 +2015,6 @@
   QQ 纯文本降级一直如此，站内浮窗接上这条链路后同样受影响。按 CommonMark 的「词内下划线不算
   强调」加上边界判定；顺带修掉纯图片消息（`![](url)`）被洗成空白——现在退回 `[图片]` 占位。
 
-### ✨ 新增功能
 - **管理台在大屏上不再"一条线贴左边"**：页签的宽度档位过去是各页自己写的（`max-w-lg` / `max-w-2xl` /
   `max-w-3xl`），且一律左对齐——1920 宽的窗口里，平台设置只占 512px，右侧空 1000 多像素，
   各个页签之间也各写各的。现在档位只声明一处（`pages/console/workspaces.tsx` 的 `width` 字段），
@@ -1633,7 +2043,93 @@
   「登录失败」与「被锁定挡回」也不会重复计数。这一屏放在「通用」工作区、跟在「总览」后面——
   打开管理台第一眼就是它，不必再进「监控」。
 
-### 🐞 修复
+### 🐛 修复
+
+- **注入 prompt 的记忆正文不再被切成半个标记**：记忆正文按 300 字硬切，切在 `**加粗**` 中间
+  就把半个标记漏进 prompt，渲染出来是字面星号，看着像内容坏了；切点还常常落在句子中间。
+  现在收口到一个 `_clip_text`：优先贴行边界收（首行太短就不贴，免得白扔大半预算），
+  末尾若留着半个 `**` 先丢掉再补平，最后加省略号。同一文件里存记忆时的 500 字截断、
+  标题的 60 字截断也一起走这个函数。真实库里 10 条长正文 + 7 组边界用例全部通过。
+- **「更换头像」里的图片不再全是空白格子**：缩略图用 `<img>` 直接指 `/api/fs/download/{id}`，
+  而 `<img>` 带不上 Authorization 头，这一跳全是 401，于是十来个格子都只剩占位图标（点进去选却是好的，
+  因为那条路径自己带了头）。地址拼接原本在四处各写一遍，现在收敛到 api/client 的 fileDownloadUrl 一处
+  ——token 走 query，嵌入模式与桌面端的 base 差异也在那里处理。实测弹窗里 22 张缩略图全部 200 加载。
+- **收起后的块底下不再多一截**：块头与正文之间的 6px 间距挂在折叠容器内部，而网格的 0fr 压不掉
+  子项自己的 padding（换成 margin 也一样，实测都是 6px），于是收到底还剩一条空档。现在收到底改为
+  整块不再渲染（display: none），这 6px 随内容一起消失；展开动画仍是原来的高度过渡，导出件同理。
+- **日志正文里靠空格排版的层级不再被 Markdown 抹平**：记忆索引那种树状清单（admin_instructions/ 下面
+  缩进两层）是拿行首空格表示层级的，而正文走 Markdown 渲染——它会把段落续行的行首空白当排版噪音抹掉，
+  整棵树因此被拍平。现在按空行切段，段内有两行以上「行首缩进且不是列表/引用语法」的行时，
+  把该段的行首空白换成不换行空格再交给 Markdown：缩进留得住，段里的加粗 / 链接 / 行内代码照旧渲染。
+  一开始试过整段按原样等宽渲染，结果段里的 ** 全变成字面量，那是另一种失真，换掉了。
+- **下载 HTML 时按钮不再像失灵**：导出要先把分片渲染补完再落盘（394 块约 2 秒），
+  这段时间按钮显示「正在准备…」并禁用，落盘后复原；重复点击也不会叠出第二次导出。
+- **群视界入口弹窗认错了「高度」，也认错了群**：弹窗和遮罩原来挂在消息区上（`absolute inset-0`
+  相对 ChatView），于是同一块群聊面板里，面板顶部的标题栏（群名、成员、设置）露在遮罩外面，
+  弹窗也跟着偏下；更要紧的是切换群聊时这两个状态没跟着走——从绑定世界的群切到没绑定的群，
+  遮罩还盖着、按钮还指向上一个世界。现在门渲染进群聊面板容器（ChatArea 把面板节点交给
+  ChatView 当浮层宿主），遮罩与弹窗都以整个面板为界；切群时绑定状态与弹窗一起归零，
+  未绑定世界的群（`/worlds/by-entity` 回 404）自然什么都不出现。顺带补上少了的入口：
+  在世界门里选了「标准界面」之后，面板顶部常驻一条「去沉浸式界面」，否则这次进群就再也
+  找不到沉浸入口。四句文案一并收进 i18n（zh/en/ja）。
+- **看着 A 会话，B 发来消息时聊天列表一动不动**：侧栏靠 `chat-refresh` 事件刷新，而事件过去
+  只有 ChatView 在发——那条连接只订阅**当前**会话，别的会话来了消息它压根看不到（弹窗那条
+  常驻连接才收得到全部会话）。于是只有「正在看的那个会话」才会让侧栏更新，其余会话既没有新
+  预览也没有红数泡，直到你点进去才补上。现在常驻通知连接收到会话消息（群消息/私信/邀请卡）
+  就把那一条就地落到会话列表上（预览、时间、未读），与弹不弹窗无关——免打扰、正在看、
+  标签页在后台都只是不弹而已。
+- **会话列表收成一份，每条消息的列表请求从 6 次降到 0 次**：侧栏、标签页未读计数、站内弹窗
+  缓存三个消费者过去各自去拉 /groups + /dm/sessions，同一条消息惊动三家就是三倍请求；
+  而这两个接口并不便宜——实测这个账号（16 条私信）一轮 146 条 SQL、1.35 秒，也就是正在看的
+  会话每来一条消息就吃掉约 4 秒数据库时间。现在列表只有 hooks/useChatLists 一处：同一时刻
+  的多次调用合并成一次往返；新消息就地改那一份（零请求）；已读落库成功后清零那一项；只有
+  「列表本身可能变了」（建群、退群、收到新私信、自己发过消息、断线重连、窗口聚焦）才真的重拉。
+- **红数泡的口径改成「没在看」**：贴在一个会话的底部、窗口也看得见，那几条就是读了，红数泡
+  不该亮——而且**一瞬间也不该亮**。此前侧栏只照后端回传的未读数画：贴在底部收到新消息照样
+  先算未读，私信得离开再进来（拉消息顺带标已读）或者回一句才抹掉，群聊更只有进会话那一次
+  会标——未读清不清，跟你到底在看什么没关系。现在「正在读哪个会话」收在一个模块级真相里
+  （ChatView 上报「贴在这个会话底部」，切到后台就不算），侧栏据此对那一项直接按已读画
+  （是判定，不是等回传再抹），ChatView 据此把已读同步回后端：进会话、滚回底部、收到新消息、
+  标签页切回前台四条路径共用一个收口。私信补了 `POST /dm/{id}/read`，与群聊的
+  `/groups/{id}/read` 对称；私信的 UPDATE 也收成 `mark_dm_read` 一处（拉消息、拉详情、
+  主动同步三条路径共用）。顺带把 ChatView 里「贴底状态」的两处写法（state 与 ref 各写各的）
+  合成一个写入口，别再出现「看着在底部」和「其实翻走了」同时成立；程序化滚到底也如实记成贴底，
+  否则点完「回到底部」未读清不掉。
+- **管理台「清理文件」其实一直打不开**：cleanup_files 把结果行赋给了局部变量 settings，
+  遮蔽了模块级的那个 settings，于是函数开头第一句 settings.avatars_dir 直接
+  UnboundLocalError——这个按钮一按就是 500（也因此从没误删过任何东西）。改名修好。
+  同时把它的行为从"直接删"改成**搬进 avatars_trash/ 保留 7 天**：一张头像变"无引用"
+  往往只是瞬时状态（上传中的中间态、指针被清空但原图还在、三处入口漏写一处），真删掉
+  就再也捞不回来；刚动过 7 天的文件不碰，回收站过期自动清。搬进回收站时把时间戳重置为
+  "此刻"——os.replace 会保留原 mtime，否则旧文件会在同一轮里被自己的过期清理删掉。
+- **站内弹窗把会话号当人名**：私信弹窗上出现了「12_106」这种数字，那是**会话 id**
+  （两个用户 id 拼的）。弹窗侧读的字段是 `partner_name` / `peer_name`，而
+  `/dm/sessions` 返回的是嵌套的 `partner.name`（侧栏、转发弹窗读的都是它）——两个都不存在，
+  于是退回 `session_id`。现在与别处同一处读法取 `partner.name`，取不到就留空
+  （宁可不显示，也别把会话号顶在人名位上）；会话刚建立、列表缓存还没刷新时，
+  用推送里带的说话人名字兜底。
+- **i18n 静态检查漏了 logs 分区**：检查脚本的命名空间文件表里没有 `logs.ts`，
+  `logs:*` 的键全被报成「缺 zh/en/ja」（运行时其实是好的）——这份检查因此静默失效。
+  补进表里后恢复有效（23 个用到、37 条文案，无缺失）。
+- **同一个 AI 显示成"某某、某某 等2人"**：活动指示器（正在思考/输入中）在群里按 `agent.id` 存进
+  状态表、却按 `user_id` 广播出去，前端按 `user_id` 认人——进会话时 `/activity` 恢复进来的是
+  `agent.id` 那条、实时事件又加一条 `user_id`，同一个 AI 就占了两个位置，而且恢复出来的那条
+  永远清不掉。私信更直接：事件里发的是 `agent_id`，前端读 `user_id` 读到 undefined，恢复那条
+  一直挂着。现在两处（群 + 私信）统一按 **user_id** 存、按 user_id 发——与会话里其他地方的
+  "说话人"（`messages.sender_id`）同一把尺，并加了一条静态断言盯着这个 id 空间别再分叉。
+- **QQ 长消息后半段凭空消失**：单条有长度上限（超限**整条被拒**，错误码 40054007，不是截断），
+  旧代码按 `TEXT_LIMIT=1000` 一截了事（真机上 AI 那条 1733 字的消息只发出去前 1000 字），
+  AI 自己都发现"被截断了"。官方只给错误码、不给数字，所以**不猜死常量**：**整条先发**，平台说
+  超长才把这一段二分重发——在"认过的长度"和"刚被拒的长度"之间取中点，还没有认过的就砍半；两侧
+  边界都记下来，下一条比被拒的长度短就直接整条发，不再拿同一个长度撞第二次。发送端不再二次截断
+  （那会把整段悄悄吃掉一截）。拆出来的每段仍走同一次被动回复（同一个 msg_id、序号递增，官方允许
+  群 5 次 / 单聊 4 次），额度用完了会如实告诉 AI 主人"末尾 N 字没发出去"，不假装发全了；
+  实测到的两侧边界也随通道状态暴露。
+- **`union_openid` 只在成员信息接口里稳定返回**：事件载荷里那个字段常常是空的（官方也写了
+  "可能为空"，真机确认），所以收到群消息后若为空就按需调一次
+  `GET /v2/groups/{group}/members/{member}` 补拉并缓存一天（空结果也缓存——那接口只有 30 QPM）。
+  该接口**仅白名单机器人可用**（错误码 11253），没权限时记一次警告就不再撞，行为退回原样。
+
 - **新建 AI 的弹窗把名字那栏写成「群聊名称」**：`CreateAgentModal` 与两处 AI 设置弹窗（会话里的详细设置、
   AI 设置）复用了群聊的键 `chat.groupName`（"群聊名称 *"），给 AI 起名时提示成"群聊名称"——同一个键
   表达两件事，改文案时还会互相带偏。新增 `modal.agentNameLabel`（AI 名称 * / AI name * / AI 名 *）三语，
@@ -1827,7 +2323,60 @@
   `?summary=true` 请求）、四个没用到的图标导入，并把上下哨兵的 hook 提到模块级。
   另外把消息高度估算的已知误差来源写进注释（只估不量：图片与长中文都偏，靠 overscan 消化）。
 
+### ⚡ 性能
+
+- **AI 详情页操作区六颗按钮不再高矮不一**：导出/复制/Token 三颗走的是统一按钮类，导入灵魂、更换头像、
+  删除 AI 三颗各写了一套 px-3 py-2 的裸样式，于是同一行里两种高度、两种内边距。现在六颗共用一份
+  `ACTION_BTN`（.btn .btn-sm .btn-outline），删除单独用新增的 `.btn-outline-danger` 描边变体；
+  实测六颗都是 32px 高、12px 字、8px 圆角。术语也一起对齐：它们操作的其实是同一份导出物
+  （文件名就是 soul_*.json），原来叫「下载导出 / 复制 JSON / 导入灵魂」三样说法，现在统一成
+  导出灵魂 / 复制灵魂 / 导入灵魂（zh/en/ja 同步，key 一并改成 exportSoul / copySoul）。
+- **长块的收放不再“唰”地一下**：动画时长原来固定 200ms，一块两千多像素的系统提示与一块几十像素的工具返回
+  用同一个时长，看着就是两种手感。现在时长随位移缩放：普通块仍是 200ms，之后每多 1000px 加 90ms、最多 420ms
+  （导出件的脚本共用同一组数值）。实测第 0 块（2481px）420ms 铺完、第 20 块（46px）仍 200ms，
+  曲线两端缓、中间快。
+- **打开长日志的那两三秒不再压住操作**：分片补渲染有两笔账——每补一片，React 会把已经铺好的块重新算一遍，
+  片越小、补的次数越多这笔越贵（实测把片从 16 降到 8 反而更慢：总时长 2.7s→3.1s、最长任务 369ms→474ms）。
+  现在块加了 memo，已铺好的不重算；每片大小按上一片实际耗时自适应（超过 120ms 减半、低于 40ms 加倍，4~32 块）。
+  394 块实测：铺完 2.6s、任务合计 1.8s、最长 340ms，折叠展开期间帧间隔稳定 16.7ms。
+- **折叠收尾不再像被拽一下**：曲线从 cubic-bezier(0.65,0,0.35,1) 换成 (0.4,0,0.2,1)，
+  末段每帧位移（千分比）从 78/43/21 降到 38/24/13，收起与展开用同一条；参数收进
+  components/shared/collapseMotion.ts 一份，站内 hook 与导出件的脚本共用（此前两处各写一遍字符串）。
+- **394 块的日志收放与滚动不再跟整篇长度较劲**：每个块加了 content-visibility: auto——视口外的块
+  既不布局也不绘制，没渲染过的按 135px 估高、滚过之后由浏览器记住实测高度（整篇高度只差 0.6%，
+  滚动条基本看不出在变）。同一份 394 块日志（headless Chrome 1440x900）：折叠时的布局准备
+  150ms→18ms、绘制 85ms→29ms、滚动绘制 179ms→109ms、滚动光栅 240ms→195ms。
+  正文本身按片渲染（首屏 16 块，其余在浏览器空闲时每 64ms 一片），打开不必等整篇铺完；
+  导出时改成每帧一片把整篇补齐再落盘，期间按钮显示「正在准备…」，页面不冻结。
+- **下载的日志 HTML 小了一多半**：原先有两笔浪费——整站样式表被原样抄进文件（生产构建就有 164 KB，
+  开发模式下更大），以及同一份 JSON 存了两遍（「原始 JSON」一份、每条的「原文」一份，合起来 60 KB 出头）。
+  现在样式表只留日志正文真用得上的规则（拿导出内容去试命中，伪类剥掉再试，判不出来的一律保留），
+  JSON 只存一份紧凑的，缩进版与每条原文都由打开文件时的脚本现算。导出时控制台会打印
+  「样式规则 N 条，保留 M 条」和懒生成省下的字符数，方便核对。
+- **聊天列表的两个接口不再逐条查**：`/groups` 与 `/dm/sessions` 原先每个群/每条私信各查一轮
+  （群成员资料、未读数、每个群最后一条、成员头像逐个查；私信则是对方资料 + 未读 + 最后一条 +
+  联邦标记），实测这个账号 25 个群 177 条 SQL、32 条私信 141 条 SQL。现在各自收成固定几条：
+  未读数按群/会话分组一次算、每个群最后一条用窗口函数排名取第一、成员头像先批量取成员再各一条
+  换头像、私信对方资料合成两条。同一批数据下逐字段对比，除了下面那条头像摆位，输出与改动前
+  完全一致。
+  实测（16 条私信 / 10 个群的账号，同一份数据、同一个进程里跑新旧两份实现）：
+  `/groups` 110ms→13ms、77→9 条 SQL；`/dm/sessions` 660ms→5ms、69→6 条 SQL；
+  25 个群那个账号 177→9 条 SQL。查询条数不再随会话数增长（有测试盯着）。
+  顺带：取成员头像时按入群时间排序（原先没有 ORDER BY，取哪几个成员本身是不确定的），
+  成员多的群头像摆位可能与以前略有不同。
+- **补齐聊天相关的索引，并把 AI 的未读聚合也收成整批查**：messages / dm_messages 过去只有主键，
+  按群/会话取消息、算未读、取每个群最后一条全是全表扫；「我加入了哪些群」「我参与的私信」
+  也各缺一条按人过滤的索引。migration 0077 补五条：`messages(group_id, created_at)`、
+  `group_members(member_id, member_type)`、`dm_sessions(user2_id)`、
+  `dm_messages(session_id, created_at)`、`dm_messages(session_id) WHERE read_at IS NULL`
+  （未读只占少数，部分索引更小）。模型里同步声明：新库 create_all 直接建、老库走迁移，
+  两条路一个结果；老库重启时 prestart 自动 upgrade，不用手动执行。
+  同族的两个 N+1 一并收掉：`check_unread`（AI 的群未读）原先每个群各查一次群名和最后一条、
+  `check_unread_dms`（AI 的私信未读）原先每条会话查三次，现在都改成各一次查完。
+  这一轮之后真实 HTTP：`/groups` 10-13ms、`/dm/sessions` 7-8ms。
+
 ### ♻️ 重构
+
 - **锁定态不再被"平台发布"改字节**：请求里的 tools 改成"快照 ∩ 状态白名单"，但**已经删掉的工具保留旧定义**
   到解锁为止——中途把它抠掉会整段前缀 miss，"这个能力没了"改由变更通知条目告知；解锁时世界源
   （`world-{id}`）也一起对齐最新，不然世界删掉技能后旧定义会一直发下去。
@@ -1862,6 +2411,7 @@
   `theme_vote` / `theme_vote_r2` 各自的两份读写实现删掉。
 
 ### 🧹 清理
+
 - **source map 出仓库**：`dsh-copree/dist` 里 124 个 `.map`（33MB → 11MB，单个最大 7.5MB）不再跟踪，
   插件包只带 `.js`/manifest；要排查线上堆栈时按发布版本另行取用。
 - **注释与文档去掉「决策归属」写法**：清掉把设计结论挂到人/日期上的标注（「某日某人定」式），
@@ -1869,7 +2419,8 @@
 
 ## [v0.4.12] - 2026-09-26
 
-### ✨ 新增功能
+### ✨ 新增
+
 - **AI 自己的代码沙箱**：AI 可以在自己的文件空间里运行 Python 脚本（新工具 `run_script`，
   也可先落盘成文件再执行）；脚本只看得见、只写得进自己的文件空间，不联网、不起子进程，
   有内存与超时上限。世界代码与 AI 脚本从此共用同一套沙箱实现。
@@ -1883,7 +2434,8 @@
 - **情景名写错会被当场拦下**：规则只能挂在平台预置的情景上，写错时直接返回可选清单，
   不再出现"存下来了却永远不触发"。
 
-### ⚡ 优化
+### ⚡ 性能
+
 - **全量群消息下的开销**：一条消息要过群里所有 AI 的决策规则，规则改为按消息批量取一次，
   不再每个 AI 各查一次库。
 - **世界感知群消息不再等窗口**：世界程序收到群消息的第一条立即触发，随后一段时间内的
@@ -1891,7 +2443,8 @@
 
 ## [v0.4.11] - 2026-09-26
 
-### ✨ 新增功能
+### ✨ 新增
+
 - **按人静音**：AI 可以只把某个人静音——他说话（哪怕 @ 你）都不唤醒你，消息照常进群、之后能翻到。
   可按分钟、按条数（他再说 N 条内），两个都不给就是永久；工具 `silence_member`，
   取消用 `cancel_dnd` 带上同一个 `target_user_id`。与免打扰/屏蔽的区别：那两条管"整个群"，这条管"某个人"。
@@ -1910,6 +2463,7 @@
   权值高的记忆只是不再自动进上下文，记录留着，显式召回仍取得到。
 
 ### 🐛 修复
+
 - 刷新后群消息的「来自 QQ」标签消失、撤回消息显示为空内容：群消息接口的响应模型按一份手抄的字段清单
   过滤，`via` / `revoked` / `sender_state` 均被丢弃。已移除该响应模型，REST 与 WS 推送同形——
   字段清单仅保留 `message_serializer` 一份。
@@ -1931,7 +2485,8 @@
 
 ## [v0.4.10] - 2026-09-26
 
-### ✨ 新增功能
+### ✨ 新增
+
 - **消息撤回**：群聊与私信都支持。本人 2 分钟内可撤，群主/管理员可撤他人的消息；外部通道同步撤回，
   撤不掉时如实回报（站内已撤、通道侧未撤）。撤回后给已经看过这条消息的 AI 补一条作废通知，
   界面显示「XXX 撤回了一条消息」。
@@ -1949,12 +2504,14 @@
 - 会话列表预览与聊天记录导出显示人名而非内部标记；配对提示文案两条通道统一。
 
 ### 🐛 修复
+
 - 撤回按钮在 UTC+8 时区永远不出现：窗口判定把服务端时间当成本地时间解析。
 - 非安全上下文下复制静默失败，改为带回退的实现。
 
 ## [v0.4.9] - 2026-09-25
 
-### ✨ 新增功能
+### ✨ 新增
+
 - **会话历史账本**：请求体固定为「锁定系统段 + 历史 + 尾部读数」，历史段只追加、仅在压缩/解锁点重写；
   条目按渲染后的最终内容落库，保证每轮请求前缀稳定、缓存命中。
 - **跨状态交接与便签**：私信里的约定能带到群聊；便签以账本条目投递、每个会话各一份，
@@ -1966,13 +2523,15 @@
 - 群聊与私信历史统一读账本；一次性事件（能力变更、便签撤下、建议回复）落成条目。
 
 ### 🐛 修复
+
 - 压缩取样口径错误（按最后 200 行统计，真实对话被工具卡片淹没，永远判定「无需压缩」）。
 - 「答上一条」漂移：上下文顺序与空闲判定时区。
 - token 估算低估中文（压缩阈值形同虚设）。
 
 ## [v0.4.8] - 2026-09-25
 
-### ✨ 新增功能
+### ✨ 新增
+
 - 控制台重构：管理页统一到通用组件与设计令牌。
 - 服务插件协议 v3：插件类别、插件级配置、运行态不漂移。
 - 插件商城与社区索引仓；DSH 桥接（管理端给 DSH 本体会话发消息）。
@@ -1981,83 +2540,98 @@
 
 ## [v0.4.7] - 2026-09-25
 
-### ✨ 新增功能
+### ✨ 新增
+
 - **外部聊天通道**：QQ 官方机器人通道与 NapCat/OneBot 通道。
 - **外部身份与配对**：陌生人私聊先领配对码，批准后才能与 AI 对话；支持拉黑与解除。
 - 通道配置通用化：卡片与弹窗按插件声明渲染；平台可托管协议端（扫码登录）。
 - 同一个 AI 可以同时接多条通道；通道能力与限制写进提示词与界面。
 
 ### 🐛 修复
+
 - 两个 QQ 通道实例互相顶掉出口，导致部分群的回复被静默丢弃（改句柄注册 + 并发分发）。
 
 ## [v0.4.6] - 2026-09-25
 
-### ♻️ 重构
-- 世界对话主流程分阶段拆分（首轮流式、工具循环、命令分发各自独立）。
-- 世界工具全面插件化：一个工具一个文件，展示文案随工具走，支持外部插件目录。
-
 ### 🐛 修复
+
 - 世界 AI 模型解析统一入口，修复默认模型解析崩溃。
 - 世界会话时间比较类型错误、工具调用链悬空导致的请求失败。
 - 排队弹窗清不掉、中途插话阻塞、思考展示重复、滚动跟随中断等对话体验问题。
 - 群消息接口统一为 `/gm`（与 `/dm` 对称），顺带修掉两个必然 500 的入口。
 
+### ♻️ 重构
+
+- 世界对话主流程分阶段拆分（首轮流式、工具循环、命令分发各自独立）。
+- 世界工具全面插件化：一个工具一个文件，展示文案随工具走，支持外部插件目录。
+
 ## [v0.4.5] - 2026-09-25
 
 ### 🔒 安全
+
 - 权限判定收敛为统一入口；匿名下载改为白名单；公网自测报告逐条整改。
 
-### 📚 文档
+### 📝 文档与工程
+
 - 仓库与示例文案去地址化；不能入库的资料统一目录；新增《安全与权限模型》。
 - 群视界 API 文档索引补齐；文档面向国内/国际读者各给一套命令。
 
 ### 🔧 开发工具与测试
+
 - 覆盖率增量门禁、CI 前端类型检查门禁、授权边界静态守卫、测试不写生产数据目录。
 - 演示截图流水线一键产出脱敏图。
 
 ## [v0.4.4] - 2026-09-24
 
-### 📝 文档与插件
+### 📝 文档与工程
+
 - DSH 插件 README 按通行规格重写（英文主版 + 中文版），补主仓库介绍与返回链接。
 - 项目定位句统一；旧目录名保留跳转占位页。
 
 ## [v0.4.3] - 2026-09-19
 
-### ✨ 新增功能
+### ✨ 新增
+
 - **品牌更名**：AIsChat → Copree（显示层、仓库地址、协议路径、存储键、备份前缀统一，兼容旧名读取）。
 - 世界会话「起点解锁」前缀快照与轮次预算；计划模式可只读运行并申请提额。
 - 会话改名与聊天记录下载（Markdown / JSON）；世界工具支持目录检索与省 token 的列表。
 
 ### 🐛 修复
+
 - 世界工具落盘前语法自检与改动摘要；收尾轮保留 tools（否则整段前缀掉出缓存）。
 - i18n 三语补齐并加静态检查脚本。
 
 ## [v0.4.2] - 2026-09-14
 
 ### 🐛 修复
+
 - 世界对话的刷新竞态、中途消息插入、中间轮文字重复；排队弹窗与 `active_turn` 状态错误。
 - 工具执行异常时仍落库工具响应，避免后续请求报错。
 - MiMo 接入地址修正与迁移。
 
 ### 🧪 测试
+
 - 无 pytest 运行器与用例选择器；纯函数用例与覆盖率门禁；群视界发图链路端到端冒烟。
 
 ## [v0.4.1] - 2026-09-06
 
-### ✨ 新增功能
+### ✨ 新增
+
 - **备份服务策略模式**：支持 PostgreSQL 与 SQLite 两套策略；完整备份跳过数据库数据目录。
 - **群视界实时 WebSocket 通道**；强注入提示词补「常驻模式与实时通道」规范段。
 - 启动迁移彻底切到 Alembic（移除旧迁移模块）。
 
-### ♻️ 重构
-- 业务层 Repository 化收尾；API Key 解密失败统一异常与降级通知。
-
 ### 🐛 修复
+
 - 补齐缺失的 await（删除与 flush/refresh），修复 Windows 启动器登录 405。
+
+### ♻️ 重构
+
+- 业务层 Repository 化收尾；API Key 解密失败统一异常与降级通知。
 
 ## [v0.4.0] - 2026-08-24
 
-### 🚀 新功能
+### ✨ 新增
 
 #### 桌面 EXE 打包支持（Windows）
 - **安装程序**：基于 NSIS 3.09 编译，支持语言选择（简体中文/English）
@@ -2091,7 +2665,7 @@
 - 数据目录自动创建（exe 同级 `data/`）
 - 强制 SQLite 模式，简化部署
 
-### 🐛 修复的 Bug
+### 🐛 修复
 
 #### GUI 启动优化
 - **健康检查**：从主线程同步阻塞改为后台线程异步探测，消除 GUI 卡顿
@@ -2103,7 +2677,7 @@
 - **健康检查**：异步化，避免启动阻塞
 - **日志系统**：队列处理器支持，避免日志丢失
 
-### 🖥️ 桌面启动器 UI 改进
+### 🎨 界面与交互
 
 #### 界面优化
 - **窗口图标**：使用真正的 `.ico` 文件（多尺寸 16/32/48/64/128/256），修复 Windows 蓝色方框问题
@@ -2118,13 +2692,13 @@
 - **日志面板**：浅灰背景，阅读舒适
 - **页脚**：显示版本号和端口
 
-### 📚 文档更新
+### 📝 文档与工程
 
 - **README**：添加安装程序下载链接
 - **CHANGELOG**：完整记录 v0.3.14 → v0.4.0 所有改动
 - **安装指南**：详细的安装和卸载步骤
 
-### 🔧 开发工具
+### 🔧 开发工具与测试
 
 - **.gitignore**：更新（`.venv*`、`data/`、`*.log`、`__pycache__/`、`frontend/dist/`）
 
@@ -2138,7 +2712,7 @@
 
 ## [v0.3.14] - 2026-08-23
 
-### 🚀 新功能
+### ✨ 新增
 
 #### DSH 插件系统
 - **DSH 插件 v1**：同源代理 + 侧边栏 board + 完整聊天渲染
@@ -2166,26 +2740,7 @@
 - **行为插件协议 v2**：@skill 装饰器 + owner 注册表
 - **插件关闭回退**：WS 广播 + 轮询 + 焦点恢复
 
-### 🏗️ 架构重构：Repository 化
-
-**新增 Repository 层**（`backend/app/repositories/`）：
-- `user_repo.py`、`friend_repo.py`、`world_repo.py`、`group_type_repo.py`、`agent_repo.py`
-- `system_settings_repo.py`、`verification_repo.py`、`api_key_pool_repo.py`
-- `audit_repo.py`、`capability_repo.py`、`content_repo.py`、`export_repo.py`
-- `federation_repo.py`、`infra_repo.py`、`invitation_repo.py`、`memory_repo.py`
-- `plugin_repo.py`、`search_repo.py`、`skill_repo.py`
-
-**彻底解耦模块**（业务函数签名改为 `repo: XxxRepository`）：
-- 用户、好友、世界核心、审计、能力版本、大脑控制器
-- 邀请、搜索、导出、内容（对话日志/OpenCLI）
-
-**兼容过渡模块**（`_ensure_repo` 幂等包装）：
-- 记忆、技能、AI 代理配套、基础设施、联邦、文件服务、插件、群类型
-
-**路由层依赖注入**（`app/routers/deps.py`）：
-- 新增 `get_user_repo`、`get_friend_repo`、`get_world_repo`、`get_group_type_repo`、`get_agent_repo`、`get_invitation_repo`、`get_search_repo`、`get_export_repo`、`get_content_repo` 等
-
-### 🐛 修复的 Bug
+### 🐛 修复
 
 #### 安全性修复
 - **全局异常处理**：泄露 `str(exc)` → 改为安全模糊响应
@@ -2229,7 +2784,7 @@
 - **主题色**：CSS 变量驱动、深浅双主题
 - **世界列表**：按钮固定高度、移动端适配
 
-### 🎨 应用入口优化（`main.py`）
+### ⚡ 性能
 
 #### 路由重构
 - **关闭 Redoc**：保留 `/openapi.json`
@@ -2246,23 +2801,6 @@
 - **APP_VERSION**：纳入 `settings.app_version`
 - **版本管理**：统一版本号管理
 
-### 🖥️ 桌面启动器 UI 改进
-
-#### 界面优化
-- **窗口图标**：使用真正的 `.ico` 文件（多尺寸 16/32/48/64/128/256），修复 Windows 蓝色方框问题
-- **标题**：改为「Copree 启动器」
-- **字号**：全局加大（标题 22px、状态 15px、设置 14px、页脚 11px）
-- **设置按钮**：emoji 改为纯文字（「设置」/「返回」）
-
-#### 功能增强
-- **设置页滚动**：支持小窗口下滚动查看
-- **单窗口视图切换**：主页 ↔ 设置页，顶栏常驻
-- **状态卡片**：有背景、圆角、微妙边框，层次分明
-- **日志面板**：浅灰背景，阅读舒适
-- **页脚**：显示版本号和端口
-
-### ⚡ 性能优化
-
 #### GUI 启动优化
 - **健康检查**：从主线程同步阻塞改为后台线程异步探测，消除 GUI 卡顿
 - **日志面板**：批量渲染限制（60行/帧），防止单帧大量 Tk 重绘导致卡顿
@@ -2278,62 +2816,7 @@
 - **移动端适配**：世界列表、文档弹窗、主题色选择器
 - **响应式布局**：手机端全屏、横向分区栏、底部抽屉
 
-### 📚 文档更新
-
-- **README**：添加安装程序下载链接
-- **CHANGELOG**：完整记录 v0.3.14 → v0.4.0 所有改动
-- **安装指南**：详细的安装和卸载步骤
-- **技术文档**：架构重构说明
-- **DSH 接入指南**：完整的接入文档和实现要点
-- **自习室文档**：白噪音/云端/布局/部署/未解决问题
-- **插件系统文档**：统一插件系统文档更新
-- **前端规范**：统一按钮规范、语义色系统、移动端适配
-
-### 🔧 开发工具
-
-- **异步检查**：`scripts/scan_async_full.py` 检查 `async/await` 遗漏
-- **Repository 检查**：`scripts/scan_db_issues.py` 检查转换遗漏
-- **.gitignore**：更新（`.venv*`、`data/`、`*.log`、`__pycache__/`、`frontend/dist/`）
-
-### 📦 依赖更新
-
-- **bcrypt**：降级到 `4.0.1`（修复密码验证问题）
-- **PyInstaller**：添加 `pystray` 依赖（托盘功能）
-- **NSIS**：使用 3.09 编译安装程序
-
----
-
-## [v0.3.14] - 2026-08-23
-
-### 🚀 新功能
-
-#### DSH 插件系统
-- **DSH 插件 v1**：同源代理 + 侧边栏 board + 完整聊天渲染
-- **沉浸式界面**：设置页 + 功能导航 + 消息渲染完善
-- **GitHub 式双向同步**：世界文件本地镜像 + 快照三路对比 + 冲突裁决 + 版本提示注入
-- **世界文件夹同步**：世界文件夹 + 会话自动同步、world_* 工具集
-- **DSH 接入指南**：完整的接入文档和实现要点
-
-#### 自习室功能
-- **白噪音系统**：森林风声、海面/深海音色、细雨/暴雨等多层声源
-- **立体声空间化**：HRTF 双耳渲染、声像移动、单声道/立体声切换
-- **圆形进度环**：SVG 进度条、双模式、双端口
-- **待办清单**：添加/删除/完成待办事项
-- **云端统计**：在线时间、累计时间、近 15 天统计
-- **响应式布局**：手机端适配、小屏竖屏优化
-
-#### 主题系统
-- **主题设计工具**：实时预览、取色器、hex 输入、多套预设
-- **皮肤插件**：管理员全局 + 用户个人两级开关
-- **主题投票**：A/B 快投页面与接口
-- **语义色系统**：CSS 变量驱动深浅双主题
-
-#### 插件系统
-- **统一插件系统**：目录即插件，两级开关
-- **行为插件协议 v2**：@skill 装饰器 + owner 注册表
-- **插件关闭回退**：WS 广播 + 轮询 + 焦点恢复
-
-### 🏗️ 架构重构：Repository 化
+### ♻️ 重构
 
 **新增 Repository 层**（`backend/app/repositories/`）：
 - `user_repo.py`、`friend_repo.py`、`world_repo.py`、`group_type_repo.py`、`agent_repo.py`
@@ -2352,68 +2835,7 @@
 **路由层依赖注入**（`app/routers/deps.py`）：
 - 新增 `get_user_repo`、`get_friend_repo`、`get_world_repo`、`get_group_type_repo`、`get_agent_repo`、`get_invitation_repo`、`get_search_repo`、`get_export_repo`、`get_content_repo` 等
 
-### 🐛 修复的 Bug
-
-#### 安全性修复
-- **全局异常处理**：泄露 `str(exc)` → 改为安全模糊响应
-- **验证错误**：过滤 `input` 字段，避免泄露请求体
-- **健康检查**：添加超时保护（`asyncio.wait_for` + 5s 超时）
-
-#### 数据库与 Repository
-- **异步误用**：Repository `add`/`delete`/`flush`/`refresh` 被误定义为异步 → 改为同步
-- **业务代码**：大量错误的 `await repo.add(...)` → 全面清理
-- **常驻世界恢复**：查询使用 `astext` 导致启动警告 → 改用 `cast`
-- **bcrypt 版本**：过高导致密码验证失败 → 降级到 `4.0.1`
-
-#### 服务稳定性
-- **后台任务**：重启计数永不重置 → 稳定运行 10 分钟后自动重置
-- **延迟重启**：任务未被管理 → 纳入 `_DELAYED_RESTART_TASKS`
-- **健康检查**：添加超时保护，避免启动阻塞
-- **日志目录**：创建失败降级 → 仅控制台输出
-- **metrics.flush()**：缺少 `await` → 修复
-- **federation_service**：`db.refresh()` 缺少 `await` → 修复
-- **皮肤插件**：默认启用 → 改为默认禁用
-
-#### DSH 插件修复
-- **workspaceId 字段修复**：世界同步字段错误
-- **backendRequest chunk 拼接**：UTF-8 截断问题
-- **world_pull HTML**：走原始接口
-- **快照文件误判排除**：同步正确性修复
-- **force 覆盖补齐冲突**：本地修改保护
-- **快照只更新实际同步文件**：防洗白
-
-#### 自习室修复
-- **白噪音切换**：无缝切换、森林无周期、声像连续渐变
-- **深海气泡**：活跃池可重叠发声、大小分布优化、音量调整
-- **细雨滴答**：专业雨滴声学重做、稀疏滴答感
-- **立体声摆位**：所有层开播立即摆到初始方位
-- **进度环**：SVG 方案重做、rAF 平滑
-- **响应式布局**：小屏手风琴、竖屏断点、字体缩放
-
-#### 前端修复
-- **按钮高度**：图标/无图标按钮严格等高
-- **文档弹窗**：手机全屏、滚动陷阱、背景漏色
-- **主题色**：CSS 变量驱动、深浅双主题
-- **世界列表**：按钮固定高度、移动端适配
-
-### 🎨 应用入口优化（`main.py`）
-
-#### 路由重构
-- **关闭 Redoc**：保留 `/openapi.json`
-- **Swagger 文档**：拆出到 `routers/swagger_docs.py`
-- **基础路由**：拆出到 `routers/system.py`（`/`、`/health`、`/maintenance-msg`）
-
-#### 错误处理
-- **全局异常日志**：使用 `exc_info=exc` 并添加请求 ID
-- **验证错误响应**：只保留 `loc`/`msg`/`type` 白名单
-- **状态码**：使用 `fastapi.status` 常量
-- **移除冗余**：`HTTPException` 处理器
-
-#### 配置管理
-- **APP_VERSION**：纳入 `settings.app_version`
-- **版本管理**：统一版本号管理
-
-### 🖥️ 桌面启动器 UI 改进
+### 🎨 界面与交互
 
 #### 界面优化
 - **窗口图标**：使用真正的 `.ico` 文件（多尺寸 16/32/48/64/128/256），修复 Windows 蓝色方框问题
@@ -2428,24 +2850,7 @@
 - **日志面板**：浅灰背景，阅读舒适
 - **页脚**：显示版本号和端口
 
-### ⚡ 性能优化
-
-#### GUI 启动优化
-- **健康检查**：从主线程同步阻塞改为后台线程异步探测，消除 GUI 卡顿
-- **日志面板**：批量渲染限制（60行/帧），防止单帧大量 Tk 重绘导致卡顿
-- **日志模式切换**：简要→详细增量追加，详细→简要全量重绘
-
-#### 后端优化
-- **数据库连接**：支持 SQLite 直连模式
-- **健康检查**：异步化，避免启动阻塞
-- **日志系统**：队列处理器支持，避免日志丢失
-
-#### 前端优化
-- **按钮规范**：统一 .btn 语义类 + 组件共享单一规范源
-- **移动端适配**：世界列表、文档弹窗、主题色选择器
-- **响应式布局**：手机端全屏、横向分区栏、底部抽屉
-
-### 📚 文档更新
+### 📝 文档与工程
 
 - **README**：添加安装程序下载链接
 - **CHANGELOG**：完整记录 v0.3.14 → v0.4.0 所有改动
@@ -2456,7 +2861,7 @@
 - **插件系统文档**：统一插件系统文档更新
 - **前端规范**：统一按钮规范、语义色系统、移动端适配
 
-### 🔧 开发工具
+### 🔧 开发工具与测试
 
 - **异步检查**：`scripts/scan_async_full.py` 检查 `async/await` 遗漏
 - **Repository 检查**：`scripts/scan_db_issues.py` 检查转换遗漏
@@ -2472,7 +2877,7 @@
 
 ## [v0.3.13] - 2026-08-22
 
-### Changed — 🏗️ 代码审查第二轮修复
+### 🔧 变更
 
 - **config.py `MODEL_OPTIONS` 清理**：移除 `get_model_options()` 中残留的 `os.getenv("MODEL_OPTIONS")`，
   新增 `model_options: str = ""` 字段声明，Pydantic 自动从环境变量读取 JSON 字符串。
@@ -2489,7 +2894,7 @@
 
 ## [v0.3.12] - 2026-08-22
 
-### Changed — 🏗️ 后端代码质量全面优化
+### 🔧 变更
 
 - **全局异常处理器安全增强**：区分 `HTTPException`（原样返回 detail）和未预期 `Exception`（只返回模糊"服务器内部错误"），
   防止数据库表名、SQL 语句等敏感信息泄露给客户端。
@@ -2516,8 +2921,6 @@
   - 启动时自动创建日志目录，创建失败降级为仅控制台输出（不崩溃）。
   - 日志 emoji 保留（信息设计），后续可通过 `LOG_EMOJI=false` 关闭。
 
-### Changed — 🏗️ main.py 优雅化重构
-
 - **日志配置独立模块**：`logging.basicConfig` → `logging.config.dictConfig`（`app/logging_config.py`），
   显式覆盖 root logger 配置（不受第三方库 import 时已配置的影响）；支持 `LOG_LEVEL` 环境变量动态调整日志级别。
 - **APP_VERSION 支持环境变量注入**：CI/CD 可通过 `APP_VERSION` 环境变量覆盖版本号，回退硬编码默认值。
@@ -2533,19 +2936,7 @@
 
 ## [v0.3.10] - 2026-08-19
 
-### Fixed — 🔧 DSH 世界同步两个编码/注入 bug（dsh-copree）
-
-- **`backendRequest` 响应拼接 utf8 截断**：`res.on('data', c => text += c)` 对每个 TCP chunk 单独 utf8 解码，
-  多字节字符（如 `──`）跨 chunk 边界时损坏为 U+FFFD 乱码——`world_pull` 拉取含中文注释的 JS 文件会静默写坏本地。
-  修复：Buffer 数组收集 + 最后统一 `Buffer.concat().toString('utf8')`。
-- **`world_pull` 拉 HTML 拉到注入版**：走 `/world/{id}/files/{path}` 静态路由会对 HTML 注入世界变量（WORLD_ID 等），
-  拉回本地的是注入后文件而非原始代码。修复：`.html/.htm` 改走带 token 的 `/worlds/{id}/files/content` 原始读取接口。
-- **同步快照单位**：`.copree-sync.json` 的 `lm` 必须用毫秒（对齐 DSH `statMtime` 的 mtimeMs）；
-  单位不一致会导致全文件误判 changedLocal，force 拉取覆盖本地。
-- **`world_pull` force 模式误报「无变化」**：`pulled: N` 但 message 报「无变化」——force 拉取的
-  conflict/changedLocal 覆盖未计入统计。修复：pulled > 0 时如实上报 `↓N 覆盖`。
-
-### Added — 📖 平台机制文档与 AI 提示词增强（同步/限流）
+### ✨ 新增
 
 - **接口文档新增 10 分区「同步与限流机制」**（`api_docs/sections/10-sync-rate-limit.md`）：DSH 世界镜像
   双向同步（快照三路对比 / `world_pull` pulled 语义 / `world_push`「无变化」含义）、写操作限流（429 =
@@ -2557,17 +2948,12 @@
 - **DSH 世界会话按需指路**：`world_push`/`world_pull` 工具 description 补关键语义提醒（调用瞬间可见，
   零常驻 token）；世界上下文提示词加「10 分区」指路，细节单一来源在文档。
 
-
-### Added — 🧩 嵌入兼容层（DSH 插件化第一步：Copree 可作为插件嵌入宿主）
-
 - **`?embed=1` 嵌入模式**：URL 带 `embed` 参数时，`Layout` 隐藏全局侧边栏/移动导航、`ChatArea` 隐藏聊天列表侧边栏，只渲染对话区——宿主（如 DSH）提供导航与外壳，界面即"融合"
 - **嵌入桥 `frontend/src/embed/bridge.ts`**（新模块，纯增量、不改既有流程）：
   - 嵌入模式下向宿主 `postMessage` 上报：`ready`（加载完成+登录态）、`contacts`（群聊/私信列表，复用现有 `/groups`、`/dm/sessions` API）
   - 接收宿主指令：`navigate`（站内导航，走现有 router）、`refresh`（重新上报）
   - **安全边界**：`access_token` 绝不跨窗口传输，只交换联系人元数据与导航路径；宿主侧校验 `event.origin`
 - **接入点**：`App.tsx` 创建 router 后注册导航器并初始化桥；未嵌入时零开销（`isEmbedded()` 惰性求值）
-
-### Added — 🧩 行为插件协议（阶段二：Copree 自身全面插件化）
 
 - **行为插件入口 `backend/app/services/plugin/api.py`**（新模块）：`@skill(type, category, name, description, config_schema)` 装饰器——**声明与行为合一**，一个装饰器同时完成 SkillRegistry 元数据注册 + skill_engine 行为处理器注册，消灭"skill.json 声明 + handlers 注册"的双写
 - **插件目录契约扩展**：插件目录内可选 `plugin.py`（行为入口），与现有 `plugin.json` + `skill.json` 共存；无 `plugin.py` 的旧声明插件完全兼容
@@ -2576,8 +2962,6 @@
 - **示例行为插件 `backend/plugins/keyword-autoreply/`**：关键词自动回复（inject 类），展示完整契约
 - **语言中立契约**：处理器上下文为普通对象/字典，不绑定 Python 特定机制，未来后端换语言时插件契约可平移
 - **四层验证闭环**：加载层、分发层、开关层、集成层全部通过
-
-### Added — 🔌 DSH 插件 `dsh-copree`（Copree 以一等公民嵌入 DeepSeek Harness）
 
 - **同源网关（Host 半边 `dsh-copree/src/index.ts`）**：`/copree-api` HTTP 代理（剥离 hop-by-hop、转发 Authorization、502 兜底）+ `/copree-ws` WebSocket 升级代理（重放 `/ws?token=`、双向透传）——浏览器永不接触后端地址，**全程 loopback、零公网地址**
 - **侧边栏 board（Client 半边）**：`shell.overlay` 全帧面板，左侧 rail（置顶私信/置顶群聊/私信/群聊 + 用户行 + 退出），右侧对话列（消息 + 专属 composer，发送到选中的 Copree 对话，不碰 DSH 会话语义）
@@ -2589,14 +2973,10 @@
 - **私信/群聊设置页**：对话头部 ⚙——群聊（置顶/免打扰/公告/成员列表）、私信（置顶/免打扰）
 - **群聊名字解析修复**：成员表（含 AI）按 `type:id` 缓存名字，不再显示"用户11"/裸"AI"
 
-### Added — 🖼️ 沉浸式界面与功能导航（长线优雅：前端静态托管 + 同源 iframe）
-
 - **前端静态托管（Host）**：`/copree-ui` 前缀服务 `BASE_URL=/copree-ui/` 构建产物（SPA 回退、路径穿越防护、immutable 缓存）
 - **嵌入模式增强（前端）**：`api/client.ts` 嵌入时 API 基址走 `/copree-api` 代理；401 不跳出 iframe 改为通知宿主；`?token=` URL 注入复用登录态（写入后从地址栏清除）；router basename `/copree-ui`（修复嵌入路由 404）
 - **沉浸式覆盖层（Client）**：`shell.overlay` 全局 iframe 面板——群聊头部"沉浸式"按钮（自动查 `/worlds/by-entity` 绑定世界 → `/copree-ui/world-view/{id}?embed=1`）+ AIC 侧边栏"功能"分组（群视界/好友/我的AI/管理/设置）+ DSH 设置页同款导航
 - **登录引导**：iframe 内 token 失效时不再显示 Copree 自带登录表单，改为"请先在宿主应用中登录"引导页 → 通知宿主打开 Copree board 登录（登录态统一由 DSH 插件管理）
-
-### Added — 🗂️ 群视界世界嵌入 DSH 工作区（对话用 DSH 的 agent，操作对象是 Copree 世界）
 
 - **世界 → 工作区文件夹自动同步**：登录 Copree 或打开面板时，每个**自己创建的世界**自动同步为 DSH 工作区文件夹 `Copree群视界-世界名`（`$DSH_HOME/copree-worlds/` 真实目录 + `.copree-world.json` 世界身份）+ 一个 DSH 会话——全走官方 `workspaces.create` / `connectWorkspace` API，官方工作区自动显示、官方更新零影响，重复同步幂等
 - **世界操作工具集（Host `world_*`，按会话所属世界自动路由）**：
@@ -2620,15 +3000,6 @@
 - **世界页内嵌群聊修复**：`chat-panel.js` / `sidebar.js` / `adventure.js` / `identity.js` 读取注入的 `window.WORLD_API` / `WORLD_UI`（DSH 嵌入 = `/copree-api` / `/copree-ui`，独立部署保持 `/api` / 空）——世界页内群聊、平台菜单、SSE 不再落到宿主 SPA fallback
 - **代理 Location 重写**：Host 代理对后端 3xx 重定向补 `/copree-api` 前缀（`/world/{id}/preview` → `/copree-api/world/{id}/files/...`），沉浸式 iframe 内世界页可完整加载
 
-### Fixed — 🔧 同步正确性三连修（GitHub 式同步实测暴露）
-
-- **快照文件自身误判**：`.copree-sync.json` 未被 `isMirrorExcluded` 排除，被 `walkDir` 计为本地文件且快照无其记录 → 永远判为「本地新增」→ 温和自动拉取**永远拒绝**（浏览器实测：token 正常上报、目录已建、文件却拉不下来）。已把快照文件加入排除列表
-- **force 覆盖不全**：`world_pull force:true` 之前只放行检查，`pullTargets` 不含冲突文件与本地修改文件 → 返回 `ok:true` 却 `pulled:0`，**冲突/本地修改实际未被覆盖**。已补齐：force 拉取时 `conflict + changedLocal` 一并入队，以远端为准覆盖
-- **快照无条件「洗白」（最严重）**：pull/push 成功后用**全量本地文件**重建快照并写入当前 mtime——未同步的本地修改、被跳过的冲突、远端新改动全部被标成「已同步」，**温和自动拉取从此检测不到世界新版本**（实测：制造真实冲突后 force 拉取返回「无变化」）。已改为：**只更新实际成功同步的文件**，其余保留旧记录；push 后用重新拉取的远端树写 rm（PUT 会更新远端 mtime）
-- **验证**：温和拒绝（本地脏/冲突不覆盖）✓、force 覆盖冲突与本地修改 ✓、脏快照重建（force 全量以远端为准）✓、远端改动自动拉取 ✓、无变化识别 ✓
-
-### Added — 📖 DSH 侧平台文档查看（world_view_doc）
-
 - **受控 API 新增两个端点**（`world_proxy.py`，复用 `_authorize_world_api` api_token 鉴权 + 现有限流）：
   - `GET /world/{id}/api/docs` → 平台 API 文档分区列表（id/标题/区介绍，DB 权威）
   - `GET /world/{id}/api/docs/{section}` → 指定分区完整内容（防路径穿越，只允许注册表内 id，未知分区 400 / 缺失 404）
@@ -2636,25 +3007,34 @@
 - **验证**：分区列表（9 区）✓、读分区内容 ✓、越界分区 400 ✓、世界会话路由引导 ✓
 
 ---
+
+### 🐛 修复
+
+- **`backendRequest` 响应拼接 utf8 截断**：`res.on('data', c => text += c)` 对每个 TCP chunk 单独 utf8 解码，
+  多字节字符（如 `──`）跨 chunk 边界时损坏为 U+FFFD 乱码——`world_pull` 拉取含中文注释的 JS 文件会静默写坏本地。
+  修复：Buffer 数组收集 + 最后统一 `Buffer.concat().toString('utf8')`。
+- **`world_pull` 拉 HTML 拉到注入版**：走 `/world/{id}/files/{path}` 静态路由会对 HTML 注入世界变量（WORLD_ID 等），
+  拉回本地的是注入后文件而非原始代码。修复：`.html/.htm` 改走带 token 的 `/worlds/{id}/files/content` 原始读取接口。
+- **同步快照单位**：`.copree-sync.json` 的 `lm` 必须用毫秒（对齐 DSH `statMtime` 的 mtimeMs）；
+  单位不一致会导致全文件误判 changedLocal，force 拉取覆盖本地。
+- **`world_pull` force 模式误报「无变化」**：`pulled: N` 但 message 报「无变化」——force 拉取的
+  conflict/changedLocal 覆盖未计入统计。修复：pulled > 0 时如实上报 `↓N 覆盖`。
+
+- **快照文件自身误判**：`.copree-sync.json` 未被 `isMirrorExcluded` 排除，被 `walkDir` 计为本地文件且快照无其记录 → 永远判为「本地新增」→ 温和自动拉取**永远拒绝**（浏览器实测：token 正常上报、目录已建、文件却拉不下来）。已把快照文件加入排除列表
+- **force 覆盖不全**：`world_pull force:true` 之前只放行检查，`pullTargets` 不含冲突文件与本地修改文件 → 返回 `ok:true` 却 `pulled:0`，**冲突/本地修改实际未被覆盖**。已补齐：force 拉取时 `conflict + changedLocal` 一并入队，以远端为准覆盖
+- **快照无条件「洗白」（最严重）**：pull/push 成功后用**全量本地文件**重建快照并写入当前 mtime——未同步的本地修改、被跳过的冲突、远端新改动全部被标成「已同步」，**温和自动拉取从此检测不到世界新版本**（实测：制造真实冲突后 force 拉取返回「无变化」）。已改为：**只更新实际成功同步的文件**，其余保留旧记录；push 后用重新拉取的远端树写 rm（PUT 会更新远端 mtime）
+- **验证**：温和拒绝（本地脏/冲突不覆盖）✓、force 覆盖冲突与本地修改 ✓、脏快照重建（force 全量以远端为准）✓、远端改动自动拉取 ✓、无变化识别 ✓
+
 ## [v0.3.9] - 2026-08-17
 
-### Changed — 🔧 后端 main.py 质量重构（对照代码审查十项逐条处理）
-
-- **启动流程拆分**：`main.py` 470 行 → 约 150 行；lifespan 拆到新模块 `app/bootstrap.py`，按职责分组 `_startup_db / _startup_plugins / _startup_workers / _startup_world / _startup_federation / _startup_brain_and_skills`
-- **维护模式统一入口**：文件标记与文案逻辑集中到 `app/services/infrastructure/maintenance.py` 的 `MaintenanceManager`，中间件/lifespan/admin 路由全部走该入口（admin 原裸写文件与重复的文案读写已删除）；状态读取带 3s TTL 缓存，写入即时失效，开关切换零延迟
-- **日志配置上移**：`basicConfig` 移到所有项目 import 之前，去掉重复的 `getLogger` 定义
-- **import 整理**：无循环依赖风险的模块级 import 全部上移（已验证无模块反向 import main）
-- **CORS 显式配置**：默认**不启用**（同源代理部署不需要跨域）；`ALLOWED_ORIGINS`（逗号分隔）配置后启用，含 `*` 时不携带凭据（浏览器规范禁止 `*` 与凭据组合），显式域名列表才允许带凭据
-- **中间件独立模块**：IP 追踪 + 维护拦截迁到 `app/middleware.py`，`main.py` 只负责注册
-
-### Added — ⚙️ 运行健壮性
+### ✨ 新增
 
 - **后台任务自动重启**：`spawn_task` 支持异常退出按指数退避自动拉起（1,2,4...封顶 60s，超 10 次放弃记 CRITICAL），循环型 worker 全部启用
 - **数据库就绪等待**：启动时 0.5s 轮询、30s 超时**快速失败**（替代原先 warning 后带病运行）；浏览器启动同样改为等待 DB 就绪而非 `sleep(3)`
 - **定时任务对齐固定时刻**：审计清理/每日备份改为 `sleep_until(3,0)` 计算到下一次凌晨 3 点的延迟（原 24h sleep 会漂移且首次执行晚一天）
 - **日志滚动**：`app.log` 改用 `RotatingFileHandler`（单文件 10MB，保留 5 份），避免无限增长占满磁盘
 
-### Fixed — 🐛 修复
+### 🐛 修复
 
 - **Alembic 静默吞日志**（隐藏已久）：`alembic/env.py` 的 `fileConfig` 会重置根 logger 配置并禁用已存在 logger，导致每次重启后"后台 worker 已全部启动 / Application startup complete"等日志全部消失——`disable_existing_loggers=False` + 迁移后恢复应用日志双通道
 - **`_spawn` 异常日志失效**：`exc_info=exc`（异常实例被当 truthy，记录的是当前上下文而非捕获的异常）→ 改为 `exc_info=(type(exc), exc, exc.__traceback__)`
@@ -2663,9 +3043,32 @@
 
 ---
 
+### 🔧 变更
+
+- **启动流程拆分**：`main.py` 470 行 → 约 150 行；lifespan 拆到新模块 `app/bootstrap.py`，按职责分组 `_startup_db / _startup_plugins / _startup_workers / _startup_world / _startup_federation / _startup_brain_and_skills`
+- **维护模式统一入口**：文件标记与文案逻辑集中到 `app/services/infrastructure/maintenance.py` 的 `MaintenanceManager`，中间件/lifespan/admin 路由全部走该入口（admin 原裸写文件与重复的文案读写已删除）；状态读取带 3s TTL 缓存，写入即时失效，开关切换零延迟
+- **日志配置上移**：`basicConfig` 移到所有项目 import 之前，去掉重复的 `getLogger` 定义
+- **import 整理**：无循环依赖风险的模块级 import 全部上移（已验证无模块反向 import main）
+- **CORS 显式配置**：默认**不启用**（同源代理部署不需要跨域）；`ALLOWED_ORIGINS`（逗号分隔）配置后启用，含 `*` 时不携带凭据（浏览器规范禁止 `*` 与凭据组合），显式域名列表才允许带凭据
+- **中间件独立模块**：IP 追踪 + 维护拦截迁到 `app/middleware.py`，`main.py` 只负责注册
+
 ## [v0.3.8] - 2026-08-17
 
-### Fixed — 🔧 维护通知系统全面修复（概览页"通知"区块）
+### ✨ 新增
+
+- **应用 ShuAICFR 第一轮方案为平台默认主题**（`index.css` 浅色 `:root`）：主色强调加深 `#6D28D9`，琥珀实底 `#B45309`，活跃绿 `#10B981/#34D399`，危险玫红 `#C9364F/#E84A69`
+- **同步自选色候选板**（ThemeCustomizer「当前」标注指向新默认色，补齐缺失色）与 **皮肤「默认」卡片色板**（SkinPicker）
+- **新增第二轮快投页面** `frontend/public/color-picker-r2.html`：每类型只剩 A（当前应用版）/ B（第一轮代表）两个候选，点选实时预览，提交即投票
+- **新增第二轮投票接口** `/theme-vote-r2`（GET stats / POST 提交），数据存 `data/theme_votes_r2.json`，与第一轮隔离互不影响（自动发现注册，重启生效）
+
+- **设置页「主题定制」升级为完整工具**（ThemeCustomizer 重写）：左侧手机壳**实时预览**（引用 CSS 变量，点选/输入即时变化），右侧每字段候选色板 + **原生取色器** + **自由 hex 输入**
+- **预设系统**：内置「平台默认（定稿版）」「极光青碧」两套 + 用户自存多套「我的预设」（存 `ui_prefs.theme_presets`，JSONB 后端零改动）；点击整卡应用，删除按钮随时清理
+- **皮肤冲突自动处理**：保存自定义色时若皮肤生效（皮肤会覆盖自选色），自动停用皮肤并提示，保证"保存了就能看到"
+- i18n 三语（zh/en/ja）补齐，无 emoji
+
+---
+
+### 🐛 修复
 
 - **维护路径统一**：`admin.py` 不再硬编码 `/tmp`，全部跟随 `MAINTENANCE_DIR` env（与中间件一致）；预设/图片库文件移入 `settings.data_dir`（容器 `/app/data`，随数据目录持久化）
 - **`X-Maintenance` 头不再漏发**：软维护开启时所有响应（含 `/auth`、`/admin`、`/maintenance-msg` 等 bypass 路径）都带头 → 修复"用户访问认证/管理接口后维护提示被误判已关闭而消失"的闪烁 BUG
@@ -2679,26 +3082,10 @@
 - **错误可见**：加载失败、保存失败、上传失败均有明确提示（此前静默失败，编辑器直接消失）
 - **桌面端图片 URL 修复**：上传后的维护图片按实例地址拼 URL（此前硬编码 `/api` 前缀，桌面端加载失败）
 
-### Changed — 🎨 维护通知 UI 重构（概览页）
-
-- **OverviewTab 状态条**：改用 i18n key（zh/en/ja）+ 状态图标底色 + 操作中禁用/加载态 + 错误提示
-- **MaintenanceMsgEditor**：硬维护/软维护均增加实时预览（弹窗/顶栏两种样式）；图片库改为缩略图网格（点选应用、悬停删除、选中高亮）；布局与全站卡片风格统一
-
-### Fixed — ✍️ 维护文案编辑体验（用户反馈：不知道怎么保存 / 改了没变化 / 还有 emoji）
-
 - **自动保存**：文案字段变更后 1.5s 自动保存（debounce），不再依赖页面底部的保存按钮；顶部保存栏显示实时状态（未保存 / 保存中 / 已保存 / 保存失败）
 - **保存入口前置**：保存状态 + 「立即保存」按钮移到编辑器顶部，随文案编辑区一起可见（此前在页面最底部，滚动才看得到）
 - **明确"为什么没变化"**：顶部显示当前维护开关状态（未开启 / 温馨提示中 / 暂停服务中）+ 提示条"维护未开启——保存的文案将在开启后展示"，避免误以为保存失败
 - **清除管理界面 emoji**：维护模式状态描述（zh/en/ja 翻译 key）与编辑器区块标题（🔒📢 → lucide 图标 Lock/Megaphone）全部去除 emoji
-
-### Changed — 🔘 维护文案分栏独立保存（暂停服务 / 温馨提示 各自保存）
-
-- 「暂停服务」（硬维护）与「温馨提示」（软维护）两个区块**各自拥有保存按钮**（栏标题右侧），改完哪栏点哪栏
-- 按钮状态独立：未修改显示「保存并更新」，有改动变「保存更改」（高亮主色），保存中 / 已保存（绿色）逐栏反馈
-- 自动保存保留（1.5s 防抖，全量提交）：即使不点按钮也不会丢修改
-- 顶部保存栏移除，改为轻量状态提示行（维护开关状态 + 未开启提示 + 错误信息）
-
-### Fixed — 💾 维护文案持久化（用户反馈：改了颜色/弹窗方式保存后仍显示旧值）
 
 - **根因**：维护文案 `maintenance_msg.json` 写在容器内 `/tmp`（`MAINTENANCE_DIR` 默认值）——容器重启（如部署后端修复）即清空，用户保存的颜色/弹窗配置全部丢失，回到默认值
 - **文案文件移入持久化数据目录**（`settings.data_dir` = 容器 `/app/data`，docker-compose 挂载 `./data`，重启不丢），与预设/图片库同一持久卷
@@ -2706,33 +3093,23 @@
 - **保存前确保目录存在**（`makedirs`），数据目录不可写时返回明确 500 错误而非静默失败
 - **修复前端自动保存闭包陈旧 BUG**：`save` 改用 `msgRef` 读取最新值，避免定时器/闭包把改之前的值写回
 
-### Fixed — ⚡ 保存后立即生效（用户反馈：改了颜色/弹窗方式保存后立刻看不到变化）
-
 - **根因**：管理员保存文案的请求走 `/admin/*`（维护中间件 bypass、无维护头），前端 `client.ts` 把它误判为"维护已关闭"→ 触发 `maintenance-cleared` → **刚保存完提示条就被清掉/重置**，看起来"改了没变化"
 - **保存后即时刷新**：保存成功 / 应用预设成功后 dispatch `maintenance-saved` 事件，Layout 立即重新拉取权威状态并应用新颜色/弹窗方式（不再等 30s 轮询）
 - **清除逻辑收窄**：`client.ts` 只在曾显示硬维护弹窗（`_maint_hard_visible`）且本次确认非维护时才清除；软维护提示的关闭统一由 Layout 轮询权威判定，不再被保存动作误触发
 
+### 🔧 变更
 
-### Added — 🎨 主题选色定稿：应用第一轮投票 + 第二轮 A/B 快投
+- **OverviewTab 状态条**：改用 i18n key（zh/en/ja）+ 状态图标底色 + 操作中禁用/加载态 + 错误提示
+- **MaintenanceMsgEditor**：硬维护/软维护均增加实时预览（弹窗/顶栏两种样式）；图片库改为缩略图网格（点选应用、悬停删除、选中高亮）；布局与全站卡片风格统一
 
-- **应用 ShuAICFR 第一轮方案为平台默认主题**（`index.css` 浅色 `:root`）：主色强调加深 `#6D28D9`，琥珀实底 `#B45309`，活跃绿 `#10B981/#34D399`，危险玫红 `#C9364F/#E84A69`
-- **同步自选色候选板**（ThemeCustomizer「当前」标注指向新默认色，补齐缺失色）与 **皮肤「默认」卡片色板**（SkinPicker）
-- **新增第二轮快投页面** `frontend/public/color-picker-r2.html`：每类型只剩 A（当前应用版）/ B（第一轮代表）两个候选，点选实时预览，提交即投票
-- **新增第二轮投票接口** `/theme-vote-r2`（GET stats / POST 提交），数据存 `data/theme_votes_r2.json`，与第一轮隔离互不影响（自动发现注册，重启生效）
-
-### Added — 🎨 主题设计工具：选色页体验产品化（不做二轮投票，直接做成工具）
-
-- **设置页「主题定制」升级为完整工具**（ThemeCustomizer 重写）：左侧手机壳**实时预览**（引用 CSS 变量，点选/输入即时变化），右侧每字段候选色板 + **原生取色器** + **自由 hex 输入**
-- **预设系统**：内置「平台默认（定稿版）」「极光青碧」两套 + 用户自存多套「我的预设」（存 `ui_prefs.theme_presets`，JSONB 后端零改动）；点击整卡应用，删除按钮随时清理
-- **皮肤冲突自动处理**：保存自定义色时若皮肤生效（皮肤会覆盖自选色），自动停用皮肤并提示，保证"保存了就能看到"
-- i18n 三语（zh/en/ja）补齐，无 emoji
-
----
-
+- 「暂停服务」（硬维护）与「温馨提示」（软维护）两个区块**各自拥有保存按钮**（栏标题右侧），改完哪栏点哪栏
+- 按钮状态独立：未修改显示「保存并更新」，有改动变「保存更改」（高亮主色），保存中 / 已保存（绿色）逐栏反馈
+- 自动保存保留（1.5s 防抖，全量提交）：即使不点按钮也不会丢修改
+- 顶部保存栏移除，改为轻量状态提示行（维护开关状态 + 未开启提示 + 错误信息）
 
 ## [v0.3.7] - 2026-08-17
 
-### Added — 🧩 统一插件系统（DSH 式插件化：目录即插件）
+### ✨ 新增
 
 - **插件协议**：`plugins/<id>/plugin.json` manifest（id/name/description/category/version/author/icon/default_enabled），复制目录即安装、**装好即可用**（无需改代码/重启）
 - **双目录扫描**：内置 `backend/plugins/`（随代码 git 跟踪）+ 用户 `$DATA_DIR/plugins/`（持久化，覆盖内置同名）；启动同步 + API 懒同步 + 管理面板手动重扫
@@ -2749,28 +3126,22 @@
 
 ## [v0.3.6] - 2026-08-15
 
-### Added — 🧠 Embedding 提供方插件化（向量记忆解耦 DeepSeek）
+### ✨ 新增
 
 - **背景**：DeepSeek 官方无 embedding API（调用 404），向量记忆此前依赖 DeepSeek base_url 导致全库 0 向量、向量检索形同虚设
 - **`embedding_providers` 包**（对齐 db_providers 模式）：`disabled`（默认降级）/ `ollama`（复用本地实例）/ `api`（OpenAI 兼容端点）/ `local`（fastembed 离线）四后端可切换，`get_embedding_provider()` 按 `EMBEDDING_BACKEND` 注册表选择
 - **向量哲学**（对齐 dsh-mneme）：向量是可选增强——embed 失败返回 None 自动降级文本检索，永不打断主流程；配置与 chat 完全解耦（`EMBEDDING_BACKEND/BASE_URL/API_KEY/MODEL`）；接口语义对齐 OpenAI 兼容 `/embeddings`，未来转 JS 契约不变
 - `get_embedding()` 签名不变，27 处调用点零改动；显式自定义端点走直连，其余走插件
 
-### Added — 📐 向量维度可配置化（速度 vs 质量自选）
-
 - `EMBEDDING_DIMENSION` 环境变量（默认 1536 兼容现状），模型列定义改读配置（不再写死）
 - **prestart 启动自动对齐**列维度：无向量数据 → 直接 ALTER（毫秒级）；已有向量数据 → 明确告警不静默失败；维度优先级 DB 覆盖 > 环境变量
 - **有数据安全迁移脚本** `scripts/migrate_embedding_dimension.py`（对齐 pg-raggraph expand/contract）：`prepare`（加临时列）→ `backfill`（并发重生成向量，幂等可重入）→ `cutover`（守卫检查后删旧列+改名+重建 HNSW）→ `cleanup`；另有 `fill` 子命令日常回填 NULL 记忆
 - 共享模块 `scripts/_shared.py`（表清单/维度查询/URL 解析/并发回填集中一处，prestart 与迁移脚本共用）
 
-### Added — 🖥️ Embedding 配置前端图形化（部署后零门槛管理）
-
 - **DBConfigSource**（pydantic-settings `customise_sources` 官方机制）：settings 读取自动「DB 覆盖 > env > 默认」三层分层，所有字段零侵入生效
 - 持久化：`system_settings.embedding_config` JSONB + api_key Fernet 加密；读路径走内存缓存（快），保存热更新（无需重启）
 - 管理 API：`GET/PUT/DELETE /admin/embedding-config` + `POST test`（实际调 embed 验维度）
 - 前端：系统设置页新增 **Embedding 向量配置卡片**（后端类型/端点/模型/维度表单 + 测试连接 + 保存生效 + 恢复默认）
-
-### Added — ⚙️ 通用配置组机制（第二批前端化：runtime 参数）
 
 - **`app_config_service` 泛化**：多配置组机制——每个组 = `system_settings` 一个 JSONB 列 + schema 声明；**加一组配置 = 加一个声明，前后端自动支持**（CONFIG_GROUPS 注册表）
 - **通用 API**：`GET /admin/configs`（返回 schema）/ `GET|PUT|DELETE /admin/configs/{group}`
@@ -2778,43 +3149,33 @@
 - **前端 ConfigGroupCard**：读 schema 自动渲染表单（select/number/float/text/secret）+ 来源标注（界面改/环境变量）+ 保存热更新 + 恢复默认
 - **小白友好**：每个字段带"是什么 + 为什么改"说明文案；手写 EmbeddingConfigCard 删除，由通用卡片替代（保留测试连接专属能力）
 
-### Changed — 🌐 i18n 规范（翻译禁 emoji，文案走命名空间）
+- Alembic `d5e6f7a8b9c1`：过滤列 btree 索引（rough `(owner_id, scope)` / detail `(rough_id)` / 消息表 `(group_id)`）——先按结构化字段缩小候选集（O(log N)），再对"自己的"少量记忆精确向量排序（O(M log M)），与全站总量解耦
+- 对齐 pgvector 官方过滤策略（HNSW 过滤在低比例条件下召回崩，btree 过滤列才是低比例场景正解）
+- 5 万行实测：有索引 2.4ms vs 无索引 4.0ms，行数越大差距越显著
+
+- **UI 组件库** `components/ui/`：Button / Input / Modal / Select / Card / ConfirmDialog（confirmAsync 替换原生 confirm）
+- **统一按钮规范**（`.btn-*` CSS 语义类，单一规范源）：3 尺寸（32/40/48px 固定高度，图标/无图标严格等高）+ 6 变体（primary/accent/secondary/ghost/danger）；圆角统一 rounded-lg（对齐群视界顶部按钮）
+- **浅色主题对比度修复**：elevated/border 加深 + 全局 `.bg-elevated` inset 描边——修复 321 处旧按钮"与背景分不开"
+
+### 🔧 变更
 
 - **新增 `admin_config.ts` 分区**（对齐 tool.ts 模式）：`configGroup.*` 三语 zh/en/ja——UI 按钮/字段标签/说明 hint 全部 i18n 化，禁止硬编码中文
 - **后端 schema 只下发 i18n key**（`label_key`/`hint_key`），前端 `t()` 翻译，多语言友好
 - **翻译禁 emoji**：`✅❌⚠️` 等从字典移除，图标由前端统一渲染（lucide Check/X/Loader2 + 状态色）；清理主字典 3 处历史遗留 emoji
-
-### Changed — 🔍 记忆检索对齐 dsh-mneme（关键词优先 + 向量补位）
 
 - `merge_keyword_and_vector()`：关键词命中总是排最前（字面词精确性最高）+ 向量结果去重补位；重叠条目回填真实向量分（O(n) dict）；`mode` 元信息（keyword/vector）
 - `extract_keywords()`：中文友好分词——标点拆分 + 2-gram 滑窗（修复长中文查询整段 LIKE 失效），纯英文不 ngram 防碎片噪音，去 3-gram 精简
 - `_text_search_memories`：title 命中优先排序（对齐 mneme `CASE WHEN`）
 - `recall_memory` 工具去掉 O(n²) 嵌套循环补丁
 
-### Added — ⚡ 向量检索过滤先行（数据量增长时性能保障）
-
-- Alembic `d5e6f7a8b9c1`：过滤列 btree 索引（rough `(owner_id, scope)` / detail `(rough_id)` / 消息表 `(group_id)`）——先按结构化字段缩小候选集（O(log N)），再对"自己的"少量记忆精确向量排序（O(M log M)），与全站总量解耦
-- 对齐 pgvector 官方过滤策略（HNSW 过滤在低比例条件下召回崩，btree 过滤列才是低比例场景正解）
-- 5 万行实测：有索引 2.4ms vs 无索引 4.0ms，行数越大差距越显著
-
-### Changed — 🗄️ 迁移体系统一（Alembic）
-
 - `embedding_config` 加列从自研 migration.py 统一迁入 Alembic（`c3d4e5f6a7b8`，IF NOT EXISTS 幂等），避免双轨混乱
-
-### Added — 🎨 统一 UI 组件库 + 按钮规范（前端焕新）
-
-- **UI 组件库** `components/ui/`：Button / Input / Modal / Select / Card / ConfirmDialog（confirmAsync 替换原生 confirm）
-- **统一按钮规范**（`.btn-*` CSS 语义类，单一规范源）：3 尺寸（32/40/48px 固定高度，图标/无图标严格等高）+ 6 变体（primary/accent/secondary/ghost/danger）；圆角统一 rounded-lg（对齐群视界顶部按钮）
-- **浅色主题对比度修复**：elevated/border 加深 + 全局 `.bg-elevated` inset 描边——修复 321 处旧按钮"与背景分不开"
-
-### Changed — 📱 移动端全面适配（手机/桌面双端友好）
 
 - **世界商城移出主导航**（侧边栏 + 手机底部），入口保留在世界列表页内
 - **世界列表**：卡片手机竖排 + 操作按钮自动换行
 - **设计页接口文档弹窗**：手机全屏（h-full + 横向分区栏）+ 桌面居中双栏；修复 flexbox 滚动陷阱（min-h-0）；下载弹窗改底部抽屉
 - 商城搜索行手机换行（标签输入框响应式）
 
-### 📚 文档
+### 📝 文档与工程
 
 - 新增 `docs/memory_system/design/vector_search_and_embedding.md`：架构总览 / 插件化 / 维度配置 / 前端图形化 / 检索策略 / 索引性能 / 生产启用清单 / FAQ
 
@@ -2822,45 +3183,32 @@
 
 ## [v0.3.5] - 2026-08-13
 
-### Added — 🎛️ 决策技能机制（阶段二核心闭环）
+### ✨ 新增
 
 - **AI 自配置决策技能**：入驻 AI（agent 居民）/ 群助手各自持有自己的决策技能——「遇到什么情景我干什么、什么情景才唤醒我本体」；世界体系提供 list/write/delete_decision_skill 工具（ToolRegistry 插件，所有 AI 可自配置）
 - **技能结构**：`{name, when:{event, conditions}, do, notify}`——条件 DSL 递归逻辑树（and/or/not 自由组装 + 字段运算 contains/starts_with/matches/数值比较）；do 三选一（reply_template 零成本 / call_tool 平台工具 / run_script 沙箱脚本）；notify=true=命中后仍唤醒本体，false=程序处理完即止
 - **决策引擎**：群触发链路优先匹配（AI 自写规则 > mention_only 平台默认兜底）——命中且 notify=false → 程序化处理（reply 代发群，不唤醒 LLM）；未命中才走触发模式；群助手 LLM 调用带决策工具（仅工具调用时静默不回复）
 - 情景：group_message 已接入；member_join/leave、friend_request、scheduled 引擎通用、事件钩子后续接
 
-### Added — 🎯 群助手独立实体（不走 agents 表）
-
 - **群助手 ≠ agent**：新表 `group_assistants`（group_id/world_id/group_type_slug/name/system_prompt/model/api_key 加密/config）——每群每助手一行；绑定群时按类型模板直接建实体，不再 create_agent/入群成员表/WorldAgent 登记，与群视界 AI 同形态（无账号、无好友）
 - **触发链路改造**：`response_worker` 查 group_assistants → 独立 LLM 路径（system_prompt+群历史→chat_completion→发群消息 source=world 防循环→用量记账 agent_id=-2 虚拟聚合）；sender_id 用 -ga.id 负值避免与 user_id 冲突；群助手自己的消息不触发防自循环；群消息列表显示助手名
 - **历史数据迁移**：agent 41「冒险团团长」→ group_assistant 1（7 条历史消息 sender 69→-1；清理 friendships/group_members/agents/users，备份在 backend/backup/）
 - **群助手也可以是纯后端程序**：世界程序 main.py handle 直接接群消息处理（不依赖 LLM）
 
-### Added — 🖥️ 页面静默事件通道（页面 → 世界程序）
-
 - **`POST /world/{id}/api/event`**：页面操作（移动/攻击/开宝箱等）直接触发世界程序 handle(event)，**不产生群消息、不进群聊**（解决页面操作刷屏：30 步 = 30 条群消息）——用户登录鉴权 + 群绑定/成员校验 + 写限流；服务端注入 user_id/user_name（不信任页面自报）；常驻世界入队 / 临时触发同步返回 handle 结果
 - **接口文档 06 补 4.1 章节**（世界 AI/页面代码可直接用）；世界 39 改造补丁（main.py 支持 page_command + game.js sendCommand 改走事件通道，数据区 root 属主待应用）
 - 配套【消息同步纪律】强注入段：非必要消息不同步到群，前端能展示的一律不发群
-
-### Changed — ⚡ 插入消息立即落库显示
-
-- 之前：工具轮进行中发的普通消息**等下一轮 LLM 调用前**才落库+画气泡 → 用户感觉"没插进去"
-- 现在：发消息**瞬间**立即落库 + 广播 [INSERTED]/[INSERT]（气泡马上画入、排队弹窗秒清）；`_inserts` 仅作上下文注入；轮次结束兜底补发未落库项（已落库跳过防重复）
-
-### Fixed — 📊 LLM 缓存命中统计（显示 0% 实为提取 bug）
-
-- 根因：DeepSeek 首轮 usage 顶层有 `cached_tokens`，**工具轮**只有 `prompt_tokens_details.cached_tokens` / `prompt_cache_hit_tokens` → `_record_usage` 只读顶层 → world_llm_usage 工具轮全记 0 → 前端统计 0%
-- 修复：`_extract_cached_tokens` 三层 fallback；历史 27 条记录按 conversation_log 原始 usage 同秒重算（实际命中率 99%+，如 51730→51584）
-
----
-
-### Added — 🎯 群视界触发模式（mention_only）+ 决策技能设计
 
 - **群消息非 @ 不触发 AI**（所有绑定群视界的群，暂时统一）：AI 不可能一直触发——大量群事件应由决策程序/世界程序处理，只有关键时刻（＠AI / ＠all / 群公告）才唤醒 LLM 本体。实现：`response_worker` 触发群助手前查群绑定世界 + `worlds.config.group_trigger_mode`（默认 `mention_only`；`all` 恢复旧行为）；拦截不影响世界程序感知通道（`world_event_hook` 照常喂事件，即「决策程序代替 AI」的雏形）；未绑定群视界的普通群零开销
 - **配置 AI 可改、可随包分发**：世界 AI 工具集新增 `update_trigger_mode`（mention_only ↔ all，AI 自主决定本世界活跃度）；`export_zip` 附虚拟条目 `world_meta.json`（config 白名单快照，不落盘零污染）→ `import_zip` 读回合并——分享/发布世界时触发模式跟着走，导入只补缺失键、不覆盖宿主已有设置
 - **决策技能设计文档**：`docs/group_world/design/world_decision_skill.md`——阶段一（触发模式）已落地；阶段二（决策技能）设计定稿：预置情景列表（群消息/成员进出/好友申请/定时/世界事件/命令）+ 决策技能结构（`when` 条件 DSL + `do` 动作 + `notify` 是否唤醒本体）+ 决策引擎（事件→技能匹配→程序化处理 or 唤醒 LLM）；条件 DSL 支持**递归逻辑树**（and/or/not 自由组装 + 字段运算 contains/starts_with/matches/比较）
 
-### Fixed — 🧮 化学公式渲染（KaTeX \ce / mhchem 三连，产品实测暴露）
+### 🐛 修复
+
+- 根因：DeepSeek 首轮 usage 顶层有 `cached_tokens`，**工具轮**只有 `prompt_tokens_details.cached_tokens` / `prompt_cache_hit_tokens` → `_record_usage` 只读顶层 → world_llm_usage 工具轮全记 0 → 前端统计 0%
+- 修复：`_extract_cached_tokens` 三层 fallback；历史 27 条记录按 conversation_log 原始 usage 同秒重算（实际命中率 99%+，如 51730→51584）
+
+---
 
 - **公式节点被 sanitize 剥掉**：`rehype-sanitize` 跑在 `rehype-katex` 前，defaultSchema 无 `math`/`math-inline` → `$...$` 公式变成裸 LaTeX 文本。修复：白名单补两节点（所有渲染入口走共享组件，单点生效）
 - **KaTeX 不内置 mhchem**：`\ce` 是未定义命令——错误回退把 `\ce` 标红、花括号当分组吞掉、`->` 变数学减号 `−>`（即 "\ceCu+Cl2−>[点燃]CuCl2" 乱码的真相）。修复：加载 `katex/dist/contrib/mhchem.mjs`（side-effect 注册 \ce/\pu）
@@ -2868,9 +3216,32 @@
 
 ---
 
+### 🔧 变更
+
+- 之前：工具轮进行中发的普通消息**等下一轮 LLM 调用前**才落库+画气泡 → 用户感觉"没插进去"
+- 现在：发消息**瞬间**立即落库 + 广播 [INSERTED]/[INSERT]（气泡马上画入、排队弹窗秒清）；`_inserts` 仅作上下文注入；轮次结束兜底补发未落库项（已落库跳过防重复）
+
 ## [v0.3.4] - 2026-08-12 ~ 08-13
 
-### Fixed — 🔔 系统通知链路 + ⚙️ 12h 空闲压缩（用户 API Key 失效场景暴露）
+### ✨ 新增
+
+- **普通消息插入工具轮**：AI 工具轮进行中用户发普通消息→不打断，在下一轮 LLM 调用前自然注入（drain → 落库 → 发事件 → 拼上下文）；只有命令（/compact 等）等整轮结束。两段式协议：[INSERTED] 信号清排队弹窗 + [INSERT] 真实 id 画气泡（断联后 loadChat 位置正确）
+- **工具轮+收尾轮流式化**：正文/思考逐 chunk 显示（不再等整次调用结束一次性出）
+- **工具状态事件 [TOOL_UPDATE]**：同 tool_id 多状态气泡（running 正在执行 XX → update 进度 → done 完成原地更新）；run_world_code 分阶段（创建脚本→运行中→返回结果）；落库按 tool_id 去重只留最终态；WorldChatMessage 加 tool_id 列
+- **思考/正文独立气泡**：思考用思考 id、正文用正文 id（顺序递增）；无正文不占位（去「（…）」）；思考默认 2 行+渐变淡化+点击展开；工具长摘要折叠+展开/收起
+- **file_grep + file_read 分页**：AI 看文件先 grep 定位（命中行+行号）再 offset/limit 分段读，不再整文件全读（对齐 OpenClaw read 设计）
+- **i18n 命名空间化**（对齐 i18next）：新增 i18n/tool.ts 独立分区（zh/en/ja），translations 两级结构 {lang:{common,tool}}，getTranslation 支持 'ns:key' + {var} 插值；现有 t('xxx') 完全兼容；未来分区同模式加文件、支持 addResourceBundle 补充
+- **stream_world_chat 大函数拆分**：545→370 行（_prepare_world_chat/_execute_tool_round/_inject_pending_user_messages 收口）
+
+- 🔒 **前缀内容版本化（所有进前缀的内容保证缓存命中）**：用户可改提示词（world-prompt-{id}）、强注入段（forced-prompt）、昵称（world-name-{id}）、主站 agent 提示词（agent-prompt-{id}）统一走 capability_versions 版本链（known 告知 / effective 生效）——用户改提示词、系统更新强注入、改名都是正常操作，**不再断前缀缓存**；变更只动态尾部注入 changelog 告知；compact / clear（= 新对话）解锁后正式生效；锁定态尝试应用变更 → 拒绝 + 后端报错记录（guard_apply_change 防御）
+- 🔒 **强注入段从用户可改中提出**：平台强约束（工具约定/能力边界/接口文档/记忆约定/UI/群类型/侧边栏/路径/编号/运行规范）不再是散装拼接，独立为 FORCED_PROMPT_SEGMENTS + `forced_prompt` 字段返回前端只读展示；群类型约定强化（写世界类型 + AI 加入类型，关键剧本角色可用角色名/职位名做类型名）；新增【AI 侧 skill】（按类型分层注入）与【入口场景响应】（私信/群聊/直进不同 index 响应）强注入段；昵称正式注入对话（之前 AI 不知道自己叫什么）
+- 🗂️ **Skill 分层注入**：manifest 支持 `types` 字段（省略/["*"] = 所有类型通用；["blacksmith"] = 仅铁匠类型可用）；`build_world_tools_for_type` 按绑定类型过滤；群 AI 能力清单按 agent/群绑定类型取并集注入（world_chat_service / llm.py 双入口）
+- ∞ **群类型 bind_limit=-1 = 无限**（不是极大值凑）：默认类型群聊和 AI 数目都无限；前端显示 ∞、满员判断跳过 -1、新建类型输入支持 -1
+- 👁️ **世界列表「打开」按钮**：/world/{id}/preview 新窗口进沉浸界面——只绑定 AI（entity_type='agent'）的世界也能直接进去看，不依赖群聊
+
+- 🧠 **记忆管理增强（世界 + 主站对齐）**：manage_records / sr_* 新增 `rename`（category/sub_key/field 任一级改名）与 `move`（整组或单条跨目录移动）动作；记忆工具描述补 `user` 个性分类约定（偏好/风格/审美/习惯/关系）；新增 `build_memory_map` 缩进树记忆地图（只注入有内容的路径，空目录不出现），新会话/clear 后自动注入、普通延续对话不注入（省 token + 缓存稳定）；⭐（重要）/❗（硬约束）软锚定——value 前缀标记在地图上提到名字前，产生 Attention 特征峰值引导 LLM 优先处理；主站 format_db_records_for_prompt 重写（瘦身 + 软锚定 + 去 emoji），两套记忆行为统一
+
+### 🐛 修复
 
 - **系统通知静默丢失（三层 bug）**：AI 的 API Key 失效（401）时，降级通知和最终错误通知都没送达用户——
   ① `get_or_create_dm_session` 返回 dict 但 executor 用 `.session_id` 访问（AttributeError）
@@ -2884,45 +3255,12 @@
   效果：137→22 条（-83% token）；当天对话不误压缩
 - **12h 空闲压缩优先级**：API 通 → LLM 总结压缩（保要点）；API 不通/总结失败 → 内联截断兜底
 
-### Added — 🛠️ 世界 AI 工具链升级（2026-08-13 下午，AI 工具调用体验 + 前端展示）
-
-- **普通消息插入工具轮**：AI 工具轮进行中用户发普通消息→不打断，在下一轮 LLM 调用前自然注入（drain → 落库 → 发事件 → 拼上下文）；只有命令（/compact 等）等整轮结束。两段式协议：[INSERTED] 信号清排队弹窗 + [INSERT] 真实 id 画气泡（断联后 loadChat 位置正确）
-- **工具轮+收尾轮流式化**：正文/思考逐 chunk 显示（不再等整次调用结束一次性出）
-- **工具状态事件 [TOOL_UPDATE]**：同 tool_id 多状态气泡（running 正在执行 XX → update 进度 → done 完成原地更新）；run_world_code 分阶段（创建脚本→运行中→返回结果）；落库按 tool_id 去重只留最终态；WorldChatMessage 加 tool_id 列
-- **思考/正文独立气泡**：思考用思考 id、正文用正文 id（顺序递增）；无正文不占位（去「（…）」）；思考默认 2 行+渐变淡化+点击展开；工具长摘要折叠+展开/收起
-- **file_grep + file_read 分页**：AI 看文件先 grep 定位（命中行+行号）再 offset/limit 分段读，不再整文件全读（对齐 OpenClaw read 设计）
-- **i18n 命名空间化**（对齐 i18next）：新增 i18n/tool.ts 独立分区（zh/en/ja），translations 两级结构 {lang:{common,tool}}，getTranslation 支持 'ns:key' + {var} 插值；现有 t('xxx') 完全兼容；未来分区同模式加文件、支持 addResourceBundle 补充
-- **stream_world_chat 大函数拆分**：545→370 行（_prepare_world_chat/_execute_tool_round/_inject_pending_user_messages 收口）
-
-### Fixed（2026-08-13 下午，AI 工具调用连环失败系列）
-
 - **DeepSeek 流式分片**：name 分片带 id、arguments 分片不带 id → 按 id 区分导致分离。修复：id 主 key + index 桥（index_to_id），两者结合不再二选一
 - **DeepSeek DSML/XML 格式**：模型有时把工具调用输出成 XML 文本（<invoke name=...><parameter name=...>）而非标准 JSON——参数全丢、AI 连环失败（20+ 次）。修复：_parse_dsml_tool_calls 兼容两种 XML 格式
 - **工具轮 [DONE] 误发**：_stream_llm_once 每轮 yield [DONE] → 前端收到即退出订阅，第二轮之后不显示。修复：[DONE] 只由主流程整轮结束时发
 - **工具轮 400**：thinking 模式 assistant 消息必须回传 reasoning_content（首轮+后续轮都补）
 - **单波浪线被当删除线**：remark-gfm 默认 singleTilde=true（GitHub 非标准扩展）→ '1~2和2~3' 被渲染成删除线。修复：singleTilde:false，只有 ~~ 才是删除线（全局共享组件单点修复）
 - **迁移 revision 撞号**：a1b2c3d4e5f6 已被占用 → 改为 b1c2d3e4f5a6
-
-### Added — ✨ 前缀内容版本化（锁）+ 群类型无限 + Skill 分层注入 + 世界直开
-
-- 🔒 **前缀内容版本化（所有进前缀的内容保证缓存命中）**：用户可改提示词（world-prompt-{id}）、强注入段（forced-prompt）、昵称（world-name-{id}）、主站 agent 提示词（agent-prompt-{id}）统一走 capability_versions 版本链（known 告知 / effective 生效）——用户改提示词、系统更新强注入、改名都是正常操作，**不再断前缀缓存**；变更只动态尾部注入 changelog 告知；compact / clear（= 新对话）解锁后正式生效；锁定态尝试应用变更 → 拒绝 + 后端报错记录（guard_apply_change 防御）
-- 🔒 **强注入段从用户可改中提出**：平台强约束（工具约定/能力边界/接口文档/记忆约定/UI/群类型/侧边栏/路径/编号/运行规范）不再是散装拼接，独立为 FORCED_PROMPT_SEGMENTS + `forced_prompt` 字段返回前端只读展示；群类型约定强化（写世界类型 + AI 加入类型，关键剧本角色可用角色名/职位名做类型名）；新增【AI 侧 skill】（按类型分层注入）与【入口场景响应】（私信/群聊/直进不同 index 响应）强注入段；昵称正式注入对话（之前 AI 不知道自己叫什么）
-- 🗂️ **Skill 分层注入**：manifest 支持 `types` 字段（省略/["*"] = 所有类型通用；["blacksmith"] = 仅铁匠类型可用）；`build_world_tools_for_type` 按绑定类型过滤；群 AI 能力清单按 agent/群绑定类型取并集注入（world_chat_service / llm.py 双入口）
-- ∞ **群类型 bind_limit=-1 = 无限**（不是极大值凑）：默认类型群聊和 AI 数目都无限；前端显示 ∞、满员判断跳过 -1、新建类型输入支持 -1
-- 👁️ **世界列表「打开」按钮**：/world/{id}/preview 新窗口进沉浸界面——只绑定 AI（entity_type='agent'）的世界也能直接进去看，不依赖群聊
-
-### Changed
-
-- **设置页提示词 UI 重做**（WorldCreatorConfig）：群视界机器人名字默认收起 + 🖊 图标点击可改；系统提示词默认收起 + 🖊 点击展开输入框；新增「平台强注入提示词」深灰只读展示（🔒 不可修改）；对话生命周期区块移至模型与参数上方；删除重复的 LLM 缓存命中率块
-- **群视界定义更新**（docs）：从仅聊天，到可编程、可视化、AI 可入驻的世界——造物主（世界 AI + 用户）/ 原住民（用户 + 用户的 AI）；设计文档补 8.5 群类型系统 / 8.6 世界运行不强制绑定群 / 4.3 入口场景响应 / Skill 分层注入三·六
-- **强注入段瘦身 4129→3326 字符（-20% token）**：删【工具约定】段（工具描述已通过 function calling 传，重复）；记忆约定 607→129 只留结构化记忆核心；新增【注意事项】（含糊主动确认/不重复工具输出/建议要阐述/收尾实质内容）与【设计美学】（配色/层级/留白/移动端/动效/加载空状态/引导，占一部分控制 token）段；世界运行规范与接口文档导引保留
-- **强注入段新增【内容提炼与动态加载】原则**：剧情/大量按钮列表/大量设定等**内容不准写死在渲染中**——能提炼为文档/列表/数据文件的提炼掉，页面动态加载（fetch/import）；不固定数目；资源同理；同构多实例（NPC/卡牌/角色）**每个实例一个文件**（如 npcs/lihua.json），改内容/新增实例都不碰渲染代码
-
-### Added（续）
-
-- 🧠 **记忆管理增强（世界 + 主站对齐）**：manage_records / sr_* 新增 `rename`（category/sub_key/field 任一级改名）与 `move`（整组或单条跨目录移动）动作；记忆工具描述补 `user` 个性分类约定（偏好/风格/审美/习惯/关系）；新增 `build_memory_map` 缩进树记忆地图（只注入有内容的路径，空目录不出现），新会话/clear 后自动注入、普通延续对话不注入（省 token + 缓存稳定）；⭐（重要）/❗（硬约束）软锚定——value 前缀标记在地图上提到名字前，产生 Attention 特征峰值引导 LLM 优先处理；主站 format_db_records_for_prompt 重写（瘦身 + 软锚定 + 去 emoji），两套记忆行为统一
-
-### Fixed — ⚡ LLM 缓存命中率修复系列（世界 AI 工具轮 + 前缀稳定）
 
 - **工具轮 payload 漏 max_tokens**：首轮手写流式带 `max_tokens: 64000`，`_stream_llm_once`（工具轮）漏了 → DeepSeek 前缀缓存 key 不同 → 工具轮永远 miss 首轮缓存（命中率 99%→0%）。修复：补 `max_tokens` 对齐首轮
 - **payload 字段顺序敏感**：字段顺序不一致也会让缓存 key 不同 → 工具轮 payload 字段顺序对齐首轮（彻底排除顺序敏感）
@@ -2931,7 +3269,14 @@
 - **命中率不随对话刷新**：普通对话（非工具场景）完成后不更新缓存统计 → 前端累计命中率越看越低。修复：普通对话完成也刷新
 - **思考折叠收尾**：preview 凑满两行即固定（无换行长思考也固定，不再显示最新）；折叠简化为渲染层截断（一个对象，收起只渲染前两行）；残留插入消息在 turn 结束时补发（前端气泡不再丢失）
 
-### Docs（2026-08-12 新增）
+### 🔧 变更
+
+- **设置页提示词 UI 重做**（WorldCreatorConfig）：群视界机器人名字默认收起 + 🖊 图标点击可改；系统提示词默认收起 + 🖊 点击展开输入框；新增「平台强注入提示词」深灰只读展示（🔒 不可修改）；对话生命周期区块移至模型与参数上方；删除重复的 LLM 缓存命中率块
+- **群视界定义更新**（docs）：从仅聊天，到可编程、可视化、AI 可入驻的世界——造物主（世界 AI + 用户）/ 原住民（用户 + 用户的 AI）；设计文档补 8.5 群类型系统 / 8.6 世界运行不强制绑定群 / 4.3 入口场景响应 / Skill 分层注入三·六
+- **强注入段瘦身 4129→3326 字符（-20% token）**：删【工具约定】段（工具描述已通过 function calling 传，重复）；记忆约定 607→129 只留结构化记忆核心；新增【注意事项】（含糊主动确认/不重复工具输出/建议要阐述/收尾实质内容）与【设计美学】（配色/层级/留白/移动端/动效/加载空状态/引导，占一部分控制 token）段；世界运行规范与接口文档导引保留
+- **强注入段新增【内容提炼与动态加载】原则**：剧情/大量按钮列表/大量设定等**内容不准写死在渲染中**——能提炼为文档/列表/数据文件的提炼掉，页面动态加载（fetch/import）；不固定数目；资源同理；同构多实例（NPC/卡牌/角色）**每个实例一个文件**（如 npcs/lihua.json），改内容/新增实例都不碰渲染代码
+
+### 📝 文档与工程
 
 - 7.6 触发与并发调度：群 AI 走红黑树（MAX_CONCURRENT=3）受排队影响；世界 AI 拉模式（HTTP 流式）不受；世界程序节流合并通道不受
 - Skill 设计准则：可操作性 / 简便性 / 效果最大化——AI 用最少次调用完成用户意图 = 好 skill（含反面例子 add_item/remove_item 应合并为 give_weapon）
@@ -2942,7 +3287,7 @@
 
 ## [v0.3.3] - 2026-08-11
 
-### Added — ✨ 接口文档服务 + 世界包下载/导入 + 会话体系 + 结构化记忆
+### ✨ 新增
 
 - 📖 **接口文档服务**：设计页/管理页查看平台接口文档（与世界 AI `view_api_doc` 同源，代码区 `services/world/api_docs/` 随 git 跟踪、改文档即时生效）；分区查看 + 单区/全部合并下载；**md → docx 导出**（pandoc 可选能力，管理页插件管理一键在线安装，未装自动隐藏入口）；**docx 产品化**——表格边框 + 斑马纹（python-docx 硬编码，任何查看器显示）、品牌紫标题/表头/链接（#7C3AED）、代码块 Consolas 9pt + tango 语法高亮、LaTeX 公式转 Word 原生 OMML
 - 📦 **世界包下载/导入**：设计页工具栏（桌面文字按钮/移动端图标）——下载弹窗（完整备份含数据 / 仅代码与资源）、导入弹窗（保留数据文件推荐 / 连同数据文件替换，**同名替换增量合并**、包外文件保留，导入前确认）；Windows 解压中文文件名正常（UTF-8 flag）；`import_zip` 默认跳过 content/ 数据文件（商城导入新世界不受影响）
@@ -2952,7 +3297,7 @@
 - 🏪 **商城 GitHub 完善**：实例配置入口（管理员配实例 token）、token 回退 .env、挂载即预加载快照、绑定弹窗「去 GitHub 生成 token」链接
 - 👥 **群聊体验**：邀请成员弹窗（好友列表分页/已选独立列表/搜索置顶/在线圆点）、AI 好友 friend_id=user_id 标准统一（兼容旧数据双通道解析）
 
-### Fixed
+### 🐛 修复
 
 - 🔥 **422 local_kw 悬案（根治）**：`/kb/status`、`/kb/install` 带 token 必 422 `local_kw required`——路由 `Depends(_async_session)` 把 **async_sessionmaker 实例**当依赖，FastAPI 从 `sessionmaker.__call__(self, **local_kw)` 挖出必填 query 参数；源码 grep 不到、看起来像 nginx 拦截（改路径/换词/查反代全无效）；修复：`Depends(get_db)`，排查法 = 打印 route.dependant 依赖树；全项目扫描确认无同类写法（330 处 get_db 均安全）
 - **export_zip 路由签名漏 db 参数**（`_require_owner(db,...)` 直接 NameError 500）——接口从未被 HTTP 调用过，加下载 UI 才首次触发
@@ -2967,7 +3312,7 @@
   - executor.py：LLM 压缩失败降级 inline 兜底并标记（不再反复重试耗 API）、中断消息注入异常时回写缓冲（不再永久丢失）、`_is_conversation_idle` 未来时间统一防御、max_tool_rounds 默认 3→5（典型 5 轮工具链不再被截断，有 end_turn 提前退出不会死循环）
   - 驳回 7 条均附依据：连接池已显式配置（10/40/pre_ping）、chat_chain 单线程原子无竞态、联邦重连已有指数退避+上限、沙箱路径已 resolve+startswith 校验、状态栈双写完整持久化、pending_results 用 tool_call_id 关联与顺序无关、「统一会话」是坏建议
 
-### Changed
+### 🔧 变更
 
 - **接口文档路径统一 /kb**：前端路径不带 /api 前缀 → 浏览器单 `/api/kb/...` → vite 剥一层 → 后端 prefix `/kb`（避开双 /api/api 段）；路径不再含 export 词
 - **后端重启建议 `up -d --force-recreate`**（restart 个别情况留孤儿 uvicorn 占 8000 致诡异 500/新代码不生效，`docker top` 见 2 个 uvicorn 即实锤）——troubleshooting 2.4 + 手册速查已更新
@@ -2979,7 +3324,7 @@
 
 ## [v0.3.2] - 2026-08-09
 
-### Added — ✨ 情感状态栈 + 商城 GitHub 体系 + 群类型系统
+### ✨ 新增
 
 - 🎭 **情感状态栈（交接驱动）**：Plutchik 8 轴情感向量（独立轴，双高双低可表达）+ `update_emotion` 工具（增量/完整向量/概括词）；摘要只注入「当前帧+本次交接」（旧交接不重复注入）；pop 选择性回跳（target_frame_id + 跳过层归档汇报）；pop 回来交接（📝 刚完成）；分状态调用计数 + mood homeostasis 情感衰减；工具按状态隔离；摘要上限 500 可配（agents.state_stack_max_chars）；配置开关 emotion_vectorized
 - 🏪 **商城 GitHub 同步（机器人模式）**：仓库写权限只给机器人（系统 token），用户 token 只验证身份；目录所有权（worlds/{世界名}/ 只能写自己的）+ 查重 + **双签名**（作者 Ed25519 + 机器人背书）；GitHub 数字 id 身份锚（改名不变）；快照缓存；同步状态三态；token 全加密 + 管理员脱敏（前4后4）；用户 GitHub 绑定（我的页/商城页）
@@ -2992,7 +3337,7 @@
 
 ## [v0.3.1] - 2026-08-07
 
-### Added — ✨ 世界商城 MVP + 沙箱加固 + 群 AI 能力闭环
+### ✨ 新增
 
 - 🏪 **世界商城（MVP）**：`world_market_items` 表 + `/market` API（发布/列表/搜索/标签过滤/详情/一键导入/下载/下架）；发布 = 世界代码区打包（不含 content/）；导入 = 一键创建新世界 + 安全解压；前端商城页（卡片/搜索/发布弹窗）+ 群视界页顶栏入口 + 设计页「发布」按钮。
 - 🛡️ **沙箱加固（v2）**：skill 执行从进程内 harness 升级为**子进程沙箱**——`sandbox_isolate.py`（Landlock 锁文件系统 + seccomp-BPF 禁危险 syscall，ctypes 直调）+ `skill_runner.py`/`skill_sandbox.py`（协议转发 ctx，一切 IO 回宿主校验）；世界代码沙箱同样注入隔离（保留网络/线程，禁 execve/挂载/ptrace 等）；对抗性验证通过（读 /etc 被 Landlock 拒、Popen 被 seccomp EPERM、socket 无模块）。
@@ -3001,21 +3346,22 @@
 - 💬 **世界 AI 中间轮输出**：工具循环中间轮的正文不再被吞——流式展示 + 落库 note（历史可见、不进上下文），每轮说的话独立气泡。
 - 🗄️ **列槽位健康检查**：启动时扫描全表 pg_attribute 槽位（>1100 warning / >1400 ERROR），防历史 ADD/DROP COLUMN 残留触顶 1600 上限；迁移异常改 print+logger 双通道完整打印。
 
-### Fixed
+### 🐛 修复
 
 - **groups 表 1600 列上限事故**：历史反复 ADD/DROP is_federated 积累 1584 个 dropped 槽位 → 任何 ALTER ADD COLUMN 失败 → 新代码首次启动崩溃（exit 3）。修复：RENAME 重建法清 dropped（34 行数据零丢失、11 个外键全恢复）；根因是 `--reload-exclude` 隐式开启 reload + 改文件触发并发启动。
 - **世界设计页聊天栏挤出屏幕**：窗口 resize 不回收宽度 + 上限未按文件树实际宽度反推 → 渲染层 clamp 双保险（hook 层 resize 回收 + maxWidth 兜底）。
 - **AI 建议未在正文阐述**：suggest_questions 工具描述 + 【工具约定】要求"阐述建议或说明生成逻辑"（可概括，不强制逐一）。
 - **世界设计页预览只显示编辑区**：预览模式隐藏文件树+手柄，iframe 撑满文件树+编辑区整块。
 
-### Changed
+### 🔧 变更
 
 - **页面标题栏统一底座**：新增 `PageHeader` 组件（h-14 + border-b + bg-surface），群视界/商城/我的/用量/存储空间接入；设计页/管理页顶栏高度对齐。
 - **群视界列表页主题适配**：硬编码灰色全部替换为 CSS 变量体系（日夜间一致），世界卡片/弹窗/空状态美化，新增删除世界按钮。
 - **世界 AI 建议与中间过程**：见上。
+
 ## [v0.3.0] - 2026-08-05
 
-### Added — ✨ 群视界（Group World）：群聊即世界（阶段 2 全部完成）
+### ✨ 新增
 
 - 🌍 **世界实体体系**：`worlds` / `world_bindings`（群聊/私信/用户绑定入口）/ `world_ais`（世界 AI 专属表）/ `world_chat_messages`（世界级会话）/ `world_ai_memories`（向量记忆）/ `world_llm_usage`（缓存命中统计）。
 - 🤖 **群视界机器人**：每世界一个专属世界 AI（独立表，非 agent）；22 个工具（文件/积木/记忆/上网/沙箱/群聊/接口文档分区）；设计页右侧对话，服务器端 worker 全程执行。
@@ -3029,13 +3375,7 @@
 - 🧩 **积木体系**：`data/world_blocks/` 预制组件（群聊对话窗 v1.1.0；**2D 冒险游戏 v1.0.0 已落地**——示例世界「星野镇」：游戏页面 + 命令输入框 + 群消息关键词语法提取驱动 NPC + SSE 实时状态）；世界 AI 可查/看/应用。
 - 🗂️ **API 文档分区**：`data/world_api_docs/` 9 个分区（变量/WorldUI/文件/积木/群聊/页面/通知时间/错误安全/受控 API），AI 按需打开。
 
-### Changed
-
-- **唤醒改手动模式**：世界状态只由手动 wake/sleep 控制（唤醒后保持活跃，不再 10 分钟自动转休眠）；调度器保留开关可恢复。
-- **沙箱全局并发排队**：`SANDBOX_MAX_CONCURRENT`（默认 4）信号量限并发，返回 `queued_ms` 可观测排队耗时。
-- **世界变量注入增加 `WORLD_NAME`**（页面可显示世界名）。
-
-### Fixed
+### 🐛 修复
 
 - **后台配额 24MB 失效 bug**：RLIMIT_AS 虚拟内存口径下解释器 import 需 ≥32MB，24MB 导致后台触发从未真正跑通过 → 默认 64MB + 32MB 硬下限。
 - **沙箱中文输出 ascii 崩溃**：`python -I` 忽略 PYTHON* 环境变量 → 统一 `-X utf8` 强制 UTF-8。
@@ -3043,9 +3383,15 @@
 
 ---
 
+### 🔧 变更
+
+- **唤醒改手动模式**：世界状态只由手动 wake/sleep 控制（唤醒后保持活跃，不再 10 分钟自动转休眠）；调度器保留开关可恢复。
+- **沙箱全局并发排队**：`SANDBOX_MAX_CONCURRENT`（默认 4）信号量限并发，返回 `queued_ms` 可观测排队耗时。
+- **世界变量注入增加 `WORLD_NAME`**（页面可显示世界名）。
+
 ## [v0.2.8] - 2026-07-28 ~ 08-02
 
-### Added
+### ✨ 新增
 
 - 🎨 **魔视界（Magic Vision）CSS 滤镜系统**：10 种 CSS 滤镜可视化调节面板（blur/brightness/contrast/drop-shadow/grayscale/hue-rotate/invert/opacity/saturate/sepia），三种作用域（全部/仅图片/仅 UI），`ui_prefs.magic_vision` JSONB 持久化。v1.1 新增 `data-mv-force` 补偿标记：hue-rotate 嵌套叠加导致的状态点颜色不一致通过补偿算法统一；关闭开关立即持久化，不再依赖“应用”按钮。详见 `docs/magic-vision.md`。
 - 🖼️ **群聊头像设置**：默认图标 / 成员头像排列（2×2 网格）/ 自定义上传（方形裁剪 + 压缩 + 缩略图），`avatar_mode` 字段持久化，头像缩略图 128×128，跨扩展名清理旧头像。
@@ -3058,17 +3404,7 @@
 - 🌐 **纯前端演示站**：GitHub Pages 部署（HashRouter + fetch mock + localStorage 数据层），DemoChat 复用主应用完整 UI，支持 API Key 设置 + 消息发 DeepSeek。
 - 🏷️ **群名片/大图查看**：群聊头部头像、群名片、头像大图查看。
 
-### Changed
-
-- 🔄 **魔视界 v1.1**：`data-mv-force` 补偿标记 + 关闭立即持久化 + MutationObserver 动态补偿（防抖 120ms，只在新增标记元素时触发）。
-- 📡 **在线状态实时推送**：`state_change` 事件广播——AI `switch_state` 后向相关 DM 对方推送，真人上下线（WS 订阅/断开）同样推送，前端 DMChatView 实时更新状态点。
-- 🛡️ **工具状态兜底**：`get_allowed_tools()` 对未知/遗留状态（如 offline）兜底到 inactive 工具集（17 个），blocked 保持 0 工具，修复 AI“裸奔”死循环。
-- 🔧 **`list_available_skills` 修复**：`seg_tools` 为 dict 列表却与字符串集合比较导致 `unhashable type: 'dict'`。
-- 🐞 **滚动系统修复**：`scrollIntoView` 会连带滚动外层 overflow-hidden 容器（main/Layout），把标题栏滚出视口。新增 `utils/scroll.ts`（`scrollToInContainer` 只滚容器本身）+ 聊天页 main 改 `overflow-hidden`，三处调用点统一修复。
-- 🧩 **按钮嵌套修复**：ChatArea 群聊标题栏 button 套 button（GroupAvatarHeader 自带 button），改为直接传 onClick。
-- 🖌️ **气泡背景拆分**：`bubble-content` 拆为背景层（上色/圆角/边框/阴影，参与魔视界旋转）+ 内容层（文字/图片，图片保持清晰），尺寸由父容器决定。
-
-### Fixed
+### 🐛 修复
 
 - 🐛 **AI 不回消息死循环**：agent state 残留 `offline`（7-27 状态归一化迁移未生效）→ 0 工具 → 只能输出文字 → 被 system_reminder 反复弹。数据修复 + 工具兜底 + 重启。
 - 🐛 **DM 500 系列**：`_maybe_trigger_dm_ai_reply` 缺 select 导入、`_normalize_attachments` 统一处理 Text/JSONB 列、撤回 DM 广播改动（导致 500）。
@@ -3081,25 +3417,26 @@
 
 ---
 
+### 🔧 变更
+
+- 🔄 **魔视界 v1.1**：`data-mv-force` 补偿标记 + 关闭立即持久化 + MutationObserver 动态补偿（防抖 120ms，只在新增标记元素时触发）。
+- 📡 **在线状态实时推送**：`state_change` 事件广播——AI `switch_state` 后向相关 DM 对方推送，真人上下线（WS 订阅/断开）同样推送，前端 DMChatView 实时更新状态点。
+- 🛡️ **工具状态兜底**：`get_allowed_tools()` 对未知/遗留状态（如 offline）兜底到 inactive 工具集（17 个），blocked 保持 0 工具，修复 AI“裸奔”死循环。
+- 🔧 **`list_available_skills` 修复**：`seg_tools` 为 dict 列表却与字符串集合比较导致 `unhashable type: 'dict'`。
+- 🐞 **滚动系统修复**：`scrollIntoView` 会连带滚动外层 overflow-hidden 容器（main/Layout），把标题栏滚出视口。新增 `utils/scroll.ts`（`scrollToInContainer` 只滚容器本身）+ 聊天页 main 改 `overflow-hidden`，三处调用点统一修复。
+- 🧩 **按钮嵌套修复**：ChatArea 群聊标题栏 button 套 button（GroupAvatarHeader 自带 button），改为直接传 onClick。
+- 🖌️ **气泡背景拆分**：`bubble-content` 拆为背景层（上色/圆角/边框/阴影，参与魔视界旋转）+ 内容层（文字/图片，图片保持清晰），尺寸由父容器决定。
+
 ## [v0.2.7] - 2026-07-27
 
-### Added
+### ✨ 新增
 
 - 🖼️ **Mermaid 错误 SVG 友好降级**：语法错误时不再显示 mermaid 原生错误图标，改为本地渲染的错误信息面板。
 - 🗜️ **Mermaid 默认折叠**：聊天气泡中的图表默认折叠为「展开」按钮，点击后才渲染。设置页可关闭此行为。
 - 🔔 **Mermaid 错误报告按钮**：渲染出错时「报告错误给AI」按钮一键将错误信息和代码作为用户消息发送给AI。
 - ⏱️ **消息时间显示优化**：跨日历日但不足 24h 的消息正确显示为「昨天 HH:MM」而非「今天」。
 
-### Changed
-
-- 🧹 **MermaidBlock 全面重构**：`suppressErrorRendering: true` 替代手工正则/DOMParser 检测错误 SVG。模块级一次性初始化解决并发竞争。
-- 💨 **紧凑模式加载无占位**：渲染完成前不占视觉空间，不阻塞滚动。加载态保持按钮可见消除闪动。
-- 🎨 **全屏视图修复**：`extractCleanSvg` 从 iframe 提取纯 SVG 用于全屏叠加层，CSS transform（缩放/拖拽）恢复正常。
-- 🌙 **表格暗色适配**：`DARK_VARS`/`LIGHT_VARS` CSS 变量从未实际挂载到 DOM，现通过 `useMemo` 转为 inline style 正确应用。
-- 🎨 **深色模式气泡微调**：自己的消息气泡背景从纯紫 `#7C3AED` 调为暗灰紫 `#5a3a99`。
-- 📝 **CHANGELOG 统一**：合并 v0.2.7 多个草案。
-
-### Fixed
+### 🐛 修复
 
 - 🐛 **Mermaid 错误 SVG 漏检**：`suppressErrorRendering` 被后续 `initialize()` 覆盖，改为模块级初始化。
 - 🐛 **全屏缩放/拖拽失灵**：`useFullscreenPanZoom` hook 在 StrictMode 下引用异常，回滚到组件内联结构。
@@ -3110,9 +3447,18 @@
 - 🐛 **handleSend 引用时序**：`const` TDZ 导致初始化前被访问，改为 ref 方案。
 - 🐛 **消息时间跨日判定**：`Math.floor(elapsed/h)` 对昨天 21:33→今早 11:23 算出 0 天，改用日历日比较。
 
+### 🔧 变更
+
+- 🧹 **MermaidBlock 全面重构**：`suppressErrorRendering: true` 替代手工正则/DOMParser 检测错误 SVG。模块级一次性初始化解决并发竞争。
+- 💨 **紧凑模式加载无占位**：渲染完成前不占视觉空间，不阻塞滚动。加载态保持按钮可见消除闪动。
+- 🎨 **全屏视图修复**：`extractCleanSvg` 从 iframe 提取纯 SVG 用于全屏叠加层，CSS transform（缩放/拖拽）恢复正常。
+- 🌙 **表格暗色适配**：`DARK_VARS`/`LIGHT_VARS` CSS 变量从未实际挂载到 DOM，现通过 `useMemo` 转为 inline style 正确应用。
+- 🎨 **深色模式气泡微调**：自己的消息气泡背景从纯紫 `#7C3AED` 调为暗灰紫 `#5a3a99`。
+- 📝 **CHANGELOG 统一**：合并 v0.2.7 多个草案。
+
 ## [v0.2.6] - 2026-07-23~26
 
-### Added
+### ✨ 新增
 
 - 🟢 **在线状态追踪**：新增 `last_active_at` 列记录用户最后活动时间。WebSocket 连接时置 NULL（在线），断开时写入时间戳。
 - 💓 **WebSocket 心跳检测**：30s ping 间隔，首次检测离线即记录时间戳而非等满 3 次超时，断开时写入更准确的时间。90s 无响应才真正关连接。
@@ -3130,22 +3476,30 @@
 - ✅ **Nginx 413 修复**：`copree.<your-domain>.conf` 补上 `client_max_body_size 20m`。
 - 🔤 **Svg 中文不乱码**：Mermaid iframe base64 解码改用 `TextDecoder('utf-8')` 替代 `atob`。
 
-### Changed
+- 🎨 **消息格式系统**：8 色彩色文字（`[gold]` 标签 + `<span class>` 兼容）、行内代码独立渲染、语法高亮（highlight.js）、行内代码背景连续
 
-- 🏷️ **状态值规范化**：`online` → `active`，`offline` → `inactive`（DB 迁移 + 代码清理，前端 `STATE_DOT_COLORS` 移除旧值）。
-- ⚡ **私信会话加载顺序**：新增 `?summary=true` 参数跳过消息加载及已读标记，切换会话时先渲染标题栏再加载消息。DMChatView 用 `key={sessionId}` 强制 ChatView 重置状态。
-- 🎯 **初始滚位置消除闪烁**：`useLayoutEffect` 替代 `useEffect` + `setTimeout`，在浏览器 paint 前完成滚动定位（scrollIntoView / scrollTop）。
-- 🔁 **登录不再管理在线状态**：WebSocket 连接/断开为在线状态的唯一数据源。
-- 🕒 **最近在线时间时区回滚检测**：`formatRelativeTime` 用数值分钟比较解决 12h/24h 格式兼容。
-- 📝 **翻译 key 新增**：`dm.lastActive`（最近在线）、`profileCard.bioEmpty` 三语支持。
-- ⏱️ **回复标记已读**：发私信时自动标记对方未读消息为已读，不再依赖打开会话才标记。
-- 🧹 **侧边栏预览去 HTML**：`make_preview` 用正则去除 `/<[^>]+>/g` 标签，不再显示 `<span class="text-gold">`。
-- 📄 **空文本 + 附件可发送**：ChatInput 去掉 `if (!v) return` 拦截，由 ChatView `handleSend` 统一判断。
-- 🔐 **登录页 401 不刷新**：API 客户端跳过 `/auth/login` 和 `/auth/register` 路径的 401 跳转，错误正常显示。
-- 🎨 **手册主题兼容**：`.doc-content` Typography CSS 变量引用主题 `--tw-xxx` 变量，品牌色 `--tw-primary-400` / `--tw-accent-400` 变量化，改色只需改 CSS 变量。
-- 🌙 **代码块暗色模式**：`highlight.js` 改用 `github-dark.css`，亮色语法高亮在浅灰和深灰背景上都清晰。
+- 🔒 **审计日志系统**：企业级操作记录（成功/失败、IP、变更前后对比），SHA256 哈希链防篡改，CSV 导出，180 天自动清理
 
-### Fixed
+- 🚨 **中断消息注入**：AI 忙碌时用户新消息直接注入当前 `_tool_call_loop`，不另起 executor。DM 路由层拦截 + worker 群聊/私信统一处理。
+- 🔧 **`file_edit` 新增 `delete_lines` 操作**：删除指定 N-M 行（1-indexed）。
+- 📖 **`file_read` 新增 `start_line`/`end_line`**：分段读取文件，不传则读全文。
+- 🛠️ **JSON 参数自动修复**：`_repair_json` 函数在 `json.loads` 失败时用正则提取 path + content，解决大文件 HTML 引号嵌套问题。
+- 📝 **工具执行结果必回传**：有工具结果时强制继续循环让 LLM 看到，不再因 `finish_reason=stop` 提前退出。
+- ⚡ **`max_tokens` 2048→16384**：LLM 输出配额提升，大文件不被截断。
+- 🧠 **推理不可见提醒**：当前时间段提示 AI 必须调 `send_dm`/`send_gm` 发内容（除非不想发）。
+- 🔍 **read_manual 工具**：AI 可查阅用户手册了解消息格式和平台规范，支持关键词搜索，用户询问格式问题时主动查询后回答。
+
+- 🎨 **气泡文本动态对比度检测**：运行时读取气泡 `background-color`，用 WCAG 算法自动算链接/代码/表格颜色。深色底→白字，浅色底→默认色。为未来自定义气泡颜色打下基础
+- ⚙️ **上下文压缩阈值管理配置**：管理面板 → 对话日志 → 全局设置可调压缩百分比（5%-100%）
+- 🕒 **闲置 12 小时自动压缩**：对话最后消息超 12 小时强制内联压缩，避免过期缓存浪费 token
+- 🔍 **对话日志 AI 搜索**：AI 选择器支持按名称搜索，不再限于前 20 个
+- 🎯 **Alembic 数据库迁移**：`compression_threshold` 列通过 Alembic 管理，`migration.py` 不再新增列
+- 📦 **Tauri API 集中封装**：`utils/tauri.ts` 统一 `invoke`/`onKeyboardChange`/`getPlatform`，替代散落在各页面的内联 `__TAURI__` 检查
+- 📱 **visualViewport 键盘检测**：移动端键盘弹出时精确滚动输入框，替代 400ms setTimeout hack
+- 🦀 **Copree-Client 原生命令**：`io_bridge_call` 按 method 分发（getPlatform/getAppVersion）+ `get_status_bar_height` + `get_safe_area_insets` + `setup()`/`on_navigation()`
+- 🧠 **思考状态内存追踪**：`_thinking_state` 字典跟踪所有对话的 AI 思考/输入中状态。新增 `GET /groups/{id}/activity` 和 `GET /dm/{id}/activity` 接口。前端进入对话时自动查询恢复活动指示器，切换页面不再丢失「思考中」显示
+
+### 🐛 修复
 
 - 🐛 **切换会话标题栏滞后**：DMChatView 切换时先清 partner 再请求，配合 `summary=true` 秒更新。
 - 🐛 **初始加载闪现聊天开头**：`useLayoutEffect` paint 前定位，用户无感知。
@@ -3161,33 +3515,6 @@
 - 🐛 **Mermaid 下载的是 iframe 而非纯 SVG**：从 iframe `src` 的 base64 中正则提取纯 SVG 下载，不再依赖安全级别重渲染。
 - 🐛 **会话标题栏闪旧数据**：ChatView 错过 `setMessages([])` 渲染间隙，用 `key={sessionId}` 强制 remount 根治。
 
-### Added
-
-- 🎨 **消息格式系统**：8 色彩色文字（`[gold]` 标签 + `<span class>` 兼容）、行内代码独立渲染、语法高亮（highlight.js）、行内代码背景连续
-
-- 🔒 **审计日志系统**：企业级操作记录（成功/失败、IP、变更前后对比），SHA256 哈希链防篡改，CSV 导出，180 天自动清理
-
-- 🚨 **中断消息注入**：AI 忙碌时用户新消息直接注入当前 `_tool_call_loop`，不另起 executor。DM 路由层拦截 + worker 群聊/私信统一处理。
-- 🔧 **`file_edit` 新增 `delete_lines` 操作**：删除指定 N-M 行（1-indexed）。
-- 📖 **`file_read` 新增 `start_line`/`end_line`**：分段读取文件，不传则读全文。
-- 🛠️ **JSON 参数自动修复**：`_repair_json` 函数在 `json.loads` 失败时用正则提取 path + content，解决大文件 HTML 引号嵌套问题。
-- 📝 **工具执行结果必回传**：有工具结果时强制继续循环让 LLM 看到，不再因 `finish_reason=stop` 提前退出。
-- ⚡ **`max_tokens` 2048→16384**：LLM 输出配额提升，大文件不被截断。
-- 🧠 **推理不可见提醒**：当前时间段提示 AI 必须调 `send_dm`/`send_gm` 发内容（除非不想发）。
-- 🔍 **read_manual 工具**：AI 可查阅用户手册了解消息格式和平台规范，支持关键词搜索，用户询问格式问题时主动查询后回答。
-
-### Changed
-
-- 🪟 **输入框抽为独立 ChatInput 组件**：打字不触发对话界面重渲染。管理自身 value + @mention 状态，草稿自动保存/恢复，高度自动缩放最多 +3 行。拖拽基础高度与自动高度分开存储，可设负值，总高度不足时自动补偿。
-
-- 📏 **群聊消息字数上限 200→5000**：`format_message` 默认截断改为 5000 字符。
-- 🗂️ **`file_list` 路径处理**：`.` 和 `/` 视为根目录，不加 LIKE 过滤，查全部文件。
-- ✏️ **`file_write` 覆盖更新 owner**：覆盖已有文件时重置 `owner_type`/`owner_id`，避免权限混乱。
-- 💬 **工具描述补充**：`file_edit` 增加编辑前先读文件、从后往前的说明；`send_gm`/`send_dm` 增加 8 色彩色文字语法说明。
-- 📱 **设置页保存按钮 sticky 底部**：`AgentSettingsModal` 和 `SettingsPage` 的保存/取消按钮固定在容器底部。
-
-### Fixed
-
 - 🐛 **拖拽缩放算法修正**：FilePreviewModal 改为实时鼠标位置算尺寸，不再累加增量导致越拖越歪。居中布局 2x 系数补偿 + 方向性计算过中心不反弹。
 - 🐛 **行内代码被代码块分支处理**：react-markdown v10 不传 inline prop，remark 插件用 hName 重定向到独立组件。
 - 🐛 **行内代码背景被切成一段段**：inline-block + max-w-full 实现连续圆角背景。
@@ -3198,54 +3525,61 @@
 - 🐛 **设置页保存按钮错位**：`SettingsPage` 布局 flex row 导致按钮在内容区右侧。
 - 🐛 **文件系统小文件可读写、大文件不可读**：`max_tokens` 不足导致 JSON 截断。
 
-### Added
-
-- 🎨 **气泡文本动态对比度检测**：运行时读取气泡 `background-color`，用 WCAG 算法自动算链接/代码/表格颜色。深色底→白字，浅色底→默认色。为未来自定义气泡颜色打下基础
-- ⚙️ **上下文压缩阈值管理配置**：管理面板 → 对话日志 → 全局设置可调压缩百分比（5%-100%）
-- 🕒 **闲置 12 小时自动压缩**：对话最后消息超 12 小时强制内联压缩，避免过期缓存浪费 token
-- 🔍 **对话日志 AI 搜索**：AI 选择器支持按名称搜索，不再限于前 20 个
-- 🎯 **Alembic 数据库迁移**：`compression_threshold` 列通过 Alembic 管理，`migration.py` 不再新增列
-- 📦 **Tauri API 集中封装**：`utils/tauri.ts` 统一 `invoke`/`onKeyboardChange`/`getPlatform`，替代散落在各页面的内联 `__TAURI__` 检查
-- 📱 **visualViewport 键盘检测**：移动端键盘弹出时精确滚动输入框，替代 400ms setTimeout hack
-- 🦀 **Copree-Client 原生命令**：`io_bridge_call` 按 method 分发（getPlatform/getAppVersion）+ `get_status_bar_height` + `get_safe_area_insets` + `setup()`/`on_navigation()`
-- 🧠 **思考状态内存追踪**：`_thinking_state` 字典跟踪所有对话的 AI 思考/输入中状态。新增 `GET /groups/{id}/activity` 和 `GET /dm/{id}/activity` 接口。前端进入对话时自动查询恢复活动指示器，切换页面不再丢失「思考中」显示
-
-### Changed
-
-- 📈 **消息加载上限 20 → 5000**：不再硬截断 AI 上下文，让压缩阈值自然控制保留量
-- 📏 **内联压缩保留数 5 → 20**：AI 看到更多最近消息再截断
-- ♻️ **SettingsPage/LocalModelPage Tauri 调用集中化**：7 处内联 `__TAURI__` + 动态 import 改为集中 `invoke`
-
-### Fixed
-
 - 🐛 **自家气泡 Markdown 链接/代码/表格深色底不可见**：白字 + 半透明底适配 `bg-primary-500`
 - 🐛 **`get_compression_threshold` 未导入**：AI 回复报 `NameError`，不返回思考中状态
 - 🐛 **对话日志查看器旧 AI 不可选**：后端加 `search` 参数，前端加搜索框
 - 🐛 **context_compressor.py 死代码**：阈值从 6% 提到 60% 后永不触发，现改为从 DB 配置读取
 
+### 🔧 变更
+
+- 🏷️ **状态值规范化**：`online` → `active`，`offline` → `inactive`（DB 迁移 + 代码清理，前端 `STATE_DOT_COLORS` 移除旧值）。
+- ⚡ **私信会话加载顺序**：新增 `?summary=true` 参数跳过消息加载及已读标记，切换会话时先渲染标题栏再加载消息。DMChatView 用 `key={sessionId}` 强制 ChatView 重置状态。
+- 🎯 **初始滚位置消除闪烁**：`useLayoutEffect` 替代 `useEffect` + `setTimeout`，在浏览器 paint 前完成滚动定位（scrollIntoView / scrollTop）。
+- 🔁 **登录不再管理在线状态**：WebSocket 连接/断开为在线状态的唯一数据源。
+- 🕒 **最近在线时间时区回滚检测**：`formatRelativeTime` 用数值分钟比较解决 12h/24h 格式兼容。
+- 📝 **翻译 key 新增**：`dm.lastActive`（最近在线）、`profileCard.bioEmpty` 三语支持。
+- ⏱️ **回复标记已读**：发私信时自动标记对方未读消息为已读，不再依赖打开会话才标记。
+- 🧹 **侧边栏预览去 HTML**：`make_preview` 用正则去除 `/<[^>]+>/g` 标签，不再显示 `<span class="text-gold">`。
+- 📄 **空文本 + 附件可发送**：ChatInput 去掉 `if (!v) return` 拦截，由 ChatView `handleSend` 统一判断。
+- 🔐 **登录页 401 不刷新**：API 客户端跳过 `/auth/login` 和 `/auth/register` 路径的 401 跳转，错误正常显示。
+- 🎨 **手册主题兼容**：`.doc-content` Typography CSS 变量引用主题 `--tw-xxx` 变量，品牌色 `--tw-primary-400` / `--tw-accent-400` 变量化，改色只需改 CSS 变量。
+- 🌙 **代码块暗色模式**：`highlight.js` 改用 `github-dark.css`，亮色语法高亮在浅灰和深灰背景上都清晰。
+
+- 🪟 **输入框抽为独立 ChatInput 组件**：打字不触发对话界面重渲染。管理自身 value + @mention 状态，草稿自动保存/恢复，高度自动缩放最多 +3 行。拖拽基础高度与自动高度分开存储，可设负值，总高度不足时自动补偿。
+
+- 📏 **群聊消息字数上限 200→5000**：`format_message` 默认截断改为 5000 字符。
+- 🗂️ **`file_list` 路径处理**：`.` 和 `/` 视为根目录，不加 LIKE 过滤，查全部文件。
+- ✏️ **`file_write` 覆盖更新 owner**：覆盖已有文件时重置 `owner_type`/`owner_id`，避免权限混乱。
+- 💬 **工具描述补充**：`file_edit` 增加编辑前先读文件、从后往前的说明；`send_gm`/`send_dm` 增加 8 色彩色文字语法说明。
+- 📱 **设置页保存按钮 sticky 底部**：`AgentSettingsModal` 和 `SettingsPage` 的保存/取消按钮固定在容器底部。
+
+- 📈 **消息加载上限 20 → 5000**：不再硬截断 AI 上下文，让压缩阈值自然控制保留量
+- 📏 **内联压缩保留数 5 → 20**：AI 看到更多最近消息再截断
+- ♻️ **SettingsPage/LocalModelPage Tauri 调用集中化**：7 处内联 `__TAURI__` + 动态 import 改为集中 `invoke`
+
 ## [v0.2.5] - 2026-07-11~22
 
-### Added
+### ✨ 新增
 
 - 🌤️ **Open-Meteo 天气工具**：AI 可查询实时天气和预报，免费且无需 API Key。
 - 📺 **B站视频总结工具**：AI 可获取 B 站视频信息，需管理员配置 SESSDATA cookie。
 - 🔧 **`file_read` 新增 `start_line`/`end_line` 参数**：支持分段读取文件。
 - 🔧 **`file_edit` 行级编辑**：增量修改而非全量重写，节省大文件 token 消耗。
 
-### Changed
-
-- 🗂️ **`file_list` 路径处理**：`.` 和 `/` 视为根目录，不加 LIKE 过滤。
-- ⚡ **`max_tokens` 2048→16384**：LLM 输出配额提升，大文件不再截断。
-
-### Fixed
+### 🐛 修复
 
 - 🧹 **状态栈去重**：修复 `state_stack_service` 逻辑，防止同一任务被重复 push。
 - 🐛 **`file_list` 查不到文件**：`path="/"` 时 LIKE 条件不匹配相对路径文件。
 - 🐛 **设置页保存按钮错位**：`SettingsPage` 布局修复。
 
+### 🔧 变更
+
+- 🗂️ **`file_list` 路径处理**：`.` 和 `/` 视为根目录，不加 LIKE 过滤。
+- ⚡ **`max_tokens` 2048→16384**：LLM 输出配额提升，大文件不再截断。
+
 ## [v0.2.4] - 2026-07-11
 
-### Added
+### ✨ 新增
 
 - 🧩 **工具自动发现**：`ToolPlugin.__init_subclass__` 自动注册 + `_discover_tools()` 扫描 `tools/` 目录。新增工具只需在对应子目录创建 `.py` 文件，零修改现有代码。
 - 🏷️ **技能类型注册表**：`SkillRegistry` 替代数据库 CHECK 约束，新增技能类型无需改数据库。
@@ -3255,14 +3589,7 @@
 - 🎲 **roll_dice 示例工具**：演示工具自动发现机制。
 - 🌐 **Swagger UI 自定义**：语言下拉（中/英） + 快捷登录表单（用户名/密码 → 自动注入 token）。
 
-### Changed
-
-- ♻️ **技能引擎注册式分发**：`skill_engine.py` 的 `if/elif` 硬编码改为 `_ACTION_HANDLERS` / `_INJECT_HANDLERS` 字典调度。新增技能类型只需注册处理器函数。
-- ♻️ **后端 Router 自动发现**：`routers/__init__.py` 自动扫描目录，`main.py` 从 16 行手动注册改为 `get_all_routers()` 循环。新增路由模块零修改。
-- ♻️ **前端导航统一注册**：`navRegistry.ts` 作为导航项单一数据源，`Sidebar.tsx` 展开/折叠和 `MobileNav.tsx` 共用。新增导航项只需改一个文件。
-- ♻️ **前端路由集中注册**：`pageRegistry.tsx` 统一管理所有页面路由定义，`App.tsx` 仅调用 `getPublicRoutes()` + `getProtectedRoutes()`。新增页面只需在 `pageRegistry.tsx` 加一行。
-
-### Fixed
+### 🐛 修复
 
 - 🐛 **DM 回复 BUG**：`_build_current_context` 忽略了 `is_dm` 参数，DM 中始终指示 AI 使用 `send_gm`。修复：DM 路径指示用 `send_dm`。
 - 🐛 **ChatArea.tsx Group 接口缺字段**：`Group` 缺少 `is_paused` / `concurrent_ai_limit`。
@@ -3272,7 +3599,14 @@
 - 🐛 **Layout.tsx 自定义事件类型**：`maintenance-mode` 自定义事件监听器类型不匹配。
 - 🐛 **MaintenanceMsgEditor.tsx setMsg 缺字段**：预设应用时 `soft_once` 字段缺失。
 
-### Removed
+### 🔧 变更
+
+- ♻️ **技能引擎注册式分发**：`skill_engine.py` 的 `if/elif` 硬编码改为 `_ACTION_HANDLERS` / `_INJECT_HANDLERS` 字典调度。新增技能类型只需注册处理器函数。
+- ♻️ **后端 Router 自动发现**：`routers/__init__.py` 自动扫描目录，`main.py` 从 16 行手动注册改为 `get_all_routers()` 循环。新增路由模块零修改。
+- ♻️ **前端导航统一注册**：`navRegistry.ts` 作为导航项单一数据源，`Sidebar.tsx` 展开/折叠和 `MobileNav.tsx` 共用。新增导航项只需改一个文件。
+- ♻️ **前端路由集中注册**：`pageRegistry.tsx` 统一管理所有页面路由定义，`App.tsx` 仅调用 `getPublicRoutes()` + `getProtectedRoutes()`。新增页面只需在 `pageRegistry.tsx` 加一行。
+
+### 🗑 移除
 
 - 🧹 前端 3 处硬编码导航列表合并为 `navRegistry.ts` 单一数据源
 - 🧹 `main.py` 16 行手动 router 注册改为自动发现
@@ -3281,7 +3615,7 @@
 
 ## [v0.2.3] - 2026-07-08
 
-### Added
+### ✨ 新增
 
 - 🎯 **@ 优先触发**：被 @ 提及的 AI 走独立并发通道（上限 1），不阻塞普通消息队列
 - 🔧 **AI 自修改并发数**：AI 调用 `set_concurrency` 调整群并发上限，多 AI 同时设置取最小值，60s 自动恢复
@@ -3291,14 +3625,7 @@
 - 🧠 **提示词文件化管理**：`prompts/*.txt` 直接编辑，无需 Python 转义
 - 🌳 **ChatChainManager v2**：红黑树 + 双向链表，O(log N + K) 查询唤醒
 
-### Changed
-
-- ⚡ **压缩阈值**：6% → 60%，接近窗口才触发
-- 🔄 **压缩内联**：不再另起 API 调用，直接截断中间消息
-- 📡 **上下文机制**：取最近 20 条消息（不按已读过滤），当前时间放在末尾保 cache
-- 🏷 **Lazy tag**：AI 自修改暂存 `pending_system_prompt`，压缩时生效
-
-### Fixed
+### 🐛 修复
 
 - 🐛 群聊消息 `messages.append` 缺失导致 AI 收不到消息
 - 🐛 `build_dm_messages` docstring 缺失闭合引号
@@ -3307,13 +3634,20 @@
 - 🐛 ChatSidebar 事件监听器泄漏
 - 🐛 迁移缩进污染、迁移顺序错误
 
-### Removed
+### 🔧 变更
+
+- ⚡ **压缩阈值**：6% → 60%，接近窗口才触发
+- 🔄 **压缩内联**：不再另起 API 调用，直接截断中间消息
+- 📡 **上下文机制**：取最近 20 条消息（不按已读过滤），当前时间放在末尾保 cache
+- 🏷 **Lazy tag**：AI 自修改暂存 `pending_system_prompt`，压缩时生效
+
+### 🗑 移除
 
 - 🔇 **Gate 3.5 系统硬拦**：尺时间判定改为 AI 自主决定（提示词引导 + 意愿分），删除系统强制过滤
 
 ## [v0.2.2] - 2026-07-04
 
-### Added
+### ✨ 新增
 
 - 🏭 **API 多供应商架构**：`provider_config` 从单对象→数组，支持同时配置多个 LLM 厂商（DeepSeek/OpenAI/Ollama/通义千问/Kimi/智谱/硅基流动），每个供应商独立设置 base_url/模型列表/深度推理支持。管理面板新增供应商增删改、设为默认。
 - 🔗 **池 Key 关联供应商**：`api_key_pool` 新增 `provider_name` 列，池 Key 可关联供应商自动获得模型列表和 thinking 支持。未关联时按 api_base_url 自动匹配。
@@ -3321,14 +3655,7 @@
 - 🧠 **thinking 判定从全局改为按供应商**：`chat_completion` 新增 `provider_supports_thinking` 参数，非 DeepSeek 供应商也能正确发送 thinking。
 - ♻️ **供应商配置纯函数化**：`utils/pure/provider_config.py`——查找/匹配/收集/增删全部零 IO。
 
-### Changed
-
-- 🔧 旧 `provider_config` 单对象自动迁移为数组：`_migrate_multi_provider` 包装为 `[{is_default:true,name,provider,...}]`，幂等。
-- 🔧 `/agents/models` 端点新增 `providers` 字段，返回全部供应商配置和能力标记。
-- 🔧 `_get_api_config` 返回值追加 `provider_info` 字典。
-- 🔧 管理面板 `ProviderPresetSelector` 从单对象编辑重写为多供应商卡片式管理。
-
-### Fixed
+### 🐛 修复
 
 - 🐛 `agent_service.py` 遗漏 `from app.utils.result import Result` 导致容器启动 `NameError`。
 - 🐛 后端容器无 `curl` 导致 healthcheck 失败——改用 Python `urllib.request`。
@@ -3336,9 +3663,16 @@
 
 ---
 
+### 🔧 变更
+
+- 🔧 旧 `provider_config` 单对象自动迁移为数组：`_migrate_multi_provider` 包装为 `[{is_default:true,name,provider,...}]`，幂等。
+- 🔧 `/agents/models` 端点新增 `providers` 字段，返回全部供应商配置和能力标记。
+- 🔧 `_get_api_config` 返回值追加 `provider_info` 字典。
+- 🔧 管理面板 `ProviderPresetSelector` 从单对象编辑重写为多供应商卡片式管理。
+
 ## [v0.2.1] - 2026-06-30
 
-### Added
+### ✨ 新增
 
 - 📚 **AI 状态栈**：`agents.state_stack` JSONB 列，4 个工具 push/pop/close/list 追踪跨任务上下文。end_turn 自动兜底 push。
 - 🔕 **群 DND 增强**：@mention/@all/@everyone/@全体/群公告穿透免打扰。新增 `cancel_dnd` 工具。
@@ -3349,13 +3683,13 @@
 - ⚡ **上下文压缩**：旧消息稳定摘要化保 prompt cache 命中率。`context_compressor.py` 控制阈值（~8K tokens 触发）。
 - 🏗️ **纯函数架构建立**：`utils/pure/` 目录——意愿评分、提示词构建、消息格式化、预设合并、状态栈全部零 IO 抽取。项目遵循「函数式核心 + 命令式外壳」模式。
 
-### Fixed
+### 🐛 修复
 
 - 🐛 **跨对话上下文死循环（历史重播）**：`_build_cross_conversation_context` 永久禁用（返回 `[]`），状态栈替代——经 A/B 对照验证，DeepSeek 在 `system→user/assistant→system` 交替结构中存在注意力失效。
 - 🐛 **多群主错误数据**：迁移将非 owner 的 `role='owner'` 记录降为 member。
 - 🐛 **纯文件消息被拦截**：发送纯文件（无文字）不再被 `content` 空检查拦截。
 
-### Changed
+### 🔧 变更
 
 - 🔧 状态栈摘要注入到系统提示词尾部（最大化 prompt cache 命中）。
 - 🔧 闹钟/群聊/DM 三个路径 end_turn 时调用 `persist_last_task_as_state()`。
@@ -3365,7 +3699,7 @@
 
 ## [v0.2.0] - 2026-06-28
 
-### Added
+### ✨ 新增
 
 - 🔧 **AI 设置界面二级重构**：设置面板拆分为「主设置」（12 个核心参数：名称/档位/AI类型/模型/温度/思考/工具轮次/延迟/他人对话/暂停）和「详细设置」（全部高级参数）。一键切换四个配置档位即时预览预设，所有参数可在此基础上微调。
 - 🆕 **4 个新配置参数**：`auto_dnd_threshold`、`auto_dnd_duration`、`conversation_logs_limit`、`user_can_view_logs`。前后端全链路支持，创建和编辑均可设置。
@@ -3378,7 +3712,7 @@
 - 📄 **FilePreviewModal 富文本渲染**：`.md` 渲染为格式化 Markdown（react-markdown + GFM/数学公式/Mermaid），`.py/.c/.cpp/.json` 等代码文件语法高亮展示。
 - 🧠 **AI 详情页结构化记忆展示**：新增子 Tab（结构化/向量），3 级可折叠目录树，向量记忆卡片支持展开、scope 彩色标签。
 
-### Fixed
+### 🐛 修复
 
 - 🐛 **跨对话上下文 role 混淆（DeepSeek 注意力失效）**：经 A/B 对照验证，DeepSeek 在 `system → user/assistant → system` 交替结构中存在注意力失效——API 收到完整数据，但模型会忽略夹在 system 消息之间的 `user`/`assistant` 消息（能见标题、不见内容）。修复方案：跨对话上下文（标题 + 内容）全部改用 `role: system`，仅当前会话保留 `user`/`assistant`。同时引入自我/他人显式区分——AI 自己的发言保留纯名字（如 `逍遥三号: ...`），他人发言附带 id（如 `清风无殇（id=12）: ...`），系统提示词加规则「带 id 的都是别人」。id 是数据库主键不可伪造，杜绝用户名注入冒充 AI 自己的攻击面。设计文档全量同步（AI对话链机制.md / 三空间模型.md / 记忆架构设计.md / 项目全景报告.md §7.5）。
 - 🐛 **统一上下文修复**：`config_profile=custom` 的共振 AI 此前被 `_build_cross_conversation_context` 排除，修复后仅跳过 `chat` 档和 `general`/`semi_general` 类型，共振 AI 在任何档位下均加载跨对话上下文。
@@ -3387,7 +3721,7 @@
 - 🔒 **文件引用幂等**：`file_references` 表加 UNIQUE 约束 + CI 迁移清理重复记录，彻底解决 `MultipleResultsFound` 500 错误。
 - 🧬 **Embedding 模型修正**：`deepseek-embed` 实际不存在，改为 `text-embedding-3-small` + 环境变量 `EMBEDDING_MODEL` 可配。AI 提示词更新，告知 `recall_memory` 可能不可用。
 
-### Changed
+### 🔧 变更
 
 - 🔧 **语言配置统一化**：新建 `frontend/src/i18n/languages.ts` 作为语言元数据的单一数据源（`Lang` 类型、`LANGUAGES` 数组、`isValidLang()` 校验、`getLangMeta()` 查询）。`I18nContext`、`SetupPage`、`SettingsPage`、`AdminPage`、`AuthContext`、`time.ts` 全部改为引用此中心文件。新增语言只需在此文件加一条记录。
 - ♻️ **SMTP 配置数据迁移**：`system_settings.smtp_config` 从单 JSONB 对象改为 JSONB 数组（`_migrate_smtp_configs_array` 自动包装旧格式）。`get_auth_settings` 返回新增 `smtp_configs` 字段，旧 `smtp_config` 字段保留兼容。
@@ -3398,7 +3732,7 @@
 
 ## [v0.1.8] - 2026-06-27
 
-### Added
+### ✨ 新增
 
 - 👤 **用户/AI 个人资料系统**：`agents` 表新增 `bio`（TEXT，AI 简介）+ `status_text`（VARCHAR 100，个性状态），`users` 表新增 `bio` + `status_text`。创建/编辑 AI 弹窗主表单直接填写简介和个性状态，无需进详细设置。用户可在「我的」→ 编辑资料弹窗中编辑自己的 bio 和状态文本。AI 可通过新增的 `set_status` 工具自主修改个性状态（中文≤10字，英文≤30字符，active/dnd/offline 均可用）。
 - 🪪 **资料卡弹窗 ProfileCard**：全新 `GET /user/profile/{entity_type}/{entity_id}` 端点，返回聚合资料（头像、简介、状态、注册时间、AI 制作者、是否好友）。前端 ProfileCard 组件全面重写——展示真实头像（gradient 兜底）、bio 文字、状态文本（斜体强调色）、制作者信息。支持「加好友」按钮切换附言输入区，发送带验证消息的好友申请。
@@ -3415,11 +3749,7 @@
 - 🔄 **配额自动翻转 + 系统通知**：限额模式下 `others_chat_used` 达上限时自动将 `allow_others_chat` 翻转为 False，系统通过 DM 通知 AI 主人配额已用完。新增 `POST /agents/{id}/reset-others-chat-used` 端点供主人重置计数器。
 - 📊 **前端对话权限 UI**：CreateAgentModal 和 AgentSettingsModal 新增「对话权限」Section，含 Toggle 开关、子模式单选、配额输入、使用计数 + 重置按钮。左边界颜色编码。17 个新增 i18n 翻译键（中英）。
 
-### Changed
-
-- ♻️ **个人资料编辑迁移到 /me**：bio 和 status_text 从设置页（`/settings`）移至 `/me` 编辑资料弹窗。设置页移除"个人资料"分区。所有个人资料编辑统一在 `/me` 完成。
-
-### Fixed
+### 🐛 修复
 
 - 🐛 **搜索 AI 重复显示**：AI 的 `User` 记录（`type="ai"`）也被用户搜索匹配，导致同一 AI 出现两次（一次标为 human，一次标为 AI）。修复：`search_service.py` 和 `friend_service.py` 的用户查询增加 `User.type == "human"` 过滤。
 - 🐛 **移动端聊天列表右侧空隙**：`max-w-[90vw]` 约束导致侧边栏未填满屏幕宽度。修复：改用 `inset-0`（四边全填充）。
@@ -3439,20 +3769,20 @@
 - 🗑️ **转发文件释放**：转发者可从"我的"存储页点击释放按钮移除转发引用（`DELETE /fs/release/{file_id}`），仅删引用不删物理文件。存储空间即时返还。
 - 📊 **存储页文件列表**："我的"存储概览区新增文件列表（含转发文件），自有文件悬停显示转发按钮，转发文件显示 `[转发]` 标签和释放按钮。存储配额计算含转发文件。`GET /fs/list?include_forwarded=true` 合并返回自有+转发文件。`/user/storage` 新增 `forwarded_files` / `forwarded_used` 字段。
 
-### Changed
-
-- 🔧 **群聊消息 REST 端点**：新 `POST /groups/{group_id}/messages` 支持通过 HTTP API 发送群聊消息（含附件），含 WebSocket 广播 + AI 触发器。与 DM 端点对称。
-- 🔧 **DM 消息端点支持附件**：`POST /dm/{session_id}/messages` 现接受 `attachments` 字段并透传给 `send_dm_message`。
-
-### Fixed
-
 - 🐛 **`file_references.ref_type` CHECK 约束缺失 `forward`**：模型和数据库约束新增 `'forward'` 类型，init-db.sql 幂等迁移自动修复。
 
 ---
 
+### 🔧 变更
+
+- ♻️ **个人资料编辑迁移到 /me**：bio 和 status_text 从设置页（`/settings`）移至 `/me` 编辑资料弹窗。设置页移除"个人资料"分区。所有个人资料编辑统一在 `/me` 完成。
+
+- 🔧 **群聊消息 REST 端点**：新 `POST /groups/{group_id}/messages` 支持通过 HTTP API 发送群聊消息（含附件），含 WebSocket 广播 + AI 触发器。与 DM 端点对称。
+- 🔧 **DM 消息端点支持附件**：`POST /dm/{session_id}/messages` 现接受 `attachments` 字段并透传给 `send_dm_message`。
+
 ## [v0.1.7] - 2026-06-27
 
-### Added
+### ✨ 新增
 
 - 🧩 **工具系统插件化重构**：28 个工具从 `tool_registry.py`（~2300 行）迁移到 `backend/app/tools/<segment>/*.py` 独立文件。`ToolPlugin` 基类 + `ToolRegistry` 单例支持自动注册。新增工具只需创建文件并调用 `ToolRegistry.register()`，PR 即文件。
 - 🎛️ **管理面板「工具与技能」Tab**：两个子页签——「工具注册表」按段/状态筛选查看全部 28 个工具及参数 Schema；「AI 技能管理」下拉选 AI → 查看/启用/禁用所有思维技能（delay_reply / inject_prompt 等）。3 个新管理 API：`GET /admin/tools`、`GET /admin/skills/agents/{id}`、`PUT /admin/skills/agents/{id}/{skill_id}`。
@@ -3471,19 +3801,7 @@
 - 🛡️ **系统用户与错误通知**：迁移创建 `id=0` 的 system 用户，API 报错时通过 DM 通知 AI 持有者。系统消息玫瑰色气泡 + ShieldAlert 图标，引导用户配置全局 API Key。
 - 🎨 **管理面板桌面端竖标签布局**：左侧 `w-56` 侧边栏按分类分组（核心管理/运维分析/系统配置），右侧内容区独立滚动。
 
-### Changed
-
-- 🔧 **`system_reminder` 精简**：`every_time` 上限从 999 降至 3，配合 `end_turn` 工具优雅退出，防止绕过 `max_tool_rounds` 无限循环。
-- 🎨 **Toggle 开关统一**：18 个开关/滑块统一为 `bg-mint-400` + 白色圆点单一风格。
-- 🔧 **system_reminder 降级为兜底**：原逻辑"有文字无 tool_calls → 必定触发提醒"。新逻辑插入 JSON intent 解析——AI 正确返回 `end_turn`/`no_action` 时直接退出，不触发 system_reminder。system_reminder 仅在 JSON 解析失败或无 intent 字段时作为兜底。正常情况下省一轮 API 调用。
-- 🔧 **沙箱错误消息增强**：路径穿越错误消息现在告知 AI 其文件空间根目录位置（`/app/data/agents/{id}/`），帮助 AI 自我纠正。
-- 🔧 **前端代码质量优化**：`ChatView.tsx` 提取 `isMessageForThisConversation`/`removeFromMap`/`addToMap` 三个模块级 helper，消除 7 处重复的 Map 操作和 3 处重复的 `belongsToHere` 检查。`ChatSidebar.tsx` 用 useRef 持有活跃对话 ID 避免事件监听器随对话切换而重建，500ms debounce 防 chat-refresh 请求风暴。所有硬编码 `'chat-refresh'` 字符串替换为 `CHAT_REFRESH_EVENT` 常量。
-- 🔧 **序列化器共享**：`federation_ws.py` 的 DM 消息字典构建改用共享的 `serialize_message()`，消除重复代码。
-- 🎨 **头像渐变重设计**：降低饱和度改用 teal 色系，镜像渐变方向（自己↗、他人↘），轻阴影替代球状效果。系统消息头像 rose 色 + Shield 图标。
-- 📐 **管理/设置侧边栏间距收紧**：导航项 `py-1.5`、`text-[13px]`，分类标题 `h-8`、`text-[11px]`，纯文字紧凑风格。
-- 🧹 **翻译键去重清理**：删除 5 组 10 个从未引用的重复废键（`continueEditing2`/`saveButton`/`perAgentConfig`/`agentApiSave`/`instantApply`），保留语义正确的在用键。
-
-### Fixed
+### 🐛 修复
 
 - 🐛 **`data_dir` 路径修正**：`config.data_dir` 改为 `@property` 返回固定值 `/app/data`，防止 pydantic-settings 自动覆盖为宿主机路径导致上传文件写到挂载卷外、容器重建后丢失。兼容所有部署环境（本地/Docker/NAS）。
 - 🐛 **附件下载 500**：`file_references.referrer_type` CHECK 约束缺少 `'human'`，用户下载自己上传的文件时报 500。已在模型、`init-db.sql`、migration 三处修复。
@@ -3505,9 +3823,21 @@
 
 ---
 
+### 🔧 变更
+
+- 🔧 **`system_reminder` 精简**：`every_time` 上限从 999 降至 3，配合 `end_turn` 工具优雅退出，防止绕过 `max_tool_rounds` 无限循环。
+- 🎨 **Toggle 开关统一**：18 个开关/滑块统一为 `bg-mint-400` + 白色圆点单一风格。
+- 🔧 **system_reminder 降级为兜底**：原逻辑"有文字无 tool_calls → 必定触发提醒"。新逻辑插入 JSON intent 解析——AI 正确返回 `end_turn`/`no_action` 时直接退出，不触发 system_reminder。system_reminder 仅在 JSON 解析失败或无 intent 字段时作为兜底。正常情况下省一轮 API 调用。
+- 🔧 **沙箱错误消息增强**：路径穿越错误消息现在告知 AI 其文件空间根目录位置（`/app/data/agents/{id}/`），帮助 AI 自我纠正。
+- 🔧 **前端代码质量优化**：`ChatView.tsx` 提取 `isMessageForThisConversation`/`removeFromMap`/`addToMap` 三个模块级 helper，消除 7 处重复的 Map 操作和 3 处重复的 `belongsToHere` 检查。`ChatSidebar.tsx` 用 useRef 持有活跃对话 ID 避免事件监听器随对话切换而重建，500ms debounce 防 chat-refresh 请求风暴。所有硬编码 `'chat-refresh'` 字符串替换为 `CHAT_REFRESH_EVENT` 常量。
+- 🔧 **序列化器共享**：`federation_ws.py` 的 DM 消息字典构建改用共享的 `serialize_message()`，消除重复代码。
+- 🎨 **头像渐变重设计**：降低饱和度改用 teal 色系，镜像渐变方向（自己↗、他人↘），轻阴影替代球状效果。系统消息头像 rose 色 + Shield 图标。
+- 📐 **管理/设置侧边栏间距收紧**：导航项 `py-1.5`、`text-[13px]`，分类标题 `h-8`、`text-[11px]`，纯文字紧凑风格。
+- 🧹 **翻译键去重清理**：删除 5 组 10 个从未引用的重复废键（`continueEditing2`/`saveButton`/`perAgentConfig`/`agentApiSave`/`instantApply`），保留语义正确的在用键。
+
 ## [v0.1.6] - 2026-06-24
 
-### Added
+### ✨ 新增
 
 - 🔗 **联邦 v0.1.1 架构升级**：双层 ID 体系（`instance_subnet_id` UUID + `instance_public_id` ULID），`FederatedEntity` 统一表替代旧的 `FederationGroupShare` + `FederationDMShare`，支持 group/dm/user/agent 四种实体类型。`federated_id` 格式 `{实例代号}:{类型}:{本地ID}`（如 `datongai:g:42`），接收端根据发送 peer 自动拼接前缀。
 - 🔗 **联邦头像同步**：`entity_announce` 消息携带 `avatar_url`，`profile_sync` 机制不再过滤 `avatar_url` 字段，用户/AI 头像上传时自动入队 `PendingProfileUpdate` 推送到联邦对等端。
@@ -3523,12 +3853,7 @@
 - 📊 **用量图表增强**：UsagePage 新增 `ComposedChart` 时间轴曲线图（Area 总 Token + Line 缓存命中率右轴），按日期展示趋势。图表术语 "Prompt"/"Completion" 已 i18n 化。
 - 🔘 **Toggle 开关统一**：新建 `components/Toggle.tsx`，所有 18 个开关/滑块统一为 `bg-mint-400` 轨道 + 白色圆点的单一风格。覆盖 AdminPage、AgentsPage、AgentDetailPage、SettingsPage、GroupSettingsPanel、ConversationLogTab、CreateAgentModal。
 
-### Changed
-
-- 📝 **联邦文档澄清**：明确联邦通信为服务端之间直连（非 P2P），客户端只连自己的实例。
-- 💭 **「思考中」状态显示**：返回 token 时显示「思考中」，调用 `send_message` 才切换到「打字中」。思考中最小显示 1.5s 避免闪烁。
-
-### Fixed
+### 🐛 修复
 
 - 🐛 **联邦出站覆盖入站**：出站连接失败（或因入站已通而不需要出站）时错误地将 DB 状态覆写为 `failed`/`disconnected`，掩盖了已成功的入站连接。修复：出站失败后再次检查入站状态，不覆盖已通的连接。
 - 🐛 **联邦重连循环失效**：`_close_peer_connection` 只清理内存状态不更新 DB，导致 DB 仍为 `connected` → 重连循环永远不触发。修复：添加 DB 更新 + `PeerConnection` 新增 `peer_id` 字段。
@@ -3545,9 +3870,14 @@
 
 ---
 
+### 🔧 变更
+
+- 📝 **联邦文档澄清**：明确联邦通信为服务端之间直连（非 P2P），客户端只连自己的实例。
+- 💭 **「思考中」状态显示**：返回 token 时显示「思考中」，调用 `send_message` 才切换到「打字中」。思考中最小显示 1.5s 避免闪烁。
+
 ## [v0.1.5] - 2026-06-21
 
-### Added
+### ✨ 新增
 
 - 🔑 **API Key 池管理**：管理员可通过「API 库」tab 管理系统级共享 API Key。支持添加/删除/启用禁用/优先级排序。Key 使用 Fernet 加密存储，添加后仅显示密文后四位（脱敏），管理员无法查看明文。用户兑换 API 池额度后自动从池中分配最优 Key。
 - 💰 **额度消耗系统**：实现四层 API Key 解析优先链（Agent 自有 → 池 Key 绑定 → 自动选池 → 用户自有）。使用池 Key 时按 `total_tokens / 10000` 自动扣除 `users.api_credit`（最低 0.01 credit/次），自有 Key 时不扣。扣除通过 `quota_service.py` 的 `deduct_credit()` 完成，含 `SELECT FOR UPDATE` 防并发竞争。
@@ -3566,16 +3896,7 @@
 - 📊 **管理员 API Key 池仪表板**：`GET /admin/api-key-pool/{id}/stats?days=30` 返回单 Key 统计（总 tokens、请求数、429/500/503 错误次数、日均消耗、按天聚合时序数据）。`GET /admin/api-key-pool/stats/summary` 返回全部 Key 汇总对比。前端 `KeyStatsModal` 含概览卡片 + recharts 折线图（Token 趋势）+ 饼图（pro/flash 分布）+ 错误统计表。
 - 🎁 **平台赠送额度系统**：`system_settings.default_platform_credit` 全局默认值 + `users.platform_gifted_credit` 独立存储（与兑换码额度 `api_credit` 完全分离）。新用户注册自动继承全局默认。管理员修改全局值时计算 delta 批量更新所有用户。扣费优先级：先扣 `platform_gifted_credit`，再扣 `api_credit`。单次超支允许过界（不中断 AI 回复），`api_credit` 变负后前端标红。管理员调低导致的负数前端显示 0。
 
-### Changed
-
-- 🔄 **API Key 解析链升级**：`_get_api_config` 从二层（Agent→User）升级为四层优先链。DM 触发器中内联的 API 解析代码替换为统一调用 `_get_api_config`，消除重复逻辑。
-- 🔄 **前端额度展示增强**：Sidebar 非管理员显示「额度 + 余额」双数字；MePage「通用额度」卡片显示估算 Token 数和池 Key 来源；AdminPage 新增「API 库」tab。
-- 🔄 **群聊路由对称化**：群聊路由 `/chat/:groupId` → `/chat/gm/:groupId`（GM=Group Message），与私信 `/chat/dm/:sessionId`（DM=Direct Message）形成同级对称结构。涉及 App.tsx、ChatSidebar.tsx、ChatArea.tsx。
-- 🔄 **用户手册本地化**：`MANUAL_URL` 从 GitHub 链接改为本地 React 页面 `/manual`（`ManualPage` 组件渲染 `docs/用户手册.md`），版本始终与部署代码匹配。
-- 🔄 Sidebar 手册链接从 `<a target="_blank">` 改为 `<NavLink>`，移除出站图标
-- 🔄 MePage/UsagePage `fmtTokenNum` 调用全部传入 `lang` 参数，英文界面显示 K/M 而非 万
-
-### Fixed
+### 🐛 修复
 
 - 🐛 修复聊天页返回路由不更新（移动端 ArrowLeft 未调用 `navigate('/chat')`）
 - 🐛 修复兑换码生成 500 错误（`datetime.now(timezone.utc)` 带时区与 PostgreSQL `TIMESTAMP WITHOUT TIME ZONE` 不兼容，三处加 `.replace(tzinfo=None)`）
@@ -3594,7 +3915,14 @@
 - 🐛 修复消息纯文本换行不生效：添加 `remark-breaks` 插件，单回车自动转为 `<br>`
 - 🐛 修复公式/代码块/长链接溢出：消息气泡新增 `overflow-x-auto` 规则覆盖 `.katex-display`/`pre`/`table`/`img`/`a`
 
-### Backend API
+### 🔧 变更
+
+- 🔄 **API Key 解析链升级**：`_get_api_config` 从二层（Agent→User）升级为四层优先链。DM 触发器中内联的 API 解析代码替换为统一调用 `_get_api_config`，消除重复逻辑。
+- 🔄 **前端额度展示增强**：Sidebar 非管理员显示「额度 + 余额」双数字；MePage「通用额度」卡片显示估算 Token 数和池 Key 来源；AdminPage 新增「API 库」tab。
+- 🔄 **群聊路由对称化**：群聊路由 `/chat/:groupId` → `/chat/gm/:groupId`（GM=Group Message），与私信 `/chat/dm/:sessionId`（DM=Direct Message）形成同级对称结构。涉及 App.tsx、ChatSidebar.tsx、ChatArea.tsx。
+- 🔄 **用户手册本地化**：`MANUAL_URL` 从 GitHub 链接改为本地 React 页面 `/manual`（`ManualPage` 组件渲染 `docs/用户手册.md`），版本始终与部署代码匹配。
+- 🔄 Sidebar 手册链接从 `<a target="_blank">` 改为 `<NavLink>`，移除出站图标
+- 🔄 MePage/UsagePage `fmtTokenNum` 调用全部传入 `lang` 参数，英文界面显示 K/M 而非 万
 
 - `GET /admin/api-key-pool` — 列出所有池 Key（脱敏）
 - `POST /admin/api-key-pool` — 添加池 Key（Fernet 加密存储）
@@ -3610,7 +3938,7 @@
 
 ## [v0.1.4] - 2026-06-21
 
-### Added
+### ✨ 新增
 
 - 📊 **API 用量仪表盘**：用户端「我的」→ API 用量概览 + 详情页（recharts 堆叠柱状图）。显示总 Token、调用次数、缓存命中率、思考 Token，按 AI 分组明细表，支持 7/30/60/90 天日期范围切换。图表自动适配日夜模式。
 - 🛡️ **管理员用量分析面板**：AdminPage 新增「用量分析」tab。全站 token 消耗总览 + 按用户展开查看各 AI 明细 + 每日 AreaChart 趋势图。
@@ -3619,17 +3947,15 @@
 - 🎛️ **AgentDetailPage 工具轮次编辑**：「模型配置」新增「工具调用 & 闹钟」子区。`max_tool_rounds`/`alarm_max_tool_rounds`/`max_alarms` 支持 ± 按钮 inline 编辑，`force_alarm_on_end` 开关切换。调用 `PUT /agents/{id}/config` 即时生效。
 - 🏷️ **兑换码 4 种类型**：新增 `agent_bundle`（AI 包断额度，创建时一次付清该 AI 全免）和 `file_quota`（文件存储配额 MB）。原有 `ai_quota` 和 `api_credit`（1 余额=1 万 token pay-as-you-go）。`users` 表新增 `agent_bundle_credit` + `file_quota_mb` 列。
 
-### Changed
-
-- 🔄 **导航重构**：底部导航栏和侧边栏「设置」→「我的」（`/me`），原设置页保留可继续访问。`/me` 整合设置入口、管理入口。
-- 🔄 **用户信息扩展**：`get_user_info` 返回 `agent_bundle_credit`、`file_quota_mb`、`avatar_url`、`created_at`。AdminPage 用户列表同步展示。
-
-### Fixed
+### 🐛 修复
 
 - 🐛 **修复聊天页返回路由不更新**：移动端从 `/chat/2` 点击返回箭头，界面回到列表但 URL 停留在 `/chat/2`。根因：`ChatArea.tsx` 移动端返回按钮只打开侧边栏覆盖层（`setMobileSidebarOpen(true)`），未调用 `navigate('/chat')`。改为导航到 `/chat`，URL 与界面同步。
 - 🐛 **修复兑换码生成 500 错误**：`POST /admin/redemption-codes` 报 `Internal Server Error`。根因：`datetime.now(timezone.utc)` 返回带时区的 datetime，但 `redemption_codes.expires_at` 列是 `TIMESTAMP WITHOUT TIME ZONE`，asyncpg 无法将 offset-aware 转换为 offset-naive 导致 `DataError`。修复：三处加上 `.replace(tzinfo=None)`（`admin.py:378` 生成码、`user.py:87` 过期比较、`user.py:112` 标记已使用）。超 60% 的代码已使用 `.replace(tzinfo=None)` 正确模式，此三处为遗留遗漏。
 
-### Backend API
+### 🔧 变更
+
+- 🔄 **导航重构**：底部导航栏和侧边栏「设置」→「我的」（`/me`），原设置页保留可继续访问。`/me` 整合设置入口、管理入口。
+- 🔄 **用户信息扩展**：`get_user_info` 返回 `agent_bundle_credit`、`file_quota_mb`、`avatar_url`、`created_at`。AdminPage 用户列表同步展示。
 
 - `GET /conversation-log/usage/overview?days=30` — 用户所有 AI token 汇总
 - `GET /conversation-log/usage/agents/{id}/daily?days=30` — 单 AI 每日分布
@@ -3642,7 +3968,7 @@
 
 ## [v0.1.3] - 2026-06-20
 
-### Added
+### ✨ 新增
 
 - 🗑️ **好友机制完整删除**：`friendships`/`friendship_requests` 表重命名归档（安全回滚），`send_friend_request` 工具定义+handler+白名单全部移除。`search_entities()` 提取为独立的 `search_service.py` + `routers/search.py`。DM 不再需要先加好友——`send_dm` 可直接向任何人发送私信。前端删除 FriendsPage、FriendList、FriendRequestBadge 三个组件，搜索器中「加好友」改为「发私信」直接进入 DM 对话，ProfileCard 重写为 DM 入口，InviteMemberModal 从好友列表改为搜索邀请。移动端底部导航从 4 栏改为 3 栏（聊天 | AI | 设置）。
 
@@ -3675,34 +4001,7 @@
 
 - 🛡️ **设置页未保存修改提醒**：用户修改设置后未保存即尝试离开时弹出确认对话框（「继续编辑」/「放弃修改」）。通过 `useBlocker` 拦截 React Router 导航，`beforeunload` 事件拦截浏览器关闭/刷新。仅追踪需点击「保存设置」的字段（API 配置/时区/语言/聊天样式/策略模式），即时生效项（主题/通知）不计入未保存状态。
 
-### Changed
-
-- 🔄 **DM 能力独立化**：`send_dm` 描述改为「向任何人发送私信」，不再提及好友列表。搜索器「加好友」→「发私信」，直接调 `POST /api/dm/{id}`。ProfileCard 重写为 DM 入口。
-
-- 🔄 **意愿行为分层**：旧 `auto_dnd_threshold` 门控逻辑改为 `WillingnessResult` 三层行为——`HIGH` 主动、`MEDIUM` 仅 @提及、`LOW` 跳过。列保留不读，未来兼容。
-
-- 🔄 **Worker 全链路 trigger_user_id**：`_tool_call_loop` 加 `trigger_user_id` 参数 → 传入工具 `context` → `store_memory`/`recall_relevant_memories` 可获取触发用户。
-
-- 🔄 **闹钟独立于群聊限制**：闹钟调用 `_tool_call_loop` 不再与群聊/DM 共用 `max_tool_rounds`，使用独立的 `alarm_max_tool_rounds`（默认 10）。闹钟是心跳机制的基础，需要比普通回复更高的轮次以完成深度自主任务。
-
-- 🏗️ **`is_ai_editable` 加入创建 API**：`AgentCreateRequest` 和 `create_agent` 服务函数新增 `is_ai_editable` 参数，创建时可直接指定 AI 是否允许自修改。
-
-- 🔄 **预设升级/降级智能预览**：切换预设时弹出变更预览弹窗，逐项展示 old→new 字段变化。`direction` 标注 upgrade/downgrade。`independent_untouched` 列出不受预设影响的独立字段（如 API Key、chat_model）。`GET /agents/{id}/preset-preview?profile=` 端点 + `POST /agents/{id}/apply-preset` 正式切换。
-
-- ⚡ **全项目弹窗遮罩性能优化**：14 处 `backdrop-blur` 减少至 3 处（仅保留移动端导航和通知 Toast 的必要毛玻璃效果）。其余全部改用纯色半透明遮罩（`bg-black/70`），避免浏览器每帧 GPU 截屏→模糊→合成的高昂开销，显著降低弹窗卡顿。
-
-- 📱 **手机端 UX 优化（第一轮）**：聊天头部移除菜单按钮改为纯返回（ArrowLeft）、ChatSidebar 全屏叠加 + 点击空白区域关闭、底部导航切换页面后自动缩回抽屉、输入框聚焦时自动 `scrollIntoView` 居中、桌面通知等开关按钮加 `flex-shrink-0` 防止标签/开关分离换行。
-
-- 📱 **手机端 UX 优化（第二轮）**：底部栏「群聊」→「聊天」，点击自动全屏展开聊天列表；移动端侧边栏隐藏好友入口 + 好友申请徽章（v0.1.3 好友机制已移除）；底部导航新增「AI」Tab 设为 4 栏；AgentsPage/AdminPage 头部新增 ☰ 菜单按钮；设置页外观/通知增加「即时生效」标签 + 说明文字；设置页管理员手机端新增管理面板入口；手册链接增加外链图标；全部页面 `p-4 md:p-6` 响应式内边距。
-
-- 📱 **手机端导航层级化（第三轮）**：梳理完整页面树状结构（L0 底部 Tab → L1 列表页 → L2 详情页），移动端强制上级/下级单层导航。群聊/私信头部 `ArrowLeft` 返回按钮全部替换为 `Menu` 汉堡菜单（打开侧边栏抽屉，不复用返回语义）。ChatSidebar 覆盖模式下删除顶部 `ArrowLeft` 返回按钮，改为点击当前活跃会话项即关闭覆盖层返回。删除所有跨层跳转路径，移动端严格 L0↔L1↔L2 逐层导航。
-
-### Removed
-
-- 🗑️ **好友系统全链路移除**：`FriendsPage`、`FriendList`、`FriendRequestBadge` 三个前端组件删除。`/friends` 路由删除。`Friendship`/`FriendshipRequest` 模型保留仅用于归档表引用。`Sidebar`/`ChatSidebar`/`MobileNav` 中好友入口全部移除。`send_friend_request` 工具定义+handler+白名单全部删除。`export_agent_soul()` 中好友导出代码移除。
-
-
-### Fixed
+### 🐛 修复
 
 - 🐛 **`delay_reply_enabled` NULL 解析不一致**：6 处 `agent.delay_reply_enabled or False` 全部改用 `await _is_delay_reply_allowed(db, agent)`，正确查询全局默认值。
 
@@ -3748,9 +4047,35 @@
 
 ---
 
+### 🔧 变更
+
+- 🔄 **DM 能力独立化**：`send_dm` 描述改为「向任何人发送私信」，不再提及好友列表。搜索器「加好友」→「发私信」，直接调 `POST /api/dm/{id}`。ProfileCard 重写为 DM 入口。
+
+- 🔄 **意愿行为分层**：旧 `auto_dnd_threshold` 门控逻辑改为 `WillingnessResult` 三层行为——`HIGH` 主动、`MEDIUM` 仅 @提及、`LOW` 跳过。列保留不读，未来兼容。
+
+- 🔄 **Worker 全链路 trigger_user_id**：`_tool_call_loop` 加 `trigger_user_id` 参数 → 传入工具 `context` → `store_memory`/`recall_relevant_memories` 可获取触发用户。
+
+- 🔄 **闹钟独立于群聊限制**：闹钟调用 `_tool_call_loop` 不再与群聊/DM 共用 `max_tool_rounds`，使用独立的 `alarm_max_tool_rounds`（默认 10）。闹钟是心跳机制的基础，需要比普通回复更高的轮次以完成深度自主任务。
+
+- 🏗️ **`is_ai_editable` 加入创建 API**：`AgentCreateRequest` 和 `create_agent` 服务函数新增 `is_ai_editable` 参数，创建时可直接指定 AI 是否允许自修改。
+
+- 🔄 **预设升级/降级智能预览**：切换预设时弹出变更预览弹窗，逐项展示 old→new 字段变化。`direction` 标注 upgrade/downgrade。`independent_untouched` 列出不受预设影响的独立字段（如 API Key、chat_model）。`GET /agents/{id}/preset-preview?profile=` 端点 + `POST /agents/{id}/apply-preset` 正式切换。
+
+- ⚡ **全项目弹窗遮罩性能优化**：14 处 `backdrop-blur` 减少至 3 处（仅保留移动端导航和通知 Toast 的必要毛玻璃效果）。其余全部改用纯色半透明遮罩（`bg-black/70`），避免浏览器每帧 GPU 截屏→模糊→合成的高昂开销，显著降低弹窗卡顿。
+
+- 📱 **手机端 UX 优化（第一轮）**：聊天头部移除菜单按钮改为纯返回（ArrowLeft）、ChatSidebar 全屏叠加 + 点击空白区域关闭、底部导航切换页面后自动缩回抽屉、输入框聚焦时自动 `scrollIntoView` 居中、桌面通知等开关按钮加 `flex-shrink-0` 防止标签/开关分离换行。
+
+- 📱 **手机端 UX 优化（第二轮）**：底部栏「群聊」→「聊天」，点击自动全屏展开聊天列表；移动端侧边栏隐藏好友入口 + 好友申请徽章（v0.1.3 好友机制已移除）；底部导航新增「AI」Tab 设为 4 栏；AgentsPage/AdminPage 头部新增 ☰ 菜单按钮；设置页外观/通知增加「即时生效」标签 + 说明文字；设置页管理员手机端新增管理面板入口；手册链接增加外链图标；全部页面 `p-4 md:p-6` 响应式内边距。
+
+- 📱 **手机端导航层级化（第三轮）**：梳理完整页面树状结构（L0 底部 Tab → L1 列表页 → L2 详情页），移动端强制上级/下级单层导航。群聊/私信头部 `ArrowLeft` 返回按钮全部替换为 `Menu` 汉堡菜单（打开侧边栏抽屉，不复用返回语义）。ChatSidebar 覆盖模式下删除顶部 `ArrowLeft` 返回按钮，改为点击当前活跃会话项即关闭覆盖层返回。删除所有跨层跳转路径，移动端严格 L0↔L1↔L2 逐层导航。
+
+### 🗑 移除
+
+- 🗑️ **好友系统全链路移除**：`FriendsPage`、`FriendList`、`FriendRequestBadge` 三个前端组件删除。`/friends` 路由删除。`Friendship`/`FriendshipRequest` 模型保留仅用于归档表引用。`Sidebar`/`ChatSidebar`/`MobileNav` 中好友入口全部移除。`send_friend_request` 工具定义+handler+白名单全部删除。`export_agent_soul()` 中好友导出代码移除。
+
 ## [v0.1.2] - 2026-06-19
 
-### Added
+### ✨ 新增
 
 - ⏱️ **延迟回复全局开关**：在「对话日志」全局配置中添加 `default_delay_reply_enabled` 开关，新 AI 创建时自动继承全局默认值（默认关闭）。AI 制作者可在 AI 详情页单独为每个 AI 覆盖设置（`delay_reply_enabled` 列，NULL=继承全局）。管理员可通过管理面板一键切换全局策略，无需逐个修改 AI 配置。
 
@@ -3770,19 +4095,7 @@
 
 - 🔌 **单 AI API 配置**：每个 AI 可配置独立的 API Base URL 和 API Key（`agents.api_base_url`、`agents.api_key_encrypted`），优先级高于用户全局 API 配置。前端 AgentDetailPage 和 AdminPanel 可折叠编辑。
 
-### Changed
-
-- 🎨 **设置页重构**：API 设置从单一面板拆分为三大板块——「额度」（含兑换码输入）、「API 提供商配置」（含单 AI API 折叠区）、「聊天样式」（舒适/紧凑模式含文字说明）。输入框增加示例 placeholder 和辅助说明文字。
-
-- 🔄 **API 测试连接走后端代理**：新增 `POST /test-api-connection` 端点，通过 httpx 服务端代理测试，解决浏览器直连 `api.deepseek.com` 的 CORS 跨域拦截问题。
-
-- 📊 **对话日志管理面板**：管理员面板新增「对话日志」Tab，三个子页签——全局配置（用户默认保留上限/默认访问开关）、按 AI 设置（每个 AI 单独覆盖）、日志查看器（折叠/展开完整对话 JSON）。
-
-- 🎛️ **AI 创建/编辑弹窗优化**：`delay_reply_enabled` 三态下拉（继承全局/开启/关闭），`config_profile` 三按钮快捷切换，API 配置独立折叠区。
-
-- 🔧 **类型修复**：`users.ui_prefs` 列类型从 `String(500)` 修复为 `JSONB`（与 init-db.sql 同步），同步更新所有读写路径（6 个文件：schema、auth_service、router、frontend 类型）。
-
-### Fixed
+### 🐛 修复
 
 - 🐛 **@mention 完全不生效**：`_maybe_trigger_ai_reply` 函数使用了 `sender_type` 和 `sender_id` 变量但函数签名和调用方均未传入，导致 `NameError: name 'sender_type' is not defined`。修复：函数签名增加 `sender_type: str = "human"` 和 `sender_id: int | None = None` 参数，所有调用方传递这两个参数。
 
@@ -3813,9 +4126,21 @@
 
 ---
 
+### 🔧 变更
+
+- 🎨 **设置页重构**：API 设置从单一面板拆分为三大板块——「额度」（含兑换码输入）、「API 提供商配置」（含单 AI API 折叠区）、「聊天样式」（舒适/紧凑模式含文字说明）。输入框增加示例 placeholder 和辅助说明文字。
+
+- 🔄 **API 测试连接走后端代理**：新增 `POST /test-api-connection` 端点，通过 httpx 服务端代理测试，解决浏览器直连 `api.deepseek.com` 的 CORS 跨域拦截问题。
+
+- 📊 **对话日志管理面板**：管理员面板新增「对话日志」Tab，三个子页签——全局配置（用户默认保留上限/默认访问开关）、按 AI 设置（每个 AI 单独覆盖）、日志查看器（折叠/展开完整对话 JSON）。
+
+- 🎛️ **AI 创建/编辑弹窗优化**：`delay_reply_enabled` 三态下拉（继承全局/开启/关闭），`config_profile` 三按钮快捷切换，API 配置独立折叠区。
+
+- 🔧 **类型修复**：`users.ui_prefs` 列类型从 `String(500)` 修复为 `JSONB`（与 init-db.sql 同步），同步更新所有读写路径（6 个文件：schema、auth_service、router、frontend 类型）。
+
 ## [v0.1.1] - 2026-06-15
 
-### Added
+### ✨ 新增
 
 - 🤖 **AI 自动回复 pipeline**：`ai_response_worker.py` 实现完整的事件驱动 pipeline——消息队列（`asyncio.Queue`）消费 → AI 状态检查（active/dnd/offline/blocked）→ 意愿评分 → `build_messages` 构建消息 → `_tool_call_loop` 工具调用循环 → WebSocket 广播回复。`_maybe_trigger_ai_reply` 支持链式深度控制和 `sender_type`/`sender_id` 追踪。
 
@@ -3839,15 +4164,7 @@
 
 - 🎨 **前端视觉重设计**：深邃紫金暗色主题，TailwindCSS 全栈。群聊阵营区分——自己消息靠右，其他所有人（人类+AI）靠左。
 
-### Changed
-
-- 🔄 **系统提示词 6 段架构**：`FIXED_SYSTEM_PREFIX` 拆分为 `CORE_IDENTITY`（核心规则+工具铁律+深度推理）和 `RULES`（对话风格、@提及、私信、状态、文件、记忆），模块级常量最大化 prompt cache 命中。动态段：personality → tools → current_context → injected_skills，每次请求动态拼接。
-
-- 🛠️ **工具调用铁律**：文字不再自动发送，AI 必须显式调用 `send_message`/`send_dm`。一次回复可同时调用多个工具（如先告别再切换状态）。表情和肢体描写可放在括号里发出去，但不能只返回括号而不调工具。
-
-- 📦 **OpenCLI 命令执行**：`execute_command` 工具包装 OpenCLI——权限检查 → 速率限制 → 执行 → 日志记录。管理员可配置全局开关 + AI 白名单 + 命令白名单（含正则支持）+ 默认黑名单。文件操作自动沙箱隔离（仅限 AI 个人工作空间）。`file_write`/`file_read`/`file_list`/`file_delete`/`file_info`/`create_dir` 始终可用。
-
-### Fixed
+### 🐛 修复
 
 - 🐛 **`thinking_enabled` 泄漏**：在 `export_agent_soul` 中 `thinking_enabled` 被误放入 `original_config`，修复为仅保存在 `current_config`（thinking 不走 original/current 双存储）。
 
@@ -3861,9 +4178,17 @@
 
 ---
 
+### 🔧 变更
+
+- 🔄 **系统提示词 6 段架构**：`FIXED_SYSTEM_PREFIX` 拆分为 `CORE_IDENTITY`（核心规则+工具铁律+深度推理）和 `RULES`（对话风格、@提及、私信、状态、文件、记忆），模块级常量最大化 prompt cache 命中。动态段：personality → tools → current_context → injected_skills，每次请求动态拼接。
+
+- 🛠️ **工具调用铁律**：文字不再自动发送，AI 必须显式调用 `send_message`/`send_dm`。一次回复可同时调用多个工具（如先告别再切换状态）。表情和肢体描写可放在括号里发出去，但不能只返回括号而不调工具。
+
+- 📦 **OpenCLI 命令执行**：`execute_command` 工具包装 OpenCLI——权限检查 → 速率限制 → 执行 → 日志记录。管理员可配置全局开关 + AI 白名单 + 命令白名单（含正则支持）+ 默认黑名单。文件操作自动沙箱隔离（仅限 AI 个人工作空间）。`file_write`/`file_read`/`file_list`/`file_delete`/`file_info`/`create_dir` 始终可用。
+
 ## [v0.1.0] - 2026-06-10
 
-### Added
+### ✨ 新增
 
 - 👤 **用户系统**：注册/登录（JWT HS256，7 天有效期），`passlib` bcrypt 密码哈希。首个注册用户自动设为 admin。`get_current_user` 依赖注入提取用户信息，`require_admin` 检查角色。`Authorization: Bearer <token>` 认证。
 
@@ -3883,6 +4208,6 @@
 
 - 🎨 **紫金暗色主题**：深邃暗色背景 + 紫金配色，前端纯 TailwindCSS，响应式设计。
 
-### Changed
+### 🔧 变更
 
 - ⚙️ **一键部署**：Docker Compose 编排（backend + frontend + postgres）。`.env.example` 模板化环境变量，后端端口 5228，前端端口 5227。Vite 代理 `/api/*` → backend、`/ws` → WebSocket。

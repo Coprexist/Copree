@@ -30,7 +30,7 @@ src/components/ui/     React 壳：PageShell PageHeader Button IconButton
 
 | 类别 | 令牌 | 值 | 用在哪 |
 |------|------|----|--------|
-| 圆角 | `rounded-control` | 8px | 按钮、输入框、小卡片、列表项 |
+| 圆角 | `rounded-control` | 8px | 输入框（大号/多行）、小卡片、列表项。**按钮不用它**——按钮一律胶囊 |
 | | `rounded-card` | 12px | 卡片 / 面板 |
 | | `rounded-dialog` | 16px | 弹窗 / 抽屉 |
 | | `rounded-full` | 胶囊 | 徽标、头像、圆点 |
@@ -67,7 +67,7 @@ src/components/ui/     React 壳：PageShell PageHeader Button IconButton
 ```
 
 - 尺寸：`btn-xs`=24px · `btn-sm`=32px · `btn-md`=40px · `btn-lg`=48px（**固定高度，同行严格等高**）
-- 变体：`btn-primary` / `btn-accent` / `btn-secondary` / `btn-outline` / `btn-ghost` / `btn-danger` / `btn-outline-danger`
+- 变体：`btn-primary` / `btn-accent` / `btn-secondary` / `btn-outline` / `btn-ghost` / `btn-danger` / `btn-outline-danger` / `btn-tinted`（主色浅底）/ `btn-tinted-danger`（危险色浅底）——语义上要区分但不想实心时用它，别自己拼 `bg-primary-500/10 text-primary-400 border …`
 - 选中态：`.btn-outline.is-active`（紫底淡化 + 紫描边 + 紫字）。开关、分段控件、勾选行都用它切状态，
   **不要**再写 `cond ? 'bg-primary-500/10 …' : 'bg-elevated …'` 这种两套配色——配色一改就得全站找一遍
 - **有描边的次级按钮默认就是白底**（`.btn-secondary` / `.btn-outline`），hover 才落一档灰。
@@ -90,8 +90,14 @@ src/components/ui/     React 壳：PageShell PageHeader Button IconButton
 <input class="field" placeholder="用户名" />
 <select class="field">…</select>
 <textarea class="field" rows="3"></textarea>
+<textarea class="field field-noresize" rows="3"></textarea>   <!-- 固定行数，不要右下角拖拽把手 -->
 <input class="field field-sm" />   <!-- 32px 紧凑版 -->
 ```
+
+- **一行里「输入框 + 按钮」**：输入框写 `field flex-1 min-w-0`，按钮用 `.btn .btn-md`（与 40px 控件等高），
+  别用 `btn-xs` 贴在 40px 输入框旁边——高度不齐比没对齐更显眼
+- 不要手写 `bg-elevated border border-border rounded-control px-3 py-2 text-sm`：那等于自己拼一个
+  半径 12、38px、还可能与 `.bg-elevated` 的内描边叠成双边框的假输入框（2026-11-14 群设置页就是这套）
 
 ### 滑杆
 
@@ -127,6 +133,9 @@ import { Slider, SliderField } from '../components/ui'
 
 卡片底色是 `surface`（白）：容器底色 / 描边 / 圆角只有 `.card` 一处定义，别再自己拼
 `bg-elevated border border-border rounded-card`——那是比页面底色更深的一层灰。
+
+要让下面的内容透出来的浮层不走 `.card`，用 `.glass-float`（圆角 22 + 半透明 + 模糊 + 软投影）：
+手机底部导航与聊天输入框共用这一份，别再各自抄 `rounded-[22px] border-black/[0.06] backdrop-blur-lg shadow-[…]`。
 
 徽标色：`chip-primary` 紫 · `chip-mint` 绿 · `chip-accent` 琥珀 · `chip-rose` 危险 · `chip-muted` 中性。
 
@@ -213,6 +222,14 @@ if (await confirmAsync({ title: '删除？', message: '不可恢复', danger: tr
 | 输入框 | `<Input>` / `<Select>` 或 `.field` |
 | 卡片 | `.card .card-pad` 或 `<Card>` |
 | 徽标 | `<Badge tone=…>` 或 `.chip .chip-* ` |
+| 悬浮玻璃面板 | `.glass-float`：圆角 22 + 半透明底 + 模糊 + 软投影，**只给浮在内容之上、要让下面透出来**的块用（手机底部导航、聊天输入框）。普通卡片仍走 `.card`——两者不是同一种东西，别再手拼 `rounded-[22px] backdrop-blur-*` 那一串 |
+| 浮层让位 | 浮在内容上的块（输入区、底部导航）不占布局，就得由容器声明让位量 `--xxx-inset`，见下面「浮层让位」 |
+| 通栏灯带（出血条） | 状态条/横幅要横向出血时：外层 `relative left-1/2 w-screen -translate-x-1/2` 撑到视口宽，滚动容器加 `overflow-x-hidden` 裁边（**不要**用 `overflow-x-auto`，会多出横向滚动条）；条里的文字必须再包一层 `width: var(--page-content-w)` + `mx-auto`，才能和内容列左对齐——否则字会跑到侧栏底下（2026-11-14 概览页踩过） |
+| 顶部条 | `.top-bar`：**全站唯一**的顶部条外观——surface 底 + 一层普通的软阴影（不加发丝线、不用负扩散）。页面头（PageShell/PageHeader）、侧栏头、聊天头部、抽屉与弹窗头都挂它，别再写 `border-b border-border bg-surface`；高度统一 `h-14`。它自带 `position: relative; z-index: 10`——不抬层级时阴影会被下面不透明的卡片整段盖掉；吸顶的用 `top-bar-sticky`（不要再写裸 `sticky top-0`，会被上面那句 position 盖掉） |
+| 胶囊按钮 | 按钮四档（xs/sm/md/lg）**一律胶囊**（2026-11-15 定）：动作是「一行可以点」，形状不随尺寸变、只有高度在变；md 以前是 8px 圆角，和同排的 sm 胶囊挨在一起「一个方一个圆」已统一。`.btn-pill` 冗余（仅兼容保留）；图标钮要圆用 `.icon-btn-pill`。**不要**在元素上补 `rounded-full`——工具类在本层规则之前，同权重会被 `.btn` 的圆角盖掉 |
+| 浮起圆钮 | `.float-btn`：36px 圆形玻璃钮（"回到底部"），比 `.glass-float` 圆、小、投影浅；**挂在滚动区里**用 `absolute` 定位，挂到面板根上会把 `bottom-*` 算到输入区上 |
+| 引用（回复某条） | `<QuotedMessage>`（`components/shared/`）：气泡里的引用与输入框上方的引用条**同一份实现**，顺序固定「竖线 → 名字 → 缩略图 → 文字」；竖线用 `self-stretch`（父级常是 `items-start`，`h-full` 撑不开）；`inverse` 切深底配色、`lines` 管行数、`prefix` 给输入框那侧加「回复 」 |
+| 头像 | **只调 `utils/avatar.ts`**：`avatarGradient(senderType, hasAvatar)` 出类名、`avatarShadowColor(senderType)` 出投影色。自己 `primary-500→700`、他人 `primary-500→300`（`to-br`，深紫在左上）、系统 `rose-400→600`（`to-bl`）；有头像时末端色带 `/30`；首字字号走 `chatStyleClasses().textSize`，别在组件里另写一套 |
 | 空状态 | `<EmptyState>`，不要自己拼居中提示 |
 | 管理页列表 | `<ListPanel>`（表格壳 + 标题 + 工具条 + 空态）；行用 `border-b border-border/50`，单元格 `py-2 px-3` |
 | 实体列表（插件/AI/应用） | **两行式**：上排「名称 + 类型 + 版本」，下排**一行截断的说明**（`truncate` + `title` 悬停看全文）。**完整说明与元信息（作者/来源）住详情，不住列表** —— 列表负责"认出它"，详情负责"讲清楚它" |
@@ -224,6 +241,29 @@ if (await confirmAsync({ title: '删除？', message: '不可恢复', danger: tr
 | 危险色 | `rose`；成功/在线 `mint`；强调/通知 `accent`；品牌主色 `primary`（紫） |
 | 主题色 | 一律走 `rgb(var(--tw-*))` 对应的 Tailwind 名（`bg-surface` / `text-textSecondary`…），
 不要写死 `#fff` / `bg-gray-100`（深色主题会瞎） |
+
+### 浮层让位
+
+浮层（`.glass-float`）**不占布局**：消息从它下面滚过去，玻璃才透得出东西。代价是"内容会一直被浮层压住最后一段"，
+所以浮层必须把自己的高度**声明给容器**，由三处各自读它：
+
+| 谁 | 读什么 | 怎么读 |
+|----|--------|--------|
+| 滚动区的底部留白 | `--xxx-inset`（CSS 变量） | `.chat-scroll { padding-bottom: calc(var(--composer-inset, 7rem) + 0.75rem) }`——只有 CSS 能读变量 |
+| 滚动条轨道底边 | `data-xxx-inset`（属性） | `MobileScrollbar` 读 `el.dataset.composerInset`；滚动回调里每帧读，读变量要 `getComputedStyle`（强制样式重算），读属性是纯 JS |
+| 贴着浮层上沿的东西 | `--xxx-inset` 或同一个整数 | 例如"回到底部"按钮 `bottom: composerH + 16`、活动状态条 `bottomOffset`——**不要**写 `bottom-4`，那会落进输入框 |
+
+规则：
+
+- **一个数字、多种载体，值是量出来的**（`ResizeObserver` 量浮层高度 → 同时写变量与属性），不许在别处再硬编码一份。
+- 变量名统一是 `--<浮层名>-inset`，属性名是它的驼峰版 `data-<浮层名>-inset`，两者必须成对出现（写一处就该想起另一处）。
+- 现有实例：
+  - 手机底部导航：`--mobile-nav-reserved` + `.pb-nav`
+  - 聊天输入区（底部浮层）：`--composer-inset` + `data-composer-inset`
+  - 聊天头部（顶部浮层，`shared/ChatHeader`）：`--header-inset`；它下面还压着「在沉浸式界面打开」
+    那一条时，再用 `--header-strip` 追加一条的高度。滚动条不读变量，改成量 `[data-float="top"]` 的
+    下沿（量一次 rect，不在滚动回调里读）
+- 浮层自己挂 `z-10` 以上就是"在内容之上"；页面里别再给滚动区加 `pb-40` 之类的魔法留白去凑高度。
 
 ### 真实页面长什么样（控制台 → 对话日志）
 
@@ -288,3 +328,34 @@ node scripts/screenshot/run.mjs --only ui-components,ui-convlog
 | --- | --- |
 | `scripts/check-i18n.mjs` | 静态字面量：用了但字典里没有、字典里有但没人用 |
 | `scripts/check-i18n-keys.mjs` | 拿**真字典**（esbuild 就地转译 `ns/*.ts`）逐个解析调用点，含动态 key 的数据表；另抓点号旧形式、key 字段写成裸文案 |
+
+## 9. 密钥 / Token 输入（SecretInput）
+
+**不要把 Token 输入框写成 `type="password"`。** 浏览器会把 `type=password` 当成「账号密码」：
+自动填入你保存的用户名/密码、提交后弹「是否保存密码」、框边冒出密码管理器的钥匙图标。
+对一串 API Key 来说这三件事都是误导——用户会以为自己存的账号被填进去了。
+
+统一用 `components/ui/SecretInput`：
+
+```tsx
+import { SecretInput } from '../components/ui'
+
+<SecretInput
+  value={token}
+  onChange={(e) => setToken(e.target.value)}
+  wrapperClassName="w-full"          // 布局类挂在包裹层：flex-1 / w-full
+  placeholder={hasToken ? t('admin:tokenConfiguredPlaceholder') : ''}
+/>
+```
+
+- 遮蔽是**纯视觉**的：始终 `type="text"`，靠 `-webkit-text-security: disc` 画点；
+  只有极少数不支持该属性的浏览器才退回原生 `type=password`（同时关闭自动填充）。
+- 自带 24px 圆形眼睛按钮（`.icon-btn-xs .icon-btn-pill`），不要在外面再手写一个切换按钮。
+- 自带的 `autoComplete="off"` + `data-1p-ignore` / `data-lpignore` / `data-bwignore` 是给密码管理器的忽略标记，别删。
+- 尺寸跟 `.field` 一致：默认 32px 胶囊；`fieldSize="lg"` 走 `.field-lg`（40px 圆角）。
+
+**真·账号密码**（登录、管理员重置/创建用户）仍用原生 `type="password"`——这类场景浏览器的密码管理器是对的，
+旁边加 `{/* ui-standard-ignore: 账号密码，浏览器密码管理器本来就该管 */}` 说明这是有意的。
+
+闸门：`scripts/check-ui.mjs` 扫到 `type="password"` 且没有 `ui-standard-ignore` 就报错，
+所以这条规矩不靠记性，靠 CI。

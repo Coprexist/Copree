@@ -104,7 +104,7 @@ node scripts/build.mjs        # 重建清单哈希
 | `pluginSourceDir` | `""` | 自更新端点的来源目录；留空则回溯 profile 里记录的安装来源。 |
 | `bridgeEnabled` | `true` | 反向桥接功能总开关；即便如此，仍需在 DSH 里打开 Copree 接入开关才会暴露任何东西。 |
 | `bridgeSecret` | `""` | 与 Copree 后端共享的密钥（对应 `DSH_BRIDGE_SECRET`）。留空则整条桥接不可用。 |
-| `bridgeAdvertiseUrl` | `""` | Copree 后端回连本机的地址。留空则整条桥接不可用。 |
+| `bridgeAdvertiseUrl` | `""` | Copree 后端回连本机的地址。留空则整条桥接不可用。必须是**容器可达**的地址（后端在 docker 里时填宿主网桥地址，且那层反代要排在 docker 启动之后），否则管理端会显示「注册了但连不上」——拓扑与开机顺序见 `docs/DSH接入指南.md` §3.6。 |
 | `bridgeHeartbeatMs` | `20000` | 桥接心跳间隔。Copree 侧有效期是它的三倍，同意/撤销在一个间隔内生效。 |
 
 配置来自 `cordis.patch.yml` 或 profile 覆盖；改完重启 Host。

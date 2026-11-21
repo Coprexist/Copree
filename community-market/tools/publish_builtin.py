@@ -34,7 +34,7 @@ DEFAULT_IDS = [
     "bilibili",
     "qq-channel",
     "qq-napcat",
-    "emoji-qq",
+    "emoji",
     "keyword-autoreply",
     "skin-aurora",
     "skill-writing-studio",

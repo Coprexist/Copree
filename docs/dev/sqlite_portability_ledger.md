@@ -21,7 +21,7 @@
 | `services/content/conversation_log_service.py` usage_daily upsert | `now()` ×2 | `no such function: now`，用量统计全丢 |
 | 同上 `get_session_token_usage` | `token_usage->>'x'::int` | `::` 转换语法报错 |
 | `services/infrastructure/tool_usage.py` | `now()` ×2、`current_date - interval 'N days'` | 工具用量统计与汇总都坏 |
-| `services/agent/state_stack_service.py` | `updated_at = now()` | 状态栈 touched 失败 |
+| `services/agent/state_stack_service.py` | `updated_at = now()` | 状态链 touched 失败 |
 | `services/channel/token_quota.py` | `now()` ×12 | 通道额度记账全失败 |
 | `routers/admin.py` 运营概览疑似来源 | `GROUP BY 2` | SQLite 当常量，聚合静默算错 |
 | `config.py` `avatars_dir` | 写死 `/app/uploads/avatars` | Windows 落到盘符根，无权限 → 头像 500 |

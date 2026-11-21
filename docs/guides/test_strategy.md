@@ -54,7 +54,7 @@
 | `backend/tests/test_agent_resolution.py` | 集成（真库） | 2 | 群成员 `member_id` 解析优先级 |
 | `backend/tests/test_work_session.py` | 集成（真库 + 探针表） | 4 | `work_session` 四态：出块提交 / 抛错回滚 / 内层回滚不影响外层 / 内层提交不被外层回滚带走（**不是 savepoint**） |
 | `backend/tests/test_frame_lifecycle.py` | 集成（真库） | 12 | 帧的存储与运行两层、容量闸与后事、同会话归并规则、稳定帧 id 复活 |
-| `backend/tests/test_state_chain.py` | 纯函数 + 集成（真库） | 21 | 状态链：指针算术（attach/move_to_tail/detach/window/reconcile）、链与运行集合对账、坏链重建、老 AI 首建链 |
+| `backend/tests/test_state_chain.py` | 纯函数 + 集成（真库） | 21 | 状态链：指针算术（attach/move_to_tail/detach/window/reconcile）、链与状态链对账、坏链重建、老 AI 首建链 |
 | `backend/tests/test_world_entry.py` | 集成（真库） | 7 | `enter_world` 不需要群/一个世界一条帧/入场身份取绑定、`world_command` 直达世界程序（不发群消息）与如实报错 |
 
 合计 **844 条**（`run_without_pytest.py` 全量 **≈84s**，2026-10-27 实测；2026-10-05 时是 700 条 46s，
@@ -86,8 +86,9 @@ docker exec -w /app \
   ai_group_backend python tests/run_without_pytest.py
 ```
 
-运行器只实现了 `pytest.fixture` 与 `pytest.mark`，**没有 `pytest.raises`**：用例里要判异常就手动
-`try/except + assert`（仓里既有用例都这么写）；需要参数化、插件、覆盖率就去装 pytest，不要往运行器里加功能。
+运行器只实现了 `pytest.fixture`、`pytest.mark` 与 `pytest.raises`：判异常可以写 `with pytest.raises(X) as err:`
+（`err.value` 可用；旧用例里的 `try/except + assert` 也能跑）。参数化、插件、覆盖率仍要去装 pytest，
+不要往运行器里加功能。
 
 运行器接受**选择器**（子串匹配 `文件名::用例名`），用于只跑改动涉及的部分：
 

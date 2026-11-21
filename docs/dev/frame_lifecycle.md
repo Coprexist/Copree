@@ -12,8 +12,8 @@
 | 请求里的 tools 数组 | effective 快照 ∩ 当前允许集 | **同名定义不动**（走快照）；增删工具、状态闸变化会改 | 平台发布增删工具、`thinking_enabled` / `delay_reply_allowed` 变化 |
 | 账本历史 | `agent_history_entries` | **重写**成「摘要 + 事件原样搬运 + 最近 N 条」 | 无（段内只追加） |
 | 事件条目（缺口 / 便签投递 / 便签撤下 / 能力变更通知 / 状态后事告知 / 空焦段告知） | 同上（账本条目） | 带 `drop_on_unlock` 的**投递过的才离场**（`flags.seen` 在 LLM 响应回来时打；没投出去的——比如轮次之外落的失败通知——原样搬进新账本）；其余**原样保留**（缺口为何保留、非压缩条目会累积，见[会话历史与前缀缓存](./conversation_history.md) §13） | 无 |
-| 状态帧本身（会话帧） | `agents.state_stack`（全量存储） | **不重建**（一个 `context_ref` 只有一帧：`ensure_active_frame` / `push_state` 认出同会话就切回原帧，`_save` 再兜底归并） | 出运行集合只是改 status（`ended` / `retired`），**记录仍在**；只有 `finish_frame`（他表态后事办完）与平台代销会删记录，见「帧的存储与运行」 |
-| `tool_uses` / `delivered`（触发规则状态 + 空焦段告知的投递进度） | 会话帧字段 | **归零**（解锁清单里的 `reset_trigger_state`） | 随帧状态复位：解锁归零、帧被弹出后即不在运行集合（不再参与）。**换会话不归零**，见下节 |
+| 状态帧本身（会话帧） | `agents.state_stack`（全量存储） | **不重建**（一个 `context_ref` 只有一帧：`ensure_active_frame` / `push_state` 认出同会话就切回原帧，`_save` 再兜底归并） | 出链只是改 status（`ended` / `retired`），**记录仍在**；只有 `finish_frame`（他表态后事办完）与平台代销会删记录，见「帧的存储与运行」 |
+| `tool_uses` / `delivered`（触发规则状态 + 空焦段告知的投递进度） | 会话帧字段 | **归零**（解锁清单里的 `reset_trigger_state`） | 随帧状态复位：解锁归零、帧被弹出后即不在链上（不再参与）。**换会话不归零**，见下节 |
 | 便签副本 `frame.notes` | 会话帧字段 | **清空**（`release_active_frame_notes`） | 无 |
 | 环境（在哪个会话、接没接渠道、绑没绑世界） | 会话帧字段 + 帧上的锁定副本 | **换新**：锁定副本对齐现值，下一次请求用新环境 | 环境变化只置脏 + 落一条通知，不碰前缀；帧的锁定副本随帧记录一起保留（帧不再被静默裁掉） |
 | 待通知脏位 | 会话帧字段 | **清空**（环境已随解锁并入前缀） | 同帧生灭 |
@@ -33,11 +33,24 @@
 数组，所以全仓把 `stack[-1]` 当"当前帧"用的地方不必改，也不会有漏改的半吊子。
 
 **当前帧 = 链尾**：调用方只改 `status`（`push_state` / `pop_state` / `close_state` /
-`restore_frame` / `ensure_active_frame` 都是这样），`_save` 里的对账（`_reconcile_chain`）
-把标成 `active` 的那帧挪到链尾、把离开运行集合的帧下链、把运行中却没上链的帧挂上。
-于是「链怎么连」只有一处写法（`app/utils/pure/state_chain.py`），各条路径不必各自记得动链。
+`pull_frame` / `restore_frame` / `ensure_active_frame` 都是这样），`_save` 里的对账
+（`_reconcile_chain`）把标成 `active` 的那帧挪到链尾、把离开链的帧下链、
+把运行中却没上链的帧挂上。于是「链怎么连」只有一处写法（`app/utils/pure/state_chain.py`），
+各条路径不必各自记得动链。
 
-> 术语：别的文档和历史注释里的**「栈顶帧」就是链尾（当前帧）**——含 `stack[-1]` 那句老不变量。
+**跳到某帧只有一种实现**（`pull_frame`）：把目标拉到链尾；它还在链上就重新移位置，
+已经结束的先复活。被顶下来的那帧只由 `leave` 决定去向——`suspend`（挂着，目标 pop 之后回到它）
+或 `end`（结束，退出链）。`pop_state` / `enter_state` / `restore_frame` 都是它的薄壳；
+`pop_state()` 不带目标时只结束当前帧，其余帧一帧不动（链里没有"要被连带放弃的中间层"）。
+
+**「原来那帧」是按「此刻谁 active」认的，所以新帧入数组时不能带 active**：`make_state_frame`
+默认给 `status="active"`，一个刚造出来、直接 `append` 再交给 `_pull` 的帧会被认成"原来那帧"，
+于是上一帧永远压不下去——链上两个 `active`，执行窗口只有 1，日志里出现
+「链上有 2 帧是 active」。两条现有写法都绕开了它：`push_state` 在 `append` **之前**先取
+`prev = current(stack)`；`restore_frame` 重建帧时把新帧建成 `suspended`，由 `_pull` 提成当前帧。
+新增"造帧再拉过去"的路径时照这两条挑一条，别直接 append 默认帧。
+
+> 术语：别的文档和历史注释里的**「当前帧」就是链尾（当前帧）**——含 `stack[-1]` 那句老不变量。
 > 名字不逐个改，口径只在这里对齐一次。
 
 链的指针算法（attach / move_to_tail / detach）、执行窗口与实测代价单独成篇：
@@ -45,16 +58,16 @@
 
 **切回一段会话 = 把它拉到链尾**（`move_to_tail`）：① 让位——此帧的前后帧直接相连；
 ② 落座——上一个最末帧的 `next` 记成本帧、本帧的 `prev` 记成上一个最末帧、`next` 置空。
-落在存储上是 **≤4 行指针更新，与链长无关**（改造前这等于重排整份栈，线上见过 126 帧 / 546 KB 的一份）。
+落在存储上是 **≤4 行指针更新，与链长无关**（改造前这等于重排整份帧数组，线上见过 126 帧 / 546 KB 的一份）。
 
-**老 AI 不需要数据迁移**：没有链的 AI 在第一次写栈时按当时的运行集合现建一条
+**老 AI 不需要数据迁移**：没有链的 AI 在第一次落库时按当时在跑的帧现建一条
 （`_ensure_chain`），"当前帧"因此不变，只是依据从"数组末尾恰好是谁"换成"链尾是谁"。
 读接口（`get_chain`）遇到没有链的 AI 只现场算一份视图，**不写库**。
 
 **执行窗口 > 1 的现状**：`max_active` 已就位并被对账尊重（窗口内一律 `active`），但一轮唤醒
 仍然只驱动链尾那一帧——真正的并行执行还没有接线。调大目前只是让"窗口"的语义提前成立。
 
-**实测代价**（126 帧 / 774 KB 的一份栈，`backend/tests` 同款数据）：
+**实测代价**（126 帧 / 774 KB 的一份帧数组，`backend/tests` 同款数据）：
 
 | 动作 | 耗时 | SQL 条数 |
 |---|---|---|
@@ -63,16 +76,63 @@
 | 一次 `_save`（位次没变） | 15.6 ms | 6，链一条都没写 |
 | 一次 `_save`（切会话，位次变了） | 16.6 ms | 8，链只多 2 条（补丁 + 端点） |
 
-也就是说：**排序与查询已经是 O(1)/常数条**，但一次写栈的大头仍然是"把整份 `state_stack`
+也就是说：**排序与查询已经是 O(1)/常数条**，但一次落库的大头仍然是"把整份 `state_stack`
 重写一遍"（15 ms 里占绝大部分）——那是存储层的代价，链没有、也不该替它付。
 真要把它降下来，下一步是把帧从"一个大 JSON"拆成"一帧一行"，那是另一场改造。
 
+### 帧清单：一次给全，之后只补增删
+
+AI 原先想知道「我手上还有哪些帧、id 是多少」，只能调 `list_states`。它经常不调，然后拿
+`push_state` 另造一帧顶上（线上：「刷 B 站」明明预建好了，它新建了一个 `world` 帧）。
+
+现在这份清单**一次给全**，按三档落位（与提示词同一套口径）：
+
+- 清单位于 `messages[1]`：稳定前缀之后、账本历史（含 compact 摘要）之前；
+- 解锁点与「这一帧第一次成为当前帧」时渲染一次，存在帧的 `roster_locked` 上，之间字节不动；
+- 帧的增删不重写清单，只往账本补一条 `notice`（`【状态帧】多了一个… / …已经结束`），
+  投一次就够，解锁点随快照重写一起离场；`roster_notified`（{id: 身份}）是判定增删的基准；
+- 清单只列**链上的帧 + 沉睡帧**（插件预建、等他进去的那些，标「（沉睡）」）：已结束的进不去，
+  待交接的是后事，都不列；超过 4 帧报数并指向 `list_states`。
+
+不放尾部读数是有意的：尾部每轮按未命中计价，而清单一动就是每轮都动；整段每轮重算同样不行——
+那等于每轮改写历史之前的一块，后面整段前缀缓存全废。
+
+实现：`utils/pure/state_stack.render_frame_roster` / `roster_frames`、`services/agent/state_stack_service.frame_roster`、
+解锁清单里的 `reset_frame_roster`。
+
+### 离开一帧：那一段落一条日志
+
+帧一换，被离开的那一段在日志页就多一条自己的记录（`ai_conversation_logs.origin = switch`）：
+内容取换帧那一刻手上那份请求体，状态块换成这一段的样子——链用的是**换帧之前**的快照，
+所以交接、doing、TODO、预算读的都是当时那份，不是下一段的。末句交代去向。桶按被离开的帧算：
+进 B 站帧落的是群聊桶，`pop` 回来落的是 B 站桶。
+
+原先一条日志只对应一次模型调用，而请求体在开轮时就定型了，一轮中途换帧在日志里不留痕——
+插件帧那几段于是彻底看不到。切换行不是模型调用：不花额度、不算 token、没有结局
+（`status` 为 null），列表与详情按 `origin` 标成「状态切换」。
+
+实现收在一处：`services/agent/segment_log.py`，写入点是 executor 里的工具分发——
+`SWITCH_TOOLS`（`push_state` / `enter_state` / `pop_state` / `close_state` /
+`finish_frame` / `restore_state`）执行前后各读一次状态链，当前帧 id 真的变了才落。
+沉睡帧预建不落：那不改变他在哪。
+
 ### 同一段会话至多一帧
 
-**身份是 `context_ref`**（`group:{id}` / `dm:{session_id}` / `world:{id}` / `file:xxx`），不是帧实例 id：
-一段会话的"现在"只有一个说法。`push_state` 认出运行集合里已有同 `context_ref` 的活帧就**切回那一帧**
-（就地更新、**帧 id 不变**——帧 id 是闹钟之类记着的长期指针），只有真新会话才压新帧；`_save`
-（唯一写入点）再兜一道归并，任何写栈的路径都过它，不必每个 push 点各自记得。
+**身份是 `context_ref`**（`group:{id}` / `dm:{session_id}` / `world:{id}` / `file:xxx` /
+插件命名空间），不是帧实例 id：一段会话的"现在"只有一个说法。
+
+认帧只有一个口：`pure.frame_of(stack, context_ref)`——在跑的优先，都结束了就取最近激活的那条；
+挑选规则与归并共用 `_pick_keeper` 一处（`active` 优先，其次 `last_active_at` 最大），认帧和「归并时留谁」不会各答各的。
+切会话（`ensure_active_frame`）、他自己压帧（`push_state`）、插件代建（`enter_frame`）、
+进世界（`activate_world_frame`）都从这里取帧，于是谁都不会为同一段会话另起一条。帧 id 是闹钟、
+计划板记着的长期指针，切回同一段会话**帧 id 不变**，只有这段会话从来没有过帧才新建。
+`_save`（唯一写入点）兜的只剩并发：两个请求同时读到同一条尾时，链上的重复帧在落库前归并。
+
+**唤醒也走这条**：`ensure_active_frame` 用 `frame_of` 取帧，取到的那条可能已出链、可能沉睡很久、
+甚至待交接（`retired`）——都把它拉起（`status=active`，`_save` 对账上链、归位到链尾），帧 id 不变，
+环境锁、帧清单、便签、原文尾巴原样还在；只有这段会话从来没建过帧时才新建。出链只是它这会儿没在跑，
+不等于这个状态没了：消息是外界带来的（“由于外界环境改变，替他把帧拉起”），不是他自己切帧。
+待交接的帧复活不动记录，后事照旧由 `pending_notices` 投递。
 
 **归并规则**（`app/utils/pure/state_stack.py::merge_same_context`；字段冲突一律照此表，不另作判断）：
 
@@ -80,7 +140,7 @@
 |---|---|
 | `id` / `status` | 幸存者的——**帧身份不变** |
 | `created_at` | 幸存者的：它是「这条记录的生日」（`restore_frame` 重建时归零），不是「会话开始时间」——全仓只有容量闸排序拿它当 `last_active_at` 的兜底，闹钟/计划板按的是**帧 id**，所以取最早没有意义 |
-| `retired_at` / `merged_into` | 幸存者优先（`merged_into` 只长在被归并的帧上） |
+| `retired_at` / `merged_into` | **不搬**：标记只属于被归并的那条帧，搬过去会变成「幸存者说自己是被并的」或「幸存者被标成待交接」 |
 | 内容字段：`type` / `label` / `why` / `doing` / `todo` / `plan` / `journal` / `emotion` / `emotion_text` / `source_emotion` / `tools` / `skills` / `env_locked` / `env_notified` / `semantic_focus` / `group_id` | **幸存者优先**；被合并方的同名值**有意丢弃**（同一段会话的"现在"只有一个说法），幸存者为空才补 |
 | `last_active_at` | 取组内最大——这帧刚被用过，不该因为时间戳旧被当成"最久没用" |
 | `call_count` | 求和 |
@@ -91,10 +151,20 @@
 | 被归并的帧 | `status=ended`（记录留着，不删）+ `merged_into=幸存者 id`，留痕：它不是他自己结束的 |
 | **未列出的字段** | 一律**幸存者优先**，被合并方的值丢弃——将来给帧加字段不必回头改这张表 |
 
-**留谁**：当前帧优先（`active`），其次最近被激活的那帧（`last_active_at` 最大）。被归并帧只可能来自
-`push_state` 之外的老数据（线上实测某 AI 的 `group:59` 攒了三帧）——下一次写栈时自愈，无需迁移。
+**留谁**：当前帧优先（`active`），其次最近被激活的那帧（`last_active_at` 最大）。
 
-| status | 含义 | 在运行集合 |
+运行时归并只扫**链上**的帧：它兜的是并发，不是历史。旧版本每轮新建一条帧留下的存量重复
+（线上实测某 AI 的 `group:66` 攒了 167 条）由迁移 `0109_one_frame_per_context` 一次性归并：
+同一 `context_ref` 只留一帧（规则同上面这张表，环境锁、便签副本、待告知、原文尾巴、调用计数
+并进幸存者），指向被并帧的长期指针改到幸存者——闹钟的 `frame_id`、`agent_state_chain_node`——
+然后把那几条帧从 `agents.state_stack` 里删掉。此后一段会话在存储里也只有一帧，读环境
+（`read_frame_env`）只读当前帧，不再沿历史帧找。
+
+将来要放开「一个环境多个帧」（由代理决策挑醒哪一帧以提高专注度，见
+`docs/dev/plan_and_alarm.md` §七），身份键会重新设计（`context_ref` + 焦点/用途）：认帧仍走
+`frame_of` 一个口，改的是挑选规则，不动调用点；迁移没有往库里加唯一约束，放开时不必先拆。
+
+| status | 含义 | 在状态链 |
 |---|---|---|
 | `active` | 当前帧 | 是 |
 | `paused` | 被压着，还要回来 | 是 |
@@ -107,9 +177,9 @@ stateDiagram-v2
     state "active（当前帧 = 链尾）" as ACTIVE
     state "paused（被压着，还要回来）" as PAUSED
     state "suspended（会话切走了，等它回来）" as SUSPENDED
-    state "ended（已出运行集合，记录留在存储）" as ENDED
+    state "ended（已出链，记录留在存储）" as ENDED
     state "retired（待交接）" as RETIRED
-    [*] --> ACTIVE : push / ensure_active 新建
+    [*] --> ACTIVE : push / ensure_active 新建或复活
     ACTIVE --> PAUSED : 被新的 push 压下去
     ACTIVE --> SUSPENDED : 切到别的会话
     PAUSED --> ACTIVE : 切回来，或 pop 回到它
@@ -134,9 +204,9 @@ stateDiagram-v2
 
 **待交接帧（retired）的归宿**：它不会自己消失，只有两条路——
 
-1. **他交接完**：调 `finish_frame`（主路径；它只拒在跑的帧，retired 不在运行集合里，可销），销完留一条账本告知；
-2. **平台代销**：挂起积压超过 `capacity` × 2 时由 `drop_retired_overflow` 删掉最旧的那批，留一条「平台代销」条目。检查发生在**下一次写栈**（`_save`）里——
-   所以一个不再被写栈的 AI 会一直留着待交接帧；这是有意的：代销必留痕，不做后台静默清扫。
+1. **他交接完**：调 `finish_frame`（主路径；它只拒在跑的帧，retired 不在链上，可销），销完留一条账本告知；
+2. **平台代销**：挂起积压超过 `capacity` × 2 时由 `drop_retired_overflow` 删掉最旧的那批，留一条「平台代销」条目。检查发生在**下一次落库**（`_save`）里——
+   所以一个不再被落库的 AI 会一直留着待交接帧；这是有意的：代销必留痕，不做后台静默清扫。
 
 会话已消失（群解散）的帧也走这两条：`dispose_context_frames` 只是按档位把它放进挂起（retired）或直接代销（dropped），之后的归宿同上。
 
@@ -145,7 +215,7 @@ AI 可自改）。开 = 超容量的帧挂起待交接（记录留着，办完�
 关 = 平台直接代销（记录删掉，只留告知）。存量 AI 一律关——那正是改造前的行为
 （旧实现 `stack[-MAX_STACK_DEPTH:]` 直接裁掉最旧的帧），只是现在不再静默。
 
-容量闸：`agents.frame_capacity`（默认 31，AI 可自配）。运行集合帧数超限 → 按档位处置
+容量闸：`agents.frame_capacity`（默认 31，AI 可自配）。链上帧数超限 → 按档位处置
 **最久没被调用**的非当前帧（挂起待交接或平台代销）。"最久"的口径是 `last_active_at`，
 即**最后一次调用**（LLM 调用与决策调用都记），不是创建时间——长期在用的会话帧不该因为建得早被挑走。
 
@@ -159,13 +229,20 @@ AI 可自改）。开 = 超容量的帧挂起待交接（记录留着，办完�
 （`emptyfocus:{焦段 id}`，与触发规则共用一份）——解锁一起归零，下段上下文条件还在就重新提醒；
 焦段重新有人了就不再命中。以前它挂在每轮重拼的状态摘要里（每轮全价），现在走这一条。
 
-**换会话不归零 = 每个会话各记各的账**：`ensure_active_frame` 把目标会话的帧从栈里取出、再压到栈顶，
+**换会话不归零 = 每个会话各记各的账**：`ensure_active_frame` 把目标会话的帧从帧数组里取出、再拉到链尾，
 帧对象连同它自己的状态原样带走，切回来还是原值。切到另一个会话读的是**那个会话的帧**——它自己没搜过
 就是没搜过（照样算本帧第一次）。所以"不归零"说的是"切走再切回不会抹掉这个会话的进度"，
 不是"所有会话共用一个计数"。compact/clear 同样不动别的会话的帧。
 
 与"灭"相对的是另一种情形：换到一个**还没建过帧**的会话时，`make_state_frame` 建一个空帧，计数与投递
 进度自然从零开始——这不是"归零"，是新帧本来就没有过状态。
+
+**被会话消息叫回来**（2026-11-01）：以前当前帧是插件帧 / AI 自己压的帧时 `ensure_active_frame`
+不干预，于是群里的消息会在插件帧里被处理——日志按状态分桶落进插件桶、经历记成插件场景，
+而那个回合实际是在回群里的人。现在有人在会话里说话就回到那个会话的帧：插件帧改成 `suspended`
+（不结束，`enter_state` 还能回去），并在会话帧上留一条交接（来源 + 当时在做什么）。
+插件帧没有对话原文，所以交接的判据是「有东西可讲」（`handoff_pending`）而不是「有原文」：
+没有原文也渲染一行「刚才你在别处（刷 B 站）」；消费后置 `consumed`，下一轮不再重复注入。
 
 ## 环境与脏位
 
@@ -179,7 +256,7 @@ compact / clear 时才把锁定副本刷成现值、同事务清脏，这一步�
 
 ## 不在本表范围
 
-尾部读数（当前时间、世界时间）与尾部动态块（状态栈摘要、当前任务、私信会话列表）
+尾部读数（当前时间、世界时间）与尾部动态块（状态链摘要、当前任务、私信会话列表）
 每轮重拼、不进前缀，本来就没有"锁"的问题；工具错误记录、未读兜底同理。本表只管会进前缀或挂在会话上的东西。
 **通道规矩**已不在这张清单里：它进锁定前缀（`channel_rules`），归上面的「环境与脏位」管（变更只落通知、
 `apply_environment` 到解锁点才对齐）；**好友申请**也移出——一条申请落一条账本通知（只投一次）；
@@ -193,7 +270,7 @@ compact / clear 时才把锁定副本刷成现值、同事务清脏，这一步�
 2. `session` 是**比帧更长**的生命周期（跨帧的生灭：帧被弹出、被代销、被 `finish_frame` 删掉，
    进度也得留着）——这正是能力版本进度**不放进帧对象**、而放在 holder 的两个 map 里以状态为键的原因：
    帧记录是可删的（他交接完就删），进度不能挂在一个会被删的容器上；何况世界 AI 根本没有帧对象。
-   会话换出栈再换回时若按"新帧"处理，会把进度当作"新源"对齐 latest，反而使该会话前缀突变换字节。
+   会话换出链再换回时若按"新帧"处理，会把进度当作"新源"对齐 latest，反而使该会话前缀突变换字节。
 3. "压缩后再投一次"就是这么实现的：解锁清单里有 `reset_trigger_state`（复位 `tool_uses` / `delivered`）。
    所以 web_search 的"先回复、再核实"在每段新上下文的第一搜都会重新投一次——正因如此，那句话
    **不该**再写进静态协议提示词（不搜索的 AI 不该每轮背着它）。
@@ -210,7 +287,8 @@ compact / clear 时才把锁定副本刷成现值、同事务清脏，这一步�
 - 账本重写：`app/services/history/context_sync.py`（`rewrite_context`）
 - 状态帧：`app/services/agent/state_stack_service.py`（`ensure_active_frame` / `release_active_frame_notes` / `load_trigger_state` / `dispose_context_frames` / `park_frame`）
 - 世界帧（进群视界 = 激活世界专属帧；绑定时预建沉睡帧、帧内工具白名单 = 基础集 + 世界侧技能）：`app/services/world/world_frame_service.py`
-- 帧的存储/运行分界、容量闸与同会话归并：`app/utils/pure/state_stack.py`（`running` / `current` / `normalize_order` / `context_frames` / `merge_same_context` / `_overflow` / `retire_overflow` / `drop_overflow` / `drop_retired_overflow`）
+- 帧的存储/运行分界、容量闸与同会话归并：`app/utils/pure/state_stack.py`（`running` / `current` / `normalize_order` / `frame_of` / `context_frames` / `merge_same_context` / `_overflow` / `retire_overflow` / `drop_overflow` / `drop_retired_overflow`）
+- 存量重复帧的一次性归并（一个 `context_ref` 只留一帧，同步改闹钟与链节点指针）：迁移 `0109`；用例 `backend/tests/test_frame_storage_migration.py`
 - 状态链的指针算术：`app/utils/pure/state_chain.py`（`attach_tail` / `move_to_tail` / `detach` / `window` / `reconcile` / `problems` / `order_by_chain`）
 - 状态链的存储与读写：`app/models/agent_state_chain.py`；`state_stack_service` 的 `_load_chain` / `_ensure_chain` / `_chain_attach` / `_chain_move_tail` / `_chain_detach` / `_reconcile_chain` / `get_chain` / `set_chain_max_active`；迁移 `0094`
 - 状态链的用例：`backend/tests/test_state_chain.py`（纯函数 + 服务集成）

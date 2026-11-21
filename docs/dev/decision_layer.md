@@ -2,6 +2,7 @@
 
 > 状态：已落地并扩展到平台通用（2026-08-13 起为群视界阶段二；2026-09-26 摘掉"必须绑定世界"）。
 > 实现：`app/services/world/decision_skill.py`；工具：`app/tools/decision.py`；用例：`backend/tests/test_decision_layer.py`。
+> 代理 LLM 那一档（同属「决策代理」）是设计稿，见 [decision_proxy_llm.md](./decision_proxy_llm.md)。
 
 ## 1. 它解决什么
 

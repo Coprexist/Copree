@@ -43,10 +43,12 @@ services:
       APP_DISTRIBUTION: docker
       # 平台自带协议端（profile: napcat）时填这两项：插件据此把"地址 + token"标成托管字段，
       # 卡片上就不让用户填了。留空 = 用户自带协议端，字段照常显示。
+      # 只作为新建实例时的默认值，不再全局覆盖：两个 AI 各接一个协议端时各填各的
       NAPCAT_WS_URL: ${NAPCAT_WS_URL:-}
       NAPCAT_TOKEN: ${NAPCAT_TOKEN:-}
-      # 托管协议端时读它的登录二维码用（NapCat 把码写在 cache 目录里）
-      NAPCAT_CACHE: ${NAPCAT_CACHE:-/app/data/napcat/cache}
+      # 登录状态与扫码走协议端控制台接口，插件不再读它的磁盘目录
+      NAPCAT_WEBUI_URL: ${NAPCAT_WEBUI_URL:-http://napcat:6099}
+      NAPCAT_WEBUI_TOKEN: ${NAPCAT_WEBUI_TOKEN:-}
       # 向量维度必须与「表列维度 + embedding 模型输出维度」三者一致：
       # 模型列定义在 import 时读这个值（DB 里的 embedding 配置来得太晚，管不到列类型），
       # 本地 nomic-embed-text = 768，四个向量列也都是 vector(768) —— 不一致时写入会静默失败
@@ -80,7 +82,11 @@ services:
     # uvicorn 保持安全默认（--forwarded-allow-ips=127.0.0.1，不信任 X-Forwarded-For）：
     # docker 端口映射下 vite 看到的客户端源是网关 IP，无法还原真实 IP；
     # 若未来在宿主层加反向代理还原真实客户端 IP，再配 --forwarded-allow-ips 指向代理地址
-    command: sh -c "python prestart.py && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload-exclude 'data/*' --timeout-graceful-shutdown 5"
+    # init: true → tini 当 PID 1（回收 chromium/常驻世界这些子进程、转发信号）；
+    # exec → uvicorn 取代 sh 成为 tini 的直接子进程。缺了 exec，SIGTERM 打在 sh 上它不转发，
+    # Docker 等满 10 秒超时后 SIGKILL——等于每次重启都是硬杀（2026-11-07 实测 stop 阶段纯空等 10s）。
+    init: true
+    command: sh -c "python prestart.py && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload-exclude 'data/*' --timeout-graceful-shutdown 5"
 
   frontend:
     build: ./frontend
@@ -101,9 +107,10 @@ services:
   #   docker compose --profile napcat up -d
   # 一个协议端 = 一个 QQ 机器人：多 AI 各接一个 QQ 号时要各起一份实例。
   # 协议端违反 QQ 用户协议，有封号风险，建议只挂备用号。
+  # 一个服务 = 一个 QQ 号 = 一个 NapCat。接第二个号时复制这一块改名（napcat-b），
+  # 并把 NAPCAT_SLOT 换成 b：两份容器、两份数据目录、两个宿主端口，互不干扰。
   napcat:
     image: mlikiowa/napcat-docker:latest
-    container_name: napcat
     profiles: ["napcat"]
     restart: always
     # 日志同时落一份到挂载目录：NapCat 只把「二维码解码URL」打进 stdout，
@@ -113,10 +120,11 @@ services:
       NAPCAT_UID: "0"
       NAPCAT_GID: "0"
     volumes:
-      - ${DATA_DIR:-./data}/napcat/config:/app/napcat/config
-      - ${DATA_DIR:-./data}/napcat/qq:/app/.config/QQ
-      # 登录二维码给后端读（卡片直接把码画出来，用户不必去找 WebUI）
-      - ${DATA_DIR:-./data}/napcat/cache:/app/napcat/cache
+      # 按槽位分开：两个槽位同时起时，QQ 数据目录与配置不能互相覆盖
+      - ${DATA_DIR:-./data}/napcat/${NAPCAT_SLOT:-a}/config:/app/napcat/config
+      - ${DATA_DIR:-./data}/napcat/${NAPCAT_SLOT:-a}/qq:/app/.config/QQ
+      - ${DATA_DIR:-./data}/napcat/${NAPCAT_SLOT:-a}/cache:/app/napcat/cache
     ports:
-      # WebUI：扫码登录与网络配置用；登录完之后可以不再暴露
-      - "6099:6099"
+      # 只绑回环：控制台由平台反代出去，不需要暴露到公网。
+      # 第二个槽位换个宿主端口即可（NAPCAT_WEBUI_PORT=6199）。
+      - "127.0.0.1:${NAPCAT_WEBUI_PORT:-6099}:6099"

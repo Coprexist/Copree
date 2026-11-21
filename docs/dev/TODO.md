@@ -94,6 +94,133 @@
 
 ---
 
+## 🧾 帧清单与快照块的结构债（2026-11-01 记，未做）
+
+帧清单（`## 🗂 你手上的状态帧`）已按「快照 + 增量条目」落地，能跑、有测试，但有几处是折中：
+
+- [ ] **快照设施没有抽出来**：记忆索引走 `capability_versions` 版本链，帧清单是帧上的
+      `roster_locked` / `roster_notified` 手写差集——同一形状两套实现。应抽一个「快照块」设施
+      （渲染 / 差集 / 解锁点重置 / 条目投递），两边都接它。这条最值钱，也最容易在改记忆索引时炸。
+- [ ] **`dormant` 是 status 之外的并列字段**：沉睡本该是状态枚举的一员
+      （`active` / `suspended` / `ended` / `dormant` / `retired`），现在每个读 status 的地方
+      都得记得还有 `dormant` 这个位。要改得连 `is_running` / `normalize_order` / 链对账一起动，
+      并给存量帧做一次补齐，属于单独一档活。
+- [ ] **清单仍在 `build_messages` 里写库**：`frame_roster` 一次调用做四件事（读栈、渲染、
+      算差集、落条目）。功能是对的，但副作用藏在"读请求体"里，不便测也不便推理。干净的做法是
+      开轮前显式 sync 一次、构建时只读——但要覆盖群聊 / 私信 / 闹钟 / 世界四条开轮路径，
+      漏一条那一轮就没清单。
+- [ ] **段日志靠"执行前后比帧 id"侦测换帧**：真正干净的是在 `_save`（唯一写入点）埋钩子，
+      但"当时的 messages"只有 executor 手里有。现状可接受，理由写在 `segment_log` 模块头。
+- [ ] **切换行与真实调用共用桶配额**：一个桶只留 N 条，切得勤的那段会把真实调用挤掉。
+
+---
+
+## 🔲 代理 LLM 门卫（2026-11-02，骨架已进工作区，未提交）
+
+> 设计稿与全部口径：[decision_proxy_llm.md](./decision_proxy_llm.md)。
+
+- [x] 极简上下文：槽位定为**派生上下文**（不进状态栈），`services/brain/proxy_judge.py::build_context`
+- [x] 替换 `ai/decider.py` Gate 4/5：前置 Gate 0–3 与 @/公告/特别关心不动；默认关
+- [x] 自动停用：单一旋钮 `PROXY_MIN_SAVING_RATIO`（0.06，94% 由它推出）+ 样本 10 / 窗口 50，全走配置
+- [x] 同一段上下文内被触发 >3 次 → 递一句建议：`services/brain/frame_reminder.py`，投递标记在帧上 `delivered`，解锁复位
+- [x] **最近对话**：5 分钟内、最多 10 条，取小；只取 `kind=message`；去掉账本里已有的触发消息
+- [ ] **§5 状态帧递规则**：帧给代理递个性化规则、投递回执、主体能看全文、可改可撤回
+- [ ] 实测前缀缓存：同一 AI 换群触发时 `cached_tokens` 占比是否随拼装顺序命中
+- [ ] 影子已开（`.env` 里 `ENABLED=1`、`ENFORCE=0`），攒够样本后统计正确拦截 / 误杀，再开 enforce
+- [ ] 判定表旁路：`proxy_judgements` 目前只有写入与统计，出一份按帧/按天的查询（看真实拦截率）
+
+## 🧊 前缀快照的下一步（2026-11-14 记，未做）
+
+- [ ] **命中时跳过 tools 段渲染**：现在每次唤醒都照跑各段构建（探测与渲染一条路径，零漂移），
+  命中快照时这些结果被丢弃，净增约 1 次查询（表情包源登记）。若峰值 Postgres 吃紧，
+  可只跳最贵的 tools 段（`_is_delay_reply_allowed` + `frame_tool_gate` + 表情包 latest，约 3 次），
+  届时需把表情包源的版本登记挪到包启停处（否则加包不再发通知）。权衡见
+  `docs/dev/capability_lazy_loading.md`「锁的是发出去的字节」。
+- [ ] **持久化前的首轮**：`cap_effective_prefix` 要等某个会话下一次真实调用才落第一条，
+  部署后 24 小时内看一次填充率（`select count(*) from agents where cap_effective_prefix <> '{}'::jsonb`）。
+
+## 🎙 语音（2026-11-14 起）
+
+- [x] **AI 语音自带文稿**（2026-11-14 已落地）：文稿写进 **`file_metadata.transcript`**（唯一来源，
+  迁移 `0113`；AI 语音 = 它念的 text），消息快照只留 `file_id`——文稿会变，塞进 N 条消息就会
+  N 份不一致、转发一次还会丢。读取按 id 补：账本（`context_sync._transcripts_of` +
+  `with_transcripts`，渲染成 `[语音] 那句话`，截 200 字）、前端语音条（`GET /fs/transcripts`，
+  只回读得到的、拿到就缓存）、转发（按元数据重建后同样按 id 补）。写入只有一处
+  `file_service.set_transcript()`——ASR 将来也走它。用例
+  `test_with_transcripts_fills_attachment_text` / `test_attachment_marks_show_voice_transcript`。
+  人的语音仍需要下面的 ASR。
+- [ ] **语音转文字（ASR）——第二步**：口径已定，待实现。
+  - **配置**：`provider_presets` 增 `kind="asr"`，与 `llm` / `voice` 同一份清单、同一套
+    Fernet Key、「检测通过才启用」的门控（照 `voice_probe` 的模式）。**默认关**，开关文案要写明
+    「语音会上传到第三方」。候选：OpenAI `whisper-1` / `gpt-4o-transcribe`、阿里 Paraformer、
+    腾讯一句话识别、SiliconFlow 托管的 whisper。
+  - **产物**：`attachments[i].transcript`，**不建新表**——附件快照本来就是消息的一部分，
+    老消息没有这个字段就是没有，不需要迁移。
+  - **时机**：后端**异步转写**（上传完、或 QQ 入站后入队），完成后经现有 WS 广播把 transcript
+    补到那条消息上，前端就地更新。站内录音与 QQ 语音走**同一条通路**，不写两份。
+  - **消费方**：① 前端语音条下面显示可折叠小字；② `utils/multimodal.attachment_marks()` 在音频
+    标记里带上它——只做 UI 等于人看得见、AI 仍听不见。
+  - **不做**：浏览器 `SpeechRecognition`（只在 Chrome/Edge，音频发到 Google 服务器，国内不可用）。
+  - **备选**：本地 faster-whisper / whisper.cpp 作为「绝不出网」开关；代价是模型 145MB~480MB，
+    CPU 上大约 5 倍实时。
+  - **已知误差**：中文标点与专有名词会有错，文案按「转写仅供参考」写，不要伪装成逐字稿。
+
+## 🔧 待收尾：卡片 / 表单的平台化（2026-11-14）
+
+- [x] 同档位卡片已收口（2026-11-14）：按"bg-surface + rounded-card + 单色描边"扫掉 67 处 + 我的 AI 小卡 + 集市条目卡。
+      剩下的 `bg-surface border border-border` 是 8px 小面板与带 `shadow-2xl` 的弹窗壳，**故意不动**：
+      弹窗自己已有投影，再挂 `.card` 会把 `shadow-2xl` 压掉（组件层在后，同属性后者胜）。
+      真要继续，先给 8px 面板补一个 `.card-sm`（只换圆角、不换投影）。
+- [ ] **约 30 处手写输入框**（`bg-elevated border … px-3 py-2`）→ `.field`，逐处替换。
+- [ ] **两套状态配色并存**：`constants.ts` 里 `STATE_BADGE_COLORS` / `STATE_TAG_COLORS` 与新的
+      `STATE_CHIP` 三套语义重复；确认没人用旧的之后删掉。
+
+## 🎨 待办：内置更多开源表情素材（2026-11-15）
+
+- [ ] **内置 Twemoji 表情包**（CC-BY 4.0，需署名）：沿用 \`scripts/render_emoji.py\` 的渲染管线
+      （128×128 透明底 PNG），打包成第二个内置包（暂名「表情·Twemoji」），包信息里写来源与许可链接。
+- [ ] **不内置初音未来等角色表情**：Crypton 的 Piapro 角色许可只覆盖个人非商用创作，
+      把素材打进对外分发的产品需另行取得授权；官方 LINE 表情禁止再分发，第三方面板站
+      （emoji.gg 等）的图是用户上传、上传者不拥有版权。角色表情一律走「用户自制包」。
+- [ ] 备选素材（都要署名）：Fluent Emoji（MIT，质感偏微软）；OpenMoji（CC BY-SA 4.0，
+      与我们的包分发方式有冲突，暂不接）。
+
+## 🔌 QQ NapCat 通道：能力扩展（2026-11-17）
+
+> 调研与判据已归档：`docs/dev/napcat_capabilities.md`（接什么、怎么分层）、
+> `docs/dev/napcat_account_risk.md`（被踢怎么判、怎么救、养号规则）。
+
+- [x] **出站 CQ 码转义**（安全修复）：模型原文里的 `[CQ:…]` 一律转成字面量。
+      出站 `message` 是普通字符串，协议端会把 `[CQ:at,qq=all]` 当指令执行——
+      这是提示词注入直达外部动作的口子。平台自己的 @ 在转义之后才由 `_translate_mentions` 拼上。
+- [ ] **入站感知**（纯读，零副作用）：`notice` 全量（撤回/戳一戳/表情回应/入退群/群文件/自己被踢）
+      + `reply` 段还原引用（现在直接跳过）+ `get_group_member_info` / `get_msg` / `get_forward_msg` 只读工具。
+      **notice 落库但不唤醒**（否则群成员进进出出就烧完额度）。
+- [ ] **表达力**：引用回复、图片/表情出站、`set_msg_emoji_like` 表情回应、`send_poke` **只回戳不主动戳**、
+      `delete_msg` 撤回自己的错话（限自己 + 2 分钟窗，需先接住 `_send_reply` 丢掉的 message_id）。
+- [ ] **群管理整层先不接**：禁言/踢人/公告/头衔/设精/加好友审批都是「改外部世界状态」，
+      平台现成的 `request_approval()` 只在 world 作用域，群聊回合没有确认通道。
+      没有闸门就放行，AI 迟早把别人的群搞乱。
+- [x] **不接（已定）**：`send_like` 点赞（刷赞是最高危行为）、`@全体`、伪造 `node`（可冒充他人发言）、
+      改头像资料、`set_group_leave(is_dismiss)` 解散群。
+
+## 🗂 消息存储与附件清理（2026-11-18）
+
+设计与全部决策见 [message_storage_and_cleanup.md](./message_storage_and_cleanup.md)。要点：
+
+- [x] 名词统一 + 误会点清理（`file_quota_mb` 显示口径、`STORAGE_QUOTA_PER_AI_MB` 落字段、`_REF_RANK` 过时注释等 8 处）
+- [x] 四个字段：`mutable`、`archived_to_message_at`、`last_referenced_at`、`physical_key`（迁移 0120 + 存量回填）
+- [ ] 计量按 `physical_key` 去重（修硬链接重复计量 + 清原附件不释放磁盘）
+      └ 口径已定：只算「有键＝字节还在」的行。开发库实测虚高主因不是硬链接（只剩 1 组），而是同路径历史版本 29 行 8.0MB，见设计 §5.7.1
+- [ ] `/fs/list` 去掉 AI 文件追加、排除已归档；`/user/storage` 收窄为「我的文件用量」
+- [ ] 存储页三块并列（我的文件 / 我在对话里产生的 / 浏览过的）+ 墓碑渲染
+- [ ] 日写入限额 + 撤回回收附件
+- [ ] 清理梯度 L1a-L6 + 占用者排序 + 审计保留下限约束
+- [ ] 消息三点菜单：转发、收进我的文件
+- [ ] 性能落地：索引清单 + 计量单条去重 + 候选一次分桶 + 批处理（文档 §14）
+
+前置待决：群聊缺 `last_message_at`；磁盘警戒线读法；L6 通知措辞；撤回回收的原子性；内容寻址的引入成本。
+
 ## 📌 备注
 
 - 后端遗留 bug 已修复（2026-09-13）：`/chat/messages` 的 dm 分支硬编码 `user_id=0`、`/chat/message` 签名缺 `dm_session_id` —— 两项都随**删除重复入口**一并消失。群消息现在只有一个入口 `GET/POST /gm/{group_id}/messages`，与 `/dm/{session_id}/messages` 同形（带认证、游标分页、返回列表）。插件已改用它，不再需要绕开。

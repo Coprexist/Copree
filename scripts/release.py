@@ -206,6 +206,12 @@ def cmd_archive(args: argparse.Namespace) -> int:
     if "## [未发布]" not in text:
         print(f"{_BAD} CHANGELOG 里没有 ## [未发布]")
         return 1
+    # 归档前先让 CHANGELOG 自己校验结构：分节重复、空节、顺序错了，归档进历史后更难改
+    gate = _run(sys.executable, str(ROOT / "scripts" / "changelog.py"), "check", "--quiet")
+    if gate.returncode != 0:
+        print(f"{_BAD} CHANGELOG 结构有问题，先跑 scripts/changelog.py check 修掉再归档：")
+        print((gate.stdout or gate.stderr).strip()[:800])
+        return 1
     today = args.date or dt.date.today().isoformat()
     text = text.replace("## [未发布]", f"## [未发布]\n\n## [v{version}] - {today}", 1)
     CHANGELOG.write_text(text, encoding="utf-8")
