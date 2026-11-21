@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useT, useLang } from '../i18n/I18nContext'
 import { api } from '../api/client'
-import { Dialog, PageShell } from '../components/ui'
+import { Dialog, PageShell, SecretInput } from '../components/ui'
 import ExternalLinkSafe from '../components/ExternalLinkSafe'
 import { AI_TYPE_LABEL } from '../constants'
 import { fmtTokenNum, cacheHitRatePct, formatFileSize } from '../utils/format'
@@ -16,9 +16,10 @@ import {
   User, Settings, LogOut, Shield,
   Gift, BarChart3, Bot, ChevronRight, Edit3,
   Loader2, Check, X, ArrowRight, Activity,
-  FileText, HardDrive, Camera, Users, MessageSquare, Share2, Github
+  FileText, HardDrive, Camera, Users, MessageSquare, Share2, Github, QrCode
 } from 'lucide-react'
 import AvatarPickerModal from '../components/AvatarPickerModal'
+import { avatarGradient, avatarShadowColor } from '../utils/avatar'
 
 interface AgentBrief {
   id: number
@@ -27,6 +28,21 @@ interface AgentBrief {
   chat_model: string | null
   avatar_url: string | null
   ai_type: string
+}
+
+/** 一个 AI 在通道侧挂着的号（"我的"页只读这份，配置仍然在 AI 页面里做） */
+interface ChannelAccount {
+  agent_id: number
+  agent_name: string
+  agent_avatar: string | null
+  plugin_id: string
+  instance: string
+  label: string
+  uin: string
+  nick: string
+  avatar: string
+  logged_in: boolean
+  online: boolean
 }
 
 interface UsageOverview {
@@ -71,6 +87,13 @@ export default function MePage() {
   const [storage, setStorage] = useState<{ total_used: number; total_files: number; quota_mb: number; usage_percent: number } | null>(null)
   const [storageLoading, setStorageLoading] = useState(true)
   const [stats, setStats] = useState<{ ai_count: number; friend_count: number; group_count: number; storage_used: number } | null>(null)
+
+  // 我的账号（哪个 AI 挂着哪个 QQ）
+  const [accounts, setAccounts] = useState<ChannelAccount[]>([])
+  const [accountBusy, setAccountBusy] = useState(false)
+  const [accountError, setAccountError] = useState('')
+  const [qrAccount, setQrAccount] = useState<ChannelAccount | null>(null)
+  const [qrPng, setQrPng] = useState('')
 
   // 编辑资料弹窗
   const [showEditProfile, setShowEditProfile] = useState(false)
@@ -126,6 +149,28 @@ export default function MePage() {
     } catch { /* ignore */ }
   }
 
+  const loadAccounts = () => api.get<{ accounts: ChannelAccount[] }>('/me/channel-accounts')
+    .then(r => setAccounts(Array.isArray(r?.accounts) ? r.accounts : []))
+    .catch(() => {})          // 没配过通道就是空列表，不是错误
+
+  /** 重新登录：先让协议端用本地登录态把号拉回来，拉不回来再摆一张码出来 */
+  const relogin = async (a: ChannelAccount) => {
+    setAccountBusy(true); setAccountError('')
+    try {
+      const r = await api.post<any>(`/me/agents/${a.agent_id}/channels/${a.plugin_id}/relogin`, {})
+      if (r?.logged_in) {
+        setQrAccount(null); setQrPng('')
+        await loadAccounts()
+        return
+      }
+      setQrAccount(a); setQrPng(r?.qr_png || '')
+    } catch (e: any) {
+      setAccountError(e?.message || String(e))
+    } finally {
+      setAccountBusy(false)
+    }
+  }
+
   // 支持 /me?bind=github 从商城页跳转过来直接打开绑定弹窗
   useEffect(() => {
     if (new URLSearchParams(window.location.search).get('bind') === 'github') {
@@ -147,6 +192,8 @@ export default function MePage() {
     api.get<{ bound: boolean; username: string | null }>('/market/github/bind').then((r) => {
       setGhBind(r || { bound: false, username: null })
     }).catch(() => {})
+
+    loadAccounts()
 
     // 加载我的 AI 列表
     api.get<AgentBrief[]>('/agents').then(r => {
@@ -422,6 +469,49 @@ export default function MePage() {
         </div>
       </div>
 
+      {/* ====== 我的账号（哪个 AI 挂着哪个 QQ） ====== */}
+      {accounts.length > 0 && (
+        <div className="bg-surface rounded-dialog border border-border p-5">
+          <h3 className="text-sm font-semibold text-textPrimary flex items-center gap-2 mb-3">
+            <QrCode size={16} className="text-primary-400" /> {t('me:channelAccounts')}
+          </h3>
+          <div className="space-y-2">
+            {accounts.map(a => (
+              <div key={a.instance} className="flex items-center gap-3 bg-canvas rounded-card border border-border px-3 py-2.5">
+                {a.avatar ? (
+                  <img src={a.avatar} className="w-9 h-9 rounded-full object-cover shrink-0" />
+                ) : (
+                  <div className="w-9 h-9 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center shrink-0">
+                    <QrCode size={15} className="text-white" />
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-sm text-textPrimary truncate">
+                      {a.nick || (a.uin ? `QQ ${a.uin}` : a.agent_name)}
+                    </span>
+                    <span className={a.logged_in && a.online ? 'chip chip-mint shrink-0' : 'chip chip-muted shrink-0'}>
+                      {a.logged_in && a.online ? t('me:channelAccountOnline') : t('me:channelAccountOffline')}
+                    </span>
+                  </div>
+                  <div className="text-3xs text-textMuted truncate mt-0.5">
+                    {a.uin ? `QQ ${a.uin} · ` : ''}{a.label} · {a.agent_name}
+                  </div>
+                </div>
+                <button
+                  onClick={() => relogin(a)}
+                  disabled={accountBusy}
+                  className="text-xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 shrink-0 disabled:opacity-50"
+                >
+                  {t('me:channelAccountRelogin')}
+                </button>
+              </div>
+            ))}
+          </div>
+          {accountError && <p className="text-3xs text-rose-400 mt-2">{accountError}</p>}
+        </div>
+      )}
+
       {/* ====== 我的 AI ====== */}
       <div className="bg-surface rounded-dialog border border-border p-5">
         <div className="flex items-center justify-between mb-3">
@@ -440,22 +530,22 @@ export default function MePage() {
               <Link
                 key={a.id}
                 to={`/agents/${a.id}`}
-                className="shrink-0 w-28 bg-canvas rounded-card p-3 border border-border hover:border-primary-400/30 transition-colors text-center"
+                className="card card-interactive shrink-0 w-28 p-3 text-center"
               >
                 {a.avatar_url ? (
-                  <div className="relative w-10 h-10 rounded-full mx-auto mb-1.5 shadow shadow-primary-500/15 overflow-hidden">
-                    <div className="absolute inset-px rounded-full bg-gradient-to-br from-primary-500 to-primary-700/30" />
+                  <div className={`relative w-10 h-10 rounded-full mx-auto mb-1.5 shadow overflow-hidden ${avatarShadowColor('ai')}`}>
+                    <div className={`absolute inset-px rounded-full ${avatarGradient('ai', false, true)}`} />
                     <img src={a.avatar_url} className="relative w-full h-full rounded-full object-cover" />
                   </div>
                 ) : (
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center mx-auto mb-1.5 shadow shadow-primary-500/15">
+                  <div className={`w-10 h-10 rounded-full flex items-center justify-center mx-auto mb-1.5 shadow ${avatarGradient('ai', false, false)} ${avatarShadowColor('ai')}`}>
                     <Bot size={18} className="text-white" />
                   </div>
                 )}
                 <div className="text-xs font-medium text-textPrimary truncate">{a.name}</div>
                 <div className="text-3xs text-textMuted mt-0.5">{a.state === 'active' ? t('me:stateActive') : a.state === 'dnd' ? t('me:stateDnd') : t('me:stateOffline')}</div>
                 {(AI_TYPE_LABEL[a.ai_type]) && (
-                  <span className={`inline-block text-[9px] px-1.5 py-0.5 rounded-full mt-1 font-medium ${AI_TYPE_LABEL[a.ai_type].cls}`}>
+                  <span className={'chip mt-1 ' + AI_TYPE_LABEL[a.ai_type].cls}>
                     {t(AI_TYPE_LABEL[a.ai_type].key)}
                   </span>
                 )}
@@ -539,7 +629,8 @@ export default function MePage() {
         <h3 className="text-sm font-semibold text-textPrimary mb-3 flex items-center gap-2">
           <Gift size={16} className="text-primary-400" /> {t('me:redeemSection')}
         </h3>
-        <div className="flex gap-2">
+        {/* 输入框与按钮同高（都是 2rem），否则按钮会矮一截、看着没对齐 */}
+        <div className="flex items-center gap-2">
           <input
             type="text"
             value={redeemCode}
@@ -598,6 +689,34 @@ export default function MePage() {
       >
         <LogOut size={14} /> {t('me:logout')}
       </button>
+
+      {/* ====== 扫码登录弹窗（重新登录拉不回来时才有） ====== */}
+      {qrAccount && (
+        <Dialog onClose={() => { setQrAccount(null); setQrPng('') }} className="flex items-center justify-center p-4">
+          <div className="bg-surface border border-border rounded-dialog p-6 w-full max-w-xs shadow-2xl text-center" onClick={e => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-textPrimary mb-1 flex items-center justify-center gap-2">
+              <QrCode size={15} className="text-primary-400" /> {t('me:channelAccountQrTitle')}
+            </h3>
+            <p className="text-3xs text-textMuted mb-3 truncate">{qrAccount.nick || qrAccount.uin} · {qrAccount.agent_name}</p>
+            {qrPng ? (
+              <img src={`data:image/png;base64,${qrPng}`} className="w-48 h-48 mx-auto rounded-card bg-white p-1" />
+            ) : (
+              <div className="w-48 h-48 mx-auto flex items-center justify-center">
+                <Loader2 size={20} className="animate-spin text-textMuted" />
+              </div>
+            )}
+            <p className="text-3xs text-textMuted mt-3">{t('me:channelAccountQrHint')}</p>
+            {accountError && <p className="text-3xs text-rose-400 mt-1">{accountError}</p>}
+            <button
+              onClick={() => relogin(qrAccount)}
+              disabled={accountBusy}
+              className="mt-3 text-xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 disabled:opacity-50"
+            >
+              {accountBusy ? t('me:channelAccountPulling') : t('me:channelAccountQrNew')}
+            </button>
+          </div>
+        </Dialog>
+      )}
 
       {/* ====== 编辑资料弹窗 ====== */}
       {showEditProfile && (
@@ -667,12 +786,11 @@ export default function MePage() {
               </div>
               <div>
                 <label className="block text-xs font-medium text-textSecondary mb-1">{t('me:passwordField')}</label>
-                <input
-                  type="password"
+                <SecretInput
                   value={editPassword}
                   onChange={e => setEditPassword(e.target.value)}
                   placeholder={t('me:passwordMinHint')}
-                  className="w-full px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                  wrapperClassName="w-full"
                 />
               </div>
               <button
@@ -767,13 +885,12 @@ export default function MePage() {
                   <label className="block text-xs text-textSecondary">GitHub Token（classic 或 fine-grained，需仓库写权限）</label>
                   <ExternalLinkSafe href="https://github.com/settings/tokens/new" className="text-3xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 transition-colors shrink-0">去 GitHub 生成 token →</ExternalLinkSafe>
                 </div>
-                <input
-                  type="password"
+                <SecretInput
                   value={ghToken}
                   onChange={e => setGhToken(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter') doBindGithub() }}
                   placeholder="ghp_… / github_pat_…"
-                  className="w-full px-3 py-2 rounded-card border border-border bg-canvas text-textPrimary text-sm focus:outline-none focus:ring-2 focus:ring-primary-500/60"
+                  wrapperClassName="w-full"
                 />
               </div>
               {ghError && (

@@ -4,7 +4,7 @@ import { useT } from '../../../i18n/I18nContext'
 import { getApiKeyUrl } from '../../../utils/providers'
 import { Key, Plus, Trash2, ToggleLeft, ToggleRight, Loader2, BarChart3, X } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts'
-import { Dialog } from '../../../components/ui'
+import { Dialog, SecretInput } from '../../../components/ui'
 
 interface PoolKey {
   id: number
@@ -111,7 +111,7 @@ export default function ApiKeyPoolTab() {
         </div>
         <button
           onClick={() => setShowAdd(true)}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-primary-500 text-white rounded-card hover:bg-primary-600 text-xs font-medium transition-colors"
+          className="btn btn-md btn-primary gap-1.5"
         >
           <Plus size={14} /> {t('admin:addKey')}
         </button>
@@ -119,7 +119,7 @@ export default function ApiKeyPoolTab() {
 
       {/* Key 列表 */}
       {keys.length === 0 ? (
-        <div className="bg-surface rounded-card border border-border p-10 text-center">
+ <div className="card p-10 text-center">
           <Key size={32} className="mx-auto mb-3 text-textMuted" />
           <p className="text-sm text-textSecondary">{t('admin:noApiKeys')}</p>
           <p className="text-xs text-textMuted mt-1">{t('admin:noKeysDesc')}</p>
@@ -131,7 +131,7 @@ export default function ApiKeyPoolTab() {
           </button>
         </div>
       ) : (
-        <div className="bg-surface rounded-card border border-border overflow-x-auto">
+ <div className="card overflow-x-auto">
           <table className="w-full text-sm text-textPrimary">
             <thead>
               <tr className="border-b border-border bg-canvas">
@@ -158,7 +158,9 @@ export default function ApiKeyPoolTab() {
                         : t('admin:keyModelsUnset')}
                     </div>
                   </td>
-                  <td className="py-2.5 px-3 text-xs text-textMuted font-mono max-w-[160px] truncate">{k.api_base_url}</td>
+                  <td className="py-2.5 px-3 text-xs text-textMuted font-mono align-top">
+                    <div className="whitespace-normal break-all max-w-[240px]">{k.api_base_url}</div>
+                  </td>
                   <td className="py-2.5 px-3 text-xs text-textMuted font-mono">
                     <span title={t('admin:keyEncryptedHint')}>{k.api_key_preview || '—'}</span>
                   </td>
@@ -325,7 +327,7 @@ function AddPoolKeyModal({ onClose, onSaved, editing }: {
             <label className="block text-xs font-medium mb-1 text-textSecondary">{t('admin:keyDefaultModel')}</label>
             <select
               value={defaultModel} onChange={(e) => setDefaultModel(e.target.value)}
-              className="w-full px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+              className="field w-full"
             >
               <option value="">{t('admin:keyDefaultModelAuto')}</option>
               {parsedModels.map(m => <option key={m} value={m}>{m}</option>)}
@@ -345,10 +347,9 @@ function AddPoolKeyModal({ onClose, onSaved, editing }: {
                 </a>
               )}
             </label>
-            <input
-              type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)}
+            <SecretInput value={apiKey} onChange={(e) => setApiKey(e.target.value)}
               placeholder="sk-..."
-              className="w-full px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+              wrapperClassName="w-full"
             />
           </div>
           <div>
@@ -424,7 +425,7 @@ function KeyStatsModal({ keyId, onClose }: { keyId: number; onClose: () => void 
             <select
               value={days}
               onChange={(e) => handleDaysChange(parseInt(e.target.value))}
-              className="px-2 py-1 rounded-control border border-border bg-canvas text-xs text-textPrimary"
+              className="field field-sm field-inline"
             >
               <option value={7}>{t('admin:lastNDays').replace('{n}', '7')}</option>
               <option value={30}>{t('admin:lastNDays').replace('{n}', '30')}</option>

@@ -39,3 +39,12 @@ export function parseWsUrl(url: string): { protocol: 'wss' | 'ws'; host: string 
   if (!m) return null
   return { protocol: m[1] as 'wss' | 'ws', host: m[2] }
 }
+
+/** 是否 iOS / iPadOS：滚动指示器是系统 overlay，CSS 藏不掉，再自绘就是滚动时并排两条 */
+export function isAppleTouch(): boolean {
+  if (typeof navigator === 'undefined') return false
+  const ua = navigator.userAgent || ''
+  if (/iPad|iPhone|iPod/.test(ua)) return true
+  // iPadOS 13 起桌面模式会伪装成 Macintosh，只能靠触摸点数认
+  return navigator.platform === 'MacIntel' && (navigator.maxTouchPoints || 0) > 1
+}

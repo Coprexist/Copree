@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { AlertTriangle, CheckCircle2, ExternalLink, KeyRound, Loader2, MessageSquare, Plug, UserCheck } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, ExternalLink, History, KeyRound, Loader2, MessageSquare, Plug, QrCode, RefreshCw, UserCheck } from 'lucide-react'
 import { api } from '../../api/client'
 import { useLang, useT } from '../../i18n/I18nContext'
 import type { Lang } from '../../i18n/languages'
-import { Button, Card, Input, Select, confirmAsync } from '../ui'
+import { Button, Card, Input, SecretInput, Select, UnderlineTabs, confirmAsync, usePaged } from '../ui'
 import ChannelTokenBudgetCard from './ChannelTokenBudgetCard'
 
 /**
@@ -14,6 +14,12 @@ import ChannelTokenBudgetCard from './ChannelTokenBudgetCard'
  * （target_agent 由平台填、copree_group_id 选落点群、dm_policy 选私聊策略）。
  * 这样 NapCat 那种完全不同的凭据（ws_url / access_token）不用在平台里再加一套代码。
  */
+interface ShowIfCond {
+  field: string
+  equals?: string
+  in?: string[]
+}
+
 interface FieldSpec {
   type?: string
   title?: string
@@ -29,6 +35,30 @@ interface FieldSpec {
   credential?: boolean
   /** 枚举字段：插件给选项，卡片统一渲染成下拉（不给就按普通文本框） */
   options?: { value: string; label?: string; label_en?: string; label_ja?: string }[]
+  /** 插件声明的默认值：没保存过的新字段按它预填（否则新设置项会以空框/错勾状态示人） */
+  default?: string | number | boolean | null
+  /** 联动显隐由插件声明：只有依赖字段满足条件时才画这个输入框（平台不写死字段名）。
+   *  给数组表示"全都要满足"（例如：开关打开 且 周期是每天/每周）。 */
+  show_if?: ShowIfCond | ShowIfCond[]
+
+  /**
+   * 行内分组：同一个 key 的字段画在同一行里，读起来像一句话
+   * （「额度自动重置 [✓ 开启] [每天▾] [04:00] 重置」）。
+   * label / hint / prefix / suffix 由组内任意成员声明，平台取第一个非空的。
+   */
+  /** 分块：同一个 key 的字段落在同一个设置块里（块头由组内任意成员声明） */
+  section?: { key: string; title: string; title_en?: string; title_ja?: string }
+  inline?: {
+    key: string
+    label?: string
+    label_en?: string
+    label_ja?: string
+    hint?: string
+    hint_en?: string
+    hint_ja?: string
+    prefix?: string
+    suffix?: string
+  }
 }
 
 interface GuideStep {
@@ -118,6 +148,129 @@ function Row({ label, hint, children }: { label: string; hint?: ReactNode; child
   )
 }
 
+/** 一次给一页的条数：待批准的行高一点（带操作按钮），已批准/已拉黑是细行，能多放几条 */
+const PAIR_PAGE = 5
+const GRANT_PAGE = 6
+const RECENT_PAGE = 4
+
+interface PairRow { id: number; origin: string; nickname: string }
+
+/** 插件给的三语展示文案；参数项可带 fmt（值的人话格式，{} 是占位） */
+interface TrailText { text: string; text_en?: string; text_ja?: string; fmt?: string; fmt_en?: string; fmt_ja?: string }
+
+/**
+ * 按插件声明的 section 分组：没有分块的字段平铺在上（落点、白名单这类每张卡都先要看的），
+ * 有分块的按声明顺序生成页签。分块顺序 = 字段在 schema 里第一次出现的顺序，不是字典序。
+ */
+function groupBySection(fields: [string, FieldSpec][], lang: Lang) {
+  const plain: [string, FieldSpec][] = []
+  const tabs: { key: string; label: string }[] = []
+  const buckets: Record<string, [string, FieldSpec][]> = {}
+  for (const [key, spec] of fields) {
+    const sectionKey = spec.section?.key
+    if (!sectionKey) {
+      plain.push([key, spec])
+      continue
+    }
+    if (!buckets[sectionKey]) {
+      buckets[sectionKey] = []
+      tabs.push({
+        key: sectionKey,
+        label: pick(lang, spec.section!.title, spec.section!.title_en, spec.section!.title_ja) || sectionKey,
+      })
+    }
+    buckets[sectionKey].push([key, spec])
+  }
+  return { plain, tabs, buckets }
+}
+
+/**
+ * 配对：待批准 / 已批准 / 已拉黑。
+ *
+ * 三份名单都会变长（拉一次群能同时进来一串人），所以一律分页——列表不铺开，卡片就
+ * 不会被十几行顶成一整屏。页码存在这里，主卡只管把数据和动作递进来。
+ * 行也压成一行（昵称与配对码并排），一页 5 条正好是一屏之内的高度。
+ */
+function PairingBlock({ pending, approved, blocked, busy, approve, approveByCode, block, forget }: {
+  pending: { id: number; origin: string; nickname: string; code: string }[]
+  approved: PairRow[]
+  blocked: PairRow[]
+  busy: string
+  approve: (id: number) => void
+  approveByCode: (code: string) => void
+  block: (origin: string) => void
+  forget: (origin: string, name: string) => void
+}) {
+  const t = useT()
+  const [code, setCode] = useState('')
+  // 已批准与已拉黑合成一份名单：行只差一个圆点颜色和右侧动作
+  const grants = [
+    ...approved.map(a => ({ ...a, kind: 'approved' as const })),
+    ...blocked.map(b => ({ ...b, kind: 'blocked' as const })),
+  ]
+  const pendingList = usePaged(pending, PAIR_PAGE)
+  const grantList = usePaged(grants, GRANT_PAGE)
+  return (
+    <>
+      {pending.length === 0 ? (
+        <div className="text-3xs text-textMuted">{t('tool:channel.pendingEmpty')}</div>
+      ) : (
+        <div className="space-y-1.5">
+          {pendingList.rows.map(p => (
+            <div key={p.id} className="grid grid-cols-[1fr_auto_auto] items-center gap-2 bg-canvas border border-border rounded-control px-2.5 py-1.5">
+              {/* 一个人一行：昵称与配对码并排，不再各占一行 */}
+              <div className="flex items-baseline gap-2 min-w-0">
+                <span className="text-xs text-textPrimary truncate">{p.nickname || t('tool:channel.unknownUser')}</span>
+                <span className="text-3xs text-textMuted truncate">{t('tool:channel.codeLabel', { code: p.code, origin: tail(p.origin) })}</span>
+              </div>
+              <Button size="xs" variant="primary" loading={busy === 'pair' + p.id} onClick={() => approve(p.id)}>{t('tool:channel.approve')}</Button>
+              <Button size="xs" variant="ghost" onClick={() => block(p.origin)}>{t('tool:channel.block')}</Button>
+            </div>
+          ))}
+          {pendingList.pager}
+        </div>
+      )}
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <Input
+          value={code}
+          onChange={e => setCode(e.target.value.toUpperCase())}
+          placeholder={t('tool:channel.byCodePlaceholder')}
+          name="copree-channel-pair-code"
+          fieldSize="sm"
+          className="w-44"
+          {...NO_AUTOFILL}
+        />
+        <Button size="sm" variant="secondary" loading={busy === 'code'} onClick={() => approveByCode(code.trim())} disabled={!code.trim()}>
+          {t('tool:channel.byCode')}
+        </Button>
+      </div>
+
+      {grants.length > 0 && (
+        <div className="space-y-1">
+          {grantList.rows.map(g => (
+            <div key={g.kind + ':' + g.id} className={'grid grid-cols-[auto_1fr_auto] items-center gap-2 text-3xs ' + (g.kind === 'approved' ? 'text-textSecondary' : 'text-textMuted')}>
+              <span className={'w-1.5 h-1.5 rounded-full ' + (g.kind === 'approved' ? 'bg-mint-400' : 'bg-gray-400')} />
+              <span className="min-w-0 truncate">
+                {t(g.kind === 'approved' ? 'tool:channel.ownerRow' : 'tool:channel.blockedRow', { name: g.nickname || tail(g.origin) })}
+              </span>
+              <button
+                onClick={() => forget(g.origin, g.nickname || tail(g.origin))}
+                className={'transition-colors ' + (g.kind === 'approved' ? 'text-textMuted hover:text-rose-400' : 'hover:text-primary-400')}
+              >
+                {t(g.kind === 'approved' ? 'tool:channel.forget' : 'tool:channel.unblock')}
+              </button>
+            </div>
+          ))}
+          {grantList.pager}
+        </div>
+      )}
+
+      <p className="text-3xs text-textMuted leading-relaxed">{t('tool:channel.privacy')}</p>
+    </>
+  )
+}
+
 /**
  * :param showTitle 卡片自己要不要亮出通道名与说明。
  *   页面里（AI 详情 → 通道页签）要，不然只看到一堆字段不知道在看哪条通道；
@@ -132,11 +285,13 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
   const [busy, setBusy] = useState('')
   const [msg, setMsg] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null)
   // 草稿按通道分开存：切换子项时，另一条通道填了一半的内容不会被带过去
+  const [configSection, setConfigSection] = useState('')   // 配置块的当前页签（接入/回复/额度/私聊）
   const [drafts, setDrafts] = useState<Record<string, Record<string, string>>>({})
   const [secrets, setSecrets] = useState<Record<string, Record<string, string>>>({})
   const [groupMode, setGroupMode] = useState<Record<string, 'existing' | 'new'>>({})
   const [newGroupName, setNewGroupName] = useState<Record<string, string>>({})
-  const [codeInput, setCodeInput] = useState('')
+  /** 使用轨迹：默认看人话，点一下看模型实际传的原文 */
+  const [activityRaw, setActivityRaw] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -153,8 +308,13 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
         const secrets: Record<string, string> = {}
         for (const [key, spec] of Object.entries(v.schema || {})) {
           if (spec.managed) continue
-          if (spec.secret) secrets[key] = ''
-          else fields[key] = String(v.values?.[key] ?? '')
+          if (spec.secret) { secrets[key] = ''; continue }
+          const saved = v.values?.[key]
+          // 没保存过的字段用 schema 的默认值：新加的设置项不该以空输入框/错误勾选状态示人
+          const fallback = spec.default === undefined || spec.default === null
+            ? ''
+            : (typeof spec.default === 'boolean' ? (spec.default ? 'true' : 'false') : String(spec.default))
+          fields[key] = String(saved ?? fallback)
         }
         nextDrafts[v.plugin_id] = fields
         nextSecrets[v.plugin_id] = secrets
@@ -172,15 +332,107 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
 
   useEffect(() => { load() }, [load])
 
-  // 托管协议端还没登录时每 5 秒重拉一次：NapCat 的二维码会轮换、登录完成后面板要自己消失，
-  // 用户不该为了"码过期了"手动刷新页面
-  const hostedPending = Boolean((views.find(v => v.plugin_id === activeId)?.detail?.hosted_endpoint as any)?.held_by_platform
-    && !(views.find(v => v.plugin_id === activeId)?.detail?.hosted_endpoint as any)?.logged_in)
+  // 托管协议端每 5 秒重拉一次，直到卡片落定：没登录（码会轮换、登录完成后要自己切走），
+  // 或登录了但还没拿到昵称（扫码确认到写回配置之间有个空窗——这个空窗里停轮询，
+  // 卡片就会永远停在「已登录：—」，只能手动刷新页面）
+  const hostedEndpoint = views.find(v => v.plugin_id === activeId)?.detail?.hosted_endpoint as
+    | { held_by_platform?: boolean; logged_in?: boolean; bot_name?: string
+        qr_state?: 'live' | 'expired' | 'stalled'; qr_expires_in?: number
+        qr_png?: string; qr_at?: number; qr_url?: string }
+    | undefined
+  const hostedPending = Boolean(hostedEndpoint?.held_by_platform
+    && (!hostedEndpoint?.logged_in || !hostedEndpoint?.bot_name))
   useEffect(() => {
     if (!hostedPending) return
     const timer = setInterval(() => { void load() }, 5000)
     return () => clearInterval(timer)
   }, [hostedPending, load])
+
+  // 二维码：默认不摆码，点一下才向协议端要一张。拿到的那张做成快照留在这里，
+  // 过期也不收起（用户可能正扫到一半），只是倒计时归零后标"已过期"；
+  // 刷新按钮常驻，一分钟内最多点三次。快照只在点击时更新——协议端自己换了新码，
+  // 也不会把手里这张顶掉，否则等于替用户自动申请了。
+  const QR_CLICK_LIMIT = 3
+  const QR_CLICK_WINDOW_MS = 60_000
+  const [qrShot, setQrShot] = useState<{ png: string; url: string; expiresAt: number } | null>(null)
+  const [qrPending, setQrPending] = useState(false)   // 点过了，正在等协议端给下一张
+  const [qrWaited, setQrWaited] = useState(0)
+  const [qrLeft, setQrLeft] = useState(0)
+  const [qrClicks, setQrClicks] = useState<number[]>([])
+  const [qrCooldown, setQrCooldown] = useState(0)
+  const [qrError, setQrError] = useState('')
+
+  const adoptQr = (png: string, url: string, expiresIn: number) => {
+    setQrShot({ png, url, expiresAt: Date.now() + Math.max(0, expiresIn) * 1000 })
+    setQrPending(false)
+  }
+
+  // 一次点击 = 一次申请：直接让协议端向腾讯要一张新的码，倒计时从这一刻算起。
+  // 不拿"协议端手上那张"——那张码上挂的时间已经过去一截，剩余秒数会是假的。
+  const requestQr = async () => {
+    const now = Date.now()
+    const recent = qrClicks.filter(at => now - at < QR_CLICK_WINDOW_MS)
+    if (recent.length >= QR_CLICK_LIMIT) {
+      setQrCooldown(Math.ceil((QR_CLICK_WINDOW_MS - (now - recent[0])) / 1000))
+      return
+    }
+    setQrClicks([...recent, now])
+    setQrPending(true)
+    setQrWaited(0)
+    setQrError('')
+    try {
+      const res = await api.post<{ qr_png?: string; qr_url?: string; qr_expires_in?: number }>(
+        '/me/agents/' + agentId + '/channels/' + activeId + '/login-qr', {}
+      )
+      if (res?.qr_png) {
+        adoptQr(res.qr_png, res.qr_url || '', Number(res.qr_expires_in) || 0)
+      } else {
+        setQrError(t('tool:channel.hostedQrFailed'))
+        setQrPending(false)
+      }
+    } catch (e: any) {
+      setQrError(e?.message || t('tool:channel.hostedQrFailed'))
+      setQrPending(false)
+    }
+  }
+
+  useEffect(() => {
+    setQrShot(null); setQrPending(false); setQrWaited(0); setQrClicks([]); setQrCooldown(0); setQrError('')
+  }, [activeId])
+  useEffect(() => {
+    if (!hostedEndpoint?.logged_in) return
+    setQrShot(null); setQrPending(false)
+  }, [hostedEndpoint?.logged_in])
+
+  // 只有"用户点出来的这一次申请"会自动采纳新码；已经显示的那张不会被替换
+  useEffect(() => {
+    if (!qrPending) return
+    if (hostedEndpoint?.qr_state === 'live' && hostedEndpoint?.qr_png) {
+      adoptQr(hostedEndpoint.qr_png, hostedEndpoint.qr_url || '', Number(hostedEndpoint.qr_expires_in) || 0)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qrPending, hostedEndpoint?.qr_state, hostedEndpoint?.qr_png, hostedEndpoint?.qr_url, hostedEndpoint?.qr_expires_in])
+
+  useEffect(() => {
+    if (!qrPending) { setQrWaited(0); return }
+    const timer = setInterval(() => setQrWaited(v => v + 1), 1000)
+    return () => clearInterval(timer)
+  }, [qrPending])
+
+  // 倒计时按快照自己算，不看轮询结果：手里这张的寿命只由它自己出生时间决定
+  useEffect(() => {
+    if (!qrShot) { setQrLeft(0); return }
+    const tick = () => setQrLeft(Math.max(0, Math.round((qrShot.expiresAt - Date.now()) / 1000)))
+    tick()
+    const timer = setInterval(tick, 1000)
+    return () => clearInterval(timer)
+  }, [qrShot])
+
+  useEffect(() => {
+    if (qrCooldown <= 0) return
+    const timer = setInterval(() => setQrCooldown(v => Math.max(0, v - 1)), 1000)
+    return () => clearInterval(timer)
+  }, [qrCooldown])
 
   /** 所有动作共用一个出口：忙标记、提示、成功后重拉
    *  okText 允许按响应生成：有些提示要等发出去才知道（自测走的是被动回复还是主动消息） */
@@ -208,6 +460,11 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
   const fields = Object.entries(view?.schema || {}).filter(([, spec]) => !spec.managed)
   const credentialFields = fields.filter(([, spec]) => spec.credential)
   const configFields = fields.filter(([, spec]) => !spec.credential)
+  // 分块字段走页签：无分块的字段照旧平铺（落点、白名单这类"每张卡都要先看的"）
+  const { plain: plainFields, tabs: sectionTabs, buckets: sectionFields } = groupBySection(configFields, lang)
+  const activeSection = sectionTabs.some(t => t.key === configSection)
+    ? configSection
+    : (sectionTabs[0]?.key || '')
 
   const setField = (key: string, value: string) =>
     setDrafts(prev => ({ ...prev, [activeId]: { ...(prev[activeId] || {}), [key]: value } }))
@@ -281,6 +538,8 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
     // 「可能是同一个群」：同一个主人的别的机器人把同名的通道群接在哪儿（只读候选）
     possible_group?: { id: number; name: string } | null;
   }[] = (view?.detail?.recent_groups as any[]) || []
+  /** 最近见过的群也分页：一次只给一页，卡不会被群列表撑长 */
+  const recentList = usePaged(recent, RECENT_PAGE)
   /** 每个 QQ 群选了哪个落点（未提交前的本地值）：键是群 openid */
   const [mapDraft, setMapDraft] = useState<Record<string, Record<string, string>>>({})
   /** 正在为哪个群起名新建（openid → 名字，空串 = 面板已打开） */
@@ -311,7 +570,7 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
   const start = () => act('start', () => api.post(base + '/start'), t('tool:channel.started'))
   const stop = () => act('stop', () => api.post(base + '/stop'), t('tool:channel.stopped'))
   const approve = (id: number) => act('pair' + id, () => api.post(base + '/pairings/approve', { pairing_id: id }), t('tool:channel.approved'))
-  const approveByCode = () => act('code', () => api.post(base + '/pairings/approve', { code: codeInput.trim() }), t('tool:channel.approved'))
+  const approveByCode = (code: string) => act('code', () => api.post(base + '/pairings/approve', { code }), t('tool:channel.approved'))
   const block = (origin: string) => act('block', () => api.post(base + '/pairings/block', { origin }), t('tool:channel.blocked'))
   const forget = async (origin: string, name: string) => {
     const ok = await confirmAsync({ title: t('tool:channel.forget'), message: t('tool:channel.forgetConfirm', { name }), danger: true })
@@ -339,11 +598,147 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
   // 平台自带协议端时，登录入口在卡片里（后端已经把二维码读出来一起报过来了）
   const hosted = (view.detail?.hosted_endpoint || null) as
     { held_by_platform: boolean; logged_in: boolean; bot_name: string; qr_png?: string; qr_at?: number
+      qr_state?: 'ready' | 'waiting' | 'stalled'; qr_expires_in?: number
       qr_url?: string } | null
+  // 使用轨迹：插件自己决定记什么、怎么记（B 站记工具调用/推送/登录），平台只按形状渲染。
+  // 插件不报就不画——没有自带工具的通道本来就没有轨迹可看。
+  const activity = (view.detail?.activity || null) as
+    {
+      count: number
+      /** 动作名与参数名的三语字典：插件声明，界面按当前语言取——库里只存工具 id 与参数值 */
+      i18n?: {
+        actions?: Record<string, TrailText>
+        args?: Record<string, TrailText>
+      }
+      items: { at: string; action: string; raw: string; ok: boolean; ms: number }[]
+    } | null
   const filled = Object.values(draft).some(v => v.trim()) || Object.values(secretDraft).some(v => v.trim())
 
+  /** 插件字典里的三语文案：缺项退回 fallback（不猜、不翻译机器名） */
+  const trailText = (dict: Record<string, TrailText> | undefined, key: string, fallback: string) => {
+    const item = dict?.[key]
+    return (item ? pick(lang, item.text, item.text_en, item.text_ja) : '') || fallback
+  }
+  /** 轨迹的动作名：插件声明 → 按语言翻译；缺了就显示工具 id 本身 */
+  const trailLabel = (action: string) => trailText(activity?.i18n?.actions, action, action)
+  /** 轨迹的参数：参数名也翻译（keyword → 关键词），值原样；不是 JSON 的老行直接显示 */
+  const trailArgs = (action: string, raw: string) => {
+    const text = (raw || '').trim()
+    if (!text) return ''
+    try {
+      const parsed = JSON.parse(text)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return Object.entries(parsed as Record<string, unknown>)
+          .map(([k, v]) => {
+            const meta = activity?.i18n?.args?.[k]
+            const value = typeof v === 'boolean' ? t(v ? 'common:yes' : 'common:no')
+              : typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v)
+            // 有格式模板就用它（如"最多 2 条"）；没有就退回"名字=值"
+            const fmt = meta ? pick(lang, meta.fmt, meta.fmt_en, meta.fmt_ja) : ''
+            if (fmt.includes('{}')) return fmt.replace('{}', value)
+            return trailText(activity?.i18n?.args, k, k) + '=' + value
+          })
+          .join(' · ')
+      }
+    } catch {
+      // 不是 JSON（老轨迹里的中文说明）就原样显示
+    }
+    return text
+  }
+
   /** 一个字段一个控件：平台只对三个约定字段用特殊控件，其余按 schema 渲染 */
+  /** 联动条件判定：多个条件为"且" */
+  const matchesCond = (cond: ShowIfCond, values: Record<string, string>): boolean => {
+    const value = values[cond.field] ?? ''
+    if (cond.equals !== undefined) return value === cond.equals
+    if (cond.in) return cond.in.includes(value)
+    return true
+  }
+  const isVisible = (spec: FieldSpec, values: Record<string, string>): boolean => {
+    const rule = spec.show_if
+    if (!rule) return true
+    return Array.isArray(rule) ? rule.every(c => matchesCond(c, values)) : matchesCond(rule, values)
+  }
+
+  /** 行内分组：key → 成员字段（按声明的先后顺序） */
+  const inlineGroups: Record<string, string[]> = {}
+  for (const [key, spec] of Object.entries(view.schema || {})) {
+    if (!spec.inline?.key) continue
+    ;(inlineGroups[spec.inline.key] ||= []).push(key)
+  }
+  const renderedGroups = new Set<string>()
+
+  /** 组内单个控件：紧凑、无独立 label（组标题已经说明这行是什么） */
+  const renderInlineControl = (key: string, spec: FieldSpec) => {
+    const inline = spec.inline!
+    if (spec.type === 'boolean') {
+      return (
+        <label key={key} className="inline-flex items-center gap-1.5 text-xs text-textSecondary cursor-pointer select-none">
+          <input
+            type="checkbox"
+            className="w-3.5 h-3.5 rounded-control border border-border bg-canvas accent-primary-500"
+            checked={(draft[key] || 'true') === 'true'}
+            onChange={e => setField(key, e.target.checked ? 'true' : 'false')}
+            disabled={!view.enabled}
+          />
+          {t('tool:channel.switchOn')}
+        </label>
+      )
+    }
+    if (spec.options && spec.options.length > 0) {
+      return (
+        <Select
+          key={key}
+          value={draft[key] || ''}
+          onChange={e => setField(key, e.target.value)}
+          options={spec.options.map(o => ({
+            value: o.value,
+            label: pick(lang, o.label, o.label_en, o.label_ja) || o.value,
+          }))}
+          fieldSize="sm"
+          className="w-32"
+          disabled={!view.enabled}
+        />
+      )
+    }
+    return (
+      <span key={key} className="inline-flex items-center gap-1.5">
+        {inline.prefix && <span className="text-xs text-textSecondary">{inline.prefix}</span>}
+        <Input
+          value={draft[key] || ''}
+          onChange={e => setField(key, e.target.value)}
+          name={'channel-field-' + key}
+          fieldSize="sm"
+          className="w-24"
+          disabled={!view.enabled}
+          {...NO_AUTOFILL}
+        />
+      </span>
+    )
+  }
+
   const renderField = (key: string, spec: FieldSpec) => {
+    // 联动显隐：插件说"这个字段什么时候才有意义"（比如重置时间只在每天/每周时显示），
+    // 平台只按声明判断，不在核心里写死字段名
+    // 行内分组：整组只画一行（成员各自保留 show_if，隐藏的成员不占位）
+    if (spec.inline) {
+      const groupKey = spec.inline.key
+      if (renderedGroups.has(groupKey)) return null
+      renderedGroups.add(groupKey)
+      const members = (inlineGroups[groupKey] || [key])
+        .filter(k => isVisible(view.schema[k], draft))
+      if (members.length === 0) return null
+      const groupLabel = pick(lang, spec.inline.label, spec.inline.label_en, spec.inline.label_ja) || ''
+      const groupHint = pick(lang, spec.inline.hint, spec.inline.hint_en, spec.inline.hint_ja) || ''
+      return (
+        <Row key={groupKey} label={groupLabel} hint={groupHint}>
+          <div className="flex items-center gap-2 flex-wrap">
+            {members.map(k => renderInlineControl(k, view.schema[k]))}
+          </div>
+        </Row>
+      )
+    }
+    if (!isVisible(spec, draft)) return null
     const label = pick(lang, spec.title, spec.title_en, spec.title_ja) || key
     const hint = pick(lang, spec.description, spec.description_en, spec.description_ja)
     if (key === 'dm_policy') {
@@ -445,8 +840,7 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
     if (spec.secret) {
       return (
         <Row key={key} label={label} hint={hint}>
-          <Input
-            type="password"
+          <SecretInput
             value={secretDraft[key] || ''}
             onChange={e => setSecret(key, e.target.value)}
             placeholder={view.secrets?.[key] ? t('tool:channel.secretSaved') : ''}
@@ -484,27 +878,19 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
       )}
 
       {/* 子项：一个 AI 接了几条通道就有几个（几条由插件声明，不是写死的） */}
-      {/* 下划线页签：和管理台/世界设计页的页签同一套视觉（选中 = 主色 + 2px 下划线），
-          药丸底衬在卡片里会显得多一层容器，反倒比内容更抢眼 */}
+      {/* 通道切换：统一用 UnderlineTabs（与商城/能力/OpenCLI 页签同一套画法，
+          切换时那条下划线是共享指示器，会平移过去而不是各自闪一下） */}
       {views.length > 1 && (
-        <div className="flex items-center gap-5 border-b border-border overflow-x-auto">
-          {views.map(v => {
-            const active = v.plugin_id === view.plugin_id
-            return (
-              <button
-                key={v.plugin_id}
-                onClick={() => { setActiveId(v.plugin_id); setMsg(null) }}
-                className={'relative flex items-center gap-1.5 text-xs pb-2 -mb-px whitespace-nowrap border-b-2 transition-colors ' +
-                  (active
-                    ? 'text-primary-600 dark:text-primary-300 border-primary-400'
-                    : 'text-textSecondary hover:text-textPrimary border-transparent')}
-              >
-                <span className={'w-1.5 h-1.5 rounded-full shrink-0 ' + DOT[statusOf(v)]} />
-                {pick(lang, v.label, v.label_en, v.label_ja)}
-              </button>
-            )
-          })}
-        </div>
+        <UnderlineTabs
+          size="sm"
+          items={views.map(v => ({
+            key: v.plugin_id,
+            label: pick(lang, v.label, v.label_en, v.label_ja),
+            icon: <span className={'w-1.5 h-1.5 rounded-full shrink-0 ' + DOT[statusOf(v)]} />,
+          }))}
+          value={view.plugin_id}
+          onChange={(k) => { setActiveId(k); setMsg(null) }}
+        />
       )}
 
       {/* 状态条：左边状态，右边启停 */}
@@ -537,32 +923,90 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
       {/* 托管协议端：码由平台画出来，用户不用去别处找登录入口 */}
       {hosted?.held_by_platform && (
         <Card title={t('tool:channel.hostedTitle')} icon={<Plug size={14} className="text-primary-400" />}>
+          {qrError && <p className="text-xs text-rose-400 leading-relaxed mb-2">{qrError}</p>}
           {hosted.logged_in ? (
-            <p className="text-xs text-mint-400">{t('tool:channel.hostedLoggedIn', { name: hosted.bot_name || '—' })}</p>
-          ) : hosted.qr_png ? (
+            <p className="text-xs text-mint-400">
+              {hosted.bot_name?.trim()
+                ? t('tool:channel.hostedLoggedIn', { name: hosted.bot_name.trim() })
+                : t('tool:channel.hostedLoggedInNoName')}
+            </p>
+          ) : qrShot ? (
+            // 手里这一张一直留着：过期只标"已过期"并压暗，不收起——收起会让人以为要重来
             <div className="flex items-start gap-4 flex-wrap">
               <img
-                src={'data:image/png;base64,' + hosted.qr_png}
+                src={'data:image/png;base64,' + qrShot.png}
                 alt=""
-                className="w-40 h-40 rounded-control border border-border bg-white p-1 shrink-0"
+                className={'w-40 h-40 rounded-control border border-border bg-white p-1 shrink-0 transition-opacity ' +
+                  (qrLeft > 0 ? '' : 'opacity-40')}
               />
               <div className="space-y-2 min-w-0 flex-1">
-                <p className="text-xs text-textSecondary leading-relaxed">{t('tool:channel.hostedScan')}</p>
-                {hosted.qr_url && (
+                <p className="text-xs leading-relaxed">
+                  <span className={qrLeft > 0 ? 'text-textSecondary' : 'text-amber-400'}>
+                    {qrLeft > 0 ? t('tool:channel.hostedScan') : t('tool:channel.hostedQrExpired')}
+                  </span>
+                  {qrLeft > 0 && (
+                    <span className={'ml-1 ' + (qrLeft <= 15 ? 'text-amber-400' : 'text-textMuted')}>
+                      {t('tool:channel.hostedQrLeft', { s: String(qrLeft) })}
+                    </span>
+                  )}
+                </p>
+                {qrShot.url && (
                   <>
                     <p className="text-3xs text-textMuted leading-relaxed">{t('tool:channel.hostedLinkHint')}</p>
                     <input
                       readOnly
-                      value={hosted.qr_url}
+                      value={qrShot.url}
                       onFocus={e => e.currentTarget.select()}
                       className="text-3xs font-mono bg-canvas border border-border rounded-control px-2 py-1.5 w-full max-w-[24rem] text-textSecondary"
                     />
                   </>
                 )}
+                <div className="flex items-center gap-2 flex-wrap pt-0.5">
+                  <Button size="sm" variant="secondary" onClick={requestQr} disabled={qrCooldown > 0}>
+                    <RefreshCw size={13} className="mr-1.5" />
+                    {qrCooldown > 0
+                      ? t('tool:channel.hostedQrCooldown', { s: String(qrCooldown) })
+                      : t('tool:channel.hostedQrRefresh')}
+                  </Button>
+                  <span className="text-3xs text-textMuted">{t('tool:channel.hostedQrLimit')}</span>
+                </div>
+                {hosted.qr_state === 'stalled' && (
+                  <p className="text-xs text-amber-400 leading-relaxed">{t('tool:channel.hostedQrStalled')}</p>
+                )}
               </div>
             </div>
+          ) : hosted.qr_state === 'stalled' ? (
+            // 协议端自己停了出码（扫码被拒 ErrCode 5 / 会话异常 ErrCode 1）：这时候点也等不到
+            <div className="space-y-2">
+              <p className="text-xs text-amber-400 leading-relaxed">{t('tool:channel.hostedQrStalled')}</p>
+              <div className="flex items-center gap-2 flex-wrap">
+                <input
+                  readOnly
+                  value="docker restart napcat"
+                  onFocus={e => e.currentTarget.select()}
+                  className="field field-sm font-mono w-full max-w-[24rem]"
+                />
+                <Button size="sm" variant="ghost" onClick={requestQr} disabled={qrCooldown > 0}>
+                  {t('tool:channel.hostedQrRetry')}
+                </Button>
+              </div>
+            </div>
+          ) : qrPending ? (
+            <p className="text-xs text-textMuted flex items-center gap-1.5">
+              <Loader2 size={13} className="animate-spin" />
+              {t('tool:channel.hostedWaiting', { s: String(qrWaited) })}
+            </p>
           ) : (
-            <p className="text-xs text-textMuted">{t('tool:channel.hostedWaiting')}</p>
+            // 默认不摆码：先让用户自己决定什么时候去要一张
+            <div className="space-y-2">
+              <p className="text-xs text-textSecondary leading-relaxed">{t('tool:channel.hostedGetQrHint')}</p>
+              <Button size="sm" variant="secondary" onClick={requestQr} disabled={qrCooldown > 0}>
+                <QrCode size={14} className="mr-1.5" />
+                {qrCooldown > 0
+                  ? t('tool:channel.hostedQrCooldown', { s: String(qrCooldown) })
+                  : t('tool:channel.hostedGetQr')}
+              </Button>
+            </div>
           )}
         </Card>
       )}
@@ -595,72 +1039,43 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
         </Card>
       )}
 
+      {/* 配对：三份名单各自分页，人再多也不把卡顶长 */}
       {view.pairing && (
         <Card title={t('tool:channel.pairTitle')} icon={<UserCheck size={14} className="text-primary-400" />} hint={t('tool:channel.pairHint')}>
-          {view.pending.length === 0 ? (
-            <div className="text-3xs text-textMuted">{t('tool:channel.pendingEmpty')}</div>
-          ) : (
-            <div className="space-y-1.5">
-              {view.pending.map(p => (
-                <div key={p.id} className="grid grid-cols-[1fr_auto_auto] items-center gap-2 bg-canvas border border-border rounded-control px-3 py-2">
-                  <div className="min-w-0">
-                    <div className="text-xs text-textPrimary truncate">{p.nickname || t('tool:channel.unknownUser')}</div>
-                    <div className="text-3xs text-textMuted">{t('tool:channel.codeLabel', { code: p.code, origin: tail(p.origin) })}</div>
-                  </div>
-                  <Button size="xs" variant="primary" loading={busy === 'pair' + p.id} onClick={() => approve(p.id)}>{t('tool:channel.approve')}</Button>
-                  <Button size="xs" variant="ghost" onClick={() => block(p.origin)}>{t('tool:channel.block')}</Button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <div className="flex items-center gap-2">
-            <Input
-              value={codeInput}
-              onChange={e => setCodeInput(e.target.value.toUpperCase())}
-              placeholder={t('tool:channel.byCodePlaceholder')}
-              name="copree-channel-pair-code"
-              fieldSize="sm"
-              className="w-44"
-              {...NO_AUTOFILL}
-            />
-            <Button size="sm" variant="secondary" loading={busy === 'code'} onClick={approveByCode} disabled={!codeInput.trim()}>
-              {t('tool:channel.byCode')}
-            </Button>
-          </div>
-
-          {(view.approved.length > 0 || view.blocked.length > 0) && (
-            <div className="grid gap-1">
-              {view.approved.map(a => (
-                <div key={a.id} className="grid grid-cols-[auto_1fr_auto] items-center gap-2 text-3xs text-textSecondary">
-                  <span className="w-1.5 h-1.5 rounded-full bg-mint-400" />
-                  <span className="min-w-0 truncate">{t('tool:channel.ownerRow', { name: a.nickname || tail(a.origin) })}</span>
-                  <button onClick={() => forget(a.origin, a.nickname || tail(a.origin))} className="text-textMuted hover:text-rose-400 transition-colors">{t('tool:channel.forget')}</button>
-                </div>
-              ))}
-              {view.blocked.map(b => (
-                <div key={b.id} className="grid grid-cols-[auto_1fr_auto] items-center gap-2 text-3xs text-textMuted">
-                  <span className="w-1.5 h-1.5 rounded-full bg-gray-400" />
-                  <span className="min-w-0 truncate">{t('tool:channel.blockedRow', { name: b.nickname || tail(b.origin) })}</span>
-                  <button onClick={() => forget(b.origin, b.nickname || tail(b.origin))} className="hover:text-primary-400 transition-colors">{t('tool:channel.unblock')}</button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <p className="text-3xs text-textMuted leading-relaxed">{t('tool:channel.privacy')}</p>
+          <PairingBlock
+            pending={view.pending}
+            approved={view.approved}
+            blocked={view.blocked}
+            busy={busy}
+            approve={approve}
+            approveByCode={approveByCode}
+            block={block}
+            forget={forget}
+          />
         </Card>
       )}
 
       <Card title={t('tool:channel.configTitle')}>
-        {configFields.map(([key, spec]) => renderField(key, spec))}
+        {plainFields.map(([key, spec]) => renderField(key, spec))}
+        {/* 分块走页签：一次只看一块，页签本身就是"你在看哪一段" */}
+        {sectionTabs.length > 0 && (
+          <div className="pt-1 mt-1 border-t border-border/60">
+            <UnderlineTabs
+              items={sectionTabs}
+              value={activeSection}
+              onChange={setConfigSection}
+              size="sm"
+            />
+          </div>
+        )}
+        {(sectionFields[activeSection] || []).map(([key, spec]) => renderField(key, spec))}
         {/* 最近见到过的群：插件在状态里报了才画（NapCat 还没报，就没有这一块） */}
         {recentField && (
           <div className="space-y-1.5">
             <div className="text-3xs text-textMuted">{t('tool:channel.recentGroups')}</div>
             {recent.length === 0 ? (
               <div className="text-3xs text-textMuted">{t('tool:channel.recentGroupsEmpty')}</div>
-            ) : recent.slice(0, 6).map(g => (
+            ) : recentList.rows.map(g => (
               <div key={g.origin} className="grid grid-cols-[auto_1fr_auto_auto_auto] items-center gap-2 bg-canvas border border-border rounded-control px-3 py-2">
                 <span className={'w-1.5 h-1.5 rounded-full shrink-0 ' + (g.allowed ? 'bg-mint-400' : 'bg-amber-400')} />
                 <div className="min-w-0">
@@ -729,12 +1144,55 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
                 )}
               </div>
             ))}
+            {recentList.pager}
           </div>
         )}
       </Card>
 
       {/* 对话额度：设置属于插件（上面 schema 表单），这里展示每个对话的账与单独调整 */}
       <ChannelTokenBudgetCard agentId={agentId} pluginId={view.plugin_id} />
+
+      {/* 使用轨迹：这个 AI 拿它那个账号做过什么（插件自己记的，平台只渲染） */}
+      {activity && (
+        <Card title={t('tool:channel.activity.title')} icon={<History size={14} className="text-primary-400" />}>
+          {activity.items.length === 0 ? (
+            <p className="text-3xs text-textMuted">{t('tool:channel.activity.empty')}</p>
+          ) : (
+            <>
+              <div className="max-h-72 overflow-auto pr-1 space-y-1.5">
+                {activity.items.map((row, i) => (
+                  <div key={i} className="flex items-start gap-2 text-3xs">
+                    <span
+                      className={'mt-1 w-1.5 h-1.5 rounded-full shrink-0 ' + (row.ok ? 'bg-mint-400' : 'bg-rose-400')}
+                      title={t(row.ok ? 'tool:channel.activity.ok' : 'tool:channel.activity.failed')}
+                    />
+                    <span className="text-textMuted tabular-nums whitespace-nowrap">{row.at}</span>
+                    <span className="text-textSecondary whitespace-nowrap">
+                      {activityRaw ? row.action : trailLabel(row.action)}
+                    </span>
+                    <span className={(activityRaw ? 'text-textMuted font-mono' : 'text-textPrimary') + ' break-words min-w-0 flex-1'}>
+                      {(activityRaw ? row.raw : trailArgs(row.action, row.raw)) || '—'}
+                    </span>
+                    {row.ms > 0 && (
+                      <span className="text-textMuted tabular-nums whitespace-nowrap">{row.ms} ms</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div className="flex items-center justify-between gap-2 mt-2">
+                <p className="text-3xs text-textMuted">{t('tool:channel.activity.count', { n: activity.count })}</p>
+                <button
+                  type="button"
+                  onClick={() => setActivityRaw(v => !v)}
+                  className="text-3xs text-textMuted hover:text-primary-400 transition-colors"
+                >
+                  {t(activityRaw ? 'tool:channel.activity.hideRaw' : 'tool:channel.activity.showRaw')}
+                </button>
+              </div>
+            </>
+          )}
+        </Card>
+      )}
 
       {/* 能力与限制：插件自带（平台不替它总结），用户配之前就该知道能做到什么 */}
       {view.limits.length > 0 && (

@@ -243,7 +243,7 @@ export default function ConversationLogTab() {
             <button
               onClick={saveConfig}
               disabled={configSaving}
-              className="btn btn-sm btn-primary gap-2"
+              className="btn btn-md btn-primary gap-2"
             >
               <Save size={14} /> {configSaving ? t('common:saving') : t('admin:saveConfig')}
             </button>
@@ -276,7 +276,7 @@ export default function ConversationLogTab() {
                 <select
                   value={selectedAgentId || ''}
                   onChange={e => setSelectedAgentId(e.target.value ? parseInt(e.target.value) : null)}
-                  className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50 min-w-0"
+                  className="field w-full min-w-0"
                 >
                   <option value="">{t('admin:selectAiPlaceholder')}</option>
                   {agentSearching ? (
@@ -340,7 +340,7 @@ export default function ConversationLogTab() {
               <button
                 onClick={saveAgentSettings}
                 disabled={agentSaving}
-                className="btn btn-sm btn-primary gap-2"
+                className="btn btn-md btn-primary gap-2"
               >
                 <Save size={14} /> {agentSaving ? t('common:saving') : t('admin:saveSettings')}
               </button>
@@ -367,7 +367,7 @@ export default function ConversationLogTab() {
           <select
             value={viewAgentId || ''}
             onChange={e => setViewAgentId(e.target.value ? parseInt(e.target.value) : null)}
-            className="px-3 py-2 rounded-control border border-border bg-elevated text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+            className="field field-inline"
           >
             <option value="">{t('admin:selectAiPlaceholder')}</option>
             {agentSearching ? (

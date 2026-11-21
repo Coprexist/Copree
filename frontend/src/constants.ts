@@ -28,6 +28,14 @@ export const STATE_BADGE_COLORS: Record<string, string> = {
   blocked: 'bg-accent-400/15 text-accent-400 border-accent-400/30',
 }
 
+/** 状态徽章（.chip 版）：新卡片/列表一律用它，别手写 rounded-full 的 px/py 组合 */
+export const STATE_CHIP: Record<string, string> = {
+  active: 'chip-mint',
+  dnd: 'chip-rose',
+  inactive: 'chip-muted',
+  blocked: 'chip-accent',
+}
+
 /** 状态中文标签 */
 export const STATE_LABELS: Record<string, string> = {
   active: '在线',

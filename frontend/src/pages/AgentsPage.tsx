@@ -4,11 +4,11 @@ import { api, ApiError } from '../api/client'
 import { Bot, Plus, Edit3, History, Power, Download, Upload, X, RotateCcw, Eye, EyeOff, ArrowLeft, Menu } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import Toggle from '../components/Toggle'
-import { Button, Dialog, IconButton, PageHeader, Slider } from '../components/ui'
+import { Button, Dialog, IconButton, PageHeader, Slider, SecretInput } from '../components/ui'
 import { useT, useLang } from '../i18n/I18nContext'
 import { fmtDate, fmtDateTime } from '../utils/time'
 
-import { STATE_BADGE_COLORS, AI_TYPE_LABEL } from '../constants'
+import { STATE_BADGE_COLORS, STATE_CHIP, AI_TYPE_LABEL } from '../constants'
 
 interface ModelOption {
   value: string
@@ -152,7 +152,7 @@ export default function AgentsPage() {
                 <div
                   key={agent.id}
                   onClick={() => navigate(`/agents/${agent.id}`)}
-                  className="bg-surface border border-border rounded-card p-5 hover:border-primary-500/30 transition-all duration-200 cursor-pointer"
+                  className="card card-interactive p-5 cursor-pointer"
                 >
                   <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-3">
@@ -170,7 +170,7 @@ export default function AgentsPage() {
                         </p>
                       </div>
                     </div>
-                    <span className={`text-xs px-2 py-0.5 rounded-full font-medium border ${STATE_BADGE_COLORS[agent.state] || ''}`}>
+                    <span className={'chip shrink-0 ' + (STATE_CHIP[agent.state] || 'chip-muted')}>
                       {stateLabelKeys[agent.state] ? t(stateLabelKeys[agent.state]) : agent.state}
                     </span>
                   </div>
@@ -195,15 +195,15 @@ export default function AgentsPage() {
                       <span className="text-mint-400">{t('agents:selfEditable')}</span>
                     )}
                     {AI_TYPE_LABEL[agent.ai_type] && (
-                      <span className={`text-3xs px-1.5 py-0.5 rounded-full font-medium ${AI_TYPE_LABEL[agent.ai_type].cls}`}>
+                      <span className={'chip ' + AI_TYPE_LABEL[agent.ai_type].cls}>
                         {t(AI_TYPE_LABEL[agent.ai_type].key)}
                       </span>
                     )}
                     {agent.thinking_enabled && (
-                      <span className="text-accent-400">{t('agents:thinkingMode')}</span>
+                      <span className="chip chip-accent">{t('agents:thinkingMode')}</span>
                     )}
                     {hasModified && (
-                      <span className="text-accent-400 font-medium">{t('agents:modified')}</span>
+                      <span className="chip chip-accent">{t('agents:modified')}</span>
                     )}
                   </div>
 
@@ -518,7 +518,7 @@ function EditAgentModal({ agent, onClose, onUpdated }: {
                   <select
                     value={chatModel}
                     onChange={(e) => setChatModel(e.target.value)}
-                    className="w-full mt-0.5 px-2 py-1.5 rounded-control border border-border bg-canvas text-xs text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                    className="field field-sm w-full mt-0.5"
                   >
                     <option value="">{t('common:default')} ({defaults.chat_model})</option>
                     {modelOptions.map(m => (
@@ -531,7 +531,7 @@ function EditAgentModal({ agent, onClose, onUpdated }: {
                   <select
                     value={workModel}
                     onChange={(e) => setWorkModel(e.target.value)}
-                    className="w-full mt-0.5 px-2 py-1.5 rounded-control border border-border bg-canvas text-xs text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                    className="field field-sm w-full mt-0.5"
                   >
                     <option value="">{t('common:default')} ({defaults.work_model})</option>
                     {modelOptions.map(m => (
@@ -605,7 +605,7 @@ function EditAgentModal({ agent, onClose, onUpdated }: {
                     const v = e.target.value
                     setDelayReplyEnabled(v === 'inherit' ? null : v === 'on')
                   }}
-                  className="text-xs px-2 py-1 rounded-control border border-border bg-canvas text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                  className="field field-sm field-inline"
                 >
                   <option value="inherit">{t('agents:inheritGlobal')}</option>
                   <option value="on">{t('agents:enable')}</option>
@@ -685,12 +685,11 @@ function EditAgentModal({ agent, onClose, onUpdated }: {
             </div>
             <div>
               <label className="text-xs text-textMuted">{t('agents:apiKeyLabel')}</label>
-              <input
-                type="password"
+              <SecretInput
                 value={agentApiKey}
                 onChange={(e) => setAgentApiKey(e.target.value)}
                 placeholder={agent.has_api_key ? t('agents:apiKeyPlaceholderSet') : t('agents:apiKeyPlaceholder')}
-                className="w-full mt-0.5 px-3 py-1.5 rounded-control border border-border bg-canvas text-xs text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                wrapperClassName="w-full"
               />
               {agent.has_api_key && <p className="text-3xs text-mint-400 mt-0.5">{t('agents:apiKeySet')}</p>}
             </div>
@@ -736,7 +735,7 @@ function EditAgentModal({ agent, onClose, onUpdated }: {
                 {t('agents:cancel')}
               </button>
               <button onClick={confirmApplyPreset} disabled={applyingPreset}
-                className="btn btn-xs btn-primary flex-1">
+                className="btn btn-md btn-primary flex-1">
                 {applyingPreset ? t('agents:applying') : t('agents:confirmSwitch')}
               </button>
             </div>
@@ -916,7 +915,7 @@ function StateModal({ agent, onClose, onUpdated }: {
             <select
               value={targetState}
               onChange={(e) => setTargetState(e.target.value)}
-              className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+              className="field w-full"
             >
               {Object.entries(stateLabelKeys).map(([k, v]) => (
                 <option key={k} value={k}>{t(v)}</option>

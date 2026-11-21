@@ -122,7 +122,7 @@ export default function SystemPromptTab() {
         <div className="ml-auto flex items-center gap-2">
           <button
             onClick={() => setPreviewOpen(!previewOpen)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-control bg-surface hover:bg-elevated border border-border text-xs text-textSecondary hover:text-textPrimary transition-colors"
+            className="btn btn-md btn-secondary"
           >
             <Eye size={13} />
             {previewOpen ? '隐藏预览' : '预览拼接'}
@@ -192,7 +192,7 @@ export default function SystemPromptTab() {
                       <button
                         onClick={() => saveEdit(seg)}
                         disabled={saving}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-control bg-mint-400 text-white hover:bg-mint-500 disabled:opacity-40 text-xs font-medium transition-colors"
+                        className="btn btn-md btn-success"
                       >
                         {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
                         保存
@@ -238,7 +238,7 @@ export default function SystemPromptTab() {
       </div>
 
       {/* 组装顺序（可编辑） */}
-      <div className="bg-surface border border-border rounded-card p-4">
+      <div className="card p-4">
         <div className="flex items-center justify-between mb-3">
           <h4 className="text-xs font-medium text-textSecondary flex items-center gap-2">
             <Layers size={13} className="text-primary-400" />
@@ -254,7 +254,7 @@ export default function SystemPromptTab() {
               finally { setSaving(false) }
             }}
             disabled={saving}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-control bg-mint-400 text-white hover:bg-mint-500 disabled:opacity-40 text-xs font-medium transition-colors"
+            className="btn btn-md btn-success"
           >
             {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
             保存顺序

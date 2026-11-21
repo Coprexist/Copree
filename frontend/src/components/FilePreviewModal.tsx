@@ -1,13 +1,19 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Download, X, ArrowLeft, FileIcon, Loader2, AlertTriangle, ZoomIn, ZoomOut, RotateCcw, Share2, Maximize2, Minimize2, Eye, Code2 } from 'lucide-react'
+import { Download, X, ArrowLeft, FileIcon, Loader2, AlertTriangle, ZoomIn, ZoomOut, RotateCcw, Share2, Maximize2, Minimize2, Eye, Code2, ChevronDown, BookmarkPlus, Check } from 'lucide-react'
 import { useT } from '../i18n/I18nContext'
-import { fileDownloadUrl } from '../api/client'
+import { api, fileDownloadUrl } from '../api/client'
 import { formatFileSize } from '../utils/format'
 import { isTextPreviewable, getCodeLang, isMarkdownFile, resolveMimeType, EXT_LANG_MAP } from '../utils/mime'
 import { PREVIEW_SANDBOX, buildPreviewDocument } from '../utils/previewSandbox'
 import MarkdownContent from './shared/MarkdownContent'
 import ForwardFileModal from './ForwardFileModal'
-import { Dialog, ResizeEdges } from './ui'
+import { Button, Dialog, HelpTip, Input, MenuItem, MenuPanel, Modal, ResizeEdges } from './ui'
+import { saveBlob } from '../utils/download'
+import {
+  readSvg, rasterizeSvg, outputSize, suggestedSide,
+  EXPORT_SIDE_MIN, EXPORT_SIDE_MAX, EXPORT_SIDE_PRESETS, type SvgSource,
+} from '../utils/svgRaster'
+import { isSvgAttachment } from '../hooks/useAttachmentUpload'
 import { useImageZoom, ZOOM_MIN, ZOOM_MAX } from '../hooks/useImageZoom'
 
 // FileCodeRenderer ——已迁移到 components/shared/CodeRenderer.tsx
@@ -33,9 +39,19 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
   const zoom = useImageZoom()
 
   const [forwardFile, setForwardFile] = useState<{file_id:number;name:string;size:number;mime_type:string}|null>(null)
+  // 收进我的文件（§7.3）：kept 之后按钮就锁住，不让人反复点——后端虽然幂等，重复请求没意义
+  const [keeping, setKeeping] = useState(false)
+  const [kept, setKept] = useState(false)
+  const [keepError, setKeepError] = useState('')
   // 富文本（md/html/代码）渲染 ↔ 原文切换：看渲染效果或源码
 
   const dlUrl = src ?? (fileId != null ? fileDownloadUrl(fileId) : '')
+
+  // 换了一份文件，上一份的「已收进」状态不能带过来
+  useEffect(() => {
+    setKept(false)
+    setKeepError('')
+  }, [fileId])
 
   // 模态框尺寸状态
   const [modalWidth, setModalWidth] = useState<number | null>(null)
@@ -116,6 +132,8 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
   const resolvedMime = resolveMimeType(fileName, mimeType)
 
   const isImage = resolvedMime.startsWith('image/')
+  // SVG 的判定与聊天气泡共用一处（历史数据的 mime 可能错，名字兜底）
+  const isSvg = isSvgAttachment({ mime_type: resolvedMime, name: fileName })
   const isPDF = resolvedMime === 'application/pdf'
   const isDocx = resolvedMime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     || fileName.endsWith('.docx')
@@ -207,6 +225,72 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
     a.click()
   }, [dlUrl, fileName])
 
+  /** 收进我的文件：把同一份字节硬链接一份到自己的空间，从此占配额、不被自动清（§7.3） */
+  const handleKeep = useCallback(async () => {
+    if (fileId == null || keeping || kept) return
+    setKeeping(true)
+    setKeepError('')
+    try {
+      await api.post('/fs/keep', { file_id: fileId })
+      setKept(true)
+    } catch (e: any) {
+      // 多半是配额满了（413）；后端把已用/上限/本次大小都写在 detail 里，直接显示
+      setKeepError(e?.detail || t('filePreview:keepFailed'))
+    } finally {
+      setKeeping(false)
+    }
+  }, [fileId, keeping, kept, t])
+
+  // SVG 的下载格式：原图（矢量，可再编辑）或 PNG（浏览器现画，尺寸可调）
+  const [dlMenu, setDlMenu] = useState(false)
+  const [pngOpen, setPngOpen] = useState(false)
+  const [svgSource, setSvgSource] = useState<SvgSource | null>(null)
+  const [sizeText, setSizeText] = useState('')
+  const [loadingSvg, setLoadingSvg] = useState(false)
+  const [exportingPng, setExportingPng] = useState(false)
+  const [pngError, setPngError] = useState('')
+  /** 去掉 SVG 自带的满幅背景层：默认保留——那层底常常就是这个图标的一部分，只有想导出透明图时才勾 */
+  const [stripBg, setStripBg] = useState(false)
+  const svgBaseName = fileName.replace(/\.svg$/i, '')
+
+  const side = Number(sizeText)
+  const sideOk = Number.isFinite(side) && side >= EXPORT_SIDE_MIN && side <= EXPORT_SIDE_MAX
+  const outSize = svgSource && sideOk ? outputSize(svgSource, side) : null
+
+  /** 打开导出弹窗：读一次文本并量出原图尺寸，之后改尺寸不再重复取文件 */
+  const openPngDialog = useCallback(async () => {
+    setDlMenu(false)
+    setPngError('')
+    setPngOpen(true)
+    if (svgSource) return
+    setLoadingSvg(true)
+    try {
+      const source = await readSvg(dlUrl)
+      setSvgSource(source)
+      // 每次打开都回到推荐尺寸（长边×2，夹在 512–2048，和最初那版一致）：
+      // 记住上次会把人上次手调的 2048 一直带回来，而大图在 QQ 里预览会先铺黑底。
+      setSizeText(String(suggestedSide(source)))
+    } catch {
+      setPngError(t('filePreview:exportPngFailed'))
+    } finally {
+      setLoadingSvg(false)
+    }
+  }, [dlUrl, svgSource, t])
+
+  const exportPng = useCallback(async () => {
+    if (!svgSource || !sideOk || exportingPng) return
+    setExportingPng(true)
+    setPngError('')
+    try {
+      saveBlob(await rasterizeSvg(svgSource, Math.round(side), { stripBackground: stripBg }), `${svgBaseName}.png`)
+      setPngOpen(false)
+    } catch {
+      setPngError(t('filePreview:exportPngFailed'))
+    } finally {
+      setExportingPng(false)
+    }
+  }, [svgSource, side, sideOk, exportingPng, stripBg, svgBaseName, t])
+
   if (!previewable) return null
 
   const fileForForward = { file_id: fileId, name: fileName, size: fileSize, mime_type: mimeType }
@@ -223,7 +307,7 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
   }
 
   const headerBar = (
-    <div className="flex items-center gap-2 md:gap-3 px-4 h-12 border-b border-border bg-surface shrink-0 rounded-t-2xl">
+    <div className="top-bar flex items-center gap-2 md:gap-3 px-4 h-14 shrink-0 rounded-t-2xl">
       <button
         onClick={onClose}
         className="icon-btn-sm -ml-1 text-textSecondary"
@@ -316,6 +400,25 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
         </button>
       </span>
 
+      {/* 收进我的文件：只在能拿到 file_id 时出现（世界文件之类只有 src，没有归属可收） */}
+      {fileId != null && (
+        <button
+          onClick={() => void handleKeep()}
+          disabled={keeping || kept}
+          className="btn btn-xs btn-outline shrink-0"
+          title={kept ? t('filePreview:kept') : t('filePreview:keep')}
+        >
+          {keeping ? (
+            <Loader2 size={14} className="animate-spin" />
+          ) : kept ? (
+            <Check size={14} className="text-primary-400" />
+          ) : (
+            <BookmarkPlus size={14} />
+          )}
+          <span className="hidden sm:inline">{kept ? t('filePreview:kept') : t('filePreview:keep')}</span>
+        </button>
+      )}
+
       <button
         onClick={() => setForwardFile({ file_id: fileId ?? 0, name: fileName, size: fileSize, mime_type: mimeType })}
         className="btn btn-xs btn-outline shrink-0"
@@ -325,14 +428,42 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
         <span className="hidden sm:inline">{t('forward:send')}</span>
       </button>
 
-      <button
-        onClick={handleDownload}
-        className="btn btn-xs btn-primary shrink-0"
-        title={t('common:download')}
-      >
-        <Download size={14} />
-        <span className="hidden sm:inline">{t('common:download')}</span>
-      </button>
+      {isSvg ? (
+        <div className="relative shrink-0">
+          <button
+            onClick={() => setDlMenu((v) => !v)}
+            className="btn btn-xs btn-primary"
+            title={t('filePreview:downloadFormat')}
+          >
+            <Download size={14} />
+            <span className="hidden sm:inline">{t('common:download')}</span>
+            <ChevronDown size={12} />
+          </button>
+          {dlMenu && (
+            <>
+              {/* 点空白处收起：模态框里没有全局点击关闭，自己铺一层透明遮罩 */}
+              <div className="fixed inset-0 z-overlay" onClick={() => setDlMenu(false)} />
+              <MenuPanel className="absolute right-0 top-full mt-1 w-44 z-modal">
+                <MenuItem onClick={() => { setDlMenu(false); handleDownload() }}>
+                  {t('filePreview:downloadAsSvg')}
+                </MenuItem>
+                <MenuItem onClick={() => void openPngDialog()}>
+                  {t('filePreview:downloadAsPng')}
+                </MenuItem>
+              </MenuPanel>
+            </>
+          )}
+        </div>
+      ) : (
+        <button
+          onClick={handleDownload}
+          className="btn btn-xs btn-primary shrink-0"
+          title={t('common:download')}
+        >
+          <Download size={14} />
+          <span className="hidden sm:inline">{t('common:download')}</span>
+        </button>
+      )}
     </div>
   )
 
@@ -347,6 +478,11 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
           onClick={(e) => e.stopPropagation()}
         >
           {headerBar}
+
+          {/* 收不进我的文件时（最常见是配额满）把理由摊在这里，别只在按钮上闪一下 */}
+          {keepError && (
+            <p className="px-4 py-2 text-xs text-rose-400 bg-rose-500/10 shrink-0">{keepError}</p>
+          )}
 
           {/* 内容区 —— 滚动只在这一层：文字类分支（Markdown / docx / 源码）都不自己写滚动条，
               免得像之前那样漏掉一支就整块滚不动。图片与 iframe 是例外：图片靠 scale 缩放、
@@ -374,13 +510,14 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
                 onPointerMove={zoom.onPanMove}
                 onPointerUp={zoom.onPanUp}
                 onPointerCancel={zoom.onPanUp}
-                className={`w-full h-full flex overflow-auto ${zoom.panning ? 'cursor-grabbing' : zoom.scale > 1 ? 'cursor-grab' : ''}`}
+                className={`w-full h-full flex overflow-auto ${isSvg ? 'bg-checker' : ''} ${zoom.panning ? 'cursor-grabbing' : zoom.scale > 1 ? 'cursor-grab' : ''}`}
               >
                 <img
                   ref={zoom.imgRef}
                   src={dlUrl + `&_=${retry}`}
                   alt={fileName}
-                  className="m-auto shrink-0 select-none"
+                  /* SVG 可能没有固有尺寸（只有 viewBox），给个下限免得预览塌成一条线 */
+                  className={`m-auto shrink-0 select-none ${isSvg ? 'min-w-[120px] min-h-[120px]' : ''}`}
                   style={zoom.imgStyle}
                   draggable={false}
                   onLoad={zoom.onImgLoad}
@@ -438,6 +575,94 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
           onClose={() => setForwardFile(null)}
         />
       )}
+
+      {/* SVG → PNG：尺寸可调（快捷档位 + 自定义长边），导出前能看见真实输出尺寸 */}
+      <Modal
+        open={pngOpen}
+        onClose={() => setPngOpen(false)}
+        title={t('filePreview:exportPngTitle')}
+        size="sm"
+        footer={(
+          <>
+            <Button variant="outline" size="sm" onClick={() => setPngOpen(false)}>
+              {t('common:cancel')}
+            </Button>
+            <Button size="sm" loading={exportingPng} disabled={!sideOk || loadingSvg} onClick={() => void exportPng()}>
+              {t('filePreview:exportPngSave')}
+            </Button>
+          </>
+        )}
+      >
+        {loadingSvg ? (
+          <p className="text-sm text-textMuted">{t('common:loading')}</p>
+        ) : (
+          <div className="space-y-3">
+            {svgSource && (
+              <p className="text-xs text-textMuted">
+                {t('filePreview:exportPngNatural', {
+                  w: Math.round(svgSource.width), h: Math.round(svgSource.height),
+                })}
+              </p>
+            )}
+            <div className="flex flex-wrap gap-1.5">
+              {EXPORT_SIDE_PRESETS.map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  onClick={() => setSizeText(String(preset))}
+                  className={`btn btn-xs btn-outline ${Number(sizeText) === preset ? 'is-active' : ''}`}
+                >
+                  {preset}px
+                </button>
+              ))}
+              {svgSource && (
+                <button
+                  type="button"
+                  onClick={() => setSizeText(String(Math.round(Math.max(svgSource.width, svgSource.height))))}
+                  className={`btn btn-xs btn-outline ${Number(sizeText) === Math.round(Math.max(svgSource.width, svgSource.height)) ? 'is-active' : ''}`}
+                >
+                  {t('filePreview:exportPngOriginal')}
+                </button>
+              )}
+            </div>
+            <Input
+              type="number"
+              label={t('filePreview:exportPngLongestSide')}
+              hint={`${EXPORT_SIDE_MIN}–${EXPORT_SIDE_MAX} px`}
+              min={EXPORT_SIDE_MIN}
+              max={EXPORT_SIDE_MAX}
+              value={sizeText}
+              onChange={(e) => setSizeText(e.target.value)}
+            />
+            {outSize && (
+              <p className="flex items-center gap-1 text-xs text-textSecondary">
+                {t('filePreview:exportPngOutput', { w: outSize.width, h: outSize.height })}
+                {/* 给客户端的建议收进 ? ：只在要发出去时才相关，不该天天占一行 */}
+                <HelpTip content={t('filePreview:exportPngClientHint')} />
+              </p>
+            )}
+            {/* "去掉背景"是高级且容易毁图的一步：放到最底下、默认不勾、写明不推荐——
+                那层满幅底常常就是这个图标本身（深色圆角底），删了图就只剩上层的几个圆 */}
+            {svgSource && svgSource.backgrounds.length > 0 && (
+              <label className="flex items-start gap-2 text-xs text-textSecondary cursor-pointer pt-3 border-t border-border/60">
+                <input
+                  type="checkbox"
+                  checked={stripBg}
+                  onChange={(e) => setStripBg(e.target.checked)}
+                  className="rounded mt-0.5"
+                />
+                <span className="flex flex-wrap items-center gap-1">
+                  <span className="font-medium">{t('filePreview:exportStripBg', { fill: svgSource.backgrounds[0].fill })}</span>
+                  <span className="text-3xs text-rose-400">{t('filePreview:exportStripBgWarn')}</span>
+                  {/* 为什么"不推荐"收进 ? ：这一段只在真的想勾时才有用 */}
+                  <HelpTip content={t('filePreview:exportStripBgHint')} />
+                </span>
+              </label>
+            )}
+            {pngError && <p className="text-xs text-rose-400">{pngError}</p>}
+          </div>
+        )}
+      </Modal>
     </>
   )
 }

@@ -16,7 +16,8 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   AlertTriangle, ArrowRight, Bot, CheckCircle2, Database, Gauge, History, Inbox,
-  KeyRound, LayoutGrid, MessageCircle, MessagesSquare, ShieldAlert, UserPlus, Users, Wrench,
+  HardDrive, KeyRound, LayoutGrid, MessageCircle, MessagesSquare, ShieldAlert, UserPlus, Users,
+  Wrench,
 } from 'lucide-react'
 import { api } from '../../../api/client'
 import { useT } from '../../../i18n/I18nContext'
@@ -155,17 +156,18 @@ export default function OverviewTab() {
     { key: 'turns', label: t('admin:opsTurns'), value: ops?.conversation?.turns, to: 'tab=convlog', hue: 'accent', icon: MessagesSquare, fresh: true },
     { key: 'loginFail', label: t('admin:opsLoginFail'), value: ops?.login?.failed, to: 'tab=logs&log_type=login_failed', hue: 'rose', icon: ShieldAlert, fresh: true },
     { key: 'newUsers', label: t('admin:opsNewUsers'), value: ops?.people?.new_local, to: 'tab=logs&log_type=register', hue: 'mint', icon: UserPlus, fresh: true },
+    { key: 'fileAlerts', label: t('admin:opsFileAlerts'), value: ops?.files?.alerts, to: 'tab=alerts', hue: 'rose', icon: HardDrive, fresh: true },
   ]
 
   const recent = recentTabs().filter(k => k !== 'overview').slice(0, 5).map(findConsoleItem)
 
   const statusBadge = mt.auto
-    ? { cls: 'bg-accent-500/15 text-accent-400', label: t('admin:maintenanceStarting') }
+    ? { tone: 'chip-accent', label: t('admin:maintenanceStarting') }
     : mt.hard
-      ? { cls: 'bg-rose-500/15 text-rose-400', label: t('admin:maintenanceStatusPaused') }
+      ? { tone: 'chip-rose', label: t('admin:maintenanceStatusPaused') }
       : mt.soft
-        ? { cls: 'bg-accent-500/15 text-accent-400', label: t('admin:maintenanceStatusTip') }
-        : { cls: 'bg-mint-500/15 text-mint-400', label: t('admin:maintenanceStatusNormal') }
+        ? { tone: 'chip-accent', label: t('admin:maintenanceStatusTip') }
+        : { tone: 'chip-mint', label: t('admin:maintenanceStatusNormal') }
   const statusDesc = mt.auto
     ? t('admin:maintenanceDescAuto')
     : mt.hard
@@ -178,46 +180,48 @@ export default function OverviewTab() {
 
   return (
     <div className="space-y-5">
-      {/* ── 需要你处理：有事项时整块用琥珀金（要动手），清空后转薄荷（没事） ── */}
-      <section>
-        <div className={`bg-surface rounded-card border overflow-hidden ${
-          hasTasks ? 'border-accent-500/30' : 'border-border'
-        }`}>
-          <div className={`flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r to-transparent ${
-            hasTasks ? 'from-accent-500/12 border-b border-accent-500/20' : 'from-mint-500/12 border-b border-border/60'
-          }`}>
-            <span className={`w-6 h-6 rounded-control flex items-center justify-center shrink-0 ${HUE[hasTasks ? 'accent' : 'mint'].chip}`}>
+      {/* ── 需要你处理：一条通栏灯带。没事是深绿渐变（mint-700→500），有事是琥珀渐变（accent-700→500），
+          一律白字；去掉了白卡（圆角/描边/投影）——它不再是"一个块"，而是把内容区横向切开的一条状态条 ── */}
+      <section className="relative left-1/2 w-screen -translate-x-1/2 -mt-4 xl:-mt-6">
+        <div className={'text-white ' + (hasTasks
+          ? 'bg-gradient-to-r from-accent-700 via-accent-600 to-accent-500'
+          : 'bg-gradient-to-r from-mint-700 via-mint-600 to-mint-500')}>
+          {/* 内容对齐内容列：--page-content-w 由 ContentColumn 写在宿主上（=内容列实际宽度），
+              整条渐变则按 100vw 铺到面板两边——所以字永远与下面的卡片左对齐，色带可以出血 */}
+          <div className="mx-auto" style={{ width: 'var(--page-content-w, 100%)' }}>
+          <div className="flex items-center gap-2 py-4">
+            <span className="w-6 h-6 rounded-control bg-white/15 flex items-center justify-center shrink-0">
               {hasTasks ? <AlertTriangle size={13} /> : <CheckCircle2 size={13} />}
             </span>
-            <h3 className="text-sm font-semibold text-textPrimary">{t('admin:homeAttention')}</h3>
+            <h3 className="text-sm font-semibold">{t('admin:homeAttention')}</h3>
             {ready && hasTasks && (
-              <span className="ml-auto text-2xs font-medium px-2 py-0.5 rounded-full bg-accent-500/15 text-accent-400">
-                {tasks.length}
-              </span>
+              <span className="ml-auto text-2xs font-medium px-2 py-0.5 rounded-full bg-white/20">{tasks.length}</span>
             )}
           </div>
           {!ready ? (
-            <p className="px-4 py-3 text-xs text-textMuted">{t('common:loading')}</p>
+            <div className="pb-4 text-xs text-white/80">{t('common:loading')}</div>
           ) : !hasTasks ? (
-            <p className="px-4 py-3 text-xs text-mint-400">{t('admin:homeAllClear')}</p>
+            // 没事时这句话就是整条灯带的主语：比标题大一档，扫一眼就知道"这里不用管"
+            <p className="pb-5 -mt-1 text-base font-medium text-white">{t('admin:homeAllClear')}</p>
           ) : tasks.map(({ icon: Icon, ...task }) => (
             <button
               key={task.key}
               onClick={() => goto(task.to)}
               className="w-full flex items-center gap-3 px-4 py-2.5 text-left border-b border-border/50 last:border-b-0 hover:bg-accent-500/[0.06] transition-colors"
             >
-              <span className={`w-7 h-7 rounded-control flex items-center justify-center shrink-0 ${HUE.accent.chip}`}>
+              <span className="w-7 h-7 rounded-control bg-white/15 flex items-center justify-center shrink-0">
                 <Icon size={14} />
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block text-sm text-textPrimary">{task.text}</span>
-                <span className="block text-2xs text-textMuted mt-0.5">{task.hint}</span>
+                <span className="block text-sm">{task.text}</span>
+                <span className="block text-2xs text-white/75 mt-0.5">{task.hint}</span>
               </span>
-              <span className="shrink-0 flex items-center gap-1 text-xs font-medium text-primary-400">
+              <span className="shrink-0 flex items-center gap-1 text-xs font-medium text-white/90">
                 {t('admin:homeGo')}<ArrowRight size={12} />
               </span>
             </button>
           ))}
+          </div>
         </div>
       </section>
 
@@ -267,7 +271,7 @@ export default function OverviewTab() {
 
       {/* ── 系统状态 + 维护开关 ── */}
       <section>
-        <div className="bg-surface rounded-card border border-border p-4 space-y-3">
+ <div className="card p-4 space-y-3">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div className="flex items-center gap-3">
               <span className={`w-9 h-9 rounded-card flex items-center justify-center shrink-0 ${HUE[statusHue].chip}`}>
@@ -276,7 +280,7 @@ export default function OverviewTab() {
               <div>
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium text-textPrimary">{t('admin:maintenanceMode')}</span>
-                  <span className={`text-2xs px-2 py-0.5 rounded-full ${statusBadge.cls}`}>{statusBadge.label}</span>
+                  <span className={'chip ' + statusBadge.tone}>{statusBadge.label}</span>
                 </div>
                 <div className="flex items-center gap-1.5 text-2xs text-textMuted mt-0.5">
                   <span className={`w-1.5 h-1.5 rounded-full ${statusDot}`} />
@@ -286,15 +290,11 @@ export default function OverviewTab() {
             </div>
             <div className="flex gap-2">
               <button onClick={toggleHard} disabled={!!mtBusy} title={t('admin:homeMaintenanceOnHint')}
-                className={`px-3 py-1.5 rounded-control text-xs font-medium transition-colors disabled:opacity-50 ${
-                  mt.hard ? 'bg-mint-500 hover:bg-mint-600 text-white' : 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30'
-                }`}>
+                className={'btn btn-sm ' + (mt.hard ? 'btn-outline' : 'btn-tinted-danger')}>
                 {mtBusy === 'hard' ? '···' : mt.hard ? t('admin:maintenanceResumeService') : t('admin:maintenancePauseService')}
               </button>
               <button onClick={toggleSoft} disabled={!!mtBusy} title={t('admin:homeMaintenanceOnHint')}
-                className={`px-3 py-1.5 rounded-control text-xs font-medium transition-colors disabled:opacity-50 ${
-                  mt.soft ? 'bg-mint-500 hover:bg-mint-600 text-white' : 'bg-accent-500/10 hover:bg-accent-500/20 text-accent-400 border border-accent-500/30'
-                }`}>
+                className={'btn btn-sm ' + (mt.soft ? 'btn-outline' : 'btn-tinted')}>
                 {mtBusy === 'soft' ? '···' : mt.soft ? t('admin:maintenanceCancelTip') : t('admin:maintenanceShowTip')}
               </button>
             </div>

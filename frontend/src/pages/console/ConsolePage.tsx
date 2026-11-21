@@ -33,12 +33,16 @@ export default function ConsolePage() {
   const current = findConsoleItem(searchParams.get('tab'))
   const [activeKey, setActiveKey] = useState(current.key)
   const workspace = workspaceOf(activeKey)
-  const [mobileView, setMobileView] = useState<'list' | 'detail'>(searchParams.get('tab') ? 'detail' : 'list')
+  // 移动端的「列表 / 详情」不另存一份 state：它完全由 URL 里有没有 tab 决定。
+  // 以前是 state + URL 两个来源，返回按钮只改 state、URL 还带着 tab，物理返回键与刷新就各走一套。
+  const mobileView: 'list' | 'detail' = searchParams.get('tab') ? 'detail' : 'list'
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(RAIL_KEY) === '1')
   // 每个工作区记住上次看的那一页：切回来还是原来那页，不用重新找
   const lastVisited = useRef<Record<string, string>>({ [workspace.key]: current.key })
   const navigate = useNavigate()
   const sidebarRef = useRef<HTMLDivElement>(null)
+  const desktopContentRef = useRef<HTMLDivElement>(null)
+  const mobileDetailRef = useRef<HTMLDivElement>(null)
   const { sidebarWidth, handleResizeStart } = useResizableSidebar('admin_sidebar_width', sidebarRef)
 
   // URL 是页签的唯一入口：从别的页签点数字跳过来、浏览器前进/后退，都要跟着切
@@ -49,6 +53,12 @@ export default function ConsolePage() {
 
   // 首页的「最近访问」靠这条记录：页签真正生效时记一次（左栏点、URL 进、首页跳都算）
   useEffect(() => { rememberTab(activeKey) }, [activeKey])
+
+  // 切页从顶部开始：滚动容器是复用的 DOM，不归零就会带着上一页的滚动位置（指示条看着像"串了"）
+  useEffect(() => {
+    desktopContentRef.current?.scrollTo({ top: 0 })
+    mobileDetailRef.current?.scrollTo({ top: 0 })
+  }, [activeKey])
 
   const activeItem = findConsoleItem(activeKey)
   const ActiveTab = activeItem.Component
@@ -77,9 +87,9 @@ export default function ConsolePage() {
   return (
     <div className="h-full flex flex-col bg-canvas">
       {/* 头部：控制台标题 + 工作区页签（桌面端）+ 手册入口 */}
-      <div className="px-4 md:px-6 h-12 border-b border-border bg-surface shrink-0 flex items-center gap-2">
+      <div className="top-bar px-4 md:px-6 h-14 shrink-0 flex items-center gap-2">
         {mobileView === 'detail' ? (
-          <button onClick={() => setMobileView('list')} className="icon-btn-sm md:hidden -ml-1 text-textSecondary" title={t('admin:backToList')}>
+          <button onClick={() => setSearchParams({}, { replace: true })} className="icon-btn-sm md:hidden -ml-1 text-textSecondary" title={t('admin:backToList')}>
             <ArrowLeft size={20} />
           </button>
         ) : (
@@ -176,7 +186,7 @@ export default function ConsolePage() {
           )}
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 xl:p-6 min-w-0">
+        <div ref={desktopContentRef} className="flex-1 overflow-y-auto overflow-x-hidden p-4 xl:p-6 min-w-0">
           <ContentColumn width={contentWidth}>
             <ActiveTab />
           </ContentColumn>
@@ -184,8 +194,7 @@ export default function ConsolePage() {
       </div>
 
       {/* 移动端：分组列表（全部工作区平铺，和以前一模一样） */}
-      {mobileView === 'list' && (
-        <div className="md:hidden flex-1 overflow-y-auto p-4 pb-nav bg-canvas space-y-4">
+      <div className={'md:hidden flex-1 overflow-y-auto p-4 pb-nav bg-canvas space-y-4 ' + (mobileView === 'list' ? '' : 'hidden')}>
           {CONSOLE_WORKSPACES.map(w => (
             <div key={w.key}>
               <div className="text-xs font-semibold text-textMuted uppercase tracking-wider px-1 mb-1.5">{t(w.labelKey)}</div>
@@ -193,7 +202,7 @@ export default function ConsolePage() {
                 {w.items.map((item) => (
                   <button
                     key={item.key}
-                    onClick={() => { openItem(item.key); setMobileView('detail') }}
+                    onClick={() => openItem(item.key)}
                     className="w-full flex items-center gap-3 px-4 py-3 rounded-card hover:bg-elevated active:bg-border/50 transition-colors text-left"
                   >
                     <div className="w-9 h-9 rounded-control bg-primary-500/10 flex items-center justify-center shrink-0">
@@ -208,12 +217,11 @@ export default function ConsolePage() {
                 ))}
               </div>
             </div>
-          ))}
-        </div>
-      )}
+        ))}
+      </div>
 
       {/* 移动端：详情内容区 */}
-      <div className={'md:hidden flex-1 overflow-y-auto p-4 pb-nav bg-canvas ' + (mobileView === 'list' ? 'hidden' : '')}>
+      <div ref={mobileDetailRef} className={'md:hidden flex-1 overflow-y-auto p-4 pb-nav bg-canvas ' + (mobileView === 'list' ? 'hidden' : '')}>
         <ContentColumn width={contentWidth}>
           <ActiveTab />
         </ContentColumn>

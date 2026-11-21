@@ -383,7 +383,7 @@ export default function WorldCreatorConfig({ wid, creator, usageStats, aiMode, o
               <button
                 onClick={saveSettings}
                 disabled={settingsSaving}
-                className="btn btn-sm btn-outline w-full"
+                className="btn btn-md btn-outline w-full"
               >
                 {settingsSaving ? t('tool:world.creatorConfig.saving') : t('tool:world.creatorConfig.lifecycle.save')}
               </button>
@@ -452,7 +452,7 @@ export default function WorldCreatorConfig({ wid, creator, usageStats, aiMode, o
           <button
             onClick={save}
             disabled={saving}
-            className="btn btn-sm btn-primary w-full"
+            className="btn btn-md btn-primary w-full"
           >
             {saving ? t('tool:world.creatorConfig.saving') : (<span className="inline-flex items-center justify-center gap-1.5"><Save size={14} /> {t('tool:world.creatorConfig.save')}</span>)}
           </button>

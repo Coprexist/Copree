@@ -180,7 +180,7 @@ export default function ProviderPresetSelector() {
   }
 
   return (
-    <section className="bg-surface border border-border rounded-card p-5 space-y-4">
+    <section className="card p-5 space-y-4">
       <h3 className="text-sm font-semibold text-textPrimary flex items-center gap-2">
         <Server size={16} className="text-accent-400" />
         {t('admin:llmProvider')}
@@ -289,11 +289,7 @@ export default function ProviderPresetSelector() {
             <button
               disabled={newPreset === 'manual'}
               onClick={() => startAdd('manual')}
-              className={`px-3 py-1.5 text-xs rounded-control font-medium transition-colors border ${
-                newPreset === 'manual'
-                  ? 'bg-accent-500/15 border-accent-500/40 text-accent-500'
-                  : 'bg-canvas border-border text-textMuted hover:text-textSecondary'
-              }`}
+              className="btn btn-sm btn-outline"
             >
               <Settings size={12} className="inline mr-1" />
               {t('admin:manualConfig')}
@@ -490,7 +486,7 @@ function ProviderEditForm({
               onClick={handleFetchModels}
               disabled={fetching || !editBaseUrl.trim()}
               title={!editBaseUrl.trim() ? '请先填 API Base URL' : undefined}
-              className="btn btn-xs btn-outline gap-1 bg-canvas hover:text-primary-500 hover:border-primary-500/40 disabled:hover:text-textSecondary shrink-0"
+              className="btn btn-md btn-outline gap-1 bg-canvas hover:text-primary-500 hover:border-primary-500/40 disabled:hover:text-textSecondary shrink-0"
             >
               {fetching ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
               {t('admin:fetchModels')}
@@ -511,7 +507,7 @@ function ProviderEditForm({
         <button
           onClick={onSave}
           disabled={saving || !editName.trim()}
-          className="btn btn-sm btn-primary gap-1.5"
+          className="btn btn-md btn-primary gap-1.5"
         >
           {saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
           {saving ? t('common:saving') : t('common:save')}

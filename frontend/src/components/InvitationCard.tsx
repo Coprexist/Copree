@@ -76,9 +76,7 @@ export default function InvitationCard({
         <div className="flex gap-2 px-4 pb-3 pt-1">
           <button
             onClick={(e) => { e.stopPropagation(); onAccept(invitationId) }}
-            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5
-              bg-mint-500 hover:bg-mint-600 text-white text-sm font-medium
-              rounded-control transition-colors"
+            className="btn btn-sm btn-success flex-1"
           >
             <Check size={14} />
             {t('invitation:accept')}

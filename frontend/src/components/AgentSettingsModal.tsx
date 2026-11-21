@@ -6,7 +6,7 @@ import StatusColorPicker from './shared/StatusColorPicker'
 import SkillBackpack from './SkillBackpack'
 import ChannelModal from './channels/ChannelModal'
 import Toggle from './Toggle'
-import { SliderField } from './ui'
+import { SliderField, SecretInput } from './ui'
 // 档位预设与创建弹窗共用一份，避免两处各维护一套数字
 import { PRESETS } from './agent-create/presets'
 // 模型下拉也共用一份渲染：清单按通道给（后端 /agents/models），"当前通道不支持"的提示也在那里
@@ -382,7 +382,7 @@ export default function AgentSettingsModal({
                 <div>
                   <label className="block text-xs font-medium mb-1 text-textSecondary">{t('modal:agentNameLabel')}</label>
                   <input type="text" value={name} onChange={(e) => setName(e.target.value)}
-                    className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50" />
+                    className="field w-full" />
                 </div>
                 <div>
                   <label className="block text-xs font-medium mb-1 text-textSecondary">{t('modal:mainSettingsProfile')}</label>
@@ -405,7 +405,7 @@ export default function AgentSettingsModal({
                 <div>
                   <label className="block text-xs font-medium mb-1 text-textSecondary">{t('modal:createAgentSystemPrompt')}</label>
                   <textarea value={systemPrompt} onChange={(e) => setSystemPrompt(e.target.value)} rows={3}
-                    className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50 resize-none" />
+                    className="field w-full resize-none" />
                 </div>
               </Section>
 
@@ -414,13 +414,13 @@ export default function AgentSettingsModal({
                 <div>
                   <label className="block text-xs font-medium mb-1 text-textSecondary">{t('agentDetail:bioLabel')}</label>
                   <textarea value={bio} onChange={(e) => setBio(e.target.value)} rows={3} maxLength={500}
-                    className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50 resize-none" />
+                    className="field w-full resize-none" />
                   <p className="text-3xs text-textMuted mt-0.5">{bio.length}/500</p>
                 </div>
                 <div>
                   <label className="block text-xs font-medium mb-1 text-textSecondary">{t('agentDetail:statusTextLabel')}</label>
                   <input type="text" value={statusText} onChange={(e) => setStatusText(e.target.value)} maxLength={100}
-                    className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50" />
+                    className="field w-full" />
                 </div>
                 <div>
                   <label className="block text-xs font-medium mb-1 text-textSecondary">{t('me:statusColorLabel')}</label>
@@ -458,7 +458,7 @@ export default function AgentSettingsModal({
                       {t('modal:detailSettingsChatModel')} <span className="text-textMuted">({t('modal:detailSettingsDefaultLabel')} {defaults.chat_model})</span>
                     </label>
                     <select value={chatModel} onChange={(e) => setChatModel(e.target.value)}
-                      className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50">
+                      className="field w-full">
                       <option value="">{t('modal:detailSettingsGlobalDefault')}</option>
                       {renderGroupedModels(modelOptions, providers, chatModel)}
                     </select>
@@ -468,7 +468,7 @@ export default function AgentSettingsModal({
                       {t('modal:detailSettingsWorkModel')} <span className="text-textMuted">({t('modal:detailSettingsDefaultLabel')} {defaults.work_model})</span>
                     </label>
                     <select value={workModel} onChange={(e) => setWorkModel(e.target.value)}
-                      className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50">
+                      className="field w-full">
                       <option value="">{t('modal:detailSettingsGlobalDefault')}</option>
                       {renderGroupedModels(modelOptions, providers, workModel)}
                     </select>
@@ -484,7 +484,7 @@ export default function AgentSettingsModal({
                   <select
                     value={delayReplyEnabled === null ? 'inherit' : delayReplyEnabled ? 'on' : 'off'}
                     onChange={(e) => { const v = e.target.value; setDelayReplyEnabled(v === 'inherit' ? null : v === 'on') }}
-                    className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                    className="field w-full"
                   >
                     <option value="inherit">{t('modal:detailSettingsInheritGlobal')}</option>
                     <option value="on">{t('common:enabled')}</option>
@@ -547,7 +547,7 @@ export default function AgentSettingsModal({
                 <div>
                   <label className="block text-xs font-medium mb-1 text-textSecondary">{t('modal:detailSettingsMemoryLoadMode')}</label>
                   <select value={memoryLoadMode} onChange={(e) => setMemoryLoadMode(e.target.value)}
-                    className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50">
+                    className="field w-full">
                     <option value="index_only">{t('modal:detailSettingsMemoryLoadModeIndexOnly')}</option>
                     <option value="index_plus_recent">{t('modal:detailSettingsMemoryLoadModeIndexRecent')}</option>
                     <option value="index_plus_semantic">{t('modal:detailSettingsMemoryLoadModeIndexSemantic')}</option>
@@ -559,7 +559,7 @@ export default function AgentSettingsModal({
                 <div>
                   <label className="block text-xs font-medium mb-1 text-textSecondary">{t('modal:detailSettingsMemorySharedScope')}</label>
                   <select value={memorySharedScope} onChange={(e) => setMemorySharedScope(e.target.value)}
-                    className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50">
+                    className="field w-full">
                     <option value="private_only">{t('modal:detailSettingsMemorySharedScopePrivate')}</option>
                     <option value="private_plus_shared_by_user">{t('modal:detailSettingsMemorySharedScopeByUser')}</option>
                     <option value="private_plus_shared_all">{t('modal:detailSettingsMemorySharedScopeAll')}</option>
@@ -574,7 +574,7 @@ export default function AgentSettingsModal({
                   <input type="number" min={1} max={10000} value={conversationLogsLimit ?? ''}
                     onChange={(e) => setConversationLogsLimit(e.target.value ? parseInt(e.target.value) : null)}
                     placeholder={t('modal:detailSettingsConversationLogsLimitDesc')}
-                    className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50" />
+                    className="field w-full" />
                   <p className="text-3xs text-textMuted mt-0.5">{t('modal:detailSettingsConversationLogsLimitDesc')}</p>
                 </div>
                 <div>
@@ -582,7 +582,7 @@ export default function AgentSettingsModal({
                   <select
                     value={userCanViewLogs === null ? 'inherit' : userCanViewLogs ? 'on' : 'off'}
                     onChange={(e) => { const v = e.target.value; setUserCanViewLogs(v === 'inherit' ? null : v === 'on') }}
-                    className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                    className="field w-full"
                   >
                     <option value="inherit">{t('modal:detailSettingsInheritGlobal')}</option>
                     <option value="on">{t('common:enabled')}</option>
@@ -599,7 +599,7 @@ export default function AgentSettingsModal({
                 <div>
                   <label className="block text-xs font-medium mb-1 text-textSecondary">{t('modal:detailSettingsReminderGrace')}</label>
                   <select value={reminderGrace} onChange={(e) => setReminderGrace(e.target.value)}
-                    className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50">
+                    className="field w-full">
                     <option value="every_time">{t('modal:detailSettingsReminderGraceEvery')}</option>
                     <option value="once">{t('modal:detailSettingsReminderGraceOnce')}</option>
                     <option value="off">{t('modal:detailSettingsReminderGraceOff')}</option>
@@ -701,7 +701,7 @@ export default function AgentSettingsModal({
                 <div>
                   <label className="block text-xs font-medium mb-1 text-textSecondary">API Base URL</label>
                   <input type="text" value={apiBaseUrl} onChange={(e) => setApiBaseUrl(e.target.value)}
-                    className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                    className="field w-full"
                     placeholder={t('modal:detailSettingsApiBaseUrlPlaceholder')} />
                 </div>
                 <div>
@@ -709,12 +709,12 @@ export default function AgentSettingsModal({
                     API Key
                     <ApiKeyGetLink providers={providers} />
                   </label>
-                  <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} autoComplete="off"
-                    className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                  <SecretInput value={apiKey} onChange={(e) => setApiKey(e.target.value)}
+                    wrapperClassName="w-full"
                     placeholder={agent.has_api_key ? '•••••••• (unchanged if empty)' : t('modal:detailSettingsApiKeyPlaceholder')} />
                 </div>
                 <button onClick={handleTestApi} disabled={testingApi || (!apiBaseUrl.trim() && !apiKey.trim())}
-                  className="btn btn-xs btn-outline gap-1.5"
+                  className="btn btn-md btn-outline gap-1.5"
                 >
                   {testingApi ? <Loader2 size={12} className="animate-spin" /> : <RotateCw size={12} />}
                   {t('settings:testConnection')}
@@ -745,7 +745,7 @@ export default function AgentSettingsModal({
                   <div className="flex-1 relative">
                     <Ticket size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-textMuted" />
                     <input type="text" value={redeemCode} onChange={(e) => setRedeemCode(e.target.value)}
-                      className="w-full pl-9 pr-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                      className="field field-with-icon w-full"
                       placeholder={t('modal:detailSettingsRedeemPlaceholder')} />
                   </div>
                   <button onClick={handleRedeem} disabled={redeeming || !redeemCode.trim()}
@@ -834,7 +834,7 @@ function NumberField({ label, value, setValue, min, max, desc }: {
       <label className="block text-xs text-textSecondary mb-1">{label}</label>
       <input type="number" min={min} max={max} value={value}
         onChange={(e) => setValue(parseInt(e.target.value) || min)}
-        className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50" />
+        className="field w-full" />
       {desc && <p className="text-3xs text-textMuted mt-0.5">{desc}</p>}
     </div>
   )

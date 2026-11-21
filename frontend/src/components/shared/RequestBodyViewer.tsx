@@ -16,8 +16,8 @@ import { foldDuration, foldTransition } from './collapseMotion'
 type Kind = 'system' | 'state' | 'injected' | 'user' | 'assistant' | 'roundTools' | 'toolCall' | 'toolResult' | 'reasoning' | 'error'
 
 // 分块配色：左竖条定色、底色调淡，一个色相只承担一类（图例才分得清）：
-//   灰=系统提示 / 天蓝=思考 / 琥珀=平台注入（状态栈、插入的消息）/ 紫=人说的话与工具链 / 绿=AI 说的话 / 红=收尾报错
-// 工具链同色相三档 + 虚线框；思考改用主题第五色系 azure 天蓝（以前跟状态栈、工具调用同是紫，撞在一起）
+//   灰=系统提示 / 天蓝=思考 / 琥珀=平台注入（状态链、插入的消息）/ 紫=人说的话与工具链 / 绿=AI 说的话 / 红=收尾报错
+// 工具链同色相三档 + 虚线框；思考改用主题第五色系 azure 天蓝（以前跟状态链、工具调用同是紫，撞在一起）
 const STYLES: Record<Kind, { bar: string; box: string; key: string }> = {
   system:     { bar: 'bg-textMuted/40',   box: 'bg-canvas border-border',                          key: 'logs:kindSystem' },
   state:      { bar: 'bg-accent-500',     box: 'bg-accent-500/5 border-accent-500/30',             key: 'logs:kindState' },
@@ -47,7 +47,7 @@ const EXPORT_STEP_BLOCKS = 64
 /** removed 用于改变量里"已经没了"的那几条：压暗再加一圈红，跟留下的分得开 */
 type Tone = 'normal' | 'removed'
 
-/** 状态栈摘要：这段状态的前缀（当前帧 / 交接 / 焦段）就长在这条里，是各状态请求体最大的不同 */
+/** 状态链摘要：这段状态的前缀（当前帧 / 交接 / 焦段）就长在这条里，是各状态请求体最大的不同 */
 const STATE_MARK = '## 📋 当前状态'
 /** 插入进来的上下文（不是对话双方说的话）：变更通知、上一轮交接、上下文压缩、未读提示 */
 const INJECTED_MARKS = ['【能力变更通知】', '【通道变更】', '[上一轮交接]', '[上下文压缩]', '（更早还有']

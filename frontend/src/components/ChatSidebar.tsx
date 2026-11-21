@@ -16,7 +16,21 @@ import { refreshChatLists, updateGroup, updateSession, useChatLists } from '../h
 const URL_RE = /(https?:\/\/[^\s<]+[^\s<.,;:!?)}\]'"])/g
 
 /** 预览文本组件：自动识别 URL 并赋予链接颜色 */
-function PreviewText({ text, placeholder }: { text: string | null; placeholder: string }) {
+function PreviewText({ text, placeholder, revokedName }: {
+  text: string | null
+  placeholder: string
+  /** 撤回的那条：名字单独给，好让"宽度不够先缩名字、后半句不缩" */
+  revokedName?: string | null
+}) {
+  const t = useT()
+  if (revokedName) {
+    return (
+      <span className="flex min-w-0 items-baseline gap-1">
+        <span className="min-w-0 truncate">{revokedName}</span>
+        <span className="shrink-0">{t('chat:revokedSuffix')}</span>
+      </span>
+    )
+  }
   if (!text) return <span className="truncate block">{placeholder}</span>
   const parts: ReactNode[] = []
   let lastIndex = 0
@@ -54,14 +68,14 @@ function DmAvatar({ session }: { session: DMSession }) {
     <div className="w-9 h-9 rounded-full relative shrink-0">
       {p.avatar_url ? (
         <>
-          <div className={`absolute inset-px rounded-full bg-gradient-to-bl ${
-            p.type === 'system' ? 'from-rose-400 to-rose-600' : 'from-teal-400 to-teal-600'
+          <div className={`absolute inset-px rounded-full bg-gradient-to-br ${
+            p.type === 'system' ? 'from-rose-400 to-rose-600' : 'from-primary-500 to-primary-300'
           }`} />
           <img src={thumbUrl(p.avatar_url) || p.avatar_url} alt="" className="relative w-full h-full rounded-full object-cover" loading="lazy" decoding="async" />
         </>
       ) : (
-        <div className={`w-full h-full rounded-full bg-gradient-to-bl flex items-center justify-center ${
-          p.type === 'system' ? 'from-rose-400 to-rose-600' : 'from-teal-400 to-teal-600'
+        <div className={`w-full h-full rounded-full bg-gradient-to-br flex items-center justify-center ${
+          p.type === 'system' ? 'from-rose-400 to-rose-600' : 'from-primary-500 to-primary-300'
         }`}>
           {p.type === 'system' ? (
             <ShieldAlert size={16} className="text-white" />
@@ -113,6 +127,8 @@ interface Group {
   unread_count: number
   has_mention: boolean
   last_message_preview: string | null
+  /** 末尾那条被撤回时的发送者名字（后端单独给，名字要能单独缩） */
+  last_message_revoked_name?: string | null
   last_message_at: string | null
   dnd_until: string | null
   member_avatars: string[]
@@ -135,6 +151,8 @@ interface DMSession {
     status_color: string | null
   }
   last_message_preview: string | null
+  /** 末尾那条被撤回时的发送者名字（后端单独给，名字要能单独缩） */
+  last_message_revoked_name?: string | null
   last_message_at: string | null
   unread_count: number
   is_federated?: boolean
@@ -339,7 +357,11 @@ const ChatSidebar = memo(function ChatSidebar({
               <span className="text-rose-400 font-medium shrink-0">{t('chatlist:atYou')}</span>
             )}
             <span className="min-w-0 flex-1" style={{ display: 'block' }}>
-              <PreviewText text={g.last_message_preview} placeholder={t('chatlist:noMessages')} />
+              <PreviewText
+                text={g.last_message_preview}
+                revokedName={g.last_message_revoked_name}
+                placeholder={t('chatlist:noMessages')}
+              />
             </span>
             {g.last_message_at && (
               <span className="shrink-0">{formatRelativeTime(g.last_message_at, lang)}</span>
@@ -393,7 +415,11 @@ const ChatSidebar = memo(function ChatSidebar({
           </div>
           <div className="text-2xs text-textMuted mt-0.5 flex items-center gap-1 min-w-0">
             <span className="min-w-0 flex-1" style={{ display: 'block' }}>
-              <PreviewText text={s.last_message_preview} placeholder={t('chatlist:noMessages')} />
+              <PreviewText
+                text={s.last_message_preview}
+                revokedName={s.last_message_revoked_name}
+                placeholder={t('chatlist:noMessages')}
+              />
             </span>
             {s.last_message_at && (
               <span className="shrink-0">{formatRelativeTime(s.last_message_at, lang)}</span>
@@ -409,7 +435,7 @@ const ChatSidebar = memo(function ChatSidebar({
       hideOnMobile && !nothingSelected ? 'hidden' : 'flex'
     } md:flex`}>
       {/* 标题 */}
-      <div className="px-3 h-14 border-b border-border font-medium text-sm flex items-center justify-between text-textPrimary shrink-0">
+      <div className="top-bar px-3 h-14 font-medium text-sm flex items-center justify-between text-textPrimary shrink-0">
         <div className="flex items-center gap-2">
           <button
             onClick={openDrawer}

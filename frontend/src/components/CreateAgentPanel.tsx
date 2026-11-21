@@ -1,13 +1,14 @@
 import { useEffect, useReducer, useRef, useState } from 'react'
-import { ArrowLeft, Settings } from 'lucide-react'
+import { ArrowLeft, Pencil, Settings, Sparkles } from 'lucide-react'
 import { api } from '../api/client'
 import { useT } from '../i18n/I18nContext'
 import { AiTypeSelector, PresetIcon, SubIcon } from './agent-create/fields'
+import { Button, confirmAsync, UnderlineTabs } from './ui'
 import { CARD_ICONS, PRESETS, SUB_OPTIONS } from './agent-create/presets'
 import SubOptionModal from './agent-create/SubOptionModal'
 import DetailSettingsModal from './agent-create/DetailSettingsModal'
 import CreationAssistantPanel from './agent-create/CreationAssistantPanel'
-import { patchDraft, type CreationDraft } from './agent-create/creationApi'
+import { createDraft, patchDraft, type CreationDraft } from './agent-create/creationApi'
 import type { AgentForm, AgentFormApi, ModelOption, ProviderInfo } from './agent-create/types'
 
 // ── 表单状态：一份 reducer，setter 由字段名推导 ──
@@ -165,6 +166,11 @@ export default function CreateAgentPanel({
   const [selectedSub, setSelectedSub] = useState<string | null>(draft?.sub ?? null)
   const [showSubModal, setShowSubModal] = useState<string | null>(null) // 子选项弹窗（独立 modal）
 
+  // 从「已建好的记录」重开时，保存等于再建一个：确认后另起一张草稿承接这次创建，
+  // 原来那条记录（以及它指向的 AI）原样留着——草稿与 AI 始终是一对一。
+  const [forkedDraftId, setForkedDraftId] = useState<number | null>(null)
+  const draftId = forkedDraftId ?? draft?.id ?? null
+
   // 弹窗状态
   const [showDetailSettings, setShowDetailSettings] = useState(false)
 
@@ -179,6 +185,8 @@ export default function CreateAgentPanel({
   const [error, setError] = useState('')
   // 建号成功但收尾失败时留住的名字：窗口要停在原地把话说清楚
   const [createdAgent, setCreatedAgent] = useState<string | null>(null)
+  // 窄屏两个屏：填写配置 / 创建助手（桌面端两栏并排，不靠这个）
+  const [mobileTab, setMobileTab] = useState<'form' | 'chat'>('form')
 
   // ── sin() 浮动动画（JS 驱动，选完子项才启动）──
   // 拿节点用 ref 而不是 querySelector：不依赖全局唯一的 data 属性，卸载时也不会静默跳过复位
@@ -292,22 +300,22 @@ export default function CreateAgentPanel({
 
   // 草稿自动保存：打字、助手填表、换档位都回写，刷新或换设备能接着填
   useEffect(() => {
-    if (!draft) return
+    if (!draftId) return
     const timer = setTimeout(() => {
-      patchDraft(draft.id, { form, preset: selectedPreset, sub: selectedSub }).catch(() => {})
+      patchDraft(draftId, { form, preset: selectedPreset, sub: selectedSub }).catch(() => {})
     }, 600)
     return () => clearTimeout(timer)
-  }, [draft, form, selectedPreset, selectedSub])
+  }, [draftId, form, selectedPreset, selectedSub])
 
   // ── 创建 ──
-  const handleCreate = async () => {
-    if (!name.trim()) return
+  /** 真正落库：draft_id 是幂等键，同一张草稿只会建出一个 AI */
+  const doCreate = async (useDraftId: number | null) => {
     setLoading(true)
     setError('')
     try {
       const agent = await api.post<{ id: number; name: string }>(
         '/agents',
-        buildCreateBody(form, selectedPreset || 'chat'),
+        { ...buildCreateBody(form, selectedPreset || 'chat'), draft_id: useDraftId },
       )
       // 如果填写了独立 API 配置，创建后立即设置
       if (apiBaseUrl.trim() || apiKey.trim()) {
@@ -323,13 +331,41 @@ export default function CreateAgentPanel({
           return
         }
       }
-      if (draft) patchDraft(draft.id, { status: 'created', agent_id: agent.id }).catch(() => {})
+      // 草稿的 created 状态与 agent_id 由后端在同一个事务里写（这次创建算数的唯一开关）
       onCreated(agent.name)
     } catch (err: any) {
       setError(err.message || t('modal:createAgentFailed'))
     } finally {
       setLoading(false)
     }
+  }
+
+  const handleCreate = async () => {
+    if (!name.trim()) return
+    let targetDraftId = draftId
+    // 这张记录已经落过 AI：先把"会新建一个、原来那个不动"讲清楚，
+    // 再另起一张草稿承接这次创建（草稿与 AI 一对一，入口页的记录不会被改写）
+    if (draft?.status === 'created' && forkedDraftId === null) {
+      const ok = await confirmAsync({
+        title: t('modal:createAgentReuseTitle'),
+        message: t('modal:createAgentReuseBody', { name: draft.title || name }),
+        confirmText: t('modal:createAgentReuseConfirm'),
+        cancelText: t('modal:createAgentReuseCancel'),
+      })
+      if (!ok) return
+      try {
+        const fresh = await createDraft()
+        const cloned = await patchDraft(fresh.id, {
+          title: draft.title, form, preset: selectedPreset, sub: selectedSub,
+        })
+        setForkedDraftId(cloned.id)
+        targetDraftId = cloned.id
+      } catch (err: any) {
+        setError(err?.message || t('modal:createAgentFailed'))
+        return
+      }
+    }
+    await doCreate(targetDraftId)
   }
 
   // ── 关闭 ──
@@ -346,48 +382,62 @@ export default function CreateAgentPanel({
 
   return (
     <div className="h-full flex flex-col bg-canvas">
-      <div className="flex-1 min-h-0 w-full max-w-6xl mx-auto p-4 md:p-6 flex flex-col">
-        {/* 页头：返回 AI 列表（整页流程，不再是弹窗） */}
-        <div className="flex items-center gap-3 mb-5 shrink-0">
+      {/* 顶部条：底纹通栏、内容跟下面的两栏同一个度量（不然标题贴在屏边、内容挤在中间） */}
+      <div className="shrink-0 border-b border-border bg-surface">
+        <div className="flex w-full items-center gap-3 px-4 py-3 lg:px-6">
           <button onClick={handleClose} className="icon-btn-sm -ml-1 text-textSecondary">
             <ArrowLeft size={18} />
           </button>
           <h2 className="text-lg font-semibold text-textPrimary">{t('modal:createAgentTitle')}</h2>
         </div>
+      </div>
 
-        {/* 内容区：宽屏左右分栏（表单区自己滚）；窄屏一路排下来、整块跟着页面滚。
-            以前窄屏给助手面板钉 38% 高，键盘一弹这格就剩不到一个输入框的高度，
-            列表的最小高度把「输入框 + 发送键」顶出面板、压在表单字段上 */}
-        <div className="flex-1 flex flex-col md:flex-row min-h-0 gap-4 overflow-y-auto md:overflow-visible">
-        {draft && (
-          <CreationAssistantPanel
-            draft={draft}
-            onForm={applyAssistantForm}
-            className="shrink-0 md:w-[330px] border-b md:border-b-0 md:border-r border-border pb-3 md:pb-0 md:pr-4"
-          />
-        )}
-        <div className="min-w-0 md:flex-1 md:min-h-0 md:overflow-y-auto scroll-floor pb-[var(--safe-bottom)] md:pb-0">
+      {/* 已建好的记录被重开：把"保存 = 再建一个"先摆在面前，别等填完才说 */}
+      {draft?.status === 'created' && forkedDraftId === null && (
+        <div className="shrink-0 border-b border-mint-500/30 bg-mint-500/10 px-4 py-2 text-xs text-mint-400 lg:px-6">
+          {t('modal:createAgentReuseBanner', { name: draft.title || t('modal:createStartUntitled') })}
+        </div>
+      )}
+
+      {/* 窄屏两个屏之间切：填写配置 / 创建助手。桌面端是「左表单 + 右对话窗格」并排 */}
+      <div className="shrink-0 px-2 lg:hidden">
+        <UnderlineTabs
+          grow
+          items={[
+            { key: 'form', label: t('modal:createAgentTabForm'), icon: <Pencil size={14} /> },
+            { key: 'chat', label: t('modal:createAgentTabChat'), icon: <Sparkles size={14} /> },
+          ]}
+          value={mobileTab}
+          onChange={(key) => setMobileTab(key as 'form' | 'chat')}
+        />
+      </div>
+
+      <div className="flex min-h-0 w-full flex-1 flex-col lg:flex-row">
+        {/* 左：表单（自己滚） */}
+        <div className={`min-w-0 scroll-floor px-4 py-4 pb-[var(--safe-bottom)] lg:flex-1 lg:min-h-0 lg:overflow-y-auto lg:px-6 lg:pb-4 ${
+          mobileTab === 'form' ? 'flex-1 flex flex-col min-h-0 overflow-y-auto' : 'hidden lg:block'
+        }`}>
 
         {/* ── 名称输入 ── */}
         <div className="mb-4">
-          <label className="block text-xs font-medium mb-1.5 text-textSecondary">{t('modal:agentNameLabel')}</label>
+          <label className="block text-sm font-medium mb-1.5 text-textSecondary">{t('modal:agentNameLabel')}</label>
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            className="w-full px-3.5 py-2.5 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+            className="field field-lg w-full"
             placeholder={t('modal:createAgentNamePlaceholder')}
           />
         </div>
 
         {/* ── 系统提示词 ── */}
         <div className="mb-5">
-          <label className="block text-xs font-medium mb-1.5 text-textSecondary">{t('modal:createAgentSystemPrompt')}</label>
+          <label className="block text-sm font-medium mb-1.5 text-textSecondary">{t('modal:createAgentSystemPrompt')}</label>
           <textarea
             value={systemPrompt}
             onChange={(e) => setSystemPrompt(e.target.value)}
             rows={3}
-            className="w-full px-3.5 py-2.5 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50 resize-none"
+            className="field w-full resize-none"
             placeholder={t('modal:createAgentSystemPromptPlaceholder')}
           />
         </div>
@@ -446,16 +496,6 @@ export default function CreateAgentPanel({
           </div>
         )}
 
-        {/* ── 跳过预设 ── */}
-        {!selectedPreset && (
-          <button
-            onClick={() => setShowDetailSettings(true)}
-            className="w-full text-center text-xs text-textMuted hover:text-textSecondary transition-colors mb-3 py-1"
-          >
-            {t('modal:createAgentSkipPreset')}
-          </button>
-        )}
-
         {/* ── 个人资料（可选） ── */}
         <div className="space-y-2 mb-3">
           <textarea
@@ -464,41 +504,56 @@ export default function CreateAgentPanel({
             placeholder={t('agentDetail:bioPlaceholder')}
             rows={2}
             maxLength={500}
-            className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50 resize-none"
+            className="field w-full resize-none"
           />
           <input
             type="text"
             value={statusText}
             onChange={(e) => setStatusText(e.target.value)}
             placeholder={t('agentDetail:statusTextPlaceholder')}
-            className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+            className="field w-full"
           />
         </div>
 
         {/* ── 操作按钮区 ── */}
         {createdAgent ? (
           // 建号已完成，只剩收尾：不再给"再建一个"的入口
-          <button onClick={handleClose} className="btn btn-md btn-primary w-full">
+          <Button size="md" variant="primary" className="w-full" onClick={handleClose}>
             {t('common:close')}
-          </button>
+          </Button>
         ) : (
-          <div className="flex gap-3">
-            <button
+          // 窄屏两个按钮平分整行；宽屏右对齐、定宽——通栏后两个各占一半会拉成两根长条
+          <div className="flex gap-3 lg:justify-end">
+            <Button
+              size="md"
+              variant="secondary"
+              className="flex-1 lg:min-w-[148px] lg:flex-none"
+              icon={<Settings size={14} />}
               onClick={() => { setShowSubModal(null); setShowDetailSettings(true) }}
-              className="flex-1 py-2.5 text-sm border border-border rounded-card hover:bg-elevated text-textSecondary transition-colors font-medium flex items-center justify-center gap-1.5"
             >
-              <Settings size={14} />
               {t('modal:createAgentDetailSettings')}
-            </button>
-            <button
+            </Button>
+            <Button
+              size="md"
+              variant="primary"
+              className="flex-1 lg:min-w-[148px] lg:flex-none"
+              loading={loading}
+              disabled={!name.trim()}
               onClick={handleCreate}
-              disabled={!name.trim() || loading}
-              className="btn btn-md btn-primary flex-1"
             >
               {loading ? t('modal:createAgentCreating') : t('modal:createAgentCreate')}
-            </button>
+            </Button>
           </div>
         )}
+        {/* 跳过预设放在动作按钮下面：先给主路径（选档 → 创建），再给"我不想选档"的旁路 */}
+        {!selectedPreset && !createdAgent && (
+          <div className="mt-3 flex justify-center">
+            <Button size="sm" variant="link" onClick={() => setShowDetailSettings(true)}>
+              {t('modal:createAgentSkipPreset')}
+            </Button>
+          </div>
+        )}
+
         {!name.trim() && selectedPreset && (
           <p className="text-xs text-textMuted mt-2 text-center">{t('modal:createAgentConfirmHint')}</p>
         )}
@@ -527,9 +582,16 @@ export default function CreateAgentPanel({
           />
         )}
         </div>
-        </div>
-      </div>
 
+        {/* 右：创建助手对话窗格（桌面固定在右侧，窄屏自成一个屏） */}
+        {draft && (
+          <div className={`min-w-0 shrink-0 border-border px-3 py-3 lg:flex lg:w-[360px] lg:min-h-0 lg:flex-col lg:border-l lg:px-4 ${
+            mobileTab === 'chat' ? 'flex-1 flex flex-col min-h-0' : 'hidden lg:flex'
+          }`}>
+            <CreationAssistantPanel draft={draft} onForm={applyAssistantForm} className="min-w-0 flex-1" />
+          </div>
+        )}
+      </div>
     </div>
   )
 }

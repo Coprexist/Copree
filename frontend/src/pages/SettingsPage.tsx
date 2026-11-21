@@ -5,7 +5,7 @@ import { useTheme } from '../context/ThemeContext'
 import { useT, useLang } from '../i18n/I18nContext'
 import { fmtDateTime } from '../utils/time'
 import Toggle from '../components/Toggle'
-import { Slider } from '../components/ui'
+import { Slider, SecretInput } from '../components/ui'
 import ComboBox from '../components/ui/ComboBox'
 import { IN_APP_NOTIFICATION_KEY } from '../hooks/useNotificationSocket'
 import MagicVisionFilter from '../components/MagicVisionFilter.tsx'
@@ -497,7 +497,7 @@ export default function SettingsPage() {
   const sections = (
     <div className="space-y-4">
       {/* 额度 */}
-      <div id="settings-quota" className={(activeTab === 'quota' ? '' : 'hidden') + ' bg-surface rounded-card border border-border p-3 md:p-6 scroll-mt-16'}>
+ <div id="settings-quota" className={(activeTab === 'quota' ? '' : 'hidden') + ' card p-3 md:p-6 scroll-mt-16'}>
         <div className="flex items-center gap-2 mb-4">
           <Zap size={18} className="text-primary-400" />
           <h2 className="font-semibold text-textPrimary">{t('settings:quotaTitle')}</h2>
@@ -531,7 +531,7 @@ export default function SettingsPage() {
               type="text"
               value={redeemCode}
               onChange={(e) => setRedeemCode(e.target.value)}
-              className="w-full pl-9 pr-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+              className="field field-with-icon w-full"
               placeholder={t('me:redeemPlaceholder')}
             />
           </div>
@@ -552,7 +552,7 @@ export default function SettingsPage() {
       </div>
 
       {/* 邮箱管理 */}
-      <div id="settings-email" className={(activeTab === 'email' ? '' : 'hidden') + ' bg-surface rounded-card border border-border p-3 md:p-6 scroll-mt-16'}>
+ <div id="settings-email" className={(activeTab === 'email' ? '' : 'hidden') + ' card p-3 md:p-6 scroll-mt-16'}>
         <div className="flex items-center gap-2 mb-4">
           <Mail size={18} className="text-primary-400" />
           <h2 className="font-semibold text-textPrimary">{t('auth:email')}</h2>
@@ -572,14 +572,14 @@ export default function SettingsPage() {
             <div className="flex gap-2">
               <button
                 onClick={() => { setShowBindEmail(true); setBindEmail(user.email || ''); setBindCode(''); setBindCodeSent(false); setBindError('') }}
-                className="px-3 py-1.5 text-xs rounded-control border border-border hover:bg-elevated text-textSecondary transition-colors"
+                className="btn btn-sm btn-secondary"
               >
                 {t('auth:changeEmail')}
               </button>
               {user.email && (
                 <button
                   onClick={() => setRemoveConfirm(true)}
-                  className="px-3 py-1.5 text-xs rounded-control border border-rose-500/20 text-rose-400 hover:bg-rose-500/10 transition-colors"
+                  className="btn btn-sm btn-tinted-danger"
                 >
                   {t('auth:removeEmail')}
                 </button>
@@ -591,7 +591,7 @@ export default function SettingsPage() {
             <p className="text-xs text-textMuted">{t('settings:emailNotSetDesc')}</p>
             <button
               onClick={() => { setShowBindEmail(true); setBindEmail(''); setBindCode(''); setBindCodeSent(false); setBindError('') }}
-              className="px-3 py-1.5 text-xs rounded-control bg-primary-500 hover:bg-primary-600 text-white font-medium transition-colors"
+              className="btn btn-sm btn-primary"
             >
               {t('auth:bindEmailTitle')}
             </button>
@@ -600,7 +600,7 @@ export default function SettingsPage() {
       </div>
 
       {/* API 提供商配置 */}
-      <div id="settings-api" className={(activeTab === 'api' ? '' : 'hidden') + ' bg-surface rounded-card border border-border p-3 md:p-6 scroll-mt-16'}>
+ <div id="settings-api" className={(activeTab === 'api' ? '' : 'hidden') + ' card p-3 md:p-6 scroll-mt-16'}>
         <div className="flex items-center gap-2 mb-4 flex-wrap">
           <Key size={18} className="text-primary-400 shrink-0" />
           <h2 className="font-semibold text-textPrimary whitespace-nowrap shrink-0">{t('settings:apiConfigTitle')}</h2>
@@ -613,6 +613,7 @@ export default function SettingsPage() {
               <label className="block text-xs font-medium mb-1.5 text-textSecondary">{t('settings:presetProvider')}</label>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 mb-2">
                 {providerPresets.map(p => (
+                  // ui-standard-ignore: 预设供应商标签（选中态是自绘的），不是按钮形态
                   <button
                     key={p.name}
                     onClick={() => applyPreset(p)}
@@ -639,7 +640,7 @@ export default function SettingsPage() {
               type="text"
               value={apiBaseUrl}
               onChange={(e) => setApiBaseUrl(e.target.value)}
-              className="w-full px-3.5 py-2.5 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+              className="field w-full"
               placeholder={t('settings:baseUrlPlaceholder')}
             />
             <p className="text-3xs text-textMuted mt-1">{t('settings:baseUrlDesc')}</p>
@@ -661,22 +662,12 @@ export default function SettingsPage() {
                 </a>
               )}
             </label>
-            <div className="relative">
-              <input
-                type={showApiKey ? 'text' : 'password'}
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                className="w-full px-3.5 py-2.5 pr-10 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
-                placeholder={user?.has_api_key ? t('settings:apiKeyPlaceholderSet') : t('settings:apiKeyPlaceholder')}
-              />
-              <button
-                type="button"
-                onClick={() => setShowApiKey(!showApiKey)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-textMuted hover:text-textSecondary"
-              >
-                {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
-              </button>
-            </div>
+            <SecretInput
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              wrapperClassName="w-full"
+              placeholder={user?.has_api_key ? t('settings:apiKeyPlaceholderSet') : t('settings:apiKeyPlaceholder')}
+            />
             <div className="flex items-center justify-between mt-1.5">
               <p className="text-xs text-textMuted">
                 {user?.has_api_key
@@ -748,6 +739,7 @@ export default function SettingsPage() {
 
         {/* 单 AI API 配置 */}
         <div className="mt-4 pt-4 border-t border-border">
+          {/* ui-standard-ignore: 折叠标题行（整行可点），不是按钮形态 */}
           <button
             onClick={() => setShowAgentApi(!showAgentApi)}
             className="flex items-center gap-2 w-full text-left hover:bg-canvas/50 rounded-control px-2 py-1.5 -mx-2 transition-colors"
@@ -779,6 +771,7 @@ export default function SettingsPage() {
                               <label className="block text-xs text-textSecondary mb-1">{t('settings:providerPreset')}</label>
                               <div className="flex flex-wrap gap-1.5 mb-1">
                                 {providerPresets.map(p => (
+                                  // ui-standard-ignore: 单 AI 的供应商标签（选中态是自绘的），不是按钮形态
                                   <button
                                     key={p.name}
                                     onClick={() => setAgentApiBaseUrl(p.base_url)}
@@ -801,20 +794,19 @@ export default function SettingsPage() {
                             type="text"
                             value={agentApiBaseUrl}
                             onChange={(e) => setAgentApiBaseUrl(e.target.value)}
-                            className="w-full px-3 py-1.5 rounded-control border border-border bg-surface text-xs text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-1 focus:ring-primary-500/50"
+                            className="field w-full"
                             placeholder={t('settings:agentBaseUrlPlaceholder')}
                           />
-                          <input
-                            type="password"
+                          <SecretInput
                             value={agentApiKey}
                             onChange={(e) => setAgentApiKey(e.target.value)}
-                            className="w-full px-3 py-1.5 rounded-control border border-border bg-surface text-xs text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-1 focus:ring-primary-500/50"
+                            wrapperClassName="w-full"
                             placeholder={t('settings:agentApiKeyPlaceholder')}
                           />
                           <button
                             onClick={() => handleSaveAgentApi(agent.id)}
                             disabled={agentApiSaving}
-                            className="w-full py-1.5 rounded-control bg-primary-500 text-white text-xs font-medium hover:bg-primary-600 disabled:opacity-40 transition-colors"
+                            className="btn btn-sm btn-primary w-full"
                           >
                             {agentApiSaving ? t('settings:agentApiSaving') : t('common:save')}
                           </button>
@@ -851,7 +843,7 @@ export default function SettingsPage() {
       </div>
 
       {/* 时区设置 */}
-      <div id="settings-timezone" className={(activeTab === 'timezone' ? '' : 'hidden') + ' bg-surface rounded-card border border-border p-3 md:p-6 scroll-mt-16'}>
+ <div id="settings-timezone" className={(activeTab === 'timezone' ? '' : 'hidden') + ' card p-3 md:p-6 scroll-mt-16'}>
         <div className="flex items-center gap-2 mb-4">
           <Clock size={18} className="text-primary-400" />
           <h2 className="font-semibold text-textPrimary">{t('settings:timezone')}</h2>
@@ -860,7 +852,7 @@ export default function SettingsPage() {
         <select
           value={timezone}
           onChange={(e) => setTimezone(e.target.value)}
-          className="w-full px-3.5 py-2.5 rounded-card border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+          className="field w-full"
         >
           {TIMEZONES.map((tz) => (
             <option key={tz} value={tz}>{tz}</option>
@@ -872,7 +864,7 @@ export default function SettingsPage() {
       </div>
 
       {/* 语言设置 */}
-      <div id="settings-language" className={(activeTab === 'language' ? '' : 'hidden') + ' bg-surface rounded-card border border-border p-3 md:p-6 scroll-mt-16'}>
+ <div id="settings-language" className={(activeTab === 'language' ? '' : 'hidden') + ' card p-3 md:p-6 scroll-mt-16'}>
         <div className="flex items-center gap-2 mb-4">
           <Globe size={18} className="text-primary-400" />
           <h2 className="font-semibold text-textPrimary">{t('settings:language')}</h2>
@@ -881,7 +873,7 @@ export default function SettingsPage() {
         <select
           value={language}
           onChange={(e) => setLanguage(e.target.value)}
-          className="w-full px-3.5 py-2.5 rounded-card border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+          className="field w-full"
         >
           {LANGUAGES.map((l) => (
             <option key={l.code} value={l.code}>{t(l.i18nKey)}</option>
@@ -890,7 +882,7 @@ export default function SettingsPage() {
       </div>
 
       {/* 聊天样式 */}
-      <div id="settings-chatstyle" className={(activeTab === 'chatstyle' ? '' : 'hidden') + ' bg-surface rounded-card border border-border p-3 md:p-6 scroll-mt-16'}>
+ <div id="settings-chatstyle" className={(activeTab === 'chatstyle' ? '' : 'hidden') + ' card p-3 md:p-6 scroll-mt-16'}>
         <div className="flex items-center gap-2 mb-4">
           <Layout size={18} className="text-primary-400" />
           <h2 className="font-semibold text-textPrimary">{t('settings:chatStyle')}</h2>
@@ -898,6 +890,7 @@ export default function SettingsPage() {
         <p className="text-xs text-textMuted mb-3">{t('settings:chatStyleDesc')}</p>
         <div className="flex gap-3">
           {CHAT_STYLES.map((s) => (
+            // ui-standard-ignore: 聊天样式卡片（整卡可选），不是按钮形态
             <button
               key={s.value}
               onClick={() => setChatStyle(s.value)}
@@ -915,7 +908,7 @@ export default function SettingsPage() {
       </div>
 
       {/* UI 缩放 */}
-      <div className={(activeTab === 'uiscale' ? '' : 'hidden') + ' bg-surface rounded-card border border-border p-3 md:p-6 scroll-mt-16'}>
+ <div className={(activeTab === 'uiscale' ? '' : 'hidden') + ' card p-3 md:p-6 scroll-mt-16'}>
         <div className="flex items-center gap-2 mb-4">
           <Layout size={18} className="text-primary-400" />
           <h2 className="font-semibold text-textPrimary">{t('settings:uiScale')}</h2>
@@ -928,6 +921,7 @@ export default function SettingsPage() {
             { value: 1.15, labelKey: 'settings:scaleLarge', descKey: 'settings:scaleLargeDesc' },
             { value: 1.3, labelKey: 'settings:scaleXLarge', descKey: 'settings:scaleXLargeDesc' },
           ].map((s) => (
+            // ui-standard-ignore: 界面缩放卡片（整卡可选），不是按钮形态
             <button
               key={s.value}
               onClick={() => setUiScale(s.value)}
@@ -945,7 +939,7 @@ export default function SettingsPage() {
       </div>
 
       {/* 策略模式 */}
-      <div id="settings-strategy" className={(activeTab === 'strategy' ? '' : 'hidden') + ' bg-surface rounded-card border border-border p-3 md:p-6 scroll-mt-16'}>
+ <div id="settings-strategy" className={(activeTab === 'strategy' ? '' : 'hidden') + ' card p-3 md:p-6 scroll-mt-16'}>
         <div className="flex items-center gap-2 mb-4">
           <Zap size={18} className="text-primary-400" />
           <h2 className="font-semibold text-textPrimary">{t('settings:strategy')}</h2>
@@ -965,7 +959,7 @@ export default function SettingsPage() {
       </div>
 
       {/* Mermaid 图表 */}
-      <div id="settings-mermaid" className={(activeTab === 'mermaid' ? '' : 'hidden') + ' bg-surface rounded-card border border-border p-3 md:p-6 scroll-mt-16'}>
+ <div id="settings-mermaid" className={(activeTab === 'mermaid' ? '' : 'hidden') + ' card p-3 md:p-6 scroll-mt-16'}>
         <div className="flex items-center gap-2 mb-4">
           <BarChart3 size={18} className="text-primary-400" />
           <h2 className="font-semibold text-textPrimary">{t('settings:mermaidTitle')}</h2>
@@ -989,7 +983,7 @@ export default function SettingsPage() {
       </div>
 
       {/* 外观主题 */}
-      <div id="settings-appearance" className={(activeTab === 'appearance' ? '' : 'hidden') + ' bg-surface rounded-card border border-border p-3 md:p-6 scroll-mt-16'}>
+ <div id="settings-appearance" className={(activeTab === 'appearance' ? '' : 'hidden') + ' card p-3 md:p-6 scroll-mt-16'}>
         <div className="flex items-center gap-2 mb-4">
           <Palette size={18} className="text-primary-400" />
           <h2 className="font-semibold text-textPrimary">{t('settings:appearance')}</h2>
@@ -1019,7 +1013,7 @@ export default function SettingsPage() {
       </div>
 
       {/* 桌面通知 */}
-      <div id="settings-notifications" className={(activeTab === 'notifications' ? '' : 'hidden') + ' bg-surface rounded-card border border-border p-3 md:p-6 scroll-mt-16'}>
+ <div id="settings-notifications" className={(activeTab === 'notifications' ? '' : 'hidden') + ' card p-3 md:p-6 scroll-mt-16'}>
         <div className="flex items-center gap-2 mb-4">
           <Bell size={18} className="text-primary-400" />
           <h2 className="font-semibold text-textPrimary">{t('settings:notifications')}</h2>
@@ -1044,7 +1038,7 @@ export default function SettingsPage() {
 
       {/* ── 桌面端设置 ── */}
       {isDesktop() && (
-        <div id="settings-desktop" className="bg-surface rounded-card border border-border p-3 md:p-6 scroll-mt-16">
+ <div id="settings-desktop" className="card p-3 md:p-6 scroll-mt-16">
           <div className="flex items-center gap-2 mb-4">
             <Monitor size={18} className="text-primary-400" />
             <h2 className="font-semibold text-textPrimary">{t('settings:desktopSection')}</h2>
@@ -1091,7 +1085,7 @@ export default function SettingsPage() {
                   } catch { /* Rust 端未实现时静默忽略 */ }
                   setTimeout(() => setClearCacheMsg(''), 3000)
                 }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-control border border-border hover:bg-elevated text-sm text-textSecondary transition-colors"
+                className="btn btn-sm btn-secondary gap-1.5"
               >
                 <Trash2 size={13} />
                 {t('settings:clearCacheBtn')}
@@ -1102,6 +1096,7 @@ export default function SettingsPage() {
             )}
 
             {/* 本地模型管理入口 */}
+            {/* ui-standard-ignore: 入口行（图标 + 说明 + 箭头），不是按钮形态 */}
             <button
               onClick={() => navigate('/local-models')}
               className="w-full flex items-center justify-between p-3 rounded-card border border-border bg-canvas/50 hover:bg-elevated transition-colors text-left"
@@ -1117,6 +1112,7 @@ export default function SettingsPage() {
             </button>
 
             {/* 实例连接配置入口 */}
+            {/* ui-standard-ignore: 入口行（图标 + 说明 + 箭头），不是按钮形态 */}
             <button
               onClick={() => navigate('/instance-setup')}
               className="w-full flex items-center justify-between p-3 rounded-card border border-border bg-canvas/50 hover:bg-elevated transition-colors text-left"
@@ -1175,12 +1171,12 @@ export default function SettingsPage() {
                             setInstallingEnv(false)
                           }}
                           disabled={installingEnv}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-control bg-primary-500 text-white text-xs font-medium hover:bg-primary-600 disabled:opacity-30 transition-colors"
+                          className="btn btn-sm btn-primary gap-1.5"
                         >
                           {installingEnv ? <Loader2 size={12} className="animate-spin" /> : <Wrench size={12} />}
                           {installingEnv ? t('settings:buildFactoryInstalling') : t('settings:buildFactoryInstall')}
                         </button>
-                        <button className="btn btn-xs btn-outline">
+                        <button className="btn btn-md btn-outline">
                           {t('settings:buildFactoryViewDocs')}
                         </button>
                       </div>
@@ -1213,11 +1209,7 @@ export default function SettingsPage() {
                                 key={plat}
                                 disabled={!available}
                                 title={available ? '' : t('settings:buildFactoryCrossPlatformHint')}
-                                className={`px-3 py-1.5 rounded-control text-xs font-medium transition-colors ${
-                                  available
-                                    ? 'bg-primary-500 text-white hover:bg-primary-600'
-                                    : 'bg-border/20 text-textMuted cursor-not-allowed'
-                                }`}
+                                className="btn btn-sm btn-primary"
                               >
                                 {label}
                               </button>
@@ -1237,12 +1229,12 @@ export default function SettingsPage() {
                             setBuilding(false)
                           }}
                           disabled={building}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-control bg-mint-500 text-white text-xs font-medium hover:bg-mint-400 disabled:opacity-30 transition-colors"
+                          className="btn btn-sm btn-success gap-1.5"
                         >
                           {building ? <Loader2 size={12} className="animate-spin" /> : <Wrench size={12} />}
                           {building ? t('settings:buildFactoryBuilding') : t('settings:buildFactoryBuild')}
                         </button>
-                        <button className="btn btn-xs btn-outline">
+                        <button className="btn btn-md btn-outline">
                           {t('settings:buildFactoryViewLog')}
                         </button>
                       </div>
@@ -1294,18 +1286,18 @@ export default function SettingsPage() {
   return (
     <div className="h-full flex flex-col bg-canvas">
       {/* 头部 */}
-      <div className="px-4 h-14 border-b border-border bg-surface flex items-center gap-2 shrink-0">
+      <div className="top-bar px-4 h-14 flex items-center gap-2 shrink-0">
         {mobileView === 'detail' ? (
           <button
             onClick={() => setMobileView('list')}
-            className="md:hidden p-1.5 -ml-1 rounded-control hover:bg-elevated text-textSecondary transition-colors"
+            className="icon-btn-sm md:hidden -ml-1 text-textSecondary"
           >
             <ArrowLeft size={18} />
           </button>
         ) : (
           <button
             onClick={() => navigate('/me')}
-            className="md:hidden p-1.5 -ml-1 rounded-control hover:bg-elevated text-textSecondary transition-colors"
+            className="icon-btn-sm md:hidden -ml-1 text-textSecondary"
             title={t('nav:me')}
           >
             <ArrowLeft size={18} />
@@ -1318,6 +1310,7 @@ export default function SettingsPage() {
       {mobileView === 'list' && (
         <div className="md:hidden flex-1 overflow-y-auto p-4 pb-nav bg-canvas space-y-4">
           {user?.role === 'admin' && (
+            // ui-standard-ignore: 管理员入口横幅，不是按钮形态
             <button
               onClick={() => navigate('/admin')}
               className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-card bg-primary-500/10 border border-primary-500/20 text-primary-400 hover:bg-primary-500/15 text-sm font-medium transition-colors"
@@ -1333,6 +1326,7 @@ export default function SettingsPage() {
                 <div className="text-xs font-semibold text-textMuted uppercase tracking-wider px-1 mb-1.5">{t(cat)}</div>
                 <div className="space-y-1">
                   {items.map(({ id, icon: Icon, labelKey }) => (
+                    // ui-standard-ignore: 设置分类导航行，不是按钮形态
                     <button
                       key={id}
                       onClick={() => switchTab(id)}
@@ -1361,6 +1355,7 @@ export default function SettingsPage() {
           <div className="overflow-y-auto py-1 w-full">
             {/* 管理员快捷入口 */}
             {user?.role === 'admin' && (
+              // ui-standard-ignore: 管理员入口横幅，不是按钮形态
               <button
                 onClick={() => navigate('/admin')}
                 className="w-full flex items-center gap-2 mx-2 px-2 py-1.5 mb-1 rounded-control bg-primary-500/10 border border-primary-500/20 text-primary-400 hover:bg-primary-500/15 text-sm font-medium transition-colors"
@@ -1384,6 +1379,7 @@ export default function SettingsPage() {
                       </div>
                       <div className="py-0.5">
                         {items.map(({ id, icon: Icon, labelKey }) => (
+                          // ui-standard-ignore: 设置分类导航行，不是按钮形态
                           <button
                             key={id}
                             onClick={() => switchTab(id)}
@@ -1417,6 +1413,7 @@ export default function SettingsPage() {
           <div className="max-w-2xl mx-auto pb-4">
             {/* 移动端管理员快捷入口 */}
             {user?.role === 'admin' && (
+              // ui-standard-ignore: 管理员入口横幅，不是按钮形态
               <button
                 onClick={() => navigate('/admin')}
                 className="md:hidden w-full flex items-center justify-center gap-2 px-4 py-3 mb-4 rounded-card bg-primary-500/10 border border-primary-500/20 text-primary-400 hover:bg-primary-500/15 text-sm font-medium transition-colors"
@@ -1444,14 +1441,14 @@ export default function SettingsPage() {
                   type="email"
                   value={bindEmail}
                   onChange={e => setBindEmail(e.target.value)}
-                  className="w-full px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                  className="field w-full"
                   placeholder={t('auth:emailPlaceholder')}
                 />
               </div>
               <button
                 onClick={handleSendBindCode}
                 disabled={!bindEmail || bindSendCooldown > 0}
-                className="w-full py-2 text-xs rounded-card border border-border text-textSecondary hover:text-textPrimary hover:bg-elevated disabled:opacity-30 transition-colors"
+                className="btn btn-sm btn-secondary w-full"
               >
                 {bindSendCooldown > 0 ? `${t('auth:codeResendIn')} ${bindSendCooldown}s` : bindCodeSent ? t('auth:codeSent') : t('auth:sendCode')}
               </button>
@@ -1467,7 +1464,7 @@ export default function SettingsPage() {
               <div className="flex gap-3 pt-2">
                 <button
                   onClick={() => setShowBindEmail(false)}
-                  className="flex-1 py-2 text-sm border border-border rounded-card hover:bg-elevated text-textSecondary transition-colors font-medium"
+                  className="btn btn-sm btn-secondary flex-1"
                 >
                   {t('common:cancel')}
                 </button>
@@ -1500,13 +1497,13 @@ export default function SettingsPage() {
             <div className="flex gap-3 mt-5">
               <button
                 onClick={() => setRemoveConfirm(false)}
-                className="flex-1 py-2.5 text-sm border border-border rounded-card hover:bg-elevated text-textSecondary transition-colors font-medium"
+                className="btn btn-sm btn-secondary flex-1"
               >
                 {t('common:cancel')}
               </button>
               <button
                 onClick={handleRemoveEmail}
-                className="flex-1 py-2.5 text-sm bg-rose-500 text-white rounded-card hover:bg-rose-400 font-medium transition-all"
+                className="btn btn-sm btn-danger flex-1"
               >
                 {t('common:confirm')}
               </button>
@@ -1531,13 +1528,13 @@ export default function SettingsPage() {
             <div className="flex gap-3 mt-5">
               <button
                 onClick={() => blocker.reset?.()}
-                className="flex-1 py-2.5 text-sm border border-border rounded-card hover:bg-elevated text-textSecondary transition-colors font-medium"
+                className="btn btn-sm btn-secondary flex-1"
               >
                 {t('settings:continueEditing')}
               </button>
               <button
                 onClick={() => blocker.proceed?.()}
-                className="flex-1 py-2.5 text-sm bg-rose-500 text-white rounded-card hover:bg-rose-400 font-medium transition-all"
+                className="btn btn-sm btn-danger flex-1"
               >
                 {t('settings:discardChanges')}
               </button>

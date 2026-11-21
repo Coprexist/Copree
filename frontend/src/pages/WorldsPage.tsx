@@ -3,11 +3,11 @@
  */
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ChevronRight, Store, Trash2, Plus, Eye } from 'lucide-react'
+import { ChevronRight, Store, Trash2, Plus, Eye, MoreHorizontal } from 'lucide-react'
 import { useT } from '../i18n/I18nContext'
 import { api } from '../api/client'
 import BindGroupModal from '../components/world/BindGroupModal'
-import { Button, PageShell } from '../components/ui'
+import { Button, PageShell, IconButton, MenuPanel, MenuItem } from '../components/ui'
 
 interface World {
   id: number
@@ -27,6 +27,8 @@ export default function WorldsPage() {
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [msg, setMsg] = useState('')
+  // 卡片右上「···」菜单：同时只开一张卡的
+  const [menuId, setMenuId] = useState<number | null>(null)
 
   const load = async () => {
     try {
@@ -98,7 +100,7 @@ export default function WorldsPage() {
           {msg && <div className="text-sm text-accent-400 mb-4">{msg}</div>}
 
           {showCreate && (
-            <div className="bg-surface border border-border rounded-control p-4 mb-6 space-y-3">
+            <div className="card p-4 mb-6 space-y-3">
               <input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
@@ -123,48 +125,62 @@ export default function WorldsPage() {
             </div>
           )}
 
-          <div className="space-y-3">
+          {/* 世界卡片：与「我的 AI」同一种卡片（.card + .chip + .btn），一屏能看几个 */}
+          <div className="grid sm:grid-cols-2 gap-4">
             {worlds.map((w) => (
-              <div key={w.id} className="bg-surface border border-border rounded-control p-4 flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 hover:border-primary-500/40 transition-colors">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-medium text-textPrimary truncate">{w.name}</span>
-                    <span className={`text-3xs px-2 py-0.5 rounded-full shrink-0 ${w.status === 'active' ? 'bg-mint-500/20 text-mint-400' : 'bg-elevated text-textMuted'}`}>
-                      {w.status === 'active' ? t('tool:world.top.status.active') : t('tool:world.top.status.hibernating')}
-                    </span>
+              <div key={w.id} className="card p-4 flex flex-col gap-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="font-medium text-textPrimary truncate">{w.name}</div>
+                    <div className="text-3xs text-textMuted mt-0.5">#{w.id}</div>
                   </div>
-                  {w.description && <div className="text-xs text-textSecondary truncate mt-0.5">{w.description}</div>}
-                  <div className="text-3xs text-textMuted mt-1 truncate">
-                    {t('tool:world.list.entry')} {w.bindings?.length ? w.bindings.map((b) => `${b.entity_type}#${b.entity_id}`).join(', ') : t('tool:world.list.unbound')}
-                  </div>
+                  <span className={'chip shrink-0 ' + (w.status === 'active' ? 'chip-mint' : 'chip-muted')}>
+                    {w.status === 'active' ? t('tool:world.top.status.active') : t('tool:world.top.status.hibernating')}
+                  </span>
                 </div>
-                {/* 操作按钮：统一 .btn .btn-sm 语义类（固定高度严格等高） */}
-                <div className="flex items-center gap-2 shrink-0 flex-wrap">
-                  <button onClick={() => openBindModal(w, 'group')} className="btn btn-sm btn-secondary">{t('tool:world.list.bindGroup')}</button>
-                  <button onClick={() => openBindModal(w, 'agent')} className="btn btn-sm btn-secondary">{t('tool:world.list.bindAgent')}</button>
-                  <button onClick={() => toggleStatus(w)} className="btn btn-sm btn-secondary">
-                    {w.status === 'active' ? t('tool:world.top.status.hibernating') : t('tool:world.list.wake')}
+
+                <p className="text-xs text-textSecondary line-clamp-2 min-h-[2.5rem]">
+                  {w.description}
+                </p>
+
+                <div className="text-3xs text-textMuted truncate">
+                  {t('tool:world.list.entry')}{' '}
+                  {w.bindings?.length
+                    ? w.bindings.map((b) => b.entity_type + '#' + b.entity_id).join(', ')
+                    : t('tool:world.list.unbound')}
+                </div>
+
+                <div className="mt-auto flex items-center gap-2 pt-1">
+                  <button onClick={() => navigate("/worlds/" + w.id + "/design")} className="btn btn-sm btn-primary">
+                    {t('tool:world.list.design')} <ChevronRight size={13} />
                   </button>
                   <button
-                    onClick={() => window.open(`/world/${w.id}/preview`, '_blank')}
+                    onClick={() => window.open("/world/" + w.id + "/preview", "_blank")}
                     className="btn btn-sm btn-secondary"
                     title={t('tool:world.list.previewTitle')}
                   >
                     <Eye size={13} /> {t('tool:world.list.open')}
                   </button>
-                  <button
-                    onClick={() => navigate(`/worlds/${w.id}/design`)}
-                    className="btn btn-sm btn-primary"
-                  >
-                    {t('tool:world.list.design')} <ChevronRight size={13} />
-                  </button>
-                  <button
-                    onClick={() => deleteWorld(w)}
-                    className="btn btn-sm btn-danger !w-8 !px-0"
-                    title={t('tool:world.list.deleteTitle')}
-                  >
-                    <Trash2 size={13} />
-                  </button>
+                  <div className="relative ml-auto">
+                    <IconButton
+                      size="sm"
+                      icon={<MoreHorizontal size={13} />}
+                      label={t('common:more')}
+                      onClick={() => setMenuId(menuId === w.id ? null : w.id)}
+                    />
+                    {menuId === w.id && (
+                      <MenuPanel className="absolute right-0 top-full mt-1 w-44 z-modal">
+                        <MenuItem onClick={() => { setMenuId(null); openBindModal(w, 'group') }}>{t('tool:world.list.bindGroup')}</MenuItem>
+                        <MenuItem onClick={() => { setMenuId(null); openBindModal(w, 'agent') }}>{t('tool:world.list.bindAgent')}</MenuItem>
+                        <MenuItem onClick={() => { setMenuId(null); toggleStatus(w) }}>
+                          {w.status === 'active' ? t('tool:world.top.status.hibernating') : t('tool:world.list.wake')}
+                        </MenuItem>
+                        <MenuItem onClick={() => { setMenuId(null); deleteWorld(w) }} className="text-rose-400">
+                          <Trash2 size={12} /> {t('tool:world.list.delete')}
+                        </MenuItem>
+                      </MenuPanel>
+                    )}
+                  </div>
                 </div>
               </div>
             ))}

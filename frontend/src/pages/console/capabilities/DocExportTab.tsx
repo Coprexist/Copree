@@ -89,7 +89,7 @@ export default function DocExportTab() {
         <button
           onClick={doInstall}
           disabled={installing || status.installing}
-          className="btn btn-sm btn-primary gap-1.5"
+          className="btn btn-md btn-primary gap-1.5"
         >
           {installing || status.installing ? <Loader2 size={14} className="animate-spin" /> : <PackagePlus size={14} />}
           {installing || status.installing ? '安装中…' : '安装 pandoc'}

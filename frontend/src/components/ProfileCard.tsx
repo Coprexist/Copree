@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { X, MessageSquare, UserPlus, Bot, User, Star } from 'lucide-react'
 import { api } from '../api/client'
 import { getStateDotColor } from '../constants'
+import { avatarGradient } from '../utils/avatar'
 import { useT, useLang } from '../i18n/I18nContext'
 import { getStatusTextStyle, BG_ELEVATED_LIGHT, BG_ELEVATED_DARK } from '../utils/statusColor.tsx'
 import { fmtDate, formatMessageTime } from '../utils/time'
@@ -188,13 +189,13 @@ export default function ProfileCard({ entityType, entityId, entityName, state, a
             <button
               onClick={() => avatarUrl && setFullImg(avatarUrl)}
               className={`relative w-14 h-14 ${avatarShape} flex items-center justify-center shrink-0 overflow-hidden ${
-                isGroup ? 'bg-elevated' : entityType === 'human' ? 'from-primary-500 to-primary-700' : 'from-teal-400 to-teal-600'
+                isGroup ? 'bg-elevated' : avatarGradient(entityType, false, true)
               }`}>
               {avatarUrl ? (
                 <img src={avatarUrl} alt={name} className={`w-full h-full ${avatarShape} object-cover hover:opacity-80 transition-opacity`} />
               ) : (
-                <div className={`w-full h-full ${avatarShape} bg-gradient-to-bl flex items-center justify-center ${
-                  isGroup ? 'bg-primary-500/10' : entityType === 'human' ? 'from-primary-500 to-primary-700' : 'from-teal-400 to-teal-600'
+                <div className={`w-full h-full ${avatarShape} flex items-center justify-center ${
+                  isGroup ? 'bg-primary-500/10' : avatarGradient(entityType, false, false)
                 }`}>
                   <span className="text-xl font-bold text-white">{name.charAt(0).toUpperCase()}</span>
                 </div>

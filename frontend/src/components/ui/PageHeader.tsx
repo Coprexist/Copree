@@ -21,7 +21,7 @@ interface PageHeaderProps {
 
 export default function PageHeader({ title, subtitle, onBack, backLabel = '返回', leading, children }: PageHeaderProps) {
   return (
-    <header className="px-4 h-14 border-b border-border bg-surface flex items-center gap-2 shrink-0">
+    <header className="top-bar px-4 h-14 flex items-center gap-2 shrink-0">
       {leading}
       {onBack && (
         <IconButton

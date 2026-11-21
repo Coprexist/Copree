@@ -75,7 +75,7 @@ export default function PluginDetailPanel({ entry, onClose, onReload, onMessage 
   return (
     <Dialog layer="drawer" className="flex justify-end" backdrop="bg-black/40" onClose={onClose}>
       <div className="h-full w-full max-w-xl bg-surface border-l border-border shadow-2xl overflow-y-auto">
-        <header className="sticky top-0 z-10 flex items-start justify-between gap-3 px-4 py-3 border-b border-border bg-surface">
+        <header className="top-bar top-bar-sticky flex items-start justify-between gap-3 px-4 py-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-textMuted shrink-0">{entry.icon}</span>

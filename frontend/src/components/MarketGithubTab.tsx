@@ -3,6 +3,7 @@
  * - 仓库（owner/repo）、系统 token（留空=不修改）、自动获取开关
  * - 「测试连接」= 调一次 GitHub 刷新（能成功说明仓库+token 有效）
  */
+import { SecretInput } from './ui'
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../api/client'
 import { Github, Save, RefreshCw, CheckCircle, XCircle, Globe, Key } from 'lucide-react'
@@ -100,7 +101,7 @@ export default function MarketGithubTab() {
         </div>
       )}
 
-      <div className="bg-surface border border-border rounded-card p-4 space-y-4 max-w-xl">
+      <div className="card p-4 space-y-4 max-w-xl">
         <div>
           <label className="flex items-center gap-1.5 text-xs text-textSecondary mb-1.5">
             <Globe size={11} /> 公共仓库（owner/repo）
@@ -109,7 +110,7 @@ export default function MarketGithubTab() {
             value={repo}
             onChange={(e) => setRepo(e.target.value)}
             placeholder="Coprexist/Copree-Community"
-            className="w-full bg-elevated text-sm px-3 py-2 rounded-control border border-border outline-none focus:border-primary-500/50 text-textPrimary"
+            className="field w-full"
           />
           <div className="text-3xs text-textMuted mt-1">同步目标仓库；本地用户绑定的 GitHub 也需对该仓库有写权限</div>
         </div>
@@ -119,12 +120,11 @@ export default function MarketGithubTab() {
             <Key size={11} /> 系统 Token（classic 或 fine-grained，需仓库写权限）
             <ExternalLinkSafe href="https://github.com/settings/tokens/new" className="text-3xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 transition-colors shrink-0 ml-auto">去 GitHub 生成 token →</ExternalLinkSafe>
           </label>
-          <input
-            type="password"
+          <SecretInput
             value={token}
             onChange={(e) => setToken(e.target.value)}
             placeholder={hasToken ? `已配置 ${masked}（留空保持不变）` : '未配置'}
-            className="w-full bg-elevated text-sm px-3 py-2 rounded-control border border-border outline-none focus:border-primary-500/50 text-textPrimary"
+            wrapperClassName="w-full"
           />
           <div className="text-3xs text-textMuted mt-1">
             {hasToken ? `已配置系统 token（加密存储，仅显示 ${masked}）` : '未配置——用户未绑定 GitHub 时同步将失败'}
@@ -145,9 +145,9 @@ export default function MarketGithubTab() {
           <button
             onClick={doSave}
             disabled={saving || loading}
-            className="btn btn-xs btn-primary gap-1.5"
+            className="btn btn-md btn-primary gap-1.5"
           >
-            {saving ? <RefreshCw size={12} className="animate-spin" /> : <Save size={12} />} {saving ? '保存中…' : '保存配置'}
+            {saving ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />} {saving ? '保存中…' : '保存配置'}
           </button>
           {loading && <span className="text-xs text-textMuted">加载中…</span>}
         </div>

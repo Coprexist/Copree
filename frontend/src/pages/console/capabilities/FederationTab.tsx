@@ -3,7 +3,7 @@ import { api } from '../../../api/client'
 import { useT } from '../../../i18n/I18nContext'
 import { Globe, Link, Plus, Trash2, RefreshCw, Power, Shield, X } from 'lucide-react'
 import ExternalLinkSafe from '../../../components/ExternalLinkSafe'
-import { Dialog } from '../../../components/ui'
+import { Dialog, SecretInput } from '../../../components/ui'
 
 interface InstanceInfo {
   instance_id: string
@@ -365,7 +365,7 @@ export default function FederationTab() {
       {/* 风险告知弹窗 */}
       {registerState === 'confirm' && (
         <Dialog onClose={() =>  { setRegisterState('idle'); setDialogToken('') } } className="flex items-center justify-center">
-          <div className="bg-surface border border-border rounded-card p-6 max-w-md mx-4 shadow-2xl" onClick={e => e.stopPropagation()}>
+          <div className="card p-6 max-w-md mx-4 shadow-2xl" onClick={e => e.stopPropagation()}>
             <h3 className="text-base font-semibold text-textPrimary mb-3">{t('admin:registerNotice')}</h3>
             <div className="text-sm text-textSecondary space-y-2 mb-5">
               <p>{t('admin:registerNoticeText')}</p>
@@ -386,11 +386,10 @@ export default function FederationTab() {
                     {t('admin:tokenConfiguredClickChange')}
                   </summary>
                   <div className="mt-2">
-                    <input
-                      type="password"
+                    <SecretInput
                       value={dialogToken}
                       onChange={e => setDialogToken(e.target.value)}
-                      className="w-full px-3 py-1.5 text-sm bg-canvas border border-border rounded-control text-textPrimary font-mono"
+                      wrapperClassName="w-full"
                       placeholder={t('admin:pasteNewToken')}
                     />
                     <p className="text-3xs text-textMuted mt-1">
@@ -407,11 +406,10 @@ export default function FederationTab() {
                     </ExternalLinkSafe>
                   </label>
                   <p className="text-3xs text-textMuted mb-1.5" dangerouslySetInnerHTML={{ __html: t('admin:tokenHelpText') }} />
-                  <input
-                    type="password"
+                  <SecretInput
                     value={dialogToken}
                     onChange={e => setDialogToken(e.target.value)}
-                    className="w-full px-3 py-1.5 text-sm bg-canvas border border-border rounded-control text-textPrimary font-mono"
+                    wrapperClassName="w-full"
                     placeholder="ghp_xxxxxxxxxxxxxxxx"
                   />
                 </>
@@ -427,11 +425,7 @@ export default function FederationTab() {
               <button
                 onClick={handleRegister}
                 disabled={!instance?.github_token_configured && !dialogToken.trim()}
-                className={`px-4 py-1.5 text-xs rounded-control transition-colors ${
-                  !instance?.github_token_configured && !dialogToken.trim()
-                    ? 'bg-canvas text-textMuted cursor-not-allowed'
-                    : 'bg-mint-600 hover:bg-mint-500 text-white'
-                }`}
+                className="btn btn-md btn-success"
               >
                 {!instance?.github_token_configured ? t('admin:saveTokenAndRegister') : t('admin:knownAndContinue')}
               </button>
@@ -440,7 +434,7 @@ export default function FederationTab() {
         </Dialog>
       )}
       {/* 实例身份 */}
-      <section className="bg-surface border border-border rounded-card p-5">
+      <section className="card p-5">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-semibold text-textPrimary flex items-center gap-2">
             <Shield size={16} /> {t('admin:instanceIdentity')}
@@ -475,7 +469,7 @@ export default function FederationTab() {
                     const host = instanceForm.public_url.replace(/^wss?:\/\//, '').replace(/\/federation\/ws$/, '')
                     setInstanceForm({ ...instanceForm, public_url: `${e.target.value}://${host}/federation/ws` })
                   }}
-                  className="w-20 px-2 text-sm bg-canvas border border-border rounded-l-lg text-textPrimary shrink-0"
+                  className="field shrink-0 field-inline"
                 >
                   <option value="wss">wss://</option>
                   <option value="ws">ws://</option>
@@ -524,21 +518,16 @@ export default function FederationTab() {
               </label>
               <p className="text-3xs text-textMuted mb-1" dangerouslySetInnerHTML={{ __html: t('admin:tokenHelpText') }} />
               <div className="flex gap-2 mt-1">
-                <input
-                  type="password"
+                <SecretInput
                   value={githubToken}
                   onChange={e => setGithubToken(e.target.value)}
-                  className="flex-1 px-3 py-1.5 text-sm bg-canvas border border-border rounded-control text-textPrimary font-mono"
+                  wrapperClassName="flex-1 min-w-0"
                   placeholder={instance?.github_token_configured ? t('admin:tokenConfiguredPlaceholder') : t('admin:tokenPlaceholder')}
                 />
                 <button
                   onClick={handleSaveToken}
                   disabled={tokenSaving || !githubToken.trim()}
-                  className={`shrink-0 px-3 py-1.5 text-xs rounded-control transition-colors ${
-                    tokenSaving || !githubToken.trim()
-                      ? 'bg-canvas text-textMuted cursor-not-allowed'
-                      : 'bg-accent-600 hover:bg-accent-500 text-white'
-                  }`}
+                  className="btn btn-md btn-accent"
                 >
                   {tokenSaving ? t('common:saving') : t('admin:saveToken')}
                 </button>
@@ -550,20 +539,14 @@ export default function FederationTab() {
             <div className="flex gap-2">
               <button
                 onClick={handleSaveInstance}
-                className="btn btn-xs btn-primary"
+                className="btn btn-md btn-primary"
               >
                 {t('admin:saveInstanceInfo')}
               </button>
               <button
                 onClick={handleRegister}
                 disabled={registerState === 'loading'}
-                className={`px-4 py-1.5 text-xs rounded-control transition-colors ${
-                  registerState === 'loading'
-                    ? 'bg-canvas text-textMuted cursor-not-allowed'
-                    : registerState === 'success'
-                    ? 'bg-mint-700 text-mint-300'
-                    : 'bg-mint-600 hover:bg-mint-500 text-white'
-                }`}
+                className="btn btn-md btn-success"
               >
                 {registerState === 'loading' ? t('admin:registering') : registerState === 'success' ? t('admin:registered') : t('admin:registerToGithub')}
               </button>
@@ -585,11 +568,10 @@ export default function FederationTab() {
             {/* TOKEN_MISSING 时行内快速输入，无需跳转到编辑模式 */}
             {(registerErrorCode === 'TOKEN_MISSING' || registerErrorCode === 'TOKEN_INVALID') && (
               <div className="flex gap-2 mt-2">
-                <input
-                  type="password"
+                <SecretInput
                   value={quickToken}
                   onChange={e => setQuickToken(e.target.value)}
-                  className="flex-1 px-3 py-1.5 text-sm bg-canvas border border-border rounded-control text-textPrimary font-mono"
+                  wrapperClassName="flex-1 min-w-0"
                   placeholder="ghp_xxxxxxxxxxxxxxxx"
                 />
                 <button
@@ -642,11 +624,10 @@ export default function FederationTab() {
                 </div>
                 {showTokenInput && (
                   <div className="flex gap-2 mt-1.5">
-                    <input
-                      type="password"
+                    <SecretInput
                       value={manageToken}
                       onChange={e => setManageToken(e.target.value)}
-                      className="flex-1 px-2 py-1 text-xs bg-canvas border border-border rounded-control text-textPrimary font-mono"
+                      wrapperClassName="flex-1 min-w-0"
                       placeholder={instance?.github_token_configured ? t('admin:pasteNewToken') : t('admin:tokenPlaceholder')}
                     />
                     <button
@@ -665,11 +646,7 @@ export default function FederationTab() {
                 <button
                   onClick={handleRegister}
                   disabled={isRegistering}
-                  className={`px-3 py-1 text-xs rounded-control transition-colors ${
-                    isRegistering
-                      ? 'bg-canvas text-textMuted cursor-not-allowed'
-                      : 'bg-mint-600 hover:bg-mint-500 text-white'
-                  }`}
+                  className="btn btn-md btn-success"
                 >
                   {isRegistering ? t('admin:registering') : registerState === 'success' ? t('admin:registered') : t('admin:registerToGithub')}
                 </button>
@@ -686,11 +663,10 @@ export default function FederationTab() {
                 {/* TOKEN_MISSING 时行内快速输入 */}
                 {(registerErrorCode === 'TOKEN_MISSING' || registerErrorCode === 'TOKEN_INVALID') && (
                   <div className="flex gap-2 mt-2 w-full">
-                    <input
-                      type="password"
+                    <SecretInput
                       value={quickToken}
                       onChange={e => setQuickToken(e.target.value)}
-                      className="flex-1 px-3 py-1.5 text-sm bg-canvas border border-border rounded-control text-textPrimary font-mono"
+                      wrapperClassName="flex-1 min-w-0"
                       placeholder={t('admin:tokenPlaceholder')}
                     />
                     <button
@@ -709,7 +685,7 @@ export default function FederationTab() {
       </section>
 
       {/* 对等端列表 */}
-      <section className="bg-surface border border-border rounded-card p-5">
+      <section className="card p-5">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-semibold text-textPrimary flex items-center gap-2">
             <Link size={16} /> {t('admin:peers').replace('{count}', String(peers.length))}
@@ -755,7 +731,7 @@ export default function FederationTab() {
                       const host = newPeer.remote_url.replace(/^wss?:\/\//, '').replace(/\/federation\/ws$/, '')
                       setNewPeer({ ...newPeer, remote_url: host ? `${e.target.value}://${host}/federation/ws` : '' })
                     }}
-                    className="w-20 px-2 text-sm bg-surface border border-border rounded-l-lg text-textPrimary shrink-0"
+                    className="field shrink-0 field-inline"
                   >
                     <option value="wss">wss://</option>
                     <option value="ws">ws://</option>
@@ -781,11 +757,10 @@ export default function FederationTab() {
               </div>
               <div className="md:col-span-2">
                 <label className="text-xs text-textMuted">{t('admin:sharedSecret')}</label>
-                <input
-                  type="password"
+                <SecretInput
                   value={newPeer.shared_secret}
                   onChange={e => setNewPeer({ ...newPeer, shared_secret: e.target.value })}
-                  className="w-full mt-1 px-3 py-1.5 text-sm bg-surface border border-border rounded-control text-textPrimary"
+                  wrapperClassName="w-full"
                   placeholder={t('admin:secretPlaceholder')}
                 />
               </div>
@@ -793,7 +768,7 @@ export default function FederationTab() {
             <div className="flex gap-2">
               <button
                 onClick={handleAddPeer}
-                className="btn btn-xs btn-primary"
+                className="btn btn-md btn-primary"
               >
                 {t('admin:addAndConnect')}
               </button>
@@ -896,7 +871,7 @@ export default function FederationTab() {
                             const host = editPeerForm.remote_url.replace(/^wss?:\/\//, '').replace(/\/federation\/ws$/, '')
                             setEditPeerForm({ ...editPeerForm, remote_url: host ? `${e.target.value}://${host}/federation/ws` : '' })
                           }}
-                          className="w-16 px-1.5 text-xs bg-surface border border-border rounded-l text-textPrimary shrink-0"
+                          className="field field-sm shrink-0 field-inline"
                         >
                           <option value="wss">wss://</option>
                           <option value="ws">ws://</option>
@@ -921,11 +896,10 @@ export default function FederationTab() {
                     </div>
                     <div className="md:col-span-2">
                       <label className="text-3xs text-textMuted">{t('admin:secretNoChange')}</label>
-                      <input
-                        type="password"
+                      <SecretInput
                         value={editPeerForm.shared_secret}
                         onChange={e => setEditPeerForm({ ...editPeerForm, shared_secret: e.target.value })}
-                        className="w-full mt-0.5 px-2 py-1 text-xs bg-surface border border-border rounded text-textPrimary"
+                        wrapperClassName="w-full"
                         placeholder={t('admin:newSecretPlaceholder')}
                       />
                     </div>
@@ -933,7 +907,7 @@ export default function FederationTab() {
                   <div className="flex gap-2">
                     <button
                       onClick={handleSavePeer}
-                      className="btn btn-xs btn-primary"
+                      className="btn btn-md btn-primary"
                     >
                       {t('common:save')}
                     </button>
@@ -957,7 +931,7 @@ export default function FederationTab() {
                     <select
                       value={rotateUrl.startsWith('wss://') ? 'wss://' : 'ws://'}
                       onChange={e => setRotateUrl(e.target.value + rotateUrl.replace(/^(wss?):\/\//, ''))}
-                      className="px-2 py-1 text-xs bg-surface border border-border rounded text-textPrimary shrink-0"
+                      className="field field-sm shrink-0 field-inline"
                     >
                       <option value="wss://">wss://</option>
                       <option value="ws://">ws://</option>
@@ -1008,7 +982,7 @@ export default function FederationTab() {
       {/* 联邦实体 */}
       <FederatedEntitiesSection />
       {/* GitHub 注册说明（可选） */}
-      <section className="bg-surface border border-border rounded-card p-5">
+      <section className="card p-5">
         <h2 className="text-sm font-semibold text-textPrimary flex items-center gap-2 mb-4">
           <Globe size={16} /> {t('admin:federationDiscovery')}
         </h2>
@@ -1076,10 +1050,10 @@ function FederatedEntitiesSection() {
     return map[entityType] || entityType
   }
 
-  if (loading) return <div className="bg-surface border border-border rounded-card p-5 text-sm text-textMuted">{t('common:loading')}</div>
+  if (loading) return <div className="card p-5 text-sm text-textMuted">{t('common:loading')}</div>
 
   return (
-    <section className="bg-surface border border-border rounded-card p-5">
+    <section className="card p-5">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-sm font-semibold text-textPrimary flex items-center gap-2">
           <Globe size={16} /> {t('admin:federationEntities').replace('{count}', String(entities.length))}

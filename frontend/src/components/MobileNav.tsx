@@ -73,7 +73,7 @@ export default function MobileNav({ closeDrawer }: MobileNavProps) {
       className="md:hidden fixed left-3 right-3 z-modal"
       style={{ bottom: 'calc(0.75rem + env(safe-area-inset-bottom, 0px))' }}
     >
-      <div className="mx-auto max-w-md h-16 rounded-[22px] border border-black/[0.06] dark:border-white/[0.08] bg-white/70 dark:bg-white/[0.06] backdrop-blur-lg backdrop-saturate-150 shadow-[0_10px_30px_-14px_rgba(0,0,0,0.35)] px-1.5 py-1.5">
+      <div className="glass-float mx-auto max-w-md h-16 px-1.5 py-1.5">
         <div className="flex items-stretch">
           {visibleItems.map((item) => {
             const active = isActive(item)

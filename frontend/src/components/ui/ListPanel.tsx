@@ -32,7 +32,7 @@ interface ListPanelProps {
 
 export default function ListPanel({ columns, title, toolbar, children, empty, className = '' }: ListPanelProps) {
   return (
-    <div className={`bg-surface rounded-card border border-border p-5 ${className}`}>
+ <div className={` card p-5 ${className}`}>
       {title && <h3 className="font-semibold mb-3 text-textPrimary">{title}</h3>}
       {toolbar && <div className="mb-3 flex items-center gap-2 flex-wrap">{toolbar}</div>}
       <div className="overflow-x-auto">

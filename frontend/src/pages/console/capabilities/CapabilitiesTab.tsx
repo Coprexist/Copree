@@ -3,6 +3,7 @@ import { api } from '../../../api/client'
 import { useT } from '../../../i18n/I18nContext'
 import { STATE_LABELS, STATE_TAG_COLORS } from '../../../constants'
 import { Wrench, Brain, Backpack, Plug } from 'lucide-react'
+import { UnderlineTabs } from '../../../components/ui'
 import SkillBackpack from '../../../components/SkillBackpack'
 import PluginManager from './PluginManager'
 
@@ -120,11 +121,11 @@ function ToolRegistryTab() {
       {/* 筛选 */}
       <div className="flex flex-wrap gap-3 items-center">
         <div className="flex items-center gap-1.5">
-          <label className="text-xs text-textSecondary">{t('admin:toolsFilterSegment')}:</label>
+          <label className="shrink-0 whitespace-nowrap text-xs text-textSecondary">{t('admin:toolsFilterSegment')}:</label>
           <select
             value={filterSegment}
             onChange={e => setFilterSegment(e.target.value)}
-            className="text-sm border border-border rounded-control px-2.5 py-1.5 bg-surface text-textPrimary"
+            className="field field-inline"
           >
             <option value="all">{t('admin:toolsFilterAll')}</option>
             {data.segments.map(seg => (
@@ -133,11 +134,11 @@ function ToolRegistryTab() {
           </select>
         </div>
         <div className="flex items-center gap-1.5">
-          <label className="text-xs text-textSecondary">{t('admin:toolsFilterState')}:</label>
+          <label className="shrink-0 whitespace-nowrap text-xs text-textSecondary">{t('admin:toolsFilterState')}:</label>
           <select
             value={filterState}
             onChange={e => setFilterState(e.target.value)}
-            className="text-sm border border-border rounded-control px-2.5 py-1.5 bg-surface text-textPrimary"
+            className="field field-inline"
           >
             <option value="all">{t('admin:toolsFilterAll')}</option>
             {stateOptions.filter(s => s !== 'all').map(s => (
@@ -244,7 +245,7 @@ function SkillManagementTab() {
         <select
           value={selectedAgent ?? ''}
           onChange={e => setSelectedAgent(Number(e.target.value) || null)}
-          className="text-sm border border-border rounded-control px-3 py-2 bg-surface text-textPrimary min-w-[200px]"
+          className="field min-w-[200px] field-inline"
           disabled={loadingAgents}
         >
           {loadingAgents && <option value="">加载中...</option>}
@@ -331,22 +332,12 @@ export default function CapabilitiesTab() {
 
   return (
     <div className="space-y-5">
-      {/* 子页签 */}
-      <div className="flex gap-1 bg-elevated rounded-control p-1 w-fit">
-        {subTabs.map(st => (
-          <button
-            key={st.key}
-            onClick={() => setSubTab(st.key)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-control text-sm transition-colors ${subTab === st.key
-              ? 'bg-surface text-textPrimary shadow-sm'
-              : 'text-textSecondary hover:text-textPrimary'
-            }`}
-          >
-            <st.icon size={15} />
-            {st.label}
-          </button>
-        ))}
-      </div>
+      {/* 子页签：统一走下划线页签（与商城、OpenCLI、通道一致） */}
+      <UnderlineTabs
+        items={subTabs.map(st => ({ key: st.key, label: st.label, icon: <st.icon size={15} /> }))}
+        value={subTab}
+        onChange={setSubTab}
+      />
 
       {/* 内容 */}
       {subTab === 'plugins' ? <PluginManager />

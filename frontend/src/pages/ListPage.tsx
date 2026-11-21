@@ -4,12 +4,13 @@ import { api } from '../api/client'
 import { useAuth } from '../context/AuthContext'
 import { useT, useLang } from '../i18n/I18nContext'
 import { uiLocale } from '../utils/time'
-import { Users, MessageSquare, UserPlus, Check, X, Search, ArrowUpDown, ArrowLeft, Bot, User, Menu, Star } from 'lucide-react'
+import { Users, MessageSquare, UserPlus, Check, X, Search, ArrowLeft, Bot, User, Menu, Star } from 'lucide-react'
 import {
   notifyRequestsChanged, fetchPendingRequests, REQUESTS_CHANGED, REQUESTS_POLL_MS,
   type PendingRequest,
 } from '../hooks/usePendingRequests'
 import { getStateDotColor } from '../constants'
+import { avatarGradient, avatarShadowColor } from '../utils/avatar'
 import { getStatusTextStyle, BG_CANVAS_LIGHT, BG_CANVAS_DARK } from '../utils/statusColor.tsx'
 import { UnderlineTabs } from '../components/ui'
 import { useTheme } from '../context/ThemeContext'
@@ -45,14 +46,15 @@ interface FriendRequest {
   created_at: string | null
 }
 
-// 头像组件：优先显示真实头像，否则显示首字母
+// 头像组件：优先显示真实头像，否则显示首字母。
+// 配色不在这里写死——统一走 utils/avatar（他人/ AI = 500→300）
 function AvatarPic({ url, name, size = 'md' }: { url: string | null | undefined; name: string; size?: 'sm' | 'md' | 'lg' }) {
   const sizeClass = size === 'sm' ? 'w-7 h-7 text-3xs' : size === 'lg' ? 'w-12 h-12 text-xl' : 'w-10 h-10 text-lg'
   return (
-    <div className={`${sizeClass} rounded-full shrink-0 overflow-hidden relative ${!url ? 'bg-gradient-to-br from-primary-500 to-primary-700 flex items-center justify-center shadow shadow-primary-500/15' : ''}`}>
+    <div className={`${sizeClass} rounded-full shrink-0 overflow-hidden relative ${!url ? `${avatarGradient(undefined, false, false)} flex items-center justify-center shadow ${avatarShadowColor(undefined)}` : ''}`}>
       {url ? (
         <>
-          <div className="absolute inset-px rounded-full bg-gradient-to-br from-primary-500 to-primary-700/30" />
+          <div className={`absolute inset-px rounded-full ${avatarGradient(undefined, false, true)}`} />
           <img src={url} alt={name} className="relative w-full h-full rounded-full object-cover" loading="lazy" />
         </>
       ) : (
@@ -361,7 +363,7 @@ export default function ListPage() {
   return (
     <div className="h-full flex flex-col bg-canvas">
       {/* 头部 */}
-      <div className="px-4 h-14 border-b border-border bg-surface flex items-center gap-2 shrink-0">
+      <div className="top-bar px-4 h-14 flex items-center gap-2 shrink-0">
         <button
           onClick={openDrawer}
           className="icon-btn-sm md:hidden -ml-1 text-textSecondary"
@@ -382,13 +384,12 @@ export default function ListPage() {
               <select
                 value={sortMode}
                 onChange={(e) => setSortMode(e.target.value as SortMode)}
-                className="appearance-none pl-2 pr-6 py-1 rounded-control border border-border bg-canvas text-2xs text-textSecondary focus:outline-none focus:ring-1 focus:ring-primary-500/50 cursor-pointer"
+                className="field field-sm field-inline"
               >
                 {SORT_OPTIONS.map(o => (
                   <option key={o.value} value={o.value}>{t(o.key)}</option>
                 ))}
               </select>
-              <ArrowUpDown size={10} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-textMuted pointer-events-none" />
             </div>
             {/* 搜索按钮 */}
             <button
@@ -570,7 +571,7 @@ export default function ListPage() {
         <>
           {/* 移动端：全屏 */}
           <div className="md:hidden fixed inset-0 z-modal bg-surface flex flex-col">
-            <div className="px-4 h-14 border-b border-border flex items-center gap-3 shrink-0">
+            <div className="top-bar px-4 h-14 flex items-center gap-3 shrink-0">
               <button
                 onClick={() => { setShowSearch(false); setSearchQuery('') }}
                 className="p-1.5 -ml-1 rounded-control hover:bg-elevated text-textSecondary transition-colors"

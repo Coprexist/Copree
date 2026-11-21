@@ -59,6 +59,27 @@ export function isMarkdownFile(fileName: string, mimeType: string): boolean {
   return mimeType === 'text/markdown' || fileName.endsWith('.md') || fileName.endsWith('.markdown')
 }
 
+/** 消息附件里的一张图：回复引用要把这条消息缩成小图，而不是只写"[图片]"三个字 */
+export interface ImageAttachmentRef {
+  file_id: number
+  name?: string
+}
+
+/**
+ * 从一条消息的附件里取第一张图（没有就 undefined）。
+ *
+ * 类型按 resolveMimeType 兜底：存量附件的 mime 可能是 application/octet-stream，
+ * 只看 mime 会让老图在回复引用里退回"[图片]"。
+ */
+export function firstImageAttachment(
+  attachments: Array<{ file_id?: number; name?: string; mime_type?: string }> | null | undefined,
+): ImageAttachmentRef | undefined {
+  const hit = (attachments || []).find(
+    (a) => a?.file_id && resolveMimeType(a.name || '', a.mime_type || '').startsWith('image/'),
+  )
+  return hit ? { file_id: Number(hit.file_id), name: hit.name } : undefined
+}
+
 /**
  * 解析 MIME 类型：优先后端返回的 mimeType，缺失时从文件名扩展名推断。
  */

@@ -191,7 +191,7 @@ export default function BackupTab() {
       )}
 
       {/* ========== 导出区 ========== */}
-      <div className="bg-surface rounded-card border border-border p-5">
+ <div className="card p-5">
         <h3 className="font-semibold text-textPrimary mb-1">{t('admin:exportTitle')}</h3>
         <p className="text-sm text-textMuted mb-5">{t('admin:exportDesc')}</p>
 
@@ -233,7 +233,7 @@ export default function BackupTab() {
       </div>
 
       {/* ========== 本地自动备份（每日备份 + 回档） ========== */}
-      <div className="bg-surface rounded-card border border-border p-5">
+ <div className="card p-5">
         <div className="flex items-center justify-between mb-1">
           <h3 className="font-semibold text-textPrimary">本地自动备份</h3>
           <button onClick={loadLocalBackups} className="text-xs text-textSecondary hover:text-textPrimary">刷新</button>

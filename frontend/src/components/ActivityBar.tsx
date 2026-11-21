@@ -1,4 +1,5 @@
 import { useT } from '../i18n/I18nContext'
+import { avatarGradient } from '../utils/avatar'
 
 /** 弹跳三点（与 MessageBubble 共用样式） */
 const BouncingDots = ({ className = '' }: { className?: string }) => (
@@ -13,27 +14,32 @@ export interface ActivityUser {
   id: number
   name: string
   avatarUrl: string | null
-  status: 'thinking' | 'typing'
+  status: 'thinking' | 'typing' | 'speaking'
 }
 
 interface ActivityBarProps {
   users: ActivityUser[]
 }
 
+/** 输入区上沿的一行：它跟着输入区一起浮起来，消息从它下面滚过去（不再夹在消息流里） */
 export default function ActivityBar({ users }: ActivityBarProps) {
   const t = useT()
   if (users.length === 0) return null
 
   const MAX = 3
+  // 一拨人里只要有人在出声，就按"说话中"报——它比"输入中"具体
+  const hasSpeaking = users.some(u => u.status === 'speaking')
   const hasTyping = users.some(u => u.status === 'typing')
-  const statusLabel = hasTyping ? t('chat:typing') : t('chat:thinking')
+  const statusLabel = hasSpeaking
+    ? t('chat:speaking')
+    : hasTyping ? t('chat:typing') : t('chat:thinking')
   const overflow = users.length > MAX
 
   // 最多展示 MAX 个头像，溢出时最后一个显示省略号
   const shown = overflow ? users.slice(0, MAX - 1) : users.slice(0, MAX)
 
   return (
-    <div className="sticky bottom-0 z-20 flex items-center gap-2.5 px-4 py-2.5 bg-canvas/90 backdrop-blur border-t border-border animate-in slide-in-from-bottom-2 duration-200">
+    <div className="flex items-center gap-2.5 px-1 pb-1.5 animate-in slide-in-from-bottom-2 duration-200">
       {/* 头像堆叠（半遮挡） */}
       <div className="flex -space-x-2.5 shrink-0">
         {shown.map((u) => (
@@ -44,11 +50,11 @@ export default function ActivityBar({ users }: ActivityBarProps) {
           >
             {u.avatarUrl ? (
               <>
-                <div className="absolute inset-px rounded-full bg-gradient-to-br from-primary-500 to-primary-700/30" />
+                <div className={`absolute inset-px rounded-full ${avatarGradient(undefined, false, true)}`} />
                 <img src={u.avatarUrl} alt={u.name} className="relative w-full h-full object-cover" loading="lazy" />
               </>
             ) : (
-              <span className="w-full h-full flex items-center justify-center text-3xs font-bold bg-gradient-to-br from-primary-500 to-primary-700 text-white">
+              <span className={`w-full h-full flex items-center justify-center text-3xs font-bold ${avatarGradient(undefined, false, false)} text-white`}>
                 {u.name.charAt(0).toUpperCase()}
               </span>
             )}
@@ -71,7 +77,7 @@ export default function ActivityBar({ users }: ActivityBarProps) {
       </span>
 
       {/* 三点弹跳气泡 */}
-      <span className="shrink-0 px-2.5 py-1.5 bg-surface border border-border rounded-card text-primary-400">
+      <span className="shrink-0 px-2.5 py-1.5 card text-primary-400">
         <BouncingDots />
       </span>
     </div>

@@ -6,7 +6,7 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, PieChart, Pie, Cell,
 } from 'recharts'
-import { Activity, Clock, AlertTriangle, Layers, Loader2 } from 'lucide-react'
+import { Activity, Clock, AlertTriangle, Layers, Loader2, Timer, Gauge, HardDrive } from 'lucide-react'
 
 export default function SystemMetricsTab() {
   const t = useT()
@@ -73,6 +73,25 @@ export default function SystemMetricsTab() {
         <MetricCard icon={Clock} label={t('admin:metricsAvgLatency')} value={`${(live.llm?.latency?.avg ?? 0).toFixed(2)}s`} color="mint" />
         <MetricCard icon={AlertTriangle} label={t('admin:metricsErrorRate')} value={`${((live.llm?.error_rate ?? 0) * 100).toFixed(1)}%`} color="rose" />
         <MetricCard icon={Layers} label={t('admin:metricsMaxQueueDepth')} value={live.queue?.max_depth ?? 0} color="amber" />
+      </div>
+
+      {/* 容量与延迟：调度层的实时读数（后端 services/infrastructure/capacity.py） */}
+ <div className="card p-4">
+        <h3 className="text-sm font-semibold text-textPrimary mb-1">容量与延迟</h3>
+        <p className="text-xs text-textMuted mb-3">
+          端到端含排队；两段分开看，才知道慢在排队还是慢在模型。
+          并发上限可在「系统设置 → 容量与内存策略」里由管理员设内存线。
+        </p>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <MetricCard icon={Clock} label="回合端到端 p95"
+            value={`${(live.rounds?.latency?.p95 ?? 0).toFixed(2)}s`} color="mint" />
+          <MetricCard icon={Timer} label="其中排队 p95"
+            value={`${(live.rounds?.queue?.p95 ?? 0).toFixed(2)}s`} color="amber" />
+          <MetricCard icon={Gauge} label="同时运行 / 上限"
+            value={`${live.capacity?.admission?.inflight ?? 0} / ${live.capacity?.admission?.limit || '∞'}`} color="primary" />
+          <MetricCard icon={HardDrive} label="本服务内存"
+            value={`${Math.round(live.capacity?.memory?.used_mb ?? 0)} MB`} color="rose" />
+        </div>
       </div>
 
       {/* LLM 延迟趋势图 */}
@@ -194,7 +213,7 @@ function MetricCard({ icon: Icon, label, value, color }: {
     amber: 'bg-accent-400/10 text-accent-400',
   }
   return (
-    <div className="bg-surface rounded-card border border-border p-4 text-center">
+ <div className="card p-4 text-center">
       <Icon size={18} className={`mx-auto mb-1.5 ${colorMap[color]?.split(' ')[1] || 'text-textSecondary'}`} />
       <div className="text-xl font-bold text-textPrimary">{value}</div>
       <div className="text-3xs text-textMuted mt-0.5">{label}</div>

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, type CSSProperties } from 'react'
 import { useNavigate, useOutletContext } from 'react-router-dom'
 import { api } from '../api/client'
 import ChatView from './ChatView'
@@ -6,9 +6,11 @@ import ChatSidebar from './ChatSidebar'
 import DMChatView from './DMChatView'
 import GroupSettingsPanel from './GroupSettingsPanel'
 import { GroupAvatarHeader, thumbUrl } from './GroupAvatar'
+import ChatHeader from './shared/ChatHeader'
+import { CHAT_HEADER_INSET } from './shared/chatHeaderInset'
 import ProfileCard from './ProfileCard'
 import SearchOverlay from './SearchOverlay'
-import { Bell, BellOff, UserPlus, Settings, ArrowLeft, Bot, User, Globe, X, Check, Users, AlertTriangle } from 'lucide-react'
+import { Bell, BellOff, UserPlus, Settings, Bot, User, Globe, X, Check, Users, AlertTriangle } from 'lucide-react'
 import { useT } from '../i18n/I18nContext'
 import { useResizableSidebar } from '../hooks/useResizableSidebar'
 import { refreshChatLists } from '../hooks/useChatLists'
@@ -170,76 +172,66 @@ export default function ChatArea({ groupId, dmSessionId }: ChatAreaProps) {
           </div>
         </div>
       ) : groupId ? (
-        /* ── 群聊 ── */
-        <div ref={setGroupPanelEl} className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
-          <div className="px-4 h-14 border-b border-border bg-surface flex items-center gap-2 shrink-0">
-            <button
-              onClick={() => navigate('/chat')}
-              className="md:hidden p-1.5 -ml-1 rounded-control hover:bg-elevated text-textSecondary transition-colors"
-              title={t('chat:sessionList')}
-            >
-              <ArrowLeft size={20} />
-            </button>
-            {currentGroup && (
-              <GroupAvatarHeader g={currentGroup} onClick={() => setProfileGroup(currentGroup)} />
-            )}
-            <h2 className="font-semibold text-textPrimary text-sm truncate">
-              # {currentGroup?.name || t('chat:loading')}
-            </h2>
-            {currentGroup?.is_federated && (
-              <span className="chip chip-primary shrink-0"
-                    title={t('chat:federatedGroup')}>
+        /* ── 群聊 ──
+           头部浮在消息上（见 shared/ChatHeader）：容器声明让位量 --header-inset，
+           消息从条底下滚过去，滚动区顶部留白按它让 */
+        <div
+          ref={setGroupPanelEl}
+          className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden relative"
+          style={{ '--header-inset': CHAT_HEADER_INSET } as CSSProperties}
+        >
+          <ChatHeader
+            onBack={() => navigate('/chat')}
+            backTitle={t('chat:sessionList')}
+            avatar={currentGroup ? <GroupAvatarHeader g={currentGroup} onClick={() => setProfileGroup(currentGroup)} /> : null}
+            title={'# ' + (currentGroup?.name || t('chat:loading'))}
+            chips={currentGroup?.is_federated ? (
+              <span className="chip chip-primary shrink-0" title={t('chat:federatedGroup')}>
                 <Globe size={11} />
                 {t('chat:federated')}
               </span>
-            )}
-            <button
-              onClick={() => setShowInvite(true)}
-              className="p-1 rounded-control hover:bg-elevated text-textMuted hover:text-primary-400 transition-colors"
-              title={t('chat:inviteMembers')}
-            >
-              <UserPlus size={16} />
-            </button>
-            <span className={`inline-flex items-center gap-1 text-3xs font-medium ${(currentGroup?.online_count ?? 0) === 0 ? 'text-slate-400' : 'text-mint-400'}`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${(currentGroup?.online_count ?? 0) === 0 ? 'bg-slate-400' : 'bg-mint-400'}`} /> {t('chat:onlineCount')}: {currentGroup?.online_count ?? 0}
-            </span>
-            <button
-              onClick={async () => {
-                if (!currentGroup) return
-                try {
-                  if (currentGroup.dnd_until) {
-                    await api.post(`/groups/${currentGroup.id}/dnd/cancel`)
-                    setGroups(prev => prev.map(g => g.id === currentGroup.id ? { ...g, dnd_until: null } : g))
-                  } else {
-                    await api.post(`/groups/${currentGroup.id}/dnd`, { group_id: currentGroup.id, duration_minutes: null })
-                    setGroups(prev => prev.map(g => g.id === currentGroup.id ? { ...g, dnd_until: 'permanent' } : g))
-                  }
-                } catch { /* ignore */ }
-              }}
-              className={`p-1 rounded-control transition-colors ml-auto ${
-                currentGroup?.dnd_until
-                  ? 'text-rose-400 hover:bg-rose-400/10'
-                  : 'text-textMuted hover:text-rose-400 hover:bg-elevated'
-              }`}
-              title={currentGroup?.dnd_until ? t('chat:unmute') : t('chat:mute')}
-            >
-              {currentGroup?.dnd_until ? <BellOff size={14} /> : <Bell size={14} />}
-            </button>
-            {currentGroup && (
-              <button
-                onClick={() => setShowSettings(true)}
-                className="p-1 rounded-control hover:bg-elevated text-textMuted hover:text-textSecondary transition-colors"
-                title={t('chat:groupSettings')}
-              >
-                <Settings size={14} />
+            ) : null}
+            status={
+              // 状态一律「圆点 + 文案」（ui_system §5）
+              <span className={'inline-flex items-center gap-1 ' + ((currentGroup?.online_count ?? 0) === 0 ? 'text-slate-400' : 'text-mint-400')}>
+                <span className={'w-1.5 h-1.5 rounded-full ' + ((currentGroup?.online_count ?? 0) === 0 ? 'bg-slate-400' : 'bg-mint-400')} />
+                {t('chat:onlineCount')}: {currentGroup?.online_count ?? 0}
+              </span>
+            }
+            actions={<>
+              <button onClick={() => setShowInvite(true)} className="icon-btn" title={t('chat:inviteMembers')}>
+                <UserPlus size={16} />
               </button>
-            )}
-          </div>
+              <button
+                onClick={async () => {
+                  if (!currentGroup) return
+                  try {
+                    if (currentGroup.dnd_until) {
+                      await api.post('/groups/' + currentGroup.id + '/dnd/cancel')
+                      setGroups(prev => prev.map(g => g.id === currentGroup.id ? { ...g, dnd_until: null } : g))
+                    } else {
+                      await api.post('/groups/' + currentGroup.id + '/dnd', { group_id: currentGroup.id, duration_minutes: null })
+                      setGroups(prev => prev.map(g => g.id === currentGroup.id ? { ...g, dnd_until: 'permanent' } : g))
+                    }
+                  } catch { /* 通道对免打扰不该让整条头部失灵 */ }
+                }}
+                className={'icon-btn' + (currentGroup?.dnd_until ? ' is-alert' : '')}
+                title={currentGroup?.dnd_until ? t('chat:unmute') : t('chat:mute')}
+              >
+                {currentGroup?.dnd_until ? <BellOff size={16} /> : <Bell size={16} />}
+              </button>
+              {currentGroup && (
+                <button onClick={() => setShowSettings(true)} className="icon-btn" title={t('chat:groupSettings')}>
+                  <Settings size={16} />
+                </button>
+              )}
+            </>}
+          />
           <ChatView conversationType="group" conversationId={groupId} myRole={currentGroup?.my_role} overlayHost={groupPanelEl} />
         </div>
       ) : (
         /* ── 私信 ── */
-        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
           <DMChatView sessionId={dmSessionId!} onMobileBack={() => setMobileSidebarOpen(true)} />
         </div>
       )}

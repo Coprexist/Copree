@@ -176,11 +176,15 @@ async function request<T = any>(
   return data
 }
 
-/** 上传文件（multipart/form-data），返回 {file_id, name, path, size, mime_type} */
-async function uploadFile(path: string, file: File): Promise<any> {
+/** 上传文件（multipart/form-data），返回 {file_id, name, path, size, mime_type}
+ *
+ *  fields 是同一张表单里的文本字段（如表情包的 name / caption）：
+ *  这些字段与文件是**同一次写入**的语义，分成两个请求就会出现"图传了、说明没传"的半截数据 */
+async function uploadFile(path: string, file: File, fields?: Record<string, string>): Promise<any> {
   const token = localStorage.getItem('access_token')
   const formData = new FormData()
   formData.append('file', file)
+  for (const [key, value] of Object.entries(fields || {})) formData.append(key, value)
 
   const headers: Record<string, string> = {}
   if (token) {

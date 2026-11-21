@@ -123,7 +123,7 @@ export default function LocalModelPage() {
       <div className="flex-1 overflow-y-auto p-4 md:p-6">
         <div className="max-w-2xl mx-auto space-y-4">
           {/* 连接状态 */}
-          <div className="bg-surface rounded-card border border-border p-4">
+ <div className="card p-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <Circle
@@ -192,7 +192,7 @@ export default function LocalModelPage() {
           )}
 
           {/* 已安装模型列表 */}
-          <div className="bg-surface rounded-card border border-border p-4">
+ <div className="card p-4">
             <h3 className="text-sm font-semibold text-textPrimary mb-3">
               {t('desktop:installedModels')}
             </h3>

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Loader2, Check, X, RotateCcw, Settings2, Brain, Plug } from 'lucide-react'
 import { api } from '../api/client'
 import { useT } from '../i18n/I18nContext'
-import { Button, Card, Select } from './ui'
+import { Button, Card, Input, Select, SecretInput} from './ui'
 
 /**
  * 通用配置组卡片（管理员图形化修改任意配置组）
@@ -134,23 +134,30 @@ export default function ConfigGroupCard({ groupKey }: { groupKey: string }) {
       icon={<Icon size={16} className="text-accent-400" />}
       hint={group.hint_key ? tr(group.hint_key) : undefined}
     >
-      {/* 字段表单（按 schema 自动渲染） */}
-      {Object.entries(group.fields as Record<string, any>).map(([key, field]) => (
-        <div key={key}>
-          <label className="block text-sm font-medium mb-1 text-textSecondary">
-            {tr(field.label_key)}
+      {/* 字段表单（按 schema 自动渲染）：标签 / 说明 / 来源标记都交给 Input / Select 自己排 */}
+      {Object.entries(group.fields as Record<string, any>).map(([key, field]) => {
+        const label = (
+          <span className="flex flex-wrap items-center gap-x-2">
+            <span>{tr(field.label_key)}</span>
             {isSecret(key) && (
-              <span className="text-xs text-textMuted ml-1">
+              <span className="text-xs font-normal text-textMuted">
                 {secretSet[key] ? tr('secretSet') : tr('secretNotSet')}
               </span>
             )}
-            <span className="text-xs text-textMuted ml-2">
+            <span className="text-xs font-normal text-textMuted">
               {source[key] === 'db' ? tr('sourceDb') : tr('sourceEnv')}
             </span>
-          </label>
+          </span>
+        )
+        const hint = field.hint_key ? tr(field.hint_key) : undefined
 
-          {field.type === 'select' ? (
+        if (field.type === 'select') {
+          return (
             <Select
+              key={key}
+              fieldSize="sm"
+              label={label}
+              hint={hint}
               value={values[key] ?? ''}
               onChange={(e) => setValues({ ...values, [key]: e.target.value })}
               options={(field.options || []).map((opt: any) => ({
@@ -158,30 +165,42 @@ export default function ConfigGroupCard({ groupKey }: { groupKey: string }) {
                 label: tr(opt.label_key),
               }))}
             />
-          ) : field.type === 'number' || field.type === 'float' ? (
-            <input
-              type="number"
-              step={field.step}
-              min={field.min}
-              max={field.max}
-              value={values[key] ?? ''}
-              onChange={(e) => setValues({ ...values, [key]: e.target.value })}
-              className="w-full px-3.5 py-2.5 rounded-card border border-border bg-canvas text-sm text-textPrimary"
-            />
-          ) : (
-            <input
-              type={isSecret(key) ? 'password' : 'text'}
-              value={values[key] ?? ''}
-              onChange={(e) => setValues({ ...values, [key]: e.target.value })}
-              placeholder={isSecret(key) && secretSet[key] ? secretPlaceholder : ''}
-              className="w-full px-3.5 py-2.5 rounded-card border border-border bg-canvas text-sm text-textPrimary"
-            />
-          )}
+          )
+        }
 
-          {/* 说明文案（i18n：是什么 + 为什么改） */}
-          {field.hint_key && <p className="text-xs text-textMuted mt-1">{tr(field.hint_key)}</p>}
-        </div>
-      ))}
+        const numeric = field.type === 'number' || field.type === 'float'
+        // 密钥字段一律走 SecretInput：不用 type=password，免得浏览器当成账号密码自动填充
+        if (isSecret(key)) {
+          return (
+            <SecretInput
+              key={key}
+              fieldSize="sm"
+              label={label}
+              hint={hint}
+              value={values[key] ?? ''}
+              onChange={(e) => setValues({ ...values, [key]: e.target.value })}
+              placeholder={secretSet[key] ? secretPlaceholder : ''}
+              wrapperClassName="w-full"
+            />
+          )
+        }
+        return (
+          <Input
+            key={key}
+            fieldSize="sm"
+            label={label}
+            hint={hint}
+            type={numeric ? 'number' : 'text'}
+            step={numeric ? field.step : undefined}
+            min={numeric ? field.min : undefined}
+            max={numeric ? field.max : undefined}
+            value={values[key] ?? ''}
+            onChange={(e) => setValues({ ...values, [key]: e.target.value })}
+            placeholder={isSecret(key) && secretSet[key] ? secretPlaceholder : ''}
+            className="w-full"
+          />
+        )
+      })}
 
       {msg && (
         <p className={`text-sm flex items-center gap-1.5 ${msgOk ? 'text-mint-400' : 'text-rose-400'}`}>
@@ -201,12 +220,13 @@ export default function ConfigGroupCard({ groupKey }: { groupKey: string }) {
       {/* 操作按钮（统一 Button 组件） */}
       <div className="flex items-center gap-2 pt-1">
         {groupKey === 'embedding' && (
-          <Button variant="secondary" onClick={handleTest} disabled={saving} icon={<Plug size={14} />}>
+          <Button variant="secondary" size="sm" onClick={handleTest} disabled={saving} icon={<Plug size={14} />}>
             {tr('test')}
           </Button>
         )}
         <Button
           variant="accent"
+          size="sm"
           onClick={handleSave}
           disabled={saving}
           loading={saving}
@@ -214,7 +234,7 @@ export default function ConfigGroupCard({ groupKey }: { groupKey: string }) {
         >
           {saved ? tr('saved') : tr('save')}
         </Button>
-        <Button variant="secondary" onClick={handleReset} disabled={saving} title={tr('reset')}>
+        <Button variant="secondary" size="sm" onClick={handleReset} disabled={saving} title={tr('reset')}>
           <RotateCcw size={16} />
         </Button>
       </div>

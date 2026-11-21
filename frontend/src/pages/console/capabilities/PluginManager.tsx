@@ -1,14 +1,15 @@
 import { useState, useEffect } from 'react'
 import {
-  BookOpen, Box, FileDown, Globe, Link2, Palette, Plug, RefreshCw, RefreshCcw, Server, Wand2,
+  BookOpen, Box, FileDown, Globe, Link2, Palette, Plug, RefreshCw, RefreshCcw, Server, Trash2, Wand2,
 } from 'lucide-react'
 import { api } from '../../../api/client'
-import { Button, EmptyState, Input, ListPanel, LIST_CELL_FLEX, Select } from '../../../components/ui'
+import { Button, EmptyState, Input, ListPanel, LIST_CELL_FLEX, Select, confirmAsync } from '../../../components/ui'
 import { useT } from '../../../i18n/I18nContext'
 import DocExportTab from './DocExportTab'
 import ApiDocSectionsTab from './ApiDocSectionsTab'
 import DshBridgeTab from './DshBridgeTab'
 import PluginDetailPanel, { type PluginEntry } from './PluginDetailPanel'
+import PluginStorageSection from './PluginStorageSection'
 import Toggle from '../../../components/Toggle'
 import type { PluginView } from '../../../utils/skin'
 import { CATEGORY_ICON, CATEGORY_LABEL_KEY } from '../../../utils/pluginCategories'
@@ -79,6 +80,7 @@ export default function PluginManager() {
   const [contentToggling, setContentToggling] = useState<string | null>(null)
   const [builtins, setBuiltins] = useState<Plugin[]>([])
   const [builtinToggling, setBuiltinToggling] = useState<string | null>(null)
+  const [uninstalling, setUninstalling] = useState('')
 
   const [q, setQ] = useState('')
   const [category, setCategory] = useState('all')
@@ -215,6 +217,28 @@ export default function PluginManager() {
     return { tone: 'muted' as Tone, text: t('tool:plugin.statusBuiltin') }
   }
 
+  /** 卸载用户插件：数据默认保留（重装可续用），清数据在下面的「插件数据」里单独做 */
+  const uninstallPlugin = async (entry: PluginEntry) => {
+    const ok = await confirmAsync({
+      title: t('tool:store.uninstall'),
+      message: t('tool:store.confirmUninstall', { name: entry.name }),
+      danger: true,
+    })
+    if (!ok) return
+    setUninstalling(entry.id)
+    setMessage(null)
+    try {
+      await api.delete('/plugins/store/installed/' + encodeURIComponent(entry.id))
+      setMessage({ type: 'success', text: t('tool:store.uninstallSuccess', { name: entry.name }) })
+      await Promise.all([fetchContentPlugins(), fetchBuiltins()])
+      invalidateEmojiPacks()
+    } catch (e: any) {
+      setMessage({ type: 'error', text: e?.detail || e?.message || String(e) })
+    } finally {
+      setUninstalling('')
+    }
+  }
+
   return (
     <div className="space-y-4">
       {message && (
@@ -262,6 +286,7 @@ export default function PluginManager() {
                 { value: 'all', label: t('tool:plugin.filterAll') },
                 { value: 'service', label: label('service') },
                 { value: 'skin', label: label('skin') },
+                { value: 'emojipack', label: label('emojipack') },
                 { value: 'skill', label: label('skill') },
                 { value: 'world', label: label('world') },
                 { value: 'builtin', label: label('builtin') },
@@ -333,6 +358,16 @@ export default function PluginManager() {
                         onChange={() => toggleBuiltin(entry.service as Plugin)}
                       />
                     )}
+                    {!entry.builtin && entry.kind !== 'capability' && (
+                      <button
+                        onClick={() => uninstallPlugin(entry)}
+                        disabled={uninstalling === entry.id}
+                        className="text-xs text-rose-400 hover:text-rose-500 disabled:opacity-50 inline-flex items-center gap-1"
+                      >
+                        <Trash2 size={12} />
+                        {t('tool:store.uninstall')}
+                      </button>
+                    )}
                     <button
                       onClick={() => setOpenKey(entry.key)}
                       className="text-xs text-textSecondary hover:text-textPrimary"
@@ -345,6 +380,9 @@ export default function PluginManager() {
           )
         })}
       </ListPanel>
+
+      {/* 插件数据：代码卸载了数据可能还在，这块让人看得见、清得掉 */}
+      <PluginStorageSection />
 
       {/* 详情在右侧抽屉里：列表留在原地当上下文，配置与表单不挤动列表 */}
       {openEntry && (

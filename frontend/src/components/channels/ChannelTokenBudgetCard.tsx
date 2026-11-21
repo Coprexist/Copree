@@ -22,6 +22,8 @@ interface BudgetPolicy {
   limit_tokens: number
   blocked_reply_enabled: boolean
   blocked_reply_text: string
+  reset_period: string      // 空 = 不自动重置
+  reset_anchor: string      // HH:MM（按平台展示时区）
 }
 
 interface BudgetConversation {
@@ -36,9 +38,18 @@ interface BudgetConversation {
   blocked: boolean
 }
 
+interface BudgetReset {
+  period: string
+  anchor: string
+  window_start: string | null
+  next_reset_at: string | null
+  timezone: string
+}
+
 interface Budget {
   policy: BudgetPolicy
   conversations: BudgetConversation[]
+  reset?: BudgetReset
   default_blocked_reply: string
 }
 
@@ -67,6 +78,22 @@ export default function ChannelTokenBudgetCard({ agentId, pluginId }: { agentId:
   if (!data) return null
   const { policy, conversations } = data
   const meterLabel = (mode: string) => t(mode === 'total' ? 'tool:channel.token.meter.total' : 'tool:channel.token.meter.billable')
+  // 自动重置：周期与锚点由插件设置声明，平台只负责按窗口算账并把它显示出来
+  const resetInfo = data.reset   // 别叫 reset：这个名字已经是下面的"手动重置"动作
+  // 静态映射而不是拼 key：i18n 检查器只认字面量，拼出来的 key 会被当成缺失
+  const RESET_PERIOD_KEY: Record<string, string> = {
+    hour: 'tool:channel.token.resetPeriod.hour',
+    day: 'tool:channel.token.resetPeriod.day',
+    '2days': 'tool:channel.token.resetPeriod.2days',
+    week: 'tool:channel.token.resetPeriod.week',
+  }
+  const resetPeriodLabel = (period: string) =>
+    t(RESET_PERIOD_KEY[period] || 'tool:channel.token.resetPeriod.none')
+  const resetLabel = !resetInfo?.period
+    ? t('tool:channel.token.resetNone')
+    : t('tool:channel.token.resetAt', {
+        period: resetPeriodLabel(resetInfo.period), at: resetInfo.anchor,
+      })
 
   const saveLimit = async (conversation: string, value: string, clear: boolean) => {
     setBusy('save:' + conversation)
@@ -109,6 +136,13 @@ export default function ChannelTokenBudgetCard({ agentId, pluginId }: { agentId:
           <span className="text-textMuted">·</span>
           <span className={policy.blocked_reply_enabled ? 'text-mint-400' : 'text-textMuted'}>
             {t(policy.blocked_reply_enabled ? 'tool:channel.token.autoReplyOn' : 'tool:channel.token.autoReplyOff')}
+          </span>
+          <span className="text-textMuted">·</span>
+          <span className={resetInfo?.period ? 'text-textSecondary' : 'text-textMuted'}>
+            {resetLabel}
+            {resetInfo?.next_reset_at && (
+              <span className="text-textMuted">（{t('tool:channel.token.resetNext', { at: resetInfo.next_reset_at })}）</span>
+            )}
           </span>
         </div>
         {policy.blocked_reply_enabled && (

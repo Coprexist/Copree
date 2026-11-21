@@ -1,7 +1,7 @@
 /**
  * 一条日志的「状态帧身份」—— AI 详情页与管理台日志列表共用（单一实现，勿各自手写）。
  *
- * 后端从存下的请求体里读回当时的栈顶帧：type + label。不同状态的请求体前缀本就不同，
+ * 后端从存下的请求体里读回当时的帧身份：type + label。不同状态的请求体前缀本就不同，
  * 列表按帧身份归堆，才看得出「这段状态的上下文长什么样」；帧实例（每次 push 的随机 id）
  * 会把同一段状态碎成一地，所以只认身份。
  */
@@ -12,7 +12,7 @@ export interface LogStateFrame {
   label?: string
 }
 
-/** 这条日志属于哪段状态；读不到就是空（那轮没注入状态摘要，比如状态栈建起来之前的旧日志） */
+/** 这条日志属于哪段状态；读不到就是空（那轮没注入状态摘要，比如状态链建起来之前的旧日志） */
 export function logStateOf(log: { state_frame?: LogStateFrame } | null | undefined): LogStateFrame | null {
   const frame = log?.state_frame
   return frame && frame.type ? frame : null
@@ -72,6 +72,25 @@ const STATE_TYPE_KEYS: Record<string, string> = {
 function stateName(label: string): string {
   const matched = /^(?:群|私信|世界)「([\s\S]*)」$/.exec(label)
   return matched ? matched[1] : label
+}
+
+/** 这一行是不是「状态段收尾」落的那条（离开状态帧时写的，不是一次模型调用） */
+export function isSwitchRow(origin: string | null | undefined): boolean {
+  return origin === 'switch'
+}
+
+/** 状态段收尾的标记：它没有结局、不算 token，列表上不能和真实调用长得一样 */
+export function SwitchChip({ origin, className = '' }: { origin?: string | null; className?: string }) {
+  const t = useT()
+  if (!isSwitchRow(origin)) return null
+  return (
+    <span
+      title={t('logs:originSwitchHint')}
+      className={`text-3xs px-1.5 py-0.5 rounded bg-canvas border border-border text-textMuted whitespace-nowrap ${className}`}
+    >
+      {t('logs:originSwitch')}
+    </span>
+  )
 }
 
 /** 状态帧身份标签：类型 + 名字，一个胶囊说完 */

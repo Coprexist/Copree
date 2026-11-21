@@ -36,7 +36,9 @@ export default function ForwardFileModal({ file, onClose }: ForwardFileModalProp
 
   // 发送状态
   const [sending, setSending] = useState(false)
-  const [done, setDone] = useState(false)
+  // 发送结果：成功几个、失败几个。以前只有一个 done，失败了也报"已发送"——
+  // 后端 500 的时候，用户看到的和真发生的事正好相反（2026-11-09 转发丢消息就是这么藏住的）
+  const [result, setResult] = useState<{ ok: number; fail: number } | null>(null)
 
   useEffect(() => {
     Promise.all([
@@ -84,6 +86,7 @@ export default function ForwardFileModal({ file, onClose }: ForwardFileModalProp
   const handleSend = async () => {
     if (selected.size === 0) return
     setSending(true)
+    setResult(null)
 
     const attachment = {
       file_id: file.file_id,
@@ -108,7 +111,7 @@ export default function ForwardFileModal({ file, onClose }: ForwardFileModalProp
     const failed = results.filter((r) => r.status === 'rejected').length
 
     setSending(false)
-    setDone(true)
+    setResult({ ok: succeeded, fail: failed })
 
     // 通知聊天界面刷新
     window.dispatchEvent(new CustomEvent(CHAT_REFRESH_EVENT))
@@ -179,7 +182,7 @@ export default function ForwardFileModal({ file, onClose }: ForwardFileModalProp
         onClick={(e) => e.stopPropagation()}
       >
         {/* 头部 */}
-        <div className="flex items-center gap-3 px-4 h-12 border-b border-border shrink-0">
+        <div className="top-bar flex items-center gap-3 px-4 h-14 shrink-0">
           <FileIcon size={16} className="text-textMuted shrink-0" />
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium text-textPrimary truncate">{file.name}</p>
@@ -225,9 +228,11 @@ export default function ForwardFileModal({ file, onClose }: ForwardFileModalProp
 
         {/* 底部操作栏 */}
         <div className="px-3 py-2.5 border-t border-border shrink-0 flex items-center gap-2">
-          <span className="text-xs text-textMuted flex-1">
-            {done
-              ? t('forward:sent')
+          <span className={'text-xs flex-1 ' + (result && result.fail > 0 ? 'text-rose-400' : 'text-textMuted')}>
+            {result
+              ? result.fail === 0
+                ? t('forward:sent')
+                : t('forward:sentPartial', { ok: String(result.ok), fail: String(result.fail) })
               : selected.size > 0
               ? t('forward:selectedCount').replace('{n}', String(selected.size))
               : t('forward:selectHint')}
@@ -236,11 +241,11 @@ export default function ForwardFileModal({ file, onClose }: ForwardFileModalProp
             onClick={onClose}
             className="px-3 py-1.5 rounded-control text-xs text-textSecondary hover:bg-elevated transition-colors"
           >
-            {done ? t('common:close') : t('common:cancel')}
+            {result ? t('common:close') : t('common:cancel')}
           </button>
           <button
             onClick={handleSend}
-            disabled={selected.size === 0 || sending || done}
+            disabled={selected.size === 0 || sending || result !== null}
             className="btn btn-xs btn-primary gap-1.5"
           >
             {sending ? (

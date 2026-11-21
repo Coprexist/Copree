@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Search, X, MessageSquare, UserPlus, Bot, User, Users } from 'lucide-react'
 import { api } from '../api/client'
 import { getStateDotColor } from '../constants'
+import { avatarGradient } from '../utils/avatar'
 import { useT } from '../i18n/I18nContext'
 import ProfileCard from './ProfileCard'
 import { MenuPanel } from './ui'
@@ -181,15 +182,11 @@ export default function SearchOverlay() {
           <div className="relative w-8 h-8 rounded-full shrink-0 overflow-hidden">
             {item.avatar_url ? (
               <>
-                <div className={`absolute inset-px rounded-full bg-gradient-to-bl ${
-                  item.type === 'human' ? 'from-primary-500 to-primary-700' : 'from-teal-400 to-teal-600'
-                }`} />
+                <div className={`absolute inset-px rounded-full ${avatarGradient(item.type, false, true)}`} />
                 <img src={item.avatar_url} alt={item.name} className="relative w-full h-full rounded-full object-cover" loading="lazy" />
               </>
             ) : (
-              <div className={`w-full h-full rounded-full bg-gradient-to-bl flex items-center justify-center ${
-                item.type === 'human' ? 'from-primary-500 to-primary-700' : 'from-teal-400 to-teal-600'
-              }`}>
+              <div className={`w-full h-full rounded-full flex items-center justify-center ${avatarGradient(item.type, false, false)}`}>
                 <span className="text-xs font-bold text-white">{item.name.charAt(0).toUpperCase()}</span>
               </div>
             )}

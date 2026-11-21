@@ -105,11 +105,7 @@ export default function SkinPicker() {
         key={opts.id}
         onClick={opts.onClick}
         disabled={busy || opts.disabled}
-        className={`relative w-full text-left rounded-card border p-3 transition-all ${
-          opts.selected
-            ? 'border-mint-400/60 bg-mint-400/5 ring-1 ring-mint-400/30'
-            : 'border-border bg-surface hover:border-primary-400/40 hover:bg-elevated'
-        } ${busy ? 'opacity-60' : ''} ${opts.disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+        className="btn btn-sm btn-outline"
       >
         {opts.selected && (
           <span className="absolute -top-2 left-3 px-2 py-0.5 rounded-full bg-mint-500 text-white text-3xs font-medium flex items-center gap-0.5 shadow">

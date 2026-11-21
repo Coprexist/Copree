@@ -4,8 +4,8 @@ import { api } from '../../../api/client'
 import { invalidateEmojiPacks } from '../../../utils/emojiPacks'
 import { useT } from '../../../i18n/I18nContext'
 import { useAuth } from '../../../context/AuthContext'
-import { Button, Dialog, EmptyState, Input, confirmAsync } from '../../../components/ui'
-import { CATEGORY_ICON, CATEGORY_LABEL_KEY } from '../../../utils/pluginCategories'
+import { Button, Dialog, EmptyState, Input, Select, confirmAsync } from '../../../components/ui'
+import { CATEGORY_ICON, CATEGORY_LABEL_KEY, PLUGIN_CATEGORIES } from '../../../utils/pluginCategories'
 import { formatFileSize } from '../../../utils/format'
 
 /**
@@ -58,6 +58,7 @@ export default function PluginMarketSection() {
   const [busy, setBusy] = useState('')
   const [msg, setMsg] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null)
   const [keyword, setKeyword] = useState('')
+  const [category, setCategory] = useState('all')
   const [detail, setDetail] = useState<StorePackage | null>(null)
 
   const load = useCallback(async () => {
@@ -133,6 +134,8 @@ export default function PluginMarketSection() {
 
   const q = keyword.trim().toLowerCase()
   const list = packages.filter(p => {
+    // 类别是商城的一等筛选：表情包、皮肤、技能各自看一眼，别全堆在一起
+    if (category !== 'all' && (p.manifest?.category || 'other') !== category) return false
     if (!q) return true
     const m = p.manifest
     return [p.file_name, m?.id, m?.name, m?.author, m?.description]
@@ -149,11 +152,20 @@ export default function PluginMarketSection() {
       {/* 工具条：搜索 + 刷新 + 上传（上传只对管理员开放，普通用户看得见列表、装不了） */}
       <div className="flex items-center gap-2 flex-wrap">
         <Input value={keyword} onChange={e => setKeyword(e.target.value)} placeholder={t('tool:store.searchPackages')} className="w-56" />
+        <Select
+          value={category}
+          onChange={e => setCategory(e.target.value)}
+          options={[
+            { value: 'all', label: t('tool:plugin.filterAll') },
+            ...PLUGIN_CATEGORIES.map(c => ({ value: c, label: t(CATEGORY_LABEL_KEY[c] || CATEGORY_LABEL_KEY.other) })),
+          ]}
+          fieldSize="sm"
+        />
         <Button size="sm" variant="secondary" icon={<RefreshCw size={13} />} onClick={load} disabled={loading}>
           {t('tool:store.refresh')}
         </Button>
         <span className="text-xs text-textMuted">{t('tool:store.packageCount', { n: list.length })}</span>
-        <label className="btn btn-sm btn-primary gap-1.5 cursor-pointer ml-auto">
+        <label className="btn btn-md btn-primary gap-1.5 cursor-pointer ml-auto">
             <Upload size={13} /> {t('tool:store.uploadPackage')}
             <input
               type="file"
@@ -191,7 +203,7 @@ export default function PluginMarketSection() {
             const status = statusOf(pkg)
             const busyKey = 'install:' + pkg.file_name
             return (
-              <div key={pkg.file_name} className="flex flex-col gap-2 rounded-card border border-border bg-surface p-3">
+ <div key={pkg.file_name} className="flex flex-col gap-2 card p-3">
                 <div className="flex items-start gap-2">
                   <div className="w-9 h-9 rounded-control bg-primary-500/10 flex items-center justify-center shrink-0">
                     <Icon size={17} className="text-primary-400" />

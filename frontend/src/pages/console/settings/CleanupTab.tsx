@@ -43,7 +43,7 @@ export default function CleanupTab() {
   return (
     <div className="space-y-5">
       {/* 运行清理 */}
-      <div className="bg-surface rounded-card border border-border p-5">
+ <div className="card p-5">
         <div className="flex items-center gap-3 mb-4">
           <div className="w-10 h-10 rounded-card bg-primary-500/10 flex items-center justify-center">
             <Eraser size={20} className="text-primary-400" />
@@ -83,7 +83,7 @@ export default function CleanupTab() {
       </div>
 
       {/* 上次清理统计 */}
-      <div className="bg-surface rounded-card border border-border p-5">
+ <div className="card p-5">
         <div className="flex items-center gap-2 mb-4">
           <Clock size={16} className="text-textSecondary" />
           <h3 className="font-semibold text-textPrimary">{t('admin:cleanupLastRun')}</h3>

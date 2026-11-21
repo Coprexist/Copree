@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Boxes, Package, Settings } from 'lucide-react'
 import { useT } from '../../../i18n/I18nContext'
+import { UnderlineTabs } from '../../../components/ui'
 import PluginMarketSection from './PluginMarketSection'
 import PluginManager from './PluginManager'
 import MarketGithubTab from '../../../components/MarketGithubTab'
@@ -26,20 +27,11 @@ export default function StoreConsoleTab() {
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-1 bg-elevated rounded-control p-1 w-fit">
-        {subTabs.map(st => (
-          <button
-            key={st.key}
-            onClick={() => setSubTab(st.key)}
-            className={st.key === subTab
-              ? 'flex items-center gap-1.5 px-3 py-1.5 rounded-control text-sm bg-surface text-textPrimary shadow-sm'
-              : 'flex items-center gap-1.5 px-3 py-1.5 rounded-control text-sm text-textSecondary hover:text-textPrimary'}
-          >
-            <st.icon size={15} />
-            {st.label}
-          </button>
-        ))}
-      </div>
+      <UnderlineTabs
+        items={subTabs.map(st => ({ key: st.key, label: st.label, icon: <st.icon size={15} /> }))}
+        value={subTab}
+        onChange={setSubTab}
+      />
 
       {subTab === 'plugins' ? <PluginMarketSection />
         : subTab === 'installed' ? <PluginManager />

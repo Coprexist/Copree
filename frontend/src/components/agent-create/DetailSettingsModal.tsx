@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { ArrowLeft, Loader2, RotateCw, Ticket, X } from 'lucide-react'
-import { SliderField } from '../../components/ui'
+import { SliderField, SecretInput } from '../../components/ui'
 import { api } from '../../api/client'
 import { useT } from '../../i18n/I18nContext'
 import {
@@ -141,7 +141,7 @@ export default function DetailSettingsModal({
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                className="field w-full"
               />
             </div>
             <div>
@@ -150,7 +150,7 @@ export default function DetailSettingsModal({
                 value={systemPrompt}
                 onChange={(e) => setSystemPrompt(e.target.value)}
                 rows={3}
-                className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50 resize-none"
+                className="field w-full resize-none"
                 placeholder={t('modal:createAgentSystemPromptPlaceholder')}
               />
             </div>
@@ -171,7 +171,7 @@ export default function DetailSettingsModal({
                   {t('modal:detailSettingsChatModel')} <span className="text-textMuted">{t('modal:detailSettingsDefaultLabel')} {defaults.chat_model})</span>
                 </label>
                 <select value={chatModel} onChange={(e) => setChatModel(e.target.value)}
-                  className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50">
+                  className="field w-full">
                   <option value="">{t('modal:detailSettingsGlobalDefault')}</option>
                   {renderModelOptions(modelOptions, providers, chatModel)}
                 </select>
@@ -181,7 +181,7 @@ export default function DetailSettingsModal({
                   {t('modal:detailSettingsWorkModel')} <span className="text-textMuted">{t('modal:detailSettingsDefaultLabel')} {defaults.work_model})</span>
                 </label>
                 <select value={workModel} onChange={(e) => setWorkModel(e.target.value)}
-                  className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50">
+                  className="field w-full">
                   <option value="">{t('modal:detailSettingsGlobalDefault')}</option>
                   {renderModelOptions(modelOptions, providers, workModel)}
                 </select>
@@ -215,7 +215,7 @@ export default function DetailSettingsModal({
               <select
                 value={memoryLoadMode}
                 onChange={(e) => setMemoryLoadMode(e.target.value)}
-                className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                className="field w-full"
               >
                 <option value="index_only">{t('modal:detailSettingsMemoryLoadModeIndexOnly')}</option>
                 <option value="index_plus_recent">{t('modal:detailSettingsMemoryLoadModeIndexRecent')}</option>
@@ -231,7 +231,7 @@ export default function DetailSettingsModal({
               <select
                 value={memorySharedScope}
                 onChange={(e) => setMemorySharedScope(e.target.value)}
-                className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                className="field w-full"
               >
                 <option value="private_only">{t('modal:detailSettingsMemorySharedScopePrivate')}</option>
                 <option value="private_plus_shared_by_user">{t('modal:detailSettingsMemorySharedScopeByUser')}</option>
@@ -254,7 +254,7 @@ export default function DetailSettingsModal({
               <input type="number" min={1} max={10000} value={conversationLogsLimit ?? ''}
                 onChange={(e) => setConversationLogsLimit(e.target.value ? parseInt(e.target.value) : null)}
                 placeholder={t('modal:detailSettingsConversationLogsLimitDesc')}
-                className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50" />
+                className="field w-full" />
               <p className="text-3xs text-textMuted mt-0.5">{t('modal:detailSettingsConversationLogsLimitDesc')}</p>
             </div>
             <div>
@@ -282,7 +282,7 @@ export default function DetailSettingsModal({
               <select
                 value={reminderGrace}
                 onChange={(e) => setReminderGrace(e.target.value)}
-                className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                className="field w-full"
               >
                 <option value="every_time">{t('modal:detailSettingsReminderGraceEvery')}</option>
                 <option value="once">{t('modal:detailSettingsReminderGraceOnce')}</option>
@@ -357,33 +357,31 @@ export default function DetailSettingsModal({
           {/* ── API 提供商 ── */}
           <Section title={t('modal:detailSettingsApiProvider')} desc={t('modal:detailSettingsApiProviderDesc')}>
             <div>
-              <label className="block text-xs font-medium mb-1 text-textSecondary">API Base URL</label>
+              <label className="block text-xs font-medium mb-1 text-textSecondary">{t('modal:detailSettingsApiBaseUrlLabel')}</label>
               <input
                 type="text"
                 value={apiBaseUrl}
                 onChange={(e) => setApiBaseUrl(e.target.value)}
-                className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                className="field w-full"
                 placeholder={t('modal:detailSettingsApiBaseUrlPlaceholder')}
               />
             </div>
             <div>
               <label className="block text-xs font-medium mb-1 text-textSecondary flex items-center gap-2">
-                API Key
+                {t('modal:detailSettingsApiKeyLabel')}
                 <ApiKeyGetLink providers={providers} />
               </label>
-              <input
-                type="password"
+              <SecretInput
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
-                autoComplete="off"
-                className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                wrapperClassName="w-full"
                 placeholder={t('modal:detailSettingsApiKeyPlaceholder')}
               />
             </div>
             <button
               onClick={handleTestApi}
               disabled={testingApi || (!apiBaseUrl.trim() && !apiKey.trim())}
-              className="btn btn-xs btn-outline gap-1.5"
+              className="btn btn-md btn-outline gap-1.5"
             >
               {testingApi ? <Loader2 size={12} className="animate-spin" /> : <RotateCw size={12} />}
               {t('settings:testConnection')}
@@ -404,7 +402,7 @@ export default function DetailSettingsModal({
                   type="text"
                   value={redeemCode}
                   onChange={(e) => setRedeemCode(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                  className="field field-with-icon w-full"
                   placeholder={t('modal:detailSettingsRedeemPlaceholder')}
                 />
               </div>

@@ -68,13 +68,13 @@ export default function MarketPublishPage() {
           {msg && <div className="text-sm text-rose-400 bg-rose-500/10 rounded-card px-4 py-3">{msg}</div>}
           {ok && <div className="text-sm text-mint-400 bg-mint-500/10 rounded-card px-4 py-3">{ok}</div>}
 
-          <div className="bg-surface border border-border rounded-card p-4 space-y-3">
+          <div className="card p-4 space-y-3">
             <div>
               <div className="text-3xs text-textMuted mb-1">选择要发布的世界</div>
               <select
                 value={worldId ?? ''}
                 onChange={(e) => setWorldId(Number(e.target.value))}
-                className="w-full bg-elevated text-sm p-2 rounded-control border border-border outline-none text-textPrimary"
+                className="field w-full"
               >
                 {myWorlds.length === 0 && <option value="">（没有可发布的世界，先去创建）</option>}
                 {myWorlds.map((w) => <option key={w.id} value={w.id}>{w.name} (#{w.id})</option>)}

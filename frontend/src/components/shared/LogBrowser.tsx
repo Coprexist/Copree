@@ -17,13 +17,16 @@ import RequestBodyViewer, { type RequestBodyViewerApi } from './RequestBodyViewe
 import OutlineNav, { type OutlineEntry } from './OutlineNav'
 import { RunStatusChip } from './RunStatus'
 import {
-  StateChip, groupByState, logStateOf, stateKeyOf, stateFrameOfKey, type LogStateFrame,
+  StateChip, SwitchChip, groupByState, isSwitchRow, logStateOf, stateKeyOf, stateFrameOfKey,
+  type LogStateFrame,
 } from './LogState'
 
 interface LogSummary {
   id: number
   message_count: number
-  status?: string
+  status?: string | null
+  /** call = 一次模型调用；switch = 离开状态帧时落的那一段（没有结局，也不是调用） */
+  origin?: string
   state_frame?: LogStateFrame
   created_at: string | null
 }
@@ -310,7 +313,7 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
               >
                 <div className="flex items-center gap-1.5">
                   <span className="text-3xs font-mono text-textMuted">#{log.id}</span>
-                  <RunStatusChip status={log.status} />
+                  {isSwitchRow(log.origin) ? <SwitchChip origin={log.origin} /> : <RunStatusChip status={log.status} />}
                 </div>
                 <div className="text-3xs text-textMuted">{log.message_count} · {timeOf(log.created_at, lang)}</div>
               </button>
@@ -322,6 +325,7 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
           {currentId && (
             <div data-export-stick-head className="flex items-center gap-2 py-1 sticky top-0 z-20 bg-surface">
               <span className="text-3xs font-mono text-textMuted">#{currentId}</span>
+              <SwitchChip origin={detail?.origin} />
               {exportLog && (
                 <>
                   <button

@@ -105,7 +105,7 @@ export default function SkillBackpack({ agentId, className = '' }: Props) {
             <button
               key={seg.name}
               onClick={() => setExpandedSegment(isExpanded ? null : seg.name)}
-              className={`bg-surface rounded-card border border-border text-left p-3.5 transition-all ${
+ className={` card text-left p-3.5 transition-all ${
                 isExpanded
                   ? 'ring-2 ring-primary-500/30 shadow-lg border-primary-500/30'
                   : 'hover:border-primary-500/20 hover:shadow-sm'

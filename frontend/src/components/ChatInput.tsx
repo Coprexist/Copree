@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef, useMemo, forwardRef, useImperativeHandle } from 'react'
-import { Send, Paperclip, Smile } from 'lucide-react'
+import { Paperclip, Send, Smile, Square } from 'lucide-react'
 import { MenuPanel, MenuItem } from './ui'
 import { useEmojiPacks } from '../hooks/useEmojiPacks'
 import { faceAssetUrl, faceMarkup } from '../utils/emojiPacks'
@@ -41,12 +41,21 @@ interface ChatInputProps {
   groupMembers?: Array<{ type: string; id: number; name: string; state?: string }>
   /** 用户拖出来的最低高度（总高）；null = 只按内容自动长 */
   inputHeight?: number | null
+  /** 覆盖默认占位文案（默认按会话类型取群聊/私信那两句） */
+  placeholder?: string
+  /** 单次输入字数上限（创建助手这类有字数限制的场景） */
+  maxLength?: number
+  /** 正在流式输出：发送键换成「停止」 */
+  busy?: boolean
+  onStop?: () => void
+  /** 左下角的附件 / 表情工具行；没有附件与表情的场景（如创建助手）传 false */
+  showTools?: boolean
 }
 
 /**
  * 独立输入框。管理自身 value 和 @mention 状态，打字不触发父组件重渲染。
  */
-const ChatInputFunc = ({ conversationType, conversationId, t, onSend, onSendFile, connected, hasAttachments, groupMembers, inputHeight }: ChatInputProps, ref: React.ForwardedRef<HTMLTextAreaElement>) => {
+const ChatInputFunc = ({ conversationType, conversationId, t, onSend, onSendFile, connected, hasAttachments, groupMembers, inputHeight, placeholder, maxLength, busy = false, onStop, showTools = true }: ChatInputProps, ref: React.ForwardedRef<HTMLTextAreaElement>) => {
   const [value, setValue] = useState('')
   // 内容自然高度（已按单行下限与 3 行上限裁剪）：输入框高度 = max(它, 用户拖出来的高度)
   const [contentH, setContentH] = useState(CHAT_INPUT_MIN_H)
@@ -200,7 +209,9 @@ const ChatInputFunc = ({ conversationType, conversationId, t, onSend, onSendFile
   }, [mentionActive, mentionFiltered, mentionIdx, insertMention, doSend])
 
   return (
-    <div className="flex items-end gap-2 px-4 py-3 shrink-0">
+    // 一张卡片装下输入与工具栏（照 DSH 主输入框）：输入在上，工具在左下、发送在右下；
+    // 整块用 focus-within 出焦点环，内部各元素不再各带一圈边
+    <div className="relative shrink-0">
       {/* 没 @ 到人的提醒：@ 是全字匹配，漏了括号后缀对方根本收不到；给一键补全 */}
       {mentionFix && (
         <div className="absolute bottom-full left-4 mb-1 flex items-center gap-2 rounded-control border border-border bg-elevated px-3 py-1.5 text-2xs text-textSecondary shadow-lg z-modal">
@@ -231,73 +242,87 @@ const ChatInputFunc = ({ conversationType, conversationId, t, onSend, onSendFile
         </MenuPanel>
       )}
 
-      <button
-        onClick={() => onSendFile?.()}
-        className="p-2.5 rounded-card border border-border bg-canvas text-textMuted hover:text-textPrimary hover:border-primary-500/30 hover:bg-elevated transition-colors shrink-0"
-        title={t('chat:addAttachment')}
-      >
-        <Paperclip size={18} />
-      </button>
+      {/* 悬浮玻璃胶囊：与手机端底部菜单同一份 .glass-float（圆角/半透明/模糊/投影都在那儿） */}
+      <div className="glass-float px-1.5 py-1.5 focus-within:border-primary-500/40 focus-within:ring-2 focus-within:ring-primary-500/20">
+        <textarea
+          ref={textareaRef}
+          value={value}
+          onChange={handleChange}
+          onKeyDown={handleKeyDown}
+          placeholder={placeholder ?? (conversationType === 'dm' ? t('chat:dmInputPlaceholder') : t('chat:groupInputPlaceholder'))}
+          maxLength={maxLength}
+          rows={1}
+          className="w-full resize-none bg-transparent px-2.5 pt-2 pb-1 text-sm leading-6 text-textPrimary outline-none placeholder:text-textMuted"
+        />
+        <div className={`flex items-end gap-2 ${showTools ? 'justify-between' : 'justify-end'}`}>
+          <div className={`flex items-center gap-0.5 ${showTools ? '' : 'hidden'}`}>
+            <button
+              onClick={() => onSendFile?.()}
+              className="icon-btn"
+              title={t('chat:addAttachment')}
+            >
+              <Paperclip size={17} />
+            </button>
 
-      {/* 装表情包插件才有这个入口：没装就不显示，输入框保持原样 */}
-      {emojiPacks.length > 0 && (
-        <div className="relative shrink-0">
-          <button
-            onClick={() => setEmojiOpen((open) => !open)}
-            className={`p-2.5 rounded-card border transition-colors ${
-              emojiOpen
-                ? 'border-primary-500/30 bg-elevated text-primary-500'
-                : 'border-border bg-canvas text-textMuted hover:text-textPrimary hover:border-primary-500/30 hover:bg-elevated'
-            }`}
-            title={t('chat:addEmoji')}
-          >
-            <Smile size={18} />
-          </button>
-          {emojiOpen && (
-            <MenuPanel className="absolute bottom-full left-0 mb-1 w-72 max-h-64 overflow-y-auto p-2 z-modal">
-              <div className="text-3xs text-textMuted px-1 pb-1">{t('chat:emojiPacks')}</div>
-              {emojiPacks.map((pack) => (
-                <div key={pack.id} className="mb-2 last:mb-0">
-                  <div className="text-3xs text-textMuted px-1 mb-1" title={pack.usage}>{pack.name}</div>
-                  <div className="flex flex-wrap gap-0.5">
-                    {pack.faces.map((face) => (
-                      <button
-                        key={face.id}
-                        type="button"
-                        title={face.name}
-                        onMouseDown={(e) => { e.preventDefault(); insertEmoji(faceMarkup(face)) }}
-                        className="w-8 h-8 flex items-center justify-center rounded-control text-base hover:bg-elevated transition-colors"
-                      >
-                        {face.emoji || (face.file
-                          ? <img src={faceAssetUrl(pack, face)} alt={face.name} className="w-5 h-5" loading="lazy" />
-                          : face.name.slice(0, 1))}
-                      </button>
+            {/* 装表情包插件才有这个入口：没装就不显示，输入框保持原样 */}
+            {emojiPacks.length > 0 && (
+              <div className="relative shrink-0">
+                <button
+                  onClick={() => setEmojiOpen((open) => !open)}
+                  className={`icon-btn ${emojiOpen ? 'is-active' : ''}`}
+                  title={t('chat:addEmoji')}
+                >
+                  <Smile size={17} />
+                </button>
+                {emojiOpen && (
+                  <MenuPanel className="absolute bottom-full left-0 mb-1 w-72 max-h-64 overflow-y-auto p-2 z-modal">
+                    <div className="text-3xs text-textMuted px-1 pb-1">{t('chat:emojiPacks')}</div>
+                    {emojiPacks.map((pack) => (
+                      <div key={pack.id} className="mb-2 last:mb-0">
+                        <div className="text-3xs text-textMuted px-1 mb-1" title={pack.usage}>{pack.name}</div>
+                        <div className="flex flex-wrap gap-0.5">
+                          {pack.faces.map((face) => (
+                            <button
+                              key={face.id}
+                              type="button"
+                              title={face.name}
+                              onMouseDown={(e) => { e.preventDefault(); insertEmoji(faceMarkup(face)) }}
+                              className="w-8 h-8 flex items-center justify-center rounded-control text-base hover:bg-elevated transition-colors"
+                            >
+                              {face.emoji || (face.file
+                                ? <img src={faceAssetUrl(pack, face)} alt={face.name} className="w-5 h-5" loading="lazy" />
+                                : face.name.slice(0, 1))}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                     ))}
-                  </div>
-                </div>
-              ))}
-            </MenuPanel>
+                  </MenuPanel>
+                )}
+              </div>
+            )}
+
+          </div>
+          {/* 流式输出时同一位置换成「停止」——形状不变，只换动作 */}
+          {busy && onStop ? (
+            <button onClick={onStop} className="btn btn-sm btn-secondary gap-1.5" title={t('chat:stop')}>
+              {t('chat:stop')}
+              <Square size={13} />
+            </button>
+          ) : (
+            /* 发送：文字 + 纸飞机，与 DSH 主输入框同形；空内容时整块压暗但保持形状 */
+            <button
+              onClick={doSend}
+              disabled={(!value.trim() && !hasAttachments) || !connected || busy}
+              className="btn btn-sm btn-primary btn-pill gap-1.5"
+              title={t('chat:send')}
+            >
+              {t('chat:send')}
+              <Send size={14} />
+            </button>
           )}
         </div>
-      )}
-
-      <textarea
-        ref={textareaRef}
-        value={value}
-        onChange={handleChange}
-        onKeyDown={handleKeyDown}
-        placeholder={conversationType === 'dm' ? t('chat:dmInputPlaceholder') : t('chat:groupInputPlaceholder')}
-        rows={1}
-        className="flex-1 min-w-0 resize-none rounded-card border border-border bg-canvas px-4 py-2.5 text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50 focus:border-primary-500/30 transition-shadow min-h-[40px]"
-      />
-      <button
-        onClick={doSend}
-        disabled={(!value.trim() && !hasAttachments) || !connected}
-        className="icon-btn-lg icon-btn-primary shrink-0"
-        title={t('chat:send')}
-      >
-        <Send size={16} />
-      </button>
+      </div>
     </div>
   )
 }

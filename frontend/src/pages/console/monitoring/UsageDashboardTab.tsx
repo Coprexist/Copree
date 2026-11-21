@@ -96,6 +96,13 @@ function chartColors(isDark: boolean) {
   }
 }
 
+/** 单 AI 堆叠柱的紫系配色：越靠上越浅，命中缓存压在最上层 */
+function stackColors(isDark: boolean) {
+  return isDark
+    ? { hit: '#DDD6FE', miss: '#A78BFA', think: '#8B5CF6', out: '#6D28D9' }
+    : { hit: '#C4B5FD', miss: '#8B5CF6', think: '#7C3AED', out: '#5B21B6' }
+}
+
 /** 每日 token 面积图 + 命中率曲线。命中率走右轴——两者量纲差几个数量级。
  *  居民 AI 与群视界两个版面画法完全一样，只差标题与数据源，所以只有这一份实现。 */
 function DailyTokenChart({ data, title }: { data: DailyPoint[]; title: string }) {
@@ -157,6 +164,8 @@ export default function UsageDashboardTab() {
   const [agentDaily, setAgentDaily] = useState<DailyPoint[]>([])
   const [agentDailyLoading, setAgentDailyLoading] = useState(false)
   const [matrix, setMatrix] = useState<UsageMatrix | null>(null)
+  // 账本卡的两个分块：矩阵（每个 AI 每天）与按用户明细
+  const [ledgerTab, setLedgerTab] = useState<'matrix' | 'user'>('matrix')
   const isDark = useIsDark()
   // 矩阵列数封顶 14：管理台默认看 30 天，全铺出来读不了；要看长区间用下面的每日曲线
   const matrixDays = Math.min(days, 14)
@@ -215,6 +224,19 @@ export default function UsageDashboardTab() {
 
   const colors = chartColors(isDark)
 
+  const stack = stackColors(isDark)
+
+  // prompt 里含着 cached、completion 里含着 reasoning：四种直接摞起来会重复计数，
+  // 总高也对不上 total_tokens。拆成互不重叠的四段后，柱子的总高就是当天的总 token
+  const agentStackData = agentDaily.map(d => ({
+    ...d,
+    outTok: Math.max(0, (d.completion_tokens || 0) - (d.reasoning_tokens || 0)),
+    thinkTok: d.reasoning_tokens || 0,
+    missTok: Math.max(0, (d.prompt_tokens || 0) - (d.cached_tokens || 0)),
+    hitTok: d.cached_tokens || 0,
+    totalTok: (d.prompt_tokens || 0) + (d.completion_tokens || 0),
+  }))
+
   // 按用户分组：用户之间按用量降序（后端给的是注册顺序 u.id，展示上没意义），
   // 组内 AI 后端已按 total_tokens 降序
   const userGroups = new Map<number, { username: string; agents: UserAgentRow[]; total: number }>()
@@ -268,59 +290,6 @@ export default function UsageDashboardTab() {
         ))}
       </div>
 
-      {matrix && matrix.agents.length > 0 && (
-        <div className="bg-surface rounded-dialog border border-border p-5">
-          <div className="flex items-baseline justify-between mb-1">
-            <h3 className="text-sm font-semibold text-textPrimary">{t('usage:matrixTitle')}</h3>
-            <span className="text-3xs text-textMuted">{t('usage:matrixHint')}</span>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-xs">
-              <thead>
-                <tr className="text-textMuted">
-                  <th className="text-left font-medium py-2 pr-3 sticky left-0 bg-surface">AI</th>
-                  {matrix.dates.map(d => (
-                    <th key={d} className="text-right font-medium py-2 px-2 whitespace-nowrap">{d.slice(5)}</th>
-                  ))}
-                  <th className="text-right font-medium py-2 pl-3">{t('usage:matrixRowTotal')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {matrix.agents.map(a => (
-                  <tr key={a.agent_id} className="border-t border-border/60">
-                    <td className="py-2 pr-3 max-w-[160px] truncate sticky left-0 bg-surface" title={a.agent_name}>
-                      <button
-                        className={`text-left hover:text-primary-500 transition-colors ${selectedAgentId === a.agent_id ? 'text-primary-500 font-medium' : ''}`}
-                        onClick={() => loadAgentDaily(a.agent_id)}
-                      >
-                        {a.agent_name}
-                      </button>
-                    </td>
-                    {matrix.dates.map(d => {
-                      const v = a.per_day[d] || 0
-                      return (
-                        <td key={d} className="py-2 px-2 text-right whitespace-nowrap">
-                          <button
-                            className={`tabular-nums hover:text-primary-500 transition-colors ${v ? 'text-textSecondary' : 'text-textMuted/50'}`}
-                            onClick={() => loadAgentDaily(a.agent_id)}
-                            title={`${a.agent_name} · ${d}`}
-                          >
-                            {v ? fmtTokenNum(v, lang) : '—'}
-                          </button>
-                        </td>
-                      )
-                    })}
-                    <td className="py-2 pl-3 text-right tabular-nums font-medium text-textPrimary">
-                      {fmtTokenNum(a.total_tokens, lang)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
       {loading ? (
         <div className="flex justify-center py-16"><Loader2 className="animate-spin" size={28} /></div>
       ) : view === 'residents' ? (
@@ -335,7 +304,7 @@ export default function UsageDashboardTab() {
                 { label: t('admin:activeAgents'), value: global.unique_agents, icon: Activity },
                 { label: t('admin:activeUsers'), value: global.unique_users, icon: Users },
               ].map(item => (
-                <div key={item.label} className="bg-surface rounded-card border border-border p-4 text-center">
+ <div key={item.label} className="card p-4 text-center">
                   <item.icon size={16} className="text-primary-400 mx-auto mb-1" />
                   <div className="text-lg font-semibold text-textPrimary">{item.value}</div>
                   <div className="text-3xs text-textMuted">{item.label}</div>
@@ -346,52 +315,116 @@ export default function UsageDashboardTab() {
 
           <DailyTokenChart data={dailyData} title={t('admin:residentsDailyTokens')} />
 
-          {/* 按用户明细 */}
+          {/* 矩阵与按用户明细同属一份"用量账本"：收在一张卡里用下划线分块切换。
+              以前是两张独立的卡，看着像两个数据源 */}
           <div className="bg-surface rounded-dialog border border-border overflow-hidden">
-            <div className="px-5 py-3 border-b border-border">
-              <h3 className="text-sm font-semibold text-textPrimary">{t('admin:usageByUser')}</h3>
+            <div className="px-5 pt-3">
+              <UnderlineTabs
+                items={[
+                  { key: 'matrix', label: t('usage:matrixTabShort') },
+                  { key: 'user', label: t('usage:byUserTab') },
+                ]}
+                value={ledgerTab}
+                onChange={setLedgerTab}
+              />
             </div>
-            <div className="divide-y divide-border/60">
-              {userEntries.map(([uid, ug]) => (
-                <div key={uid}>
-                  {/* 用户行 */}
-                  <button
-                    onClick={() => toggleUser(uid)}
-                    className="w-full flex items-center gap-3 px-5 py-3 hover:bg-elevated transition-colors text-left"
-                  >
-                    {expandedUsers.has(uid) ? <ChevronDown size={14} className="text-textMuted" /> : <ChevronRight size={14} className="text-textMuted" />}
-                    <span className="text-sm font-medium text-textPrimary">{ug.username}</span>
-                    <span className="text-xs text-textMuted ml-auto">{ug.agents.length} {t('admin:aiCount')}</span>
-                    <span className="text-sm font-mono text-textPrimary ml-4">{fmtTokenNum(ug.total, lang)} Token</span>
-                  </button>
-                  {/* AI 子行 */}
-                  {expandedUsers.has(uid) && (
-                    <div className="bg-canvas/50">
-                      {ug.agents.map(a => (
-                        <button
-                          key={a.agent_id}
-                          onClick={() => loadAgentDaily(a.agent_id)}
-                          className={`w-full flex items-center gap-4 px-10 py-2.5 text-xs hover:bg-elevated transition-colors ${
-                            selectedAgentId === a.agent_id ? 'bg-primary-500/5' : ''
-                          }`}
-                        >
-                          <span className="text-textPrimary font-medium">{a.agent_name}</span>
-                          <span className="text-textMuted hidden md:inline">{a.model || '-'}</span>
-                          <span className="text-textMuted ml-auto">{t('admin:cacheHitRate')} {a.cache_hit_rate_pct}%</span>
-                          <span className="text-textMuted ml-4">{a.total_calls} {t('admin:callsCount')}</span>
-                          <span className="text-textPrimary font-mono ml-4">{fmtTokenNum(a.total_tokens, lang)}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
-              {userEntries.length === 0 && (
-                <div className="text-center py-12 text-textMuted text-sm">{t('admin:noData')}</div>
-              )}
-            </div>
-          </div>
 
+            {ledgerTab === 'matrix' ? (
+              <div className="px-5 py-4">
+                <div className="flex items-baseline justify-between mb-1">
+                  <h3 className="text-sm font-semibold text-textPrimary">{t('usage:matrixTitle')}</h3>
+                  <span className="text-3xs text-textMuted">{t('usage:matrixHint')}</span>
+                </div>
+                {matrix && matrix.agents.length > 0 ? (
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-xs text-textPrimary">
+                      <thead>
+                        <tr className="text-textMuted">
+                          <th className="text-left font-medium py-2 pr-3 sticky left-0 bg-surface">AI</th>
+                          {matrix.dates.map(d => (
+                            <th key={d} className="text-right font-medium py-2 px-2 whitespace-nowrap">{d.slice(5)}</th>
+                          ))}
+                          <th className="text-right font-medium py-2 pl-3">{t('usage:matrixRowTotal')}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {matrix.agents.map(a => (
+                          <tr key={a.agent_id} className="border-t border-border/60">
+                            {/* sticky 单元格自带白底，文字必须显式给色——只靠继承，日间主题下会被白底吃掉 */}
+                            <td className="py-2 pr-3 max-w-[180px] whitespace-normal break-words sticky left-0 bg-surface text-textPrimary">
+                              <button
+                                className={'text-left transition-colors hover:text-primary-500 ' + (selectedAgentId === a.agent_id ? 'text-primary-500 font-medium' : '')}
+                                onClick={() => loadAgentDaily(a.agent_id)}
+                              >
+                                {a.agent_name}
+                              </button>
+                            </td>
+                            {matrix.dates.map(d => {
+                              const v = a.per_day[d] || 0
+                              return (
+                                <td key={d} className="py-2 px-2 text-right whitespace-nowrap">
+                                  <button
+                                    className={'tabular-nums transition-colors hover:text-primary-500 ' + (v ? 'text-textSecondary' : 'text-textMuted/50')}
+                                    onClick={() => loadAgentDaily(a.agent_id)}
+                                    title={a.agent_name + ' · ' + d}
+                                  >
+                                    {v ? fmtTokenNum(v, lang) : '—'}
+                                  </button>
+                                </td>
+                              )
+                            })}
+                            <td className="py-2 pl-3 text-right tabular-nums font-medium text-textPrimary">
+                              {fmtTokenNum(a.total_tokens, lang)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="text-center py-8 text-textMuted text-sm">{t('admin:noData')}</div>
+                )}
+              </div>
+            ) : (
+              <div className="divide-y divide-border/60">
+                {userEntries.map(([uid, ug]) => (
+                  <div key={uid}>
+                    {/* 用户行 */}
+                    <button
+                      onClick={() => toggleUser(uid)}
+                      className="btn btn-lg btn-ghost w-full"
+                    >
+                      {expandedUsers.has(uid) ? <ChevronDown size={14} className="text-textMuted" /> : <ChevronRight size={14} className="text-textMuted" />}
+                      <span className="text-sm font-medium text-textPrimary">{ug.username}</span>
+                      <span className="text-xs text-textMuted ml-auto">{ug.agents.length} {t('admin:aiCount')}</span>
+                      <span className="text-sm font-mono text-textPrimary ml-4">{fmtTokenNum(ug.total, lang)} Token</span>
+                    </button>
+                    {/* AI 子行 */}
+                    {expandedUsers.has(uid) && (
+                      <div className="bg-canvas/50">
+                        {ug.agents.map(a => (
+                          <button
+                            key={a.agent_id}
+                            onClick={() => loadAgentDaily(a.agent_id)}
+                            className={'w-full flex items-center gap-4 px-10 py-2.5 text-xs hover:bg-elevated transition-colors ' + (selectedAgentId === a.agent_id ? 'bg-primary-500/5' : '')}
+                          >
+                            <span className="text-textPrimary font-medium">{a.agent_name}</span>
+                            <span className="text-textMuted hidden md:inline">{a.model || '-'}</span>
+                            <span className="text-textMuted ml-auto">{t('admin:cacheHitRate')} {a.cache_hit_rate_pct}%</span>
+                            <span className="text-textMuted ml-4">{a.total_calls} {t('admin:callsCount')}</span>
+                            <span className="text-textPrimary font-mono ml-4">{fmtTokenNum(a.total_tokens, lang)}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+                {userEntries.length === 0 && (
+                  <div className="text-center py-12 text-textMuted text-sm">{t('admin:noData')}</div>
+                )}
+              </div>
+            )}
+          </div>
           {/* 选中 AI 的每日图表 */}
           {selectedAgentId && (
             <div className="bg-surface rounded-dialog border border-border p-5">
@@ -403,7 +436,7 @@ export default function UsageDashboardTab() {
               ) : agentDaily.length > 0 ? (
                 <div className="h-72">
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={agentDaily} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
+                    <BarChart data={agentStackData} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} />
                       <XAxis dataKey="date" tick={{ fontSize: 11, fill: colors.text }} tickFormatter={v => v.slice(5)} />
                       <YAxis
@@ -414,17 +447,24 @@ export default function UsageDashboardTab() {
                       <Tooltip
                         contentStyle={{
                           backgroundColor: isDark ? '#1F2937' : '#FFFFFF',
-                          border: `1px solid ${colors.grid}`,
+                          border: '1px solid ' + colors.grid,
                           borderRadius: '12px',
                           fontSize: '12px',
                         }}
-                        formatter={(value: number) => [fmtTokenNum(value, lang), '']}
+                        // 标题带上当天总量（四段之和），和参考图一样先给总、再给拆分
+                        labelFormatter={(label: string, payload: any[]) => {
+                          const total = payload && payload[0] && payload[0].payload ? payload[0].payload.totalTok : 0
+                          return label + (total ? ' · ' + fmtTokenNum(total, lang) : '')
+                        }}
+                        formatter={(value: number, name: string) => [fmtTokenNum(value, lang), name]}
                       />
                       <Legend wrapperStyle={{ fontSize: '11px', flexWrap: 'wrap' }} />
-                      <Bar dataKey="prompt_tokens" stackId="a" fill={colors.prompt} name="Prompt" />
-                      <Bar dataKey="completion_tokens" stackId="a" fill={colors.completion} name="Completion" />
-                      <Bar dataKey="reasoning_tokens" stackId="a" fill={colors.reasoning} name={t('admin:thinking')} />
-                      <Bar dataKey="cached_tokens" stackId="a" fill={colors.cached} name={t('admin:cached')} />
+                      {/* 自下而上：输出 → 深度推理 → 输入(未命中缓存) → 输入(命中缓存)。
+                          命中缓存压在最上层，一眼看得出"这天的量里有多少是白拿的" */}
+                      <Bar dataKey="outTok" stackId="a" fill={stack.out} name={t('admin:usageOutput')} />
+                      <Bar dataKey="thinkTok" stackId="a" fill={stack.think} name={t('admin:thinking')} />
+                      <Bar dataKey="missTok" stackId="a" fill={stack.miss} name={t('admin:usageInputUncached')} />
+                      <Bar dataKey="hitTok" stackId="a" fill={stack.hit} name={t('admin:usageInputCached')} radius={[3, 3, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
@@ -444,7 +484,7 @@ export default function UsageDashboardTab() {
               { label: t('admin:totalTokens'), value: fmtTokenNum(worldSummary.tokens, lang), icon: Activity },
               { label: t('admin:cacheHitRate'), value: `${cacheHitRatePct(worldSummary.prompt, worldSummary.cached)}%`, icon: Percent },
             ].map(item => (
-              <div key={item.label} className="bg-surface rounded-card border border-border p-4 text-center">
+ <div key={item.label} className="card p-4 text-center">
                 <item.icon size={16} className="text-primary-400 mx-auto mb-1" />
                 <div className="text-lg font-semibold text-textPrimary">{item.value}</div>
                 <div className="text-3xs text-textMuted">{item.label}</div>

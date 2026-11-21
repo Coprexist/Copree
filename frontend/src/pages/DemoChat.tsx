@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
+import { SecretInput } from '../components/ui'
 import { Send, Key, Bot, User, Trash2, Github, Sun, Moon } from 'lucide-react'
 
 type Role = 'user' | 'assistant'
@@ -110,7 +111,7 @@ export default function DemoChat() {
   return (
     <div className={`flex flex-col h-screen ${dark ? 'dark' : ''}`}>
       {/* 顶部栏 */}
-      <header className="flex items-center justify-between px-4 py-2.5 border-b border-border bg-surface shrink-0">
+      <header className="top-bar flex items-center justify-between px-4 py-2.5 shrink-0">
         <div className="flex items-center gap-2">
           <Bot size={20} className="text-primary-400" />
           <span className="font-semibold text-sm text-textPrimary">Copree Demo</span>
@@ -130,10 +131,9 @@ export default function DemoChat() {
       {!apiKey ? (
         <div className="flex items-center gap-2 px-4 py-3 border-b border-border bg-accent-500/5">
           <Key size={14} className="text-accent-500 shrink-0" />
-          <input
-            type="password" value={keyInput} onChange={e => setKeyInput(e.target.value)}
+          <SecretInput value={keyInput} onChange={e => setKeyInput(e.target.value)}
             placeholder="输入你的 DeepSeek API Key 开始体验..."
-            className="flex-1 bg-transparent text-sm text-textPrimary placeholder:text-textMuted outline-none"
+            wrapperClassName="flex-1 min-w-0"
             onKeyDown={e => e.key === 'Enter' && saveKey()}
           />
           <button onClick={saveKey} disabled={!keyInput.trim()}

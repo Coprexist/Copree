@@ -250,11 +250,11 @@ export default function MaintenanceMsgEditor() {
 
   if (!loaded) {
     return (
-      <div className="bg-surface rounded-card border border-border p-4">
+ <div className="card p-4">
         {loadError ? (
           <div className="flex items-center gap-2 text-xs text-rose-400">
             <AlertTriangle size={14} /> {loadError}
-            <button onClick={load} className="btn btn-xs btn-outline ml-auto hover:text-textPrimary">重试</button>
+            <button onClick={load} className="btn btn-md btn-outline ml-auto hover:text-textPrimary">重试</button>
           </div>
         ) : (
           <p className="text-xs text-textMuted">{t('common:loading')}</p>
@@ -284,10 +284,10 @@ export default function MaintenanceMsgEditor() {
       </div>
 
       {/* ── 预设栏 ── */}
-      <div className="bg-surface rounded-card border border-border p-3.5 space-y-2">
+ <div className="card p-3.5 space-y-2">
         <div className="flex flex-wrap items-center gap-2">
           <select value={selPreset} onChange={e => { const v = e.target.value; if (v) applyPreset(v); else setSelPreset('') }}
-            className="flex-1 min-w-[140px] px-3 py-1.5 rounded-control border border-border bg-canvas text-xs text-textPrimary focus:outline-none focus:ring-1 focus:ring-primary-500/50">
+            className="field field-sm flex-1 min-w-[140px] field-inline">
             <option value="">{t('admin:presets')} ···</option>
             {presets.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
           </select>
@@ -306,8 +306,8 @@ export default function MaintenanceMsgEditor() {
           </div>
           {selPreset && (
             <div className="flex items-center gap-1">
-              <button onClick={() => { setRenaming(selPreset); setRenameValue(selPreset) }} className="p-1.5 rounded-control text-textMuted hover:text-textPrimary hover:bg-elevated transition-colors" title="重命名"><Pencil size={13} /></button>
-              <button onClick={() => deletePreset(selPreset)} className="p-1.5 rounded-control text-rose-400/70 hover:text-rose-400 hover:bg-rose-500/10 transition-colors" title="删除"><Trash2 size={13} /></button>
+              <button onClick={() => { setRenaming(selPreset); setRenameValue(selPreset) }} className="p-1.5 rounded-control text-rose-400/70 hover:text-rose-400 hover:bg-rose-500/10 transition-colors" title="重命名"><Pencil size={13} /></button>
+              <button onClick={() => deletePreset(selPreset)} className="icon-btn icon-btn-sm" title="删除"><Trash2 size={13} /></button>
             </div>
           )}
         </div>
@@ -321,8 +321,8 @@ export default function MaintenanceMsgEditor() {
               className="flex-1 px-2 py-1.5 rounded-control border border-border bg-canvas text-2xs focus:outline-none focus:ring-1 focus:ring-primary-500/50"
             />
             <button onClick={() => renamePreset(renaming, renameValue)}
-              className="px-2 py-1.5 text-2xs rounded-control bg-mint-500/10 border border-mint-500/30 text-mint-400 hover:bg-mint-500/20"><Check size={12} /></button>
-            <button onClick={() => setRenaming(null)} className="p-1.5 text-textMuted hover:text-textPrimary"><X size={13} /></button>
+              className="p-1.5 text-textMuted hover:text-textPrimary"><Check size={12} /></button>
+            <button onClick={() => setRenaming(null)} className="icon-btn icon-btn-sm"><X size={13} /></button>
           </div>
         )}
         {presetError && <p className="text-2xs text-rose-400">{presetError}</p>}
@@ -331,7 +331,7 @@ export default function MaintenanceMsgEditor() {
       {/* ── 双栏编辑 ── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         {/* 硬维护 */}
-        <div className="bg-surface rounded-card border border-border p-4 space-y-3">
+ <div className="card p-4 space-y-3">
           <div className="flex items-center gap-1.5 text-xs font-semibold text-textPrimary">
             <span className="w-2 h-2 rounded-full bg-rose-400 animate-pulse" />
             <Lock size={13} className="text-rose-400" /> 暂停服务
@@ -364,7 +364,7 @@ export default function MaintenanceMsgEditor() {
                 </div>
               </div>
               <select value={msg.hard_style} onChange={e => updateMsg({ hard_style: e.target.value })}
-                className="px-2.5 py-1.5 rounded-control border border-border bg-canvas text-2xs text-textPrimary focus:outline-none">
+                className="field field-sm field-inline">
                 <option value="popup">弹窗</option>
                 <option value="banner">顶栏</option>
               </select>
@@ -417,7 +417,7 @@ export default function MaintenanceMsgEditor() {
         </div>
 
         {/* 软维护 */}
-        <div className="bg-surface rounded-card border border-border p-4 space-y-3">
+ <div className="card p-4 space-y-3">
           <div className="flex items-center gap-1.5 text-xs font-semibold text-textPrimary">
             <span className="w-2 h-2 rounded-full bg-accent-400" />
             <Megaphone size={13} className="text-accent-400" /> 温馨提示
@@ -446,7 +446,7 @@ export default function MaintenanceMsgEditor() {
                 </div>
               </div>
               <select value={msg.soft_style} onChange={e => updateMsg({ soft_style: e.target.value })}
-                className="px-2.5 py-1.5 rounded-control border border-border bg-canvas text-2xs text-textPrimary focus:outline-none">
+                className="field field-sm field-inline">
                 <option value="banner">顶栏</option>
                 <option value="popup">弹窗</option>
               </select>

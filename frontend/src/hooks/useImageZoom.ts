@@ -34,15 +34,29 @@ export function useImageZoom() {
   const [scale, setScale] = useState(1)
   const [fit, setFit] = useState({ w: 0, h: 0 })
 
+  // 没有固有尺寸的图（SVG 只有 viewBox 时）拿不到 naturalWidth，只能量一次渲染尺寸当基准。
+  // 只量一次：之后我们会给它写显式宽高，再量到的就是自己的缩放结果了。
+  const baseSize = useRef({ w: 0, h: 0 })
+
   /** 量 100% 时的布局尺寸：原图等比缩进容器，小图不放大 */
   const measure = useCallback(() => {
     const box = boxRef.current
     const img = imgRef.current
-    if (!box || !img || !img.naturalWidth) return
+    if (!box || !img) return
+    let w = img.naturalWidth
+    let h = img.naturalHeight
+    if (!w || !h) {
+      if (!baseSize.current.w || !baseSize.current.h) {
+        baseSize.current = { w: img.offsetWidth, h: img.offsetHeight }
+      }
+      w = baseSize.current.w
+      h = baseSize.current.h
+    }
+    if (!w || !h) return
     // 用 offsetWidth 而不是 clientWidth：滚动条一出现 clientWidth 就变小，
     // 拿它当基准会在「放大 → 出滚动条 → 基准缩水」之间来回抖
-    const ratio = Math.min(1, box.offsetWidth / img.naturalWidth, box.offsetHeight / img.naturalHeight)
-    setFit({ w: img.naturalWidth * ratio, h: img.naturalHeight * ratio })
+    const ratio = Math.min(1, box.offsetWidth / w, box.offsetHeight / h)
+    setFit({ w: w * ratio, h: h * ratio })
   }, [])
 
   /** 缩放前记下指针底下那个点在图片里的位置，缩放后据此把滚动位置摆回去 */

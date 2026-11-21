@@ -8,6 +8,7 @@
  *   PageHeader 页面标题栏
  *   Button / IconButton  按钮与图标按钮
  *   Input / Select       表单控件
+ *   SecretInput          密钥 / Token 输入（不用 type=password，避免被当成账号密码自动填充）
  *   Card                 卡片区块
  *   Modal / Dialog       弹窗（带卡片 / 只有遮罩）
  *   ListPanel            紧凑列表外壳（表格 + 标题 + 工具条 + 空态）
@@ -15,8 +16,10 @@
  *   EmptyState           空状态
  *   Badge                胶囊标签
  *   UnderlineTabs        下划线页签（页面级 / 卡片内二级共用一份画法）
+ *   Pager                分页条（列表不铺开，一次给一页）
  *   Slider / SliderField 滑杆与带标签的滑杆（左侧填充 + 相对拖拽）
  *   confirmAsync / ConfirmDialogHost  确认弹窗
+ *   HelpTip              「？」帮助：点一下开小浮层（长说明不再占一行）
  *
  * 视觉规范定义在 index.css 的 @layer components（.btn / .field / .card / .chip /
  * .icon-btn），组件只是它的 React 外壳；手写标签请直接用语义类，不要再写裸 Tailwind 组合。
@@ -24,12 +27,14 @@
 export { default as Button } from './Button'
 export { default as IconButton } from './IconButton'
 export { default as Input } from './Input'
+export { default as SecretInput } from './SecretInput'
 export { default as Modal } from './Modal'
 export { default as Select } from './Select'
 export { default as ComboBox, sortByPrefix } from './ComboBox'
 export { default as Card } from './Card'
 export { default as Badge } from './Badge'
 export { default as UnderlineTabs, type UnderlineTabItem } from './UnderlineTabs'
+export { default as Pager, usePaged } from './Pager'
 export { default as Slider, SliderField } from './Slider'
 export { default as Dialog } from './Dialog'
 export { default as EmptyState } from './EmptyState'
@@ -43,3 +48,4 @@ export { PAGE_WIDTH, type Width } from './pageWidth'
 export { default as PageShell } from './PageShell'
 export { confirmAsync, ConfirmDialogHost } from './ConfirmDialog'
 export { MenuPanel, MenuItem, MENU_CAPTION, INSET_CARD } from './MenuPanel'
+export { default as HelpTip } from './HelpTip'

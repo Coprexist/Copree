@@ -6,9 +6,10 @@
  * 那一份 AgentForm 仍是全站唯一的表单状态。
  */
 import { useEffect, useRef, useState } from 'react'
-import { ClipboardList, Globe, Send, Sparkles, Square } from 'lucide-react'
+import { ClipboardList, Globe, Sparkles } from 'lucide-react'
 import MarkdownContent from '../shared/MarkdownContent'
 import { ToolBubble } from '../shared/ChatPanelAtoms'
+import ChatInput from '../ChatInput'
 import { useT } from '../../i18n/I18nContext'
 import { getDraft, runCreatorTurn, MAX_TURN_CHARS, type CreationDraft, type TurnFrame } from './creationApi'
 import type { AgentForm } from './types'
@@ -25,7 +26,6 @@ export default function CreationAssistantPanel({ draft, onForm, className = '' }
 }) {
   const t = useT()
   const [items, setItems] = useState<Item[]>([])
-  const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const abortRef = useRef<AbortController | null>(null)
@@ -57,10 +57,9 @@ export default function CreationAssistantPanel({ draft, onForm, className = '' }
       return next
     })
 
-  const send = async () => {
-    const text = input.trim()
+  const send = async (raw: string) => {
+    const text = raw.trim()
     if (!text || busy) return
-    setInput('')
     setError('')
     setBusy(true)
     setItems((prev) => [...prev, { kind: 'user', text }, { kind: 'assistant', text: '' }])
@@ -101,14 +100,23 @@ export default function CreationAssistantPanel({ draft, onForm, className = '' }
       setBusy(false)
       abortRef.current = null
       if (!controller.signal.aborted) {
-        // 流断在半路（服务端异常、代理掐线）时不能把「思考中…」永远挂在屏幕上：
-        // 空着的助手气泡换成一句人话，用户知道该重发
+        // 空着的助手气泡不能一直挂「思考中…」，但也不能一律当成「断线」：
+        //   · 只有思考没有正文 —— 模型其实答了，只是没给正文，别谎报断线
+        //   · 后面已经插了工具/提示帧 —— 那帧才是解释，空壳直接删掉
+        //   · 真的一帧都没有 —— 这时才说「再发一次试试」
         setItems((prev) => {
           const next = [...prev]
-          const last = next[next.length - 1]
-          if (last && last.kind === 'assistant' && !last.text.trim()) {
-            next[next.length - 1] = { ...last, text: t('modal:creatorNoReply') }
+          let i = next.length - 1
+          while (i >= 0 && next[i].kind !== 'assistant') i -= 1
+          if (i < 0) return prev
+          const item = next[i]
+          if (item.kind !== 'assistant') return prev
+          if (item.text.trim() || (item.reasoning || '').trim()) return prev
+          if (i < next.length - 1) {
+            next.splice(i, 1)
+            return next
           }
+          next[i] = { ...item, text: t('modal:creatorNoReply') }
           return next
         })
       }
@@ -123,10 +131,9 @@ export default function CreationAssistantPanel({ draft, onForm, className = '' }
         <Sparkles size={13} /> {t('modal:creatorTitle')}
       </div>
 
-      {/* 窄屏这条列表跟着整页滚（高度封顶 38vh，溢出自滚），宽屏才吃掉面板剩下的高度；
-          不挂 scroll-floor：它是封顶的自滚列表，不会被压扁，而 160px 的下限会把
-          手机上一整屏的高度钉死在对话区，下面的表单反而被挤走 */}
-      <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto space-y-2 pr-1 max-h-[38vh] md:max-h-none">
+      {/* 列表吃掉面板剩下的高度（自己滚）：窄屏上「创建助手」本来就是一整屏，
+          以前那个 38vh 封顶是用来和下面的表单分高度的，拆屏之后只会把输入框顶到半空 */}
+      <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto space-y-2 pr-1">
         {items.length === 0 && (
           <p className="text-xs text-textMuted leading-relaxed">{t('modal:creatorEmpty')}</p>
         )}
@@ -163,25 +170,21 @@ export default function CreationAssistantPanel({ draft, onForm, className = '' }
 
       {error && <p className="text-xs text-rose-400 mt-2 shrink-0">{error}</p>}
 
-      <div className="shrink-0 mt-2 flex items-end gap-2">
-        <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
-          rows={2}
+      {/* 与群聊/私信同一个输入框：外壳、发送键、Enter 发送、草稿保存都走它。
+          创建助手没有附件与表情，关掉左下工具行；流式输出时同一位置换成「停止」*/}
+      <div className="shrink-0 mt-2">
+        <ChatInput
+          conversationType="creator"
+          conversationId={draft.id}
+          t={t}
+          onSend={send}
+          connected
+          busy={busy}
+          onStop={stop}
+          showTools={false}
           maxLength={MAX_TURN_CHARS}
           placeholder={t('modal:creatorPlaceholder')}
-          className="flex-1 min-w-0 px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50 resize-none"
         />
-        {busy ? (
-          <button onClick={stop} className="btn btn-sm btn-secondary shrink-0" title={t('modal:creatorStop')}>
-            <Square size={13} />
-          </button>
-        ) : (
-          <button onClick={send} disabled={!input.trim()} className="btn btn-sm btn-primary shrink-0" title={t('modal:creatorSend')}>
-            <Send size={13} />
-          </button>
-        )}
       </div>
     </div>
   )

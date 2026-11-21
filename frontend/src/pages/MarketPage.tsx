@@ -15,7 +15,7 @@ import {
 } from 'lucide-react'
 import { api } from '../api/client'
 import { useT } from '../i18n/I18nContext'
-import { Dialog, PageHeader } from '../components/ui'
+import { Dialog, PageHeader, UnderlineTabs } from '../components/ui'
 import MarketGithubTab from '../components/MarketGithubTab'
 import { formatFileSize } from '../utils/format'
 
@@ -433,20 +433,15 @@ export default function MarketPage() {
 
       {/* 板块切换 */}
       <div className="px-4 pt-2 shrink-0">
-        <div className="flex items-center gap-1 bg-elevated rounded-control p-0.5 w-fit">
-          <button
-            onClick={() => setTab('local')}
-            className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-control transition-colors ${tab === 'local' ? 'bg-primary-500/15 text-primary-400' : 'text-textSecondary hover:text-textPrimary'}`}
-          >
-            <Database size={12} /> 本地 <span className="text-3xs opacity-70">({total})</span>
-          </button>
-          <button
-            onClick={() => setTab('github')}
-            className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-control transition-colors ${tab === 'github' ? 'bg-primary-500/15 text-primary-400' : 'text-textSecondary hover:text-textPrimary'}`}
-          >
-            <Github size={12} /> GitHub <span className="text-3xs opacity-70">({ghItems.length})</span>
-          </button>
-        </div>
+        <UnderlineTabs
+          size="sm"
+          items={[
+            { key: 'local' as const, label: '本地', icon: <Database size={12} />, badge: <span className="text-3xs opacity-70">({total})</span> },
+            { key: 'github' as const, label: 'GitHub', icon: <Github size={12} />, badge: <span className="text-3xs opacity-70">({ghItems.length})</span> },
+          ]}
+          value={tab}
+          onChange={setTab}
+        />
       </div>
 
       {/* GitHub 绑定条（统一到「我的」页绑定，状态跨页同步） */}
@@ -544,7 +539,7 @@ export default function MarketPage() {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
               {items.map((item) => (
-                <div key={item.id} className="rounded-card bg-surface border border-border p-3 flex flex-col gap-2 hover:border-primary-500/40 transition-colors cursor-pointer" onClick={() => setDetail({ kind: 'local', item })}>
+                <div key={item.id} className="card card-interactive p-3 flex flex-col gap-2 cursor-pointer" onClick={() => setDetail({ kind: 'local', item })}>
                   <div className="flex items-start gap-2">
                     <div className="w-9 h-9 rounded-control bg-primary-500/15 text-primary-400 flex items-center justify-center shrink-0">
                       <Globe size={16} />
@@ -633,7 +628,7 @@ export default function MarketPage() {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
               {ghItems.map((item) => (
-                <div key={item.id} className="rounded-card bg-surface border border-border p-3 flex flex-col gap-2 hover:border-primary-500/40 transition-colors cursor-pointer" onClick={() => setDetail({ kind: 'github', item })}>
+                <div key={item.id} className="card card-interactive p-3 flex flex-col gap-2 cursor-pointer" onClick={() => setDetail({ kind: 'github', item })}>
                   <div className="flex items-start gap-2">
                     <div className="w-9 h-9 rounded-control bg-[#24292F]/10 dark:bg-white/10 text-[#24292F] dark:text-white flex items-center justify-center shrink-0">
                       <Github size={16} />
@@ -741,7 +736,7 @@ export default function MarketPage() {
             <button
               onClick={doEdit}
               disabled={editing}
-              className="btn btn-sm btn-primary w-full"
+              className="btn btn-md btn-primary w-full"
             >
               {editing ? '保存中…' : '保存'}
             </button>

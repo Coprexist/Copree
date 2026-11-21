@@ -30,6 +30,7 @@ function ResetPasswordDialog({ target, onDone, onClose }: {
 
   return (
     <Modal open title={t('admin:resetPasswordTitle').replace('{username}', target.username)} onClose={onClose}>
+      {/* ui-standard-ignore: 账号密码，浏览器密码管理器本来就该管 */}
       <input
         ref={inputRef}
         type="password"
@@ -83,6 +84,7 @@ function CreateUserDialog({ onDone, onClose }: { onDone: () => void; onClose: ()
   return (
     <Modal open title={t('admin:createUserTitle')} onClose={onClose}>
       {error && <p className="text-xs text-rose-400 mb-2">{error}</p>}
+           {/* ui-standard-ignore: 账号密码，浏览器密码管理器本来就该管 */}
       <input value={username} onChange={e => setUsername(e.target.value)} placeholder={t('admin:createUserUsername')}
         className="w-full px-3 py-2 text-sm border border-border bg-canvas rounded-control mb-2 focus:outline-none focus:ring-1 focus:ring-primary-500" />
       <p className="text-2xs text-textMuted -mt-1.5 mb-2">{username.length > 0 && !usernameOk ? t('admin:createUserUsernameHint') : '\u00a0'}</p>

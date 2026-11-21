@@ -1,7 +1,7 @@
 // OpenCLI：配置 / 授权 AI / 命令 / 日志
 
 import { useState, useEffect } from 'react'
-import { ListPanel } from '../../../components/ui'
+import { ListPanel, UnderlineTabs } from '../../../components/ui'
 import { api } from '../../../api/client'
 import Toggle from '../../../components/Toggle'
 import { useT, useLang } from '../../../i18n/I18nContext'
@@ -19,21 +19,7 @@ export default function OpenCLITab() {
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-2 bg-canvas border border-border rounded-card p-1 w-full overflow-x-auto">
-        {subTabs.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            className={`px-3 py-1.5 text-sm rounded-control transition-colors font-medium ${
-              tab === t.key
-                ? 'bg-elevated text-textPrimary shadow-sm'
-                : 'text-textMuted hover:text-textSecondary hover:bg-elevated'
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      <UnderlineTabs items={subTabs} value={tab} onChange={setTab} grow />
       {tab === 'config' && <OpenCLIConfigSection />}
       {tab === 'agents' && <OpenCLIAgentsSection />}
       {tab === 'commands' && <OpenCLICommandsSection />}
@@ -77,7 +63,7 @@ function OpenCLIConfigSection() {
   if (!config) return <p className="text-textMuted">{t('common:loading')}</p>
 
   return (
-    <div className="bg-surface rounded-card border border-border p-5">
+ <div className="card p-5">
       <h3 className="font-semibold text-textPrimary mb-4">{t('admin:globalConfig')}</h3>
       <div className="space-y-4">
         <div className="flex items-center gap-3">
@@ -94,7 +80,7 @@ function OpenCLIConfigSection() {
             className="w-24 px-2 py-1.5 border border-border bg-canvas rounded-card text-sm text-textPrimary" />
         </div>
         <button onClick={handleSave} disabled={saving}
-          className="btn btn-sm btn-primary">
+          className="btn btn-md btn-primary">
           {saving ? t('admin:saving') : t('admin:save')}
         </button>
       </div>
@@ -120,11 +106,12 @@ function OpenCLIAgentsSection() {
   if (!data.length) return <p className="text-textMuted">{t('common:loading')}</p>
 
   return (
-    <div className="bg-surface rounded-card border border-border p-5">
+ <div className="card p-5">
       <h3 className="font-semibold text-textPrimary mb-3">{t('admin:opencliAiWhitelist')}</h3>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm text-textPrimary">
-          <thead>
+      {/* 与"使用日志"同款：卡片内滚动 + 表头吸顶（AI 多了以后不该把整页撑长） */}
+      <div className="max-h-[60vh] overflow-auto rounded-card border border-border/60">
+        <table className="w-full min-w-[720px] table-fixed text-sm text-textPrimary">
+          <thead className="sticky top-0 z-10 bg-surface">
             <tr className="border-b border-border">
               <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin:opencliAiWhitelistColId')}</th>
               <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin:opencliAiWhitelistColName')}</th>
@@ -260,7 +247,7 @@ function OpenCLICommandsSection() {
   return (
     <div className="space-y-4">
       {/* ── 预设命令快速添加（新手友好） ── */}
-      <div className="bg-surface rounded-card border border-border p-5">
+ <div className="card p-5">
         <div className="flex items-center justify-between mb-3">
           <div>
             <h3 className="font-semibold text-textPrimary">{t('admin:presetCommands')}</h3>
@@ -329,7 +316,7 @@ function OpenCLICommandsSection() {
       </div>
 
       {/* ── 手动添加表单 ── */}
-      <div className="bg-surface rounded-card border border-border p-5">
+ <div className="card p-5">
         <h3 className="font-semibold mb-3 text-textPrimary">{t('admin:manualAddCommand')}</h3>
         <p className="text-xs text-textMuted mb-3" dangerouslySetInnerHTML={{ __html: t('admin:manualAddDesc') }} />
         <div className="flex flex-wrap items-end gap-3">
@@ -351,7 +338,7 @@ function OpenCLICommandsSection() {
               placeholder={t('common:optional')} />
           </div>
           <button onClick={handleAdd}
-            className="btn btn-xs btn-primary">
+            className="btn btn-md btn-primary">
             {t('admin:addCmd')}
           </button>
         </div>
@@ -407,6 +394,16 @@ function OpenCLICommandsSection() {
 
 // ---- 使用日志 ----
 
+/** 毫秒 → 人读时长：小于 1 秒看毫秒，超过看秒/分，避免一列全是 6 位数 */
+function fmtDuration(ms: number | null | undefined): string {
+  const v = Number(ms ?? 0)
+  if (!Number.isFinite(v) || v < 0) return '-'
+  if (v < 1000) return `${Math.round(v)}ms`
+  if (v < 60_000) return `${(v / 1000).toFixed(v < 10_000 ? 2 : 1)}s`
+  return `${Math.floor(v / 60_000)}m${Math.round((v % 60_000) / 1000)}s`
+}
+
+
 function OpenCLILogsSection() {
   const t = useT()
   const lang = useLang()
@@ -420,41 +417,60 @@ function OpenCLILogsSection() {
   if (!data) return <p className="text-textMuted">{t('common:loading')}</p>
 
   return (
-    <div className="bg-surface rounded-card border border-border p-5">
+ <div className="card p-5">
       <h3 className="font-semibold text-textPrimary mb-3">{t('admin:usageLogs')}</h3>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm text-textPrimary">
-          <thead>
-            <tr className="border-b border-border">
-              <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin:logsColTime')}</th>
-              <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin:logsColAi')}</th>
-              <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin:logsColCmd')}</th>
-              <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin:logsColExitCode')}</th>
-              <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin:logsColDuration')}</th>
-              <th className="text-left py-2 px-3 font-medium text-textSecondary">{t('admin:logsColOutput')}</th>
+      {/* 表格用 table-fixed + 明确列宽：auto 布局下"退出码"这种四字表头会被压成竖排，
+          命令列又会把耗时/输出挤出可视区（实测 1069px 宽就把最后一列裁掉了）。
+          只有命令列允许伸缩，其余列都按内容给定宽度 */}
+      {/* 卡片内滚动 + 表头吸顶：日志是一长串，整页被它撑长会让人找不到分页按钮 */}
+      <div className="max-h-[60vh] overflow-auto rounded-card border border-border/60">
+        <table className="w-full min-w-[760px] table-fixed text-sm text-textPrimary">
+          <thead className="sticky top-0 z-10 bg-surface">
+            <tr className="border-b border-border text-textSecondary">
+              <th className="text-left py-2 pr-3 font-medium w-[132px] whitespace-nowrap">{t('admin:logsColTime')}</th>
+              <th className="text-left py-2 pr-3 font-medium w-[72px] whitespace-nowrap">{t('admin:logsColAi')}</th>
+              <th className="text-left py-2 pr-3 font-medium">{t('admin:logsColCmd')}</th>
+              <th className="text-right py-2 px-2 font-medium w-[72px] whitespace-nowrap">{t('admin:logsColExitCode')}</th>
+              <th className="text-right py-2 px-2 font-medium w-[80px] whitespace-nowrap">{t('admin:logsColDuration')}</th>
+              <th className="text-left py-2 pl-3 font-medium w-[260px] whitespace-nowrap">{t('admin:logsColOutput')}</th>
             </tr>
           </thead>
           <tbody>
-            {data.items.map((log: any) => (
-              <tr key={log.id} className="border-b border-border/50">
-                <td className="py-2 px-3 text-xs text-textSecondary">
-                  {log.executed_at ? fmtDateTime(log.executed_at, lang) : '-'}
-                </td>
-                <td className="py-2 px-3 text-xs text-textPrimary">AI #{log.agent_id}</td>
-                <td className="py-2 px-3 font-mono text-xs text-textPrimary">
-                  {log.command}{log.args ? ` ${log.args}` : ''}
-                </td>
-                <td className="py-2 px-3">
-                  <span className={log.exit_code === 0 ? 'text-mint-400 text-xs' : 'text-rose-400 text-xs'}>
-                    {log.exit_code}
-                  </span>
-                </td>
-                <td className="py-2 px-3 text-xs text-textSecondary">{log.duration_ms}ms</td>
-                <td className="py-2 px-3 text-xs text-textSecondary max-w-[250px] truncate">
-                  {log.stdout_truncated || log.stderr_truncated || '-'}
-                </td>
+            {data.items.length === 0 && (
+              <tr>
+                <td colSpan={6} className="py-8 text-center text-xs text-textMuted">{t('admin:usageLogsEmpty')}</td>
               </tr>
-            ))}
+            )}
+            {data.items.map((log: any) => {
+              const ok = log.exit_code === 0
+              const output = String(log.stdout_truncated || log.stderr_truncated || '').replace(/\s+/g, ' ').trim()
+              return (
+                <tr key={log.id} className="border-b border-border/50 hover:bg-elevated/40 transition-colors">
+                  <td className="py-2 pr-3 text-xs text-textSecondary whitespace-nowrap tabular-nums">
+                    {log.executed_at ? fmtDateTime(log.executed_at, lang) : '-'}
+                  </td>
+                  <td className="py-2 pr-3 text-xs text-textSecondary whitespace-nowrap tabular-nums">AI #{log.agent_id}</td>
+                  {/* 能横向滚就不省略：命令完整换行显示（长参数也不藏），超长时单元格内滚动 */}
+                  <td className="py-2 pr-3 align-top">
+                    <div className="font-mono text-xs text-textPrimary whitespace-pre-wrap break-words max-w-[420px] max-h-32 overflow-auto">
+                      {log.command}{log.args ? ` ${log.args}` : ''}
+                    </div>
+                  </td>
+                  <td className="py-2 px-2 text-right whitespace-nowrap">
+                    <span className={'text-xs tabular-nums ' + (ok ? 'text-mint-400' : 'text-rose-400')}>{log.exit_code}</span>
+                  </td>
+                  <td className="py-2 px-2 text-right text-xs text-textSecondary whitespace-nowrap tabular-nums"
+                      title={`${log.duration_ms ?? 0} 毫秒`}>
+                    {fmtDuration(log.duration_ms)}
+                  </td>
+                  <td className="py-2 pl-3 text-xs text-textMuted align-top">
+                    <div className="whitespace-pre-wrap break-words max-w-[280px] max-h-32 overflow-auto">
+                      {output || '-'}
+                    </div>
+                  </td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>

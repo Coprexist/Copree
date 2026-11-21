@@ -18,7 +18,7 @@ export default function ChannelModal({ agentId, onClose }: { agentId: number; on
         className="w-full max-w-lg sm:max-w-2xl lg:max-w-4xl bg-surface border border-border rounded-dialog max-h-[85vh] flex flex-col shadow-xl"
         onClick={e => e.stopPropagation()}
       >
-        <div className="sticky top-0 bg-surface border-b border-border px-4 py-3 flex items-center gap-2 shrink-0">
+        <div className="top-bar top-bar-sticky px-4 py-3 flex items-center gap-2 shrink-0">
           <MessageSquare size={15} className="text-primary-400 shrink-0" />
           <span className="text-sm font-semibold text-textPrimary truncate">{t('tool:channel.modalTitle')}</span>
           <button onClick={onClose} className="ml-auto p-1 text-textMuted hover:text-textPrimary transition-colors shrink-0">

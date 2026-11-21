@@ -109,7 +109,7 @@ export default function ApiDocSectionsTab() {
         <button
           onClick={save}
           disabled={saving}
-          className="btn btn-xs btn-primary gap-1.5"
+          className="btn btn-md btn-primary gap-1.5"
         >
           <Save size={13} /> {saving ? '保存中…' : '保存'}
         </button>
@@ -121,7 +121,7 @@ export default function ApiDocSectionsTab() {
         <button
           onClick={syncFromDocs}
           disabled={syncing}
-          className="btn btn-sm btn-outline"
+          className="btn btn-md btn-outline"
         >
           <RefreshCw size={13} /> {syncing ? '同步中…' : '从文档中更新'}
         </button>

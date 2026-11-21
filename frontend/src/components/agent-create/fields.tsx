@@ -117,7 +117,7 @@ export function TristateSelect({ value, onChange }: { value: boolean | null; onC
     <select
       value={value === null ? 'inherit' : value ? 'on' : 'off'}
       onChange={(e) => { const v = e.target.value; onChange(v === 'inherit' ? null : v === 'on') }}
-      className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+      className="field w-full"
     >
       <option value="inherit">{t('modal:detailSettingsInheritGlobal')}</option>
       <option value="on">{t('common:enabled')}</option>
@@ -169,7 +169,7 @@ export function NumberField({
           }
           setDraft(null)
         }}
-        className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+        className="field w-full"
       />
       {desc && <p className="text-3xs text-textMuted mt-0.5">{desc}</p>}
     </div>

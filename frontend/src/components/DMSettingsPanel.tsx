@@ -122,7 +122,7 @@ export default function DMSettingsPanel({ sessionId, partner, myDndUntil, onClos
 
       <div className="relative w-full md:w-80 max-w-full h-full bg-surface md:border-l border-border shadow-2xl flex flex-col animate-slide-in">
         {/* 头部 */}
-        <div className="h-14 px-4 border-b border-border flex items-center justify-between shrink-0">
+        <div className="top-bar h-14 px-4 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
             <button
               onClick={onClose}
@@ -173,7 +173,7 @@ export default function DMSettingsPanel({ sessionId, partner, myDndUntil, onClos
                       key={d.key}
                       onClick={() => handleSetDnd(d.minutes)}
                       disabled={loading}
-                      className="flex items-center justify-center gap-1.5 px-3 py-2.5 bg-elevated hover:bg-primary-500/10 hover:text-primary-400 text-textSecondary border border-border rounded-control text-xs font-medium transition-colors disabled:opacity-50"
+                      className="btn btn-md btn-secondary w-full"
                     >
                       <Clock size={12} />
                       {t(d.key)}
@@ -190,12 +190,12 @@ export default function DMSettingsPanel({ sessionId, partner, myDndUntil, onClos
                     max={10080}
                     disabled={loading}
                     onKeyDown={(e) => { if (e.key === 'Enter') handleCustomDnd() }}
-                    className="flex-1 bg-elevated border border-border rounded-control px-3 py-2 text-sm text-textPrimary outline-none focus:border-primary-400 placeholder:text-textMuted disabled:opacity-50"
+                    className="field flex-1"
                   />
                   <button
                     onClick={handleCustomDnd}
                     disabled={loading || !customMinutes.trim()}
-                    className="btn btn-xs btn-primary shrink-0"
+                    className="btn btn-md btn-primary shrink-0"
                   >
                     {t('common:set')}
                   </button>

@@ -2,18 +2,21 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } fr
 import { createPortal } from 'react-dom'
 import { useWebSocket, type WebSocketMessage } from '../hooks/useWebSocket'
 import { api } from '../api/client'
+import { firstImageAttachment } from '../utils/mime'
 import { useAuth } from '../context/AuthContext'
 import { parseServerDate } from '../utils/time'
 import MessageBubble from './MessageBubble'
 import { renderMentions, type MentionNames } from '../utils/mentions'
 import ChatInput, { CHAT_INPUT_MIN_H } from './ChatInput'
-import EmojiText from './shared/EmojiText'
+import QuotedMessage from './shared/QuotedMessage'
+import NoticeStack, { NOTICE_H, type NoticeItem } from './shared/NoticeStack'
 // 阈值（距底多少算「在底部」）与群视界/DSH 对话同一份来源；本组件有自己的虚拟列表机器，不套整个 hook
 import { BOTTOM_THRESHOLD } from '../hooks/useStickToBottom'
 // 「我正在读这个会话」的唯一真相（侧边栏据此不画红数泡，本组件据此把已读落回后端）
 import { conversationKey, setFollowingConversation, useReadingKey } from '../hooks/useReadingConversation'
-import { markConversationRead } from '../hooks/useChatLists'
+import { markConversationRead, refreshChatLists } from '../hooks/useChatLists'
 import ActivityBar, { type ActivityUser } from './ActivityBar'
+import MobileScrollbar from './MobileScrollbar'
 import ProfileCard from './ProfileCard'
 import { EmptyState, MenuPanel, MenuItem } from './ui'
 import { Loader2, AlertTriangle, X, ArrowDown, ArrowUp, Bot, User, MessageSquare, Settings, Gamepad2, Globe } from 'lucide-react'
@@ -31,14 +34,20 @@ import { AttachmentChips, DropMask } from './AttachmentChips'
 // 而中文一行只放得下 14~18 字 → 行数偏低）、Markdown 表格与代码块。
 // 所以这是像素近似、不是精确布局：误差由 VIRTUAL_OVERSCAN / OVERSCAN_PX 消化，
 // 短对话无感，上千条或图文混排时允许有轻微漂移。要做到精确得渲染后回填真实高度。
-const estimateMessageHeight = (msg: any): number => {
+const estimateMessageHeight = (msg: any, replyHasImage = false): number => {
   const base = 44                        // 气泡 + 间距基础
   const text = msg.content || ''
   const lines = Math.max(1, Math.ceil(text.length / 28))  // 每行约 28 字符
   const textH = lines * 20
   const attachH = (msg.attachments?.length || 0) * 88     // 附件/图片
-  const replyH = msg.reply_to ? 26 : 0                     // 回复引用
-  return base + textH + attachH + replyH
+  // 语音下面还挂着文稿（最多 2 行）：按 22 字一行估，每行 16px
+  const transcriptH = (msg.attachments || []).reduce((h: number, a: any) => {
+    const t = typeof a?.transcript === 'string' ? a.transcript.trim() : ''
+    return h + (t ? Math.min(2, Math.ceil(t.length / 22)) * 16 : 0)
+  }, 0)
+  // 回复引用：被引的是一张图时，引用块里多一张 36px 缩略图（+边框/间距 ≈ 44）
+  const replyH = msg.reply_to ? (replyHasImage ? 44 : 26) : 0
+  return base + textH + attachH + replyH + transcriptH
 }
 
 const VIRTUAL_OVERSCAN = 40   // 窗口外预渲染条数（估算误差缓冲）
@@ -46,6 +55,11 @@ const OVERSCAN_PX = 1200      // 视口上下各多渲染的像素
 
 // 撤回窗口（与后端一致：2 分钟内、只能撤自己的）；这里只是别让人点了必然失败
 const REVOKE_WINDOW_MS = 2 * 60 * 1000
+
+// 「正在录音」的兜底清除：TTS 走的是外部服务，实测一次合成能到两分多钟。
+// 给成一个"彻底没下文"的宽限（收到新的 speaking 事件会重新计时），
+// 而不是一个"正常语速"的估计值——估计值小了，界面会在合成中途自己退回「思考中」
+const SPEAKING_STALE_MS = 5 * 60 * 1000
 
 interface Message {
   id: number
@@ -80,6 +94,9 @@ interface ChatViewProps {
 const PAGE_SIZE = 20
 // 一次补齐最多拉多少页：离开一天也就几百条；再多交给触底继续拉，别把首屏拖住
 const CATCH_UP_MAX_PAGES = 50
+// 首屏「首条未读」只有落在最新这么多条里才自动把视口拉过去。
+// 再早的未读不抢视口：刷新后被拽回一周前、中间还补不全的观感就是这么来的
+const AUTO_LOCATE_RECENT = 10
 
 // ── 模块级工具函数 ──
 
@@ -183,8 +200,27 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
   } | null>(null)
   const [thinkingAgents, setThinkingAgents] = useState<Map<number, { name: string; avatarUrl: string | null }>>(new Map())
   const [typingAgents, setTypingAgents] = useState<Map<number, { name: string; avatarUrl: string | null }>>(new Map())
+  // 正在说话（发语音时的 TTS 合成那几秒）：与"输入中"分开一条状态，正文照旧走 typing
+  const [speakingAgents, setSpeakingAgents] = useState<Map<number, { name: string; avatarUrl: string | null }>>(new Map())
   // 人类打字状态: userId → {name, avatarUrl}
   const [humanTyping, setHumanTyping] = useState<Map<number, { name: string; avatarUrl: string | null }>>(new Map())
+  // 「录音中」的续期计时器：每个 AI 一条。TTS 合成是一次长等待，期间没有别的事件，
+  // 所以每收到一次 state=speaking 就重新计时；被思考/落地/轮末收掉时一起清
+  const speakingTimers = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map())
+  const dropSpeaking = useCallback((id: number) => {
+    const timer = speakingTimers.current.get(id)
+    if (timer) { clearTimeout(timer); speakingTimers.current.delete(id) }
+    removeFromMap(setSpeakingAgents, id)
+  }, [])
+  const holdSpeaking = useCallback((id: number, info: { name: string; avatarUrl: string | null }) => {
+    addToMap(setSpeakingAgents, id, info)
+    const timer = speakingTimers.current.get(id)
+    if (timer) clearTimeout(timer)
+    speakingTimers.current.set(id, setTimeout(() => {
+      speakingTimers.current.delete(id)
+      removeFromMap(setSpeakingAgents, id)
+    }, SPEAKING_STALE_MS))
+  }, [])
 
   // 合并所有活动用户（AI 思考 + AI 输入中 + 人类打字）
   const activityUsers: ActivityUser[] = useMemo(() => {
@@ -198,12 +234,16 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
       if (existing) existing.status = 'typing'
       else map.set(id, { id, name: info.name, avatarUrl: info.avatarUrl, status: 'typing' })
     })
+    // 说话覆盖前两者：它说的是"此刻在出声"，比"在想要说什么"更具体
+    speakingAgents.forEach((info, id) => {
+      map.set(id, { id, name: info.name, avatarUrl: info.avatarUrl, status: 'speaking' })
+    })
     humanTyping.forEach(({ name, avatarUrl }, id) => {
       map.set(id, { id, name, avatarUrl, status: 'typing' })
     })
 
     return Array.from(map.values())
-  }, [thinkingAgents, typingAgents, humanTyping])
+  }, [thinkingAgents, typingAgents, speakingAgents, humanTyping])
 
   // @提及 自动补全（仅群聊）
   const [groupMembers, setGroupMembers] = useState<Array<{ type: string; id: number; name: string; state?: string }>>([])
@@ -222,6 +262,21 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
   const inputRef = useRef(input)
   inputRef.current = input // 保持同步，供 effect cleanup 闭包读取最新值
   const containerRef = useRef<HTMLDivElement>(null)
+  // 输入区浮在消息之上（和手机端底部菜单同一个做法）：它不再占布局空间，
+  // 所以要把自己的高度量出来，垫成消息列表的底部留白，最后一条才滚得出来
+  const composerRef = useRef<HTMLDivElement>(null)
+  // 初值给个近似高度（一行的输入区），首帧就按它留白；挂载后 ResizeObserver 立刻校准，
+  // 免得刚打开会话时消息列表先按 0 留白、再跳一下
+  const [composerH, setComposerH] = useState(112)
+  useEffect(() => {
+    const el = composerRef.current
+    if (!el) return
+    const update = () => setComposerH(el.offsetHeight)
+    update()
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [conversationId, conversationType])
 
   // ── 虚拟列表状态（窗口化渲染，长对话不卡）──
   const [scrollTop, setScrollTop] = useState(0)
@@ -239,10 +294,22 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
     isAtBottomRef.current = value
     setIsAtBottom(value)
   }, [])
-  const newestIdRef = useRef<number | null>(null)       // 离开时保存已读位置
-  const oldestIdRef = useRef<number | null>(null)        // 供哨兵读取，避免 messages 依赖
+  // 会话边界（最早/最新一条的 id）只有一份真相：按 id 排好序的 messages 的首尾。
+  // 这两个 ref 只是它的镜像，**只由下面那个同步 effect 写** —— 供哨兵和渲染之外的地方（断线补漏、
+  // 卸载时存已读位）同步读取。
+  // 以前是每个分页各自改游标：往上翻一页会把 newest 拽成那一页的末条（「会话最新」直接退到一周前），
+  // 于是断线补漏从一周前开始补、卸载时 lastRead 也写成一周前——下次进来又照着它定位。
+  const newestIdRef = useRef<number | null>(null)
+  const oldestIdRef = useRef<number | null>(null)
   const typingRef = useRef(false)                       // 当前是否正在输入中，避免重复发送 typing 消息
   const showJumpToUnreadRef = useRef(false)              // 避免 scroll 中高频 setState
+
+  // messages 是排序后的唯一真相，两端镜像到 ref。分页方向不再自己碰游标。
+  useEffect(() => {
+    if (messages.length === 0) return
+    oldestIdRef.current = messages[0].id
+    newestIdRef.current = messages[messages.length - 1].id
+  }, [messages])
 
   // 离开对话时保存已读位置（通过 newestIdRef，无需额外的 messages 同步 effect）
   useEffect(() => {
@@ -342,9 +409,7 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
       setMessages((prev) => {
         // 去重：防止 WebSocket 与 HTTP fetch 竞态导致同 ID 消息重复
         if (prev.some((existing) => existing.id === m.id)) return prev
-        const next = [...prev, m]
-        newestIdRef.current = m.id
-        return next
+        return [...prev, m]
       })
       if (isAtBottomRef.current) {
         schedule(() => scrollToBottom(true), 50)
@@ -354,15 +419,20 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
       if (m.sender_type === 'ai' && m.sender_id) {
         removeFromMap(setThinkingAgents, m.sender_id)
         removeFromMap(setTypingAgents, m.sender_id)
+        dropSpeaking(m.sender_id)
       }
     } else if (msg.type === 'message_revoked') {
       const d = msg.data
       if (!isMessageForThisConversation(d, conversationType, conversationId)) return
       setMessages((prev) => prev.map((m) => (m.id === d.id ? { ...m, revoked: true, content: '' } : m)))
+      // 侧栏那一行预览也得跟着撤：它存的是列表接口给的字符串，不重拉就还挂着原话
+      refreshChatLists()
     } else if (msg.type === 'ai_thinking') {
       const d = msg.data
       if (d.trigger === 'auto') return
       if (!isMessageForThisConversation(d, conversationType, conversationId)) return
+      // 新一轮开始了：上一条语音的"正在录音"到这儿就该收
+      dropSpeaking(d.user_id)
       addToMap(setThinkingAgents, d.user_id, { name: d.agent_name, avatarUrl: d.agent_avatar_url || null })
     } else if (msg.type === 'ai_thinking_end') {
       const d = msg.data
@@ -370,12 +440,20 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
       if (!isMessageForThisConversation(d, conversationType, conversationId)) return
       removeFromMap(setThinkingAgents, d.user_id)
       removeFromMap(setTypingAgents, d.user_id)
+      dropSpeaking(d.user_id)
     } else if (msg.type === 'ai_typing') {
       const d = msg.data
       if (d.trigger === 'auto') return
       if (!isMessageForThisConversation(d, conversationType, conversationId)) return
-      schedule(() => removeFromMap(setThinkingAgents, d.user_id), 1500)
-      addToMap(setTypingAgents, d.user_id, { name: d.agent_name, avatarUrl: d.agent_avatar_url || null })
+      const info = { name: d.agent_name, avatarUrl: d.agent_avatar_url || null }
+      // 收到 ai_typing 就说明思考结束了：和下面的状态同一批 setState，不会闪；
+      // 以前挂 1.5s 定时器，切对话时被清掉就成了永久「思考中」
+      removeFromMap(setThinkingAgents, d.user_id)
+      if (d.state === 'speaking') {
+        holdSpeaking(d.user_id, info)
+      } else {
+        addToMap(setTypingAgents, d.user_id, info)
+      }
     } else if (msg.type === 'typing') {
       // 人类打字状态
       const d = msg.data
@@ -466,7 +544,15 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
 
   // 消息列表 memo：窗口化渲染（虚拟列表）——只渲染视口附近的消息，
   // 上下用估算高度占位，解决“对话一多就卡”的 DOM 节点爆炸问题
-  const heights = useMemo(() => messages.map(m => estimateMessageHeight(m)), [messages])
+  // 被引用的是张图时引用块里多一张缩略图：高度估算要跟着，否则虚拟列表会把滚动位置算偏
+  const replyImageIds = useMemo(
+    () => new Set(messages.filter(m => firstImageAttachment(m.attachments)).map(m => m.id)),
+    [messages],
+  )
+  const heights = useMemo(
+    () => messages.map(m => estimateMessageHeight(m, m.reply_to != null && replyImageIds.has(m.reply_to))),
+    [messages, replyImageIds],
+  )
   const cumHeights = useMemo(() => {
     const a: number[] = [0]
     for (const h of heights) a.push(a[a.length - 1] + h)
@@ -524,6 +610,8 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
         }))
       }
       setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, revoked: true, content: '' } : m)))
+      // 自己撤回时 WS 不会回到自己（私信广播按 exclude_user_id 排除了发起者），列表得自己刷
+      refreshChatLists()
     } catch (e: any) {
       setRevokeNotice(e?.message || String(e))
     }
@@ -532,13 +620,47 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
   // 按 id 直取：窗口里每条都从头 find 一遍是 O(窗口 × 全量)，而每次滚动都会重算一遍
   const messageById = useMemo(() => new Map(messages.map((m) => [m.id, m])), [messages])
 
+  // 语音文稿按 file_id 取：文稿的家在 file_metadata（消息负载里不带它），
+  // 这样转发、ASR 回填都只改一处，消息快照也不会变成 N 份。一次拿齐缺的那些，拿到就缓存。
+  const [transcripts, setTranscripts] = useState<Record<number, string>>({})
+  const transcriptFetchedRef = useRef<Set<number>>(new Set())
+  const transcriptIds = useMemo(() => {
+    const ids: number[] = []
+    for (const m of messages) {
+      for (const a of (m.attachments || []) as Array<{ file_id?: number; mime_type?: string }>) {
+        if (a?.file_id && typeof a.mime_type === 'string' && a.mime_type.startsWith('audio/')) {
+          ids.push(Number(a.file_id))
+        }
+      }
+    }
+    return Array.from(new Set(ids))
+  }, [messages])
+  useEffect(() => {
+    const missing = transcriptIds.filter((id) => !transcriptFetchedRef.current.has(id))
+    if (missing.length === 0) return
+    missing.forEach((id) => transcriptFetchedRef.current.add(id))
+    api.get<Record<string, string>>(`/fs/transcripts?file_ids=${missing.join(',')}`)
+      .then((res) => {
+        const patch: Record<number, string> = {}
+        for (const [k, v] of Object.entries(res || {})) patch[Number(k)] = v
+        if (Object.keys(patch).length > 0) setTranscripts((prev) => ({ ...prev, ...patch }))
+      })
+      .catch(() => { missing.forEach((id) => transcriptFetchedRef.current.delete(id)) })
+  }, [transcriptIds])
+
   const messageElements = useMemo(() => {
     const { s, e } = windowRange
     const items = messages.slice(s, e).map((msg) => {
       const replyToData = msg.reply_to == null ? undefined : (() => {
         const quoted = messageById.get(msg.reply_to)
         if (!quoted) return { id: msg.reply_to, sender: '?', content: '' }
-        return { id: quoted.id, sender: quoted.sender_name || `用户${quoted.sender_id}`, content: renderMentions(quoted.content.slice(0, 80), mentionNames) }
+        return {
+          id: quoted.id,
+          sender: quoted.sender_name || `用户${quoted.sender_id}`,
+          content: renderMentions(quoted.content.slice(0, 80), mentionNames),
+          // 被引用的是图/图+字：把那张图缩成小图带过来，否则引用只剩一句"[图片]"
+          image: firstImageAttachment(quoted.attachments),
+        }
       })()
       return (
         <div
@@ -572,6 +694,7 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
             replyTo={replyToData}
             onAvatarClick={handleAvatarClick}
             onReply={(id, name, text) => setReplyTo({ id, sender_name: name, content: text.slice(0, 80) })}
+            transcripts={transcripts}
           />
         </div>
       )
@@ -581,7 +704,7 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
       afterH: totalHeight - cumHeights[e],
       items,
     }
-  }, [windowRange, messages, messageById, cumHeights, totalHeight, firstUnreadId, hasMoreBefore, isOwnMessage, handleAvatarClick, mentionNames, canRevoke, handleRevoke, t])
+  }, [windowRange, messages, messageById, cumHeights, totalHeight, firstUnreadId, hasMoreBefore, isOwnMessage, handleAvatarClick, mentionNames, canRevoke, handleRevoke, transcripts, t])
 
   // ============================================================
   // 消息加载器
@@ -619,12 +742,6 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
       }
 
       const gotFullPage = fetched.length >= PAGE_SIZE
-
-      // 更新 refs（避免 IntersectionObserver 依赖 messages 数组）
-      if (fetched.length > 0) {
-        newestIdRef.current = fetched[fetched.length - 1].id
-        oldestIdRef.current = fetched[0].id
-      }
 
       setMessages((prev) => {
         if (mode === 'initial') return fetched
@@ -666,11 +783,10 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
               setFirstUnreadId(firstUnread.id)
             }
             // 所有消息都已读 → firstUnreadId 保持 null
-          } else if (gotFullPage) {
-            // 首次访问且有更多历史消息 → 最旧那条作为未读边界
-            setFirstUnreadId(fetched[0].id)
           }
-          // 首次访问且消息 ≤ PAGE_SIZE → 全部可见，无需未读标记
+          // 没有 lastRead（无痕窗口/新设备）就没有「新消息」分界：不画红线。
+          // 以前这里会用本页最旧那条当边界，结果未读数为 0 也横一条「新消息」，
+          // 还会把视口往那一页的顶部带
         }
       }
       return fetched
@@ -753,15 +869,12 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
       setGroupMembers(membersData)
     }
     await loadMessages({ mode: 'initial' })
-    // 上次已读位置落在最新那一页之前（离开超过一页的量）时，未读的主体正好夹在中间：
-    // 只加载最新一页的话，红线只能画在当页最旧那条上，中间那批也翻不到
-    const stored = localStorage.getItem(`lastRead_${conversationType}_${conversationId}`)
-    const lastReadId = stored ? parseInt(stored) : null
-    const newest = newestIdRef.current
-    if (!lastReadId || !newest || lastReadId >= newest) return
-    const boundary = await catchUpFrom(lastReadId)
-    if (boundary) setFirstUnreadId(boundary)
-  }, [conversationType, conversationId, loadMessages, catchUpFrom])
+    // 首屏不再自动 catchUpFrom 补中间那段：补到的第一条会被当成「首条未读」定位到视口顶部，
+    // 刷新后直接被拽回一周前；补到 CATCH_UP_MAX_PAGES 上限还会留下永久断层——上/下哨兵只在
+    // 整页最顶和最底，缝里没人来加载。
+    // 现在红线由 loadMessages 按 lastRead 画好（已读位落在这页之前就画本页最旧那条），
+    // 想看更早的未读就往上翻（连续分页）或点「跳到首条未读」。
+  }, [conversationType, conversationId, loadMessages])
 
   // Tauri 那条"3 秒窗口没开成 → 整页兜底跳转"的待定标记：用户改选标准界面、切走对话后作废
   const immersivePending = useRef(false)
@@ -808,6 +921,9 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
     if (!conversationId) return
     setThinkingAgents(new Map())
     setTypingAgents(new Map())
+    speakingTimers.current.forEach(clearTimeout)
+    speakingTimers.current.clear()
+    setSpeakingAgents(new Map())
     setMessages([])
     setHasMoreBefore(false)
     setHasMoreAfter(false)
@@ -829,12 +945,19 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
     const activityUrl = conversationType === 'group'
       ? `/groups/${conversationId}/activity`
       : `/dm/${conversationId}/activity`
-    api.get<Record<string, {name: string; avatar_url: string | null}>>(activityUrl).then(active => {
+    api.get<Record<string, {name: string; avatar_url: string | null; state?: string}>>(activityUrl).then(active => {
       const thinking = new Map<number, {name: string; avatarUrl: string | null}>()
+      const typing = new Map<number, {name: string; avatarUrl: string | null}>()
+      // 恢复的是三态，不是只有「思考中」：正在合成的语音要恢复成「录音中」，
+      // 否则刷新一次，一个正在说话的人就变回在想
       Object.entries(active).forEach(([id, info]) => {
-        thinking.set(Number(id), { name: info.name, avatarUrl: info.avatar_url })
+        const item = { name: info.name, avatarUrl: info.avatar_url }
+        if (info.state === 'speaking') holdSpeaking(Number(id), item)
+        else if (info.state === 'typing') typing.set(Number(id), item)
+        else thinking.set(Number(id), item)
       })
       if (thinking.size > 0) setThinkingAgents(thinking)
+      if (typing.size > 0) setTypingAgents(typing)
     }).catch(() => {})
 
     let cancelled = false
@@ -866,27 +989,32 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
   useLayoutEffect(() => {
     if (loadingState === null && messages.length > 0 && prevMessageCount.current === 0) {
       prevMessageCount.current = messages.length
-      // 立即保存已读位置：初始加载完成即视为用户已看到最新消息
-      if (newestIdRef.current && conversationId) {
+      // 立即保存已读位置：初始加载完成即视为用户已看到最新消息。
+      // 取 messages 末条而不是 newestIdRef：镜像 effect 在这之后才跑，ref 此刻可能还是 null
+      const newest = messages[messages.length - 1]?.id
+      if (newest && conversationId) {
         const key = `lastRead_${conversationType}_${conversationId}`
-        localStorage.setItem(key, String(newestIdRef.current))
+        localStorage.setItem(key, String(newest))
       }
       const container = containerRef.current
       if (!container) return
-      if (firstUnreadId) {
-        // 有更早的未读消息 → 将首个未读定位到视口顶部（paint 之前，无闪烁）
-        const msgEl = container.querySelector(`[data-message-id="${firstUnreadId}"]`)
-        if (msgEl) {
-          markAutoScrolling()
-          // 只滚动消息容器本身，避免 scrollIntoView 连带滚动外层 main/Layout
-          scrollToInContainer(container, msgEl as HTMLElement)
-        }
+      // 只把落在最近 AUTO_LOCATE_RECENT 条内的首条未读拉进视口；更早的未读不抢视口，
+      // 停在最新（红线与「跳到首条未读」按钮仍在消息流里，往上翻是连续分页）
+      const unreadIdx = firstUnreadId ? messages.findIndex(m => m.id === firstUnreadId) : -1
+      const msgEl = unreadIdx >= 0 && messages.length - unreadIdx <= AUTO_LOCATE_RECENT
+        ? container.querySelector(`[data-message-id="${firstUnreadId}"]`)
+        : null
+      if (msgEl) {
+        // 首条未读就在附近 → 对齐到视口顶部（paint 之前，无闪烁）
+        markAutoScrolling()
+        // 只滚动消息容器本身，避免 scrollIntoView 连带滚动外层 main/Layout
+        scrollToInContainer(container, msgEl as HTMLElement)
       } else if (container.scrollHeight > container.clientHeight) {
-        // 无旧消息但内容溢出 → 滚到底部
+        // 没东西要定位（或未读在很远、虚拟列表还没渲染它）→ 停在最新
         container.scrollTop = container.scrollHeight
       }
     }
-  }, [loadingState, messages.length, firstUnreadId, markAutoScrolling])
+  }, [loadingState, messages, firstUnreadId, markAutoScrolling])
 
   // 上下哨兵：加载更早/更新的分页（游标在 ref 里，见 useSentinel 的注释）
   useSentinel({
@@ -1095,6 +1223,27 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
 
   // 世界门是「群聊面板」级浮层：本组件里的 absolute 只到消息区，面板顶部标题栏会露在遮罩外面，
   // 所以整块交给 ChatArea 的面板容器渲染；宿主还没就绪时就地渲染，避免门没出现而消息也不加载
+  // 头部下面是常驻的「在沉浸式界面打开」入口（只在绑定世界的群里）。它不占布局，
+  // 但消息顶部要给它让出高度：WORLD_STRIP_H 就是这条的高度
+  const showWorldStrip = conversationType === 'group' && boundWorldId != null && !worldModalOpen
+  // 顶部提示条：统一交给 NoticeStack 排（order 小的在上）。重连比世界入口更急，所以压在它上面；
+  // 它的总高度由下面 --header-strip 让给消息区，条浮着、消息不会钻到条底下
+  const notices: NoticeItem[] = []
+  if (reconnecting) {
+    notices.push({
+      id: 'reconnecting', order: 10, tone: 'accent',
+      icon: <Loader2 size={12} className="animate-spin" />,
+      text: t('chat:reconnecting'),
+    })
+  }
+  if (showWorldStrip) {
+    notices.push({
+      id: 'world-immersive', order: 20, tone: 'primary',
+      icon: <Gamepad2 size={12} />,
+      text: t('chat:worldEnterImmersive'),
+      onClick: openImmersive,
+    })
+  }
   const worldGate = worldModalOpen && boundWorldId != null && conversationType === 'group' ? (
     <div className="absolute inset-0 z-toast flex items-center justify-center bg-black/70 backdrop-blur-sm">
       <div className="w-full max-w-md mx-4 max-h-full overflow-y-auto bg-surface rounded-dialog border border-primary-500/30 shadow-2xl p-8 text-center">
@@ -1117,24 +1266,11 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
   ) : null
 
   return (
-    <div className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
-      {/* 重连提示条 */}
-      {reconnecting && (
-        <div className="absolute top-0 left-0 right-0 z-modal flex items-center justify-center gap-2 bg-accent-500/15 border-b border-accent-500/20 text-accent-400 px-4 py-1.5 text-xs font-medium backdrop-blur-sm">
-          <Loader2 size={12} className="animate-spin" />
-          {t('chat:reconnecting')}
-        </div>
-      )}
-
-      {/* 沉浸入口：从世界门选了标准界面之后，进群这一次就再也找不到入口，所以顶部常驻一条 */}
-      {conversationType === 'group' && boundWorldId != null && !worldModalOpen && (
-        <button
-          onClick={openImmersive}
-          className="shrink-0 flex items-center justify-center gap-1.5 px-4 py-1.5 text-xs font-medium text-primary-400 bg-primary-500/10 border-b border-primary-500/20 hover:bg-primary-500/15 transition-colors"
-        >
-          <Gamepad2 size={12} /> {t('chat:worldEnterImmersive')}
-        </button>
-      )}
+    // min-h-0 不能省：没有它 flex 项的 min-height 是 auto，消息区会按内容撑高、
+    // 底部输入区被顶到它下面去，看着就是"输入框压住了最后几条消息"（玻璃改成透明后才看得见）
+    <div className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden relative">
+      {/* 顶部提示条：统一一处渲染、按 order 从上往下排，高度由 --header-strip 让给消息区 */}
+      <NoticeStack items={notices} />
 
       {/* 隐藏的文件输入（附件按钮触发） */}
       <input
@@ -1147,7 +1283,7 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
 
       {/* 错误 Toast */}
       {errors.length > 0 && (
-        <div className="absolute top-4 right-4 z-modal space-y-1 max-w-sm">
+        <div className="absolute right-4 z-modal space-y-1 max-w-sm" style={{ top: 'calc(var(--header-inset, 0px) + 1rem)' }}>
           {errors.map((err) => (
             <div
               key={err.timestamp}
@@ -1165,7 +1301,7 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
 
       {/* 撤回提示：通道侧没撤掉这类"半成功"必须让人看见，不能假装全撤了 */}
       {revokeNotice && (
-        <div className="absolute top-4 right-4 z-modal max-w-sm">
+        <div className="absolute right-4 z-modal max-w-sm" style={{ top: 'calc(var(--header-inset, 0px) + 0.75rem)' }}>
           <div className="flex items-start gap-2 bg-amber-500/10 border border-amber-500/20 text-amber-500 rounded-card px-3 py-2 text-sm shadow-lg shadow-black/20">
             <AlertTriangle size={14} className="shrink-0 mt-0.5" />
             <span className="flex-1">{revokeNotice}</span>
@@ -1176,11 +1312,12 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
         </div>
       )}
 
-      {/* ↑ 跳至首个未读消息 */}
+      {/* ↑ 跳至首个未读消息：顶部有浮起的头部，这颗必须落在它下沿，不能用 top-3 */}
       {showJumpToUnread && firstUnreadId && (
         <button
           onClick={handleJumpToUnread}
           className="absolute top-3 right-4 z-drawer flex items-center gap-1.5 px-3 py-1.5 bg-primary-500/90 hover:bg-primary-500 text-white text-xs font-medium rounded-full shadow-lg shadow-primary-500/30 backdrop-blur-sm transition-all duration-200"
+          style={{ top: 'calc(var(--header-inset, 0px) + 0.5rem)' }}
         >
           <ArrowUp size={14} />
           {t('chat:jumpToFirstUnread')}
@@ -1192,11 +1329,26 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
 
       {/* 消息列表：外层不滚动，专门用来挂拖拽蒙版（放进滚动容器会随内容滚走）；
           containerRef 必须留在内层——虚拟列表靠它读 scrollTop */}
-      <div className="flex-1 min-h-0 relative" {...attachments.zoneProps('list')}>
+      <div
+        className="flex-1 min-h-0 relative"
+        // 输入区浮在消息上，它占掉的高度只有 composerH 一个来源，但要用两种载体送出去：
+        // ① --composer-inset（CSS 变量，给 .chat-scroll 的 padding-bottom 用——只有 CSS 能读变量）
+        // ② data-composer-inset（下一层滚动容器上的属性，给 MobileScrollbar 量轨道用——
+        //    它在滚动回调里读数，读 dataset 是纯 JS，读变量得 getComputedStyle，每帧强制一次样式重算）
+        // 两处都是同一个数字，改高度时不用管这里，ResizeObserver 会把两者一起刷新
+        style={{
+          '--composer-inset': `${composerH}px`,
+          // 头部下面压着的提示条（重连、沉浸入口…）：条数 × 每条高度，一起算进顶部留白
+          '--header-strip': notices.length ? `calc(${notices.length} * ${NOTICE_H})` : '0px',
+        } as React.CSSProperties}
+        {...attachments.zoneProps('list')}
+      >
         <DropMask {...attachments.dropState('list')} label={t('chat:dropToAdd')} />
         <div
           ref={containerRef}
-          className="absolute inset-0 overflow-y-auto px-2 py-3 md:px-4 md:py-4 bg-canvas"
+          className="absolute inset-0 overflow-y-auto px-2 md:px-4 bg-canvas chat-scroll"
+          // 上一条注释里的 ②：滚动条读这个属性算轨道底边
+          data-composer-inset={composerH}
         >
           {/* 顶部哨兵（加载更旧消息的触发器） */}
           <div ref={topSentinelRef} className="h-1" />
@@ -1228,9 +1380,6 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
             </div>
           )}
 
-          {/* 底部活动状态栏：合并 AI 思考/输入 + 人类打字 */}
-          <ActivityBar users={activityUsers} />
-
           {/* 底部加载指示器 */}
           {loadingState === 'newer' && (
             <div className="flex items-center justify-center py-3">
@@ -1241,47 +1390,60 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
           {/* 底部哨兵（加载更新消息的触发器） */}
           <div ref={bottomSentinelRef} className="h-1" />
         </div>
+
+        {/* ↓ 回到底部浮动按钮 —— 必须挂在消息区里：挂到面板根上，bottom-* 量的是
+            整块面板（含输入区），按钮就会落进输入框里 */}
+        {!isAtBottom && messages.length > 0 && (
+          <div className="absolute right-4 z-drawer" style={{ bottom: composerH + 16 }}>
+            <button onClick={() => scrollToBottom(true)} className="float-btn" title={t('chat:scrollToBottom')}>
+              <ArrowDown size={16} />
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* ↓ 回到底部浮动按钮 */}
-      {!isAtBottom && messages.length > 0 && (
-        <div className="absolute bottom-20 right-6 z-drawer">
-          <button
-            onClick={() => scrollToBottom(true)}
-            className="flex items-center justify-center w-9 h-9 bg-elevated border border-border rounded-full shadow-lg shadow-black/20 text-textSecondary hover:text-textPrimary hover:bg-surface transition-all duration-200"
-            title={t('chat:scrollToBottom')}
-          >
-            <ArrowDown size={16} />
-          </button>
-        </div>
-      )}
-
-      {/* 输入框拖拽调整手柄 */}
+      {/* 输入区浮在消息之上：不占布局空间，消息从它底下滚过去（和手机端底部菜单同一个做法）。
+          高度由 ResizeObserver 量出来，垫进消息列表的 paddingBottom */}
       <div
-        className="relative h-1.5 cursor-row-resize hover:bg-primary-400/30 active:bg-primary-400/50 transition-colors shrink-0"
-        onMouseDown={(e) => {
-          inputResizeRef.current = true
-          const startY = e.clientY
-          // 从当前视觉高度起拖：inputHeight 存的就是总高的下限，自动增长那部分已经在里面
-          const startTotalH = Math.max(CHAT_INPUT_MIN_H, textareaRef.current?.offsetHeight || 0)
-          const onMove = (ev: MouseEvent) => {
-            if (!inputResizeRef.current) return
-            const deltaY = startY - ev.clientY  // 向上拖=正值=扩大
-            setInputHeight(Math.max(CHAT_INPUT_MIN_H, startTotalH + deltaY))
-          }
-          const onUp = () => {
-            inputResizeRef.current = false
-            window.removeEventListener('mousemove', onMove)
-            window.removeEventListener('mouseup', onUp)
-          }
-          window.addEventListener('mousemove', onMove)
-          window.addEventListener('mouseup', onUp)
-        }}
-      />
-
-      {/* 输入框（文件可直接拖进来放下，与点回形针等价） */}
-      <div className="p-3 bg-surface border-t border-border relative" {...attachments.zoneProps('input')} {...attachments.pasteProps}>
+        ref={composerRef}
+        className="absolute inset-x-0 bottom-0 z-10 px-3 pt-1 pb-3"
+        // 与手机端悬浮菜单同一条安全区规则：刘海屏底部留白算进去，胶囊才不会被手势条压住
+        style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom, 0px))' }}
+        {...attachments.zoneProps('input')}
+        {...attachments.pasteProps}
+      >
         <DropMask {...attachments.dropState('input')} label={t('chat:dropToAdd')} />
+        {/* 高度拖拽手柄：跟着输入区一起浮起来（原来在流里，飘到消息上方就够不着了）。
+            只在桌面出现——手机上拖它和滚动消息区抢手势；平时是一条 8px 的透明带，
+            悬停才显出一道细把手（浮起来之后没了 hover 反馈，看着就不像能拖） */}
+        <div
+          className="group/handle hidden md:flex absolute inset-x-0 -top-1 h-2 items-center justify-center cursor-row-resize"
+          title={t('chat:dragToResize')}
+          onMouseDown={(e) => {
+            inputResizeRef.current = true
+            const startY = e.clientY
+            // 从当前视觉高度起拖：inputHeight 存的就是总高的下限，自动增长那部分已经在里面
+            const startTotalH = Math.max(CHAT_INPUT_MIN_H, textareaRef.current?.offsetHeight || 0)
+            const onMove = (ev: MouseEvent) => {
+              if (!inputResizeRef.current) return
+              const deltaY = startY - ev.clientY  // 向上拖=正值=扩大
+              setInputHeight(Math.max(CHAT_INPUT_MIN_H, startTotalH + deltaY))
+            }
+            const onUp = () => {
+              inputResizeRef.current = false
+              window.removeEventListener('mousemove', onMove)
+              window.removeEventListener('mouseup', onUp)
+            }
+            window.addEventListener('mousemove', onMove)
+            window.addEventListener('mouseup', onUp)
+          }}
+        >
+          <span className="h-[3px] w-10 rounded-full bg-textMuted/0 transition-colors group-hover/handle:bg-textMuted/45" />
+        </div>
+        {/* 活动状态栏：贴输入框上沿，跟输入区一起浮起来（它的高度会被 composerH 量进去，
+            消息区留白自动让开，不会压住最后一条） */}
+        <ActivityBar users={activityUsers} />
+
         {/* 附件预览列表（与群视界世界对话共用同一组件） */}
         <AttachmentChips items={attachments.items} onRemove={attachments.remove} errorText={t('chat:uploadFailed')} />
 
@@ -1306,13 +1468,17 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
         )}
 
         {replyTo && (
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-t-xl border border-border bg-surface/50 text-xs">
-            <div className="w-0.5 h-8 bg-primary-400 rounded-full shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="text-primary-400 font-medium truncate">回复 @{replyTo.sender_name}</div>
-              <div className="text-textMuted truncate"><EmojiText content={replyTo.content} /></div>
-            </div>
-            <button onClick={() => setReplyTo(null)} className="shrink-0 p-1 rounded-control hover:bg-elevated text-textMuted hover:text-textPrimary transition-colors">
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-t-xl border border-border bg-surface/50">
+            {/* 与气泡里的引用同一份实现：竖线、名字在前、缩略图跟名字后面 */}
+            <QuotedMessage
+              sender={replyTo.sender_name}
+              content={replyTo.content}
+              image={firstImageAttachment(messageById.get(replyTo.id)?.attachments)}
+              prefix="回复 "
+              lines={1}
+              thumbClass="w-7 h-7"
+            />
+            <button onClick={() => setReplyTo(null)} className="icon-btn icon-btn-sm shrink-0">
               <X size={14} />
             </button>
           </div>
@@ -1332,6 +1498,10 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
       </div>
 
       {/* 资料卡 */}
+      {/* 手机端滚动条：轨道止于浮起的输入区上沿（不传 bottomInset 会一路画到输入框底下） */}
+      {/* 全端同一根：手机上它为了绕开悬浮输入区，桌面上同样没有原生条（.chat-scroll 已收起） */}
+      <MobileScrollbar containerRef={containerRef} always />
+
       {profileCard && (
         <ProfileCard
           entityType={profileCard.type as 'human' | 'ai'}

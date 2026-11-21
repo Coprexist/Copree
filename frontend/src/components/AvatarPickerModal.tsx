@@ -54,7 +54,8 @@ export default function AvatarPickerModal({
     setLoadingFiles(true)
     setFileError('')
     try {
-      const data = await api.get<FileItem[]>('/fs/list?path=.')
+      // 选头像只从「我的文件」里挑：那是用户自己的空间（users/{uid}/files）
+      const data = await api.get<FileItem[]>('/fs/list?scope=mine')
       const list = Array.isArray(data) ? data : []
       // 只显示图片
       setFiles(list.filter((f) => f.mime_type?.startsWith('image/')))
@@ -176,7 +177,7 @@ export default function AvatarPickerModal({
         onClick={onClose}
       >
         <div
-          className="relative bg-surface border border-border rounded-card shadow-2xl w-80 max-w-[90vw] p-5"
+          className="relative card shadow-2xl w-80 max-w-[90vw] p-5"
           onClick={(e) => e.stopPropagation()}
         >
           {/* 标题栏 */}

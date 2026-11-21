@@ -40,6 +40,8 @@ export const usageZh: TranslationDict = {
   'matrixTitle': '每个 AI 每天花多少',
   'matrixHint': '行是 AI，列是最近 N 天（最多 14 列）。点数字切到下面的曲线看这个 AI 的明细。',
   'matrixRowTotal': '合计',
+  'matrixTabShort': '每个 AI 每天',
+  'byUserTab': '按用户',
 }
 
 export const usageEn: TranslationDict = {
@@ -73,6 +75,8 @@ export const usageEn: TranslationDict = {
   'matrixTitle': 'Daily spend per AI',
   'matrixHint': 'Rows are AIs, columns are the last N days (up to 14). Click a number to open that AI below.',
   'matrixRowTotal': 'Total',
+  'matrixTabShort': 'Per AI per day',
+  'byUserTab': 'By user',
 }
 
 export const usageJa: TranslationDict = {
@@ -106,4 +110,6 @@ export const usageJa: TranslationDict = {
   'matrixTitle': 'AI ごとの1日あたりの消費',
   'matrixHint': '行が AI、列が直近 N 日（最大14列）。数字をクリックすると下のグラフで詳細を表示します。',
   'matrixRowTotal': '合計',
+  'matrixTabShort': 'AI ごと・日別',
+  'byUserTab': 'ユーザー別',
 }

@@ -100,6 +100,29 @@ function walk(dir) {
   }
 }
 
+/** 从 `t(` 之后读到配对的 `)`（跳过字符串里的括号），返回参数表达式原文 */
+function callArgument(text, start) {
+  let depth = 1
+  let quote = ''
+  let i = start
+  while (i < text.length && depth > 0) {
+    const ch = text[i]
+    if (quote) {
+      if (ch === '\\') { i += 2; continue }
+      if (ch === quote) quote = ''
+      else if (quote === '`' && ch === '$' && text[i + 1] === '{') depth++
+    } else if (ch === "'" || ch === '"' || ch === '`') {
+      quote = ch
+    } else if (ch === '(') {
+      depth++
+    } else if (ch === ')') {
+      depth--
+    }
+    i++
+  }
+  return text.slice(start, Math.max(start, i - 1))
+}
+
 function scanFile(file) {
   const text = readFileSync(file, 'utf8')
   // 匹配 t( / tr( 且前面不是标识符字符或点（排除 api.post( / .insert( 之类）
@@ -123,6 +146,18 @@ function scanFile(file) {
       const raw = text.slice(start + 1, end)
       usages.push({ file, line, ...splitNs(raw), raw, kind: raw.includes('${') ? 'template' : 'static' })
       re.lastIndex = end
+    } else {
+      // 非字面量起始：`t(ok ? 'a.b' : 'a.c')`、`t(pick(x))` 这类。
+      // 原先这里整段跳过，等于给三元开了个洞（两个分支都不被检查），只好在调用点
+      // 退化成「显式映射表」骗过闸门。现在把参数表达式里所有像 key 的字符串都收进来。
+      const arg = callArgument(text, start)
+      for (const lit of arg.match(/(?:'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`)/g) || []) {
+        const raw = lit.slice(1, -1)
+        if (!raw.includes('.') && !raw.includes(':')) continue
+        if (!/^[A-Za-z_][\w.]*(?::[\w.]+)?$/.test(raw)) continue
+        usages.push({ file, line, ...splitNs(raw), raw, kind: raw.includes('${') ? 'template' : 'static' })
+      }
+      re.lastIndex = start + arg.length
     }
   }
 

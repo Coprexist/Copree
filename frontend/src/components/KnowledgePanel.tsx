@@ -171,7 +171,7 @@ export default function KnowledgePanel({ agentId }: { agentId: number }) {
   }
 
   return (
-    <div className="bg-surface rounded-card border border-border p-4">
+ <div className="card p-4">
       <div className="flex items-center gap-2 mb-1">
         <BookOpen size={16} className="text-primary-400" />
         <h3 className="font-medium text-textPrimary text-sm">
@@ -283,10 +283,10 @@ export default function KnowledgePanel({ agentId }: { agentId: number }) {
           title={draft.id ? t('agentDetail:knowledgeEditTitle') : t('agentDetail:knowledgeAddTitle')}
           footer={
             <>
-              <button className="btn btn-sm btn-outline" onClick={() => setDraft(null)} disabled={saving}>
+              <button className="btn btn-md btn-outline" onClick={() => setDraft(null)} disabled={saving}>
                 {t('agentDetail:knowledgeCancel')}
               </button>
-              <button className="btn btn-sm btn-primary" onClick={save} disabled={saving}>
+              <button className="btn btn-md btn-primary" onClick={save} disabled={saving}>
                 {saving ? t('agentDetail:knowledgeSaving') : t('agentDetail:knowledgeSave')}
               </button>
             </>

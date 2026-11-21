@@ -66,6 +66,32 @@ export const adminConfigZh: TranslationDict = {
   'uploadMaxSizeHint': '用户上传单个文件的上限，不含头像。落 runtime 配置组，重启不丢。',
   'avatarMaxSize': '头像上传大小上限（MB）',
   'avatarMaxSizeHint': '用户 / AI 上传头像的上限。同样落 runtime 配置组。',
+
+  // ── 记忆 / 经历的注入额度 ──
+  'memoryInjectMax': '记忆注入上限（条）',
+  'memoryInjectMaxHint': '每轮最多投几条记忆。默认 5。',
+  'experienceInjectMax': '经历注入上限（条）',
+  'experienceInjectMaxHint': '每轮最多投几条「我在别处干过什么」。与记忆额度分开计算，默认 5。',
+  'injectMaxTotal': '注入合计上限（条）',
+  'injectMaxTotalHint': '一轮里记忆 + 经历最多合起来几条，默认 7：超出的先砍经历，记忆优先。',
+  'handoffTailExchanges': '交接原文轮数',
+  'handoffTailExchangesHint': '切换会话时抄上一段对话的最后几轮原文，默认 2 轮。那一场干过什么由经历行补。',
+  'handoffTailChars': '交接原文字数上限',
+  'handoffTailCharsHint': '交接原文最多多少字，超了从最旧的丢，默认 400。',
+
+  // ── 文件日常额度（人与 AI 各一套，0 = 不限）──
+  'fileDailyMbHuman': '人：每天最多写入（MB）',
+  'fileDailyMbHumanHint': '只算真的写了字节的上传/发送；去重命中、收进我的文件（硬链接）不算。按显示时区的自然日重置，0 = 不限。',
+  'fileDailyMbAi': 'AI：每天最多写入（MB）',
+  'fileDailyMbAiHint': '每个 AI 各算各的，不占主人的额度。AI 失控比人更吓人，这个数别设得跟人一样宽。0 = 不限。',
+  'fileDailyFilesHuman': '人：每天最多新增文件数',
+  'fileDailyFilesHumanHint': '只算新建物理文件；同名覆盖写不算（inode 没变）。0 = 不限。',
+  'fileDailyFilesAi': 'AI：每天最多新增文件数',
+  'fileDailyFilesAiHint': '每个 AI 各算各的。0 = 不限。',
+  'fileOpsHuman': '人：每分钟操作次数',
+  'fileOpsHumanHint': '上传 + 发送带附件的消息 + 转发的总和。超了返回 429，说清几秒后再试。0 = 不限。',
+  'fileOpsAi': 'AI：每分钟操作次数',
+  'fileOpsAiHint': '每个 AI 各算各的。0 = 不限。',
 }
 
 export const adminConfigEn: TranslationDict = {
@@ -121,6 +147,31 @@ export const adminConfigEn: TranslationDict = {
   'uploadMaxSizeHint': 'Per-file upload limit for users, avatars excluded. Stored in the runtime config group, survives restarts.',
   'avatarMaxSize': 'Max avatar upload size (MB)',
   'avatarMaxSizeHint': 'Avatar upload limit for users and AIs. Also stored in the runtime config group.',
+
+  'memoryInjectMax': 'Memory injection limit',
+  'memoryInjectMaxHint': 'How many memories may be injected per turn. Default 5.',
+  'experienceInjectMax': 'Experience injection limit',
+  'experienceInjectMaxHint': 'How many "what I did elsewhere" rows may be injected per turn. Counted separately from memory. Default 5.',
+  'injectMaxTotal': 'Combined injection limit',
+  'injectMaxTotalHint': 'Memory + experience rows per turn combined. Default 7; experiences are trimmed first.',
+  'handoffTailExchanges': 'Handoff tail exchanges',
+  'handoffTailExchangesHint': 'How many exchanges of the previous conversation are copied on a context switch. Default 2; experiences cover what happened there.',
+  'handoffTailChars': 'Handoff tail characters',
+  'handoffTailCharsHint': 'Character budget of the handoff tail, oldest dropped first. Default 400.',
+
+  // ── Daily file budgets (one set for humans, one for AIs; 0 = unlimited) ──
+  'fileDailyMbHuman': 'Human: daily write limit (MB)',
+  'fileDailyMbHumanHint': 'Counts uploads and sends that really write bytes; dedup hits and "keep to my files" hardlinks do not. Resets on the local calendar day. 0 = unlimited.',
+  'fileDailyMbAi': 'AI: daily write limit (MB)',
+  'fileDailyMbAiHint': 'Each AI has its own budget and does not spend its owner\'s. A runaway AI is worse than a runaway human. 0 = unlimited.',
+  'fileDailyFilesHuman': 'Human: new files per day',
+  'fileDailyFilesHumanHint': 'Counts newly created physical files only; overwriting the same path does not count (same inode). 0 = unlimited.',
+  'fileDailyFilesAi': 'AI: new files per day',
+  'fileDailyFilesAiHint': 'Each AI has its own budget. 0 = unlimited.',
+  'fileOpsHuman': 'Human: file operations per minute',
+  'fileOpsHumanHint': 'Uploads + messages with attachments + forwards. Over the limit returns 429 with how long to wait. 0 = unlimited.',
+  'fileOpsAi': 'AI: file operations per minute',
+  'fileOpsAiHint': 'Each AI has its own budget. 0 = unlimited.',
 }
 
 export const adminConfigJa: TranslationDict = {
@@ -176,4 +227,29 @@ export const adminConfigJa: TranslationDict = {
   'uploadMaxSizeHint': 'ユーザーが 1 ファイルをアップロードできる上限（アバターを除く）。runtime 設定グループに保存され、再起動しても残ります。',
   'avatarMaxSize': 'アバターの最大サイズ（MB）',
   'avatarMaxSizeHint': 'ユーザー / AI のアバター上限。同じく runtime 設定グループに保存されます。',
+
+  'memoryInjectMax': '記憶の注入上限（件）',
+  'memoryInjectMaxHint': '1 ターンに注入する記憶の最大件数。既定 5。',
+  'experienceInjectMax': '経験の注入上限（件）',
+  'experienceInjectMaxHint': '「別の場所で何をしたか」を 1 ターンに注入する最大件数。記憶とは別枠。既定 5。',
+  'injectMaxTotal': '注入の合計上限（件）',
+  'injectMaxTotalHint': '記憶 + 経験を合わせた 1 ターンの上限。既定 7。超過分は経験から削られます。',
+  'handoffTailExchanges': '引き継ぎ原文の往復数',
+  'handoffTailExchangesHint': '会話を切り替えるとき、直前の会話の最後の何往復を写すか。既定 2。',
+  'handoffTailChars': '引き継ぎ原文の文字数上限',
+  'handoffTailCharsHint': '引き継ぎ原文の最大文字数。超えた分は古い側から落ちます。既定 400。',
+
+  // ── ファイルの日次上限（人と AI で別々、0 = 無制限）──
+  'fileDailyMbHuman': '人：1 日の最大書き込み（MB）',
+  'fileDailyMbHumanHint': '実際にバイトを書いたアップロード／送信だけを数えます。重複ヒットと「自分のファイルへ収める」（ハードリンク）は数えません。表示タイムゾーンの暦日でリセット。0 = 無制限。',
+  'fileDailyMbAi': 'AI：1 日の最大書き込み（MB）',
+  'fileDailyMbAiHint': 'AI ごとに独立した枠で、飼い主の枠は消費しません。暴走した AI の方が危険なので、人と同じ値にしない方が安全です。0 = 無制限。',
+  'fileDailyFilesHuman': '人：1 日の新規ファイル数',
+  'fileDailyFilesHumanHint': '新しく作られた物理ファイルだけを数えます。同じパスへの上書きは数えません（inode が変わらないため）。0 = 無制限。',
+  'fileDailyFilesAi': 'AI：1 日の新規ファイル数',
+  'fileDailyFilesAiHint': 'AI ごとに独立した枠。0 = 無制限。',
+  'fileOpsHuman': '人：1 分あたりのファイル操作回数',
+  'fileOpsHumanHint': 'アップロード＋添付付きメッセージの送信＋転送の合計。超過すると 429 と待ち時間を返します。0 = 無制限。',
+  'fileOpsAi': 'AI：1 分あたりのファイル操作回数',
+  'fileOpsAiHint': 'AI ごとに独立した枠。0 = 無制限。',
 }

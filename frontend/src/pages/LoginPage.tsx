@@ -316,6 +316,7 @@ export default function LoginPage() {
                     <label className="block text-xs font-medium text-textSecondary mb-1.5 ml-0.5">
                       {t('auth:password')}
                     </label>
+                    {/* ui-standard-ignore: 账号密码，浏览器密码管理器本来就该管 */}
                     <input
                       type="password"
                       value={password}
@@ -351,6 +352,7 @@ export default function LoginPage() {
                         <label className="block text-xs font-medium text-textSecondary mb-1.5 ml-0.5">
                           {t('auth:password')}
                         </label>
+                        {/* ui-standard-ignore: 账号密码，浏览器密码管理器本来就该管 */}
                         <input
                           type="password"
                           value={password}

@@ -30,7 +30,7 @@ export default function Sidebar({ mobile, onClose, translucent }: { mobile?: boo
       } ${translucent ? 'bg-surface/70' : 'bg-surface'} border-r border-border flex flex-col transition-all duration-200 shrink-0`}
     >
       {/* 头部 */}
-      <div className="h-14 px-4 border-b border-border flex items-center justify-between shrink-0">
+      <div className="top-bar h-14 px-4 flex items-center justify-between shrink-0">
         {!collapsed && (
           <div className="flex items-center gap-2">
             <div className="w-6 h-6 rounded-control flex items-center justify-center shadow shadow-primary-500/30 overflow-hidden">
@@ -169,7 +169,7 @@ export default function Sidebar({ mobile, onClose, translucent }: { mobile?: boo
       )}
 
       {/* 小工具（三根杠菜单） */}
-      <div className="p-2 border-t border-border shrink-0 relative">
+      <div className="p-2 shrink-0 relative">
         <button
           onClick={() => setToolsOpen(!toolsOpen)}
           className={`flex items-center rounded-card text-textSecondary hover:text-textPrimary hover:bg-elevated transition-all duration-200 text-sm ${

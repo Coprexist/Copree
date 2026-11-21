@@ -7,10 +7,13 @@ import { Loader2 } from 'lucide-react'
  * 样式来自 CSS 语义类（.btn .btn-md .btn-primary 等，见 index.css）——
  * 与手写按钮共享同一规范源，一处定义全站统一。
  *
- * 变体：primary / accent / secondary / outline / ghost / danger
+ * 变体：primary / accent / secondary / outline / ghost / danger / success / link
  * 尺寸：xs(24px) / sm(32px) / md(40px) / lg(48px) —— 固定高度，任何内容严格等高
+ *       （link 是例外：文字按钮没有底色与固定高度）
  */
-type Variant = 'primary' | 'accent' | 'secondary' | 'outline' | 'ghost' | 'danger'
+type Variant =
+  | 'primary' | 'accent' | 'secondary' | 'outline' | 'ghost' | 'danger' | 'success' | 'link'
+  | 'tinted' | 'tinted-danger' | 'tinted-success'
 type Size = 'xs' | 'sm' | 'md' | 'lg'
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -28,6 +31,11 @@ const VARIANT_CLASS: Record<Variant, string> = {
   outline: 'btn-outline',
   ghost: 'btn-ghost',
   danger: 'btn-danger',
+  success: 'btn-success',
+  link: 'btn-link',
+  tinted: 'btn-tinted',
+  'tinted-danger': 'btn-tinted-danger',
+  'tinted-success': 'btn-tinted-success',
 }
 
 const SIZE_CLASS: Record<Size, string> = {

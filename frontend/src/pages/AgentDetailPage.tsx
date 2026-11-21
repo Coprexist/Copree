@@ -19,6 +19,8 @@ import AgentSettingsModal from '../components/AgentSettingsModal'
 import { ContentColumn, Dialog, EmptyState, UnderlineTabs } from '../components/ui'
 import FilePreviewModal from '../components/FilePreviewModal'
 import ChannelCard from '../components/channels/ChannelCard'
+import EmojiPacksPanel from '../components/EmojiPacksPanel'
+import AgentVoicePanel from '../components/AgentVoicePanel'
 import LogBrowser from '../components/shared/LogBrowser'
 import KnowledgePanel from '../components/KnowledgePanel'
 
@@ -262,7 +264,7 @@ function StructuredMemoryView({ agentId }: { agentId: number }) {
   )
 }
 
-const TABS = ['info', 'channels', 'memories', 'knowledge', 'storage', 'workspace', 'logs', 'collaborators'] as const
+const TABS = ['info', 'channels', 'emoji', 'voice', 'memories', 'knowledge', 'storage', 'workspace', 'logs', 'collaborators'] as const
 type Tab = (typeof TABS)[number]
 
 export default function AgentDetailPage() {
@@ -293,6 +295,8 @@ export default function AgentDetailPage() {
   const tabLabels: Record<string, string> = {
     info: t('agentDetail:tabInfo'),
     channels: t('agentDetail:tabChannels'),
+    emoji: t('agentDetail:tabEmoji'),
+    voice: t('agentDetail:tabVoice'),
     memories: t('agentDetail:tabMemories'),
     knowledge: t('agentDetail:tabKnowledge'),
     storage: t('agentDetail:tabStorage'),
@@ -365,6 +369,7 @@ export default function AgentDetailPage() {
   const [isOwner, setIsOwner] = useState(false)
   /** 通道配置（机器人凭据）是否允许合作者查看与编辑：默认关，只有主人能改 */
   const [collabChannelAccess, setCollabChannelAccess] = useState(false)
+  const [collabEmojiAccess, setCollabEmojiAccess] = useState(false)
   const [collabSearch, setCollabSearch] = useState('')
   const [collabSearchResults, setCollabSearchResults] = useState<Array<{id:number;username:string;avatar_url:string|null}>>([])
   const [addingCollab, setAddingCollab] = useState(false)
@@ -385,6 +390,9 @@ export default function AgentDetailPage() {
       // 通道配置（机器人凭据）是否对合作者开放：主人可在下面单独打开
       const access = await api.get<{ allow_collaborators: boolean }>(`/agents/${agentId}/channel-access`)
       setCollabChannelAccess(!!access.allow_collaborators)
+      // 表情包开关（这个 AI 能用哪些包）是另一件事，单独一个授权
+      const emoji = await api.get<{ allow_collaborators: boolean }>(`/agents/${agentId}/emoji-access`)
+      setCollabEmojiAccess(!!emoji.allow_collaborators)
     } catch { /* ignore */ }
   }, [agentId])
 
@@ -394,6 +402,15 @@ export default function AgentDetailPage() {
       await api.put(`/agents/${agentId}/channel-access`, { allow_collaborators: value })
     } catch {
       setCollabChannelAccess(!value)   // 保存失败就退回原值，不让界面说谎
+    }
+  }
+
+  const toggleEmojiAccess = async (value: boolean) => {
+    setCollabEmojiAccess(value)
+    try {
+      await api.put(`/agents/${agentId}/emoji-access`, { allow_collaborators: value })
+    } catch {
+      setCollabEmojiAccess(!value)
     }
   }
 
@@ -739,7 +756,7 @@ export default function AgentDetailPage() {
             </button>
 
             {/* Quick Edit Prompt */}
-            <div className="bg-surface rounded-card border border-border p-4">
+ <div className="card p-4">
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
                   <Edit3 size={16} className="text-primary-400" />
@@ -778,7 +795,7 @@ export default function AgentDetailPage() {
             </div>
 
             {/* 个人资料 */}
-            <div className="bg-surface rounded-card border border-border p-4">
+ <div className="card p-4">
               <div className="flex items-center gap-2 mb-3">
                 <User size={16} className="text-primary-400" />
                 <h3 className="font-medium text-textPrimary text-sm">{t('agentDetail:profileSection')}</h3>
@@ -835,7 +852,7 @@ export default function AgentDetailPage() {
             </div>
 
             {/* Config Info */}
-            <div className="bg-surface rounded-card border border-border p-4">
+ <div className="card p-4">
               <h3 className="font-medium text-textPrimary text-sm mb-3">{t('agentDetail:modelConfig')}</h3>
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <div>
@@ -878,7 +895,7 @@ export default function AgentDetailPage() {
                       const v = e.target.value
                       handleToggleDelayReply(v === 'inherit' ? null : v === 'on')
                     }}
-                    className="text-xs px-2 py-0.5 rounded border border-border bg-canvas text-textPrimary focus:outline-none focus:ring-1 focus:ring-primary-500/50"
+                    className="field field-sm field-inline"
                   >
                     <option value="inherit">{t('agentDetail:inheritGlobal')}</option>
                     <option value="on">{t('agentDetail:enabled')}</option>
@@ -951,7 +968,7 @@ export default function AgentDetailPage() {
                     <select
                       value={agent.memory_load_mode || 'index_only'}
                       onChange={(e) => handleUpdateAgentField('memory_load_mode', e.target.value)}
-                      className="text-xs px-2 py-0.5 rounded border border-border bg-canvas text-textPrimary focus:outline-none focus:ring-1 focus:ring-primary-500/50 ml-1"
+                      className="field field-sm ml-1 field-inline"
                     >
                       <option value="index_only">{t('agentDetail:memoryModeIndexOnly')}</option>
                       <option value="index_plus_recent">{t('agentDetail:memoryModeIndexRecent')}</option>
@@ -977,7 +994,7 @@ export default function AgentDetailPage() {
                     <select
                       value={agent.memory_shared_scope || 'private_only'}
                       onChange={(e) => handleUpdateAgentField('memory_shared_scope', e.target.value)}
-                      className="text-xs px-2 py-0.5 rounded border border-border bg-canvas text-textPrimary focus:outline-none focus:ring-1 focus:ring-primary-500/50 ml-1"
+                      className="field field-sm ml-1 field-inline"
                     >
                       <option value="private_only">{t('agentDetail:sharedScopePrivate')}</option>
                       <option value="private_plus_shared_by_user">{t('agentDetail:sharedScopeByUser')}</option>
@@ -1003,7 +1020,7 @@ export default function AgentDetailPage() {
             </div>
 
             {/* API Config */}
-            <div className="bg-surface rounded-card border border-border p-4">
+ <div className="card p-4">
               <div className="flex items-center gap-2 mb-3">
                 <Key size={16} className="text-primary-400" />
                 <h3 className="font-medium text-textPrimary text-sm">{t('agentDetail:apiConfig')}</h3>
@@ -1025,7 +1042,7 @@ export default function AgentDetailPage() {
             </div>
 
             {/* Actions */}
-            <div className="bg-surface rounded-card border border-border p-4">
+ <div className="card p-4">
               <h3 className="font-medium text-textPrimary text-sm mb-3">{t('agentDetail:actions')}</h3>
               <div className="flex flex-wrap gap-2">
                 {/* Export */}
@@ -1085,6 +1102,16 @@ export default function AgentDetailPage() {
           <ChannelCard agentId={agent.id} />
         )}
 
+        {/* 表情包：平台资源勾给这只 AI 用 + 创建者自己上传的包 */}
+        {activeTab === 'emoji' && (
+          <EmojiPacksPanel agentId={agent.id} />
+        )}
+
+        {/* 语音：配一套 TTS API，这只 AI 才有"开口说话"的能力 */}
+        {activeTab === 'voice' && (
+          <AgentVoicePanel agentId={agent.id} />
+        )}
+
         {activeTab === 'knowledge' && (
           <div className="space-y-4">
             <KnowledgePanel agentId={agentId} />
@@ -1092,7 +1119,7 @@ export default function AgentDetailPage() {
         )}
 
         {activeTab === 'storage' && (
-          <div className="bg-surface rounded-card border border-border p-4">
+ <div className="card p-4">
             <div className="flex items-center gap-2 mb-4">
               <HardDrive size={16} className="text-primary-400" />
               <h3 className="font-medium text-textPrimary text-sm">{t('agentDetail:storageTitle')}</h3>
@@ -1177,7 +1204,7 @@ export default function AgentDetailPage() {
         )}
 
         {activeTab === 'logs' && (
-          <div className="bg-surface rounded-card border border-border p-4">
+ <div className="card p-4">
             <div className="flex items-center gap-2 mb-3">
               <ScrollText size={16} className="text-primary-400" />
               <h3 className="font-medium text-textPrimary text-sm">{t('agentDetail:logTitle')}</h3>
@@ -1197,7 +1224,7 @@ export default function AgentDetailPage() {
 
             {/* Owner: 添加合作者 */}
             {isOwner && (
-              <div className="bg-surface rounded-card border border-border p-4">
+ <div className="card p-4">
                 <h3 className="font-medium text-textPrimary text-sm mb-3">{t('agentDetail:addCollaborator')}</h3>
                 <div className="flex gap-2 mb-3">
                   <input
@@ -1220,6 +1247,21 @@ export default function AgentDetailPage() {
                     <span>
                       {t('agentDetail:channelAccessTitle')}
                       <span className="block text-3xs text-textMuted mt-0.5">{t('agentDetail:channelAccessHint')}</span>
+                    </span>
+                  </label>
+                )}
+                {/* 表情包开关权限：与通道分开授权——包是资产，开关是它拿什么发图 */}
+                {isOwner && (
+                  <label className="flex items-start gap-2 mb-3 text-xs text-textSecondary cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={collabEmojiAccess}
+                      onChange={e => toggleEmojiAccess(e.target.checked)}
+                      className="rounded mt-0.5"
+                    />
+                    <span>
+                      {t('agentDetail:emojiAccessTitle')}
+                      <span className="block text-3xs text-textMuted mt-0.5">{t('agentDetail:emojiAccessHint')}</span>
                     </span>
                   </label>
                 )}
@@ -1273,7 +1315,7 @@ export default function AgentDetailPage() {
 
             {/* 合作者列表 */}
             {collaborators.length > 0 && (
-              <div className="bg-surface rounded-card border border-border p-4">
+ <div className="card p-4">
                 <h3 className="font-medium text-textPrimary text-sm mb-3">{t('agentDetail:collaboratorList')} ({collaborators.length})</h3>
                 <div className="space-y-2">
                   {collaborators.map(c => (
@@ -1334,7 +1376,7 @@ export default function AgentDetailPage() {
         )}
 
         {activeTab === 'memories' && (
-          <div className="bg-surface rounded-card border border-border p-4">
+ <div className="card p-4">
             <div className="flex items-center gap-2 mb-3">
               <Brain size={16} className="text-primary-400" />
               <h3 className="font-medium text-textPrimary text-sm">{t('agentDetail:memoryTitlePrefix')}{memTotal}{t('agentDetail:memoryTitleSuffix')}</h3>
@@ -1391,7 +1433,7 @@ export default function AgentDetailPage() {
         )}
 
         {activeTab === 'workspace' && (
-          <div className="bg-surface rounded-card border border-border p-4">
+ <div className="card p-4">
             <div className="flex items-center gap-2 mb-3">
               <Edit3 size={16} className="text-primary-400" />
               <h3 className="font-medium text-textPrimary text-sm">{t('agentDetail:workspaceTitle')}</h3>

@@ -179,7 +179,7 @@ export default function UsagePage() {
         ].map(item => {
           const Icon = item.icon;
           return (
-          <div key={item.key} className="bg-surface rounded-card border border-border p-4 text-center">
+ <div key={item.key} className="card p-4 text-center">
             <div className="mb-1 flex justify-center"><Icon size={20} className="text-textSecondary" /></div>
             <div className="text-lg font-semibold text-textPrimary">{item.value}</div>
             <div className="text-3xs text-textMuted">{t(item.key)}</div>
@@ -208,7 +208,7 @@ export default function UsagePage() {
               <tbody>
                 {matrix.agents.map(a => (
                   <tr key={a.agent_id} className="border-t border-border/60">
-                    <td className="py-2 pr-3 text-textPrimary max-w-[160px] truncate sticky left-0 bg-surface" title={a.agent_name}>
+                    <td className="py-2 pr-3 text-textPrimary max-w-[180px] whitespace-normal break-words sticky left-0 bg-surface">
                       <button
                         className={`text-left hover:text-primary-500 transition-colors ${selectedAgent === a.agent_id ? 'text-primary-500 font-medium' : ''}`}
                         onClick={() => setSelectedAgent(a.agent_id)}
@@ -258,7 +258,7 @@ export default function UsagePage() {
               <select
                 value={selectedAgent || ''}
                 onChange={e => setSelectedAgent(e.target.value ? parseInt(e.target.value) : null)}
-                className="px-3 py-1.5 rounded-card border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50 max-w-[140px] truncate"
+                className="field max-w-[140px] truncate field-inline"
               >
                 <option value="">{t('usage:allAi')}</option>
                 {overview.map(a => (

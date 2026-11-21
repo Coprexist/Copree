@@ -92,7 +92,7 @@ export default function OpsOverviewTab() {
         <select
           value={days}
           onChange={e => setDays(Number(e.target.value))}
-          className="text-sm border border-border rounded-control px-2.5 py-1.5 bg-surface text-textPrimary"
+          className="field field-inline"
         >
           {RANGES.map(d => <option key={d} value={d}>{t(`admin:opsRange${d}`)}</option>)}
         </select>

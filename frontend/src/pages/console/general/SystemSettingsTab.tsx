@@ -1,12 +1,15 @@
 // 平台设置：站点 / 注册 / 语言等分组配置
+//
+// 这里只写语义：卡片用 Card（标题 / 说明 / 右上动作），控件用 Input / Select / Toggle / Button。
+// 手写 div.card + 一长串 Tailwind 的写法已经收掉——视觉来源是 .card / .field / .btn 三个语义类。
 
 import { useState, useEffect, useRef } from 'react'
 import { api } from '../../../api/client'
 import Toggle from '../../../components/Toggle'
 import { useT } from '../../../i18n/I18nContext'
 import { LANGUAGES } from '../../../i18n/languages'
-import ConfigGroupCard from '../../../components/ConfigGroupCard'
 import UpdateCard from '../../../components/UpdateCard'
+import { Button, Card, Input, Select } from '../../../components/ui'
 import { NOTICE_TEXT_CLASS, useNotice } from '../../../hooks/useNotice'
 
 export default function SystemSettingsTab() {
@@ -26,6 +29,9 @@ export default function SystemSettingsTab() {
   const [messageRetention, setMessageRetention] = useState(0)
   const [dailyBackupEnabled, setDailyBackupEnabled] = useState(false)
   const [dailyBackupKeep, setDailyBackupKeep] = useState(7)
+  // 容量策略：0 = 不设（走默认调控）。口径是"这个服务占多少内存"（容器 cgroup 用量）
+  const [memoryDailyTarget, setMemoryDailyTarget] = useState(0)
+  const [memoryLimit, setMemoryLimit] = useState(0)
   const [geoipUrl, setGeoipUrl] = useState('')
   const [bulkConcurrency, setBulkConcurrency] = useState(3)
   const [bulking, setBulking] = useState(false)
@@ -53,6 +59,8 @@ export default function SystemSettingsTab() {
       setMessageRetention(settings.message_retention_days ?? 0)
       setDailyBackupEnabled(settings.daily_backup_enabled ?? false)
       setDailyBackupKeep(settings.daily_backup_keep ?? 7)
+      setMemoryDailyTarget(settings.memory_daily_target_mb ?? 0)
+      setMemoryLimit(settings.memory_limit_mb ?? 0)
       setGeoipUrl(settings.geoip_provider_url || '')
       setHasActiveKeys(keys.some((k: any) => k.is_active))
     }).catch(console.error)
@@ -75,6 +83,10 @@ export default function SystemSettingsTab() {
       else if (field === 'daily_backup_enabled') payload.daily_backup_enabled = value
       else if (field === 'daily_backup_keep') payload.daily_backup_keep = value
       else if (field === 'geoip_url') payload.geoip_provider_url = value || null
+      else if (field === 'memory_policy') {
+        payload.memory_daily_target_mb = value.daily
+        payload.memory_limit_mb = value.limit
+      }
       const updated = await api.put('/admin/system-settings', payload)
       setConfig(updated)
       noticeOk(t('admin:saveSuccess'))
@@ -105,6 +117,8 @@ export default function SystemSettingsTab() {
 
   if (!config) return <p className="text-textMuted p-6">{t('common:loading')}</p>
 
+  const saveOff = saving
+
   return (
     <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
       <h3 className="xl:col-span-2 font-semibold text-textPrimary">{t('admin:systemSettings')}</h3>
@@ -113,30 +127,22 @@ export default function SystemSettingsTab() {
       <UpdateCard className="xl:col-span-2" />
 
       {/* 默认语言 */}
-      <div className="bg-surface rounded-card border border-border p-4">
-        <label className="block text-sm font-medium mb-1 text-textSecondary">{t('admin:defaultLanguage')}</label>
-        <p className="text-xs text-textMuted mb-2">{t('admin:defaultLanguageDesc')}</p>
-        <select
+      <Card title={t('admin:defaultLanguage')} hint={t('admin:defaultLanguageDesc')}>
+        <Select
           value={lang}
           onChange={(e) => {
             setLang(e.target.value)
             handleSave('language', e.target.value)
           }}
-          className="w-full px-3.5 py-2.5 rounded-card border border-border bg-canvas text-sm text-textPrimary"
-        >
-          {LANGUAGES.map((l) => (
-            <option key={l.code} value={l.code}>{t(l.i18nKey)}</option>
-          ))}
-        </select>
-      </div>
+          options={LANGUAGES.map((l) => ({ value: l.code, label: t(l.i18nKey) }))}
+        />
+      </Card>
 
       {/* 注册通道开关 */}
-      <div className="bg-surface rounded-card border border-border p-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <label className="text-sm font-medium text-textSecondary">{t('admin:registrationEnabled')}</label>
-            <p className="text-xs text-textMuted mt-0.5">{t('admin:registrationEnabledDesc')}</p>
-          </div>
+      <Card
+        title={t('admin:registrationEnabled')}
+        hint={t('admin:registrationEnabledDesc')}
+        action={
           <Toggle
             checked={registrationEnabled}
             onChange={(val: boolean) => {
@@ -146,51 +152,52 @@ export default function SystemSettingsTab() {
               handleSave('registration_enabled', val).finally(() => { regToggleRef.current = false })
             }}
           />
-        </div>
-      </div>
+        }
+      />
 
       {/* 平台赠送额度 */}
-      <div className="bg-surface rounded-card border border-border p-4">
-        <label className="block text-sm font-medium mb-1 text-textSecondary">{t('admin:defaultPlatformCredit')}</label>
-        <p className="text-xs text-textMuted mb-2">{t('admin:defaultPlatformCreditDesc')}</p>
+      <Card title={t('admin:defaultPlatformCredit')} hint={t('admin:defaultPlatformCreditDesc')}>
         <div className="flex items-center gap-2">
-          <input
+          <Input
             type="number"
+            fieldSize="sm"
+            className="w-28"
             value={platformCredit}
             onChange={(e) => setPlatformCredit(parseInt(e.target.value) || 0)}
             min={0}
             max={999999}
             disabled={platformCredit > 0 && !hasActiveKeys}
-            className="w-32 px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50 disabled:opacity-40"
           />
-          <button
+          <Button
+            size="sm"
+            variant="primary"
             onClick={handlePlatformCreditSave}
-            disabled={saving || platformCredit === (config?.default_platform_credit || 0)}
-            className="btn btn-sm btn-primary"
+            disabled={saveOff || platformCredit === (config?.default_platform_credit || 0)}
           >
             {t('settings:save')}
-          </button>
+          </Button>
         </div>
         {!hasActiveKeys && (
-          <p className="text-xs text-accent-400 mt-1.5">{t('admin:platformCreditNoActiveKey')}</p>
+          <p className="text-xs text-accent-400">{t('admin:platformCreditNoActiveKey')}</p>
         )}
-      </div>
+      </Card>
 
       {/* 用户默认文件配额 */}
-      <div className="bg-surface rounded-card border border-border p-4">
-        <label className="block text-sm font-medium mb-1 text-textSecondary">{t('admin:defaultFileQuota')}</label>
-        <p className="text-xs text-textMuted mb-2">{t('admin:defaultFileQuotaDesc')}</p>
+      <Card title={t('admin:defaultFileQuota')} hint={t('admin:defaultFileQuotaDesc')}>
         <div className="flex items-center gap-2">
-          <input
+          <Input
             type="number"
+            fieldSize="sm"
+            className="w-28"
             value={fileQuota}
             onChange={(e) => setFileQuota(parseInt(e.target.value) || 1)}
             min={1}
             max={1048576}
-            className="w-32 px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
           />
           <span className="text-xs text-textMuted">MB</span>
-          <button
+          <Button
+            size="sm"
+            variant="primary"
             onClick={() => {
               const old = config?.default_file_quota_mb ?? 100
               if (fileQuota === old) return
@@ -207,24 +214,30 @@ export default function SystemSettingsTab() {
               if (!confirmed) return
               handleSave('file_quota', fileQuota)
             }}
-            disabled={saving || fileQuota === (config?.default_file_quota_mb ?? 100)}
-            className="px-3 py-2 bg-primary-500 text-white rounded-card hover:bg-primary-600 text-sm disabled:opacity-40 transition-colors"
+            disabled={saveOff || fileQuota === (config?.default_file_quota_mb ?? 100)}
           >
             {t('settings:save')}
-          </button>
+          </Button>
         </div>
-      </div>
+      </Card>
 
       {/* 单文件上传大小限制（落 runtime 配置组：热生效、重启不丢） */}
-      <div className="bg-surface rounded-card border border-border p-4">
-        <label className="block text-sm font-medium mb-1 text-textSecondary">单文件上传大小上限</label>
-        <p className="text-xs text-textMuted mb-2">控制用户上传单个文件的最大尺寸（不含头像）</p>
+      <Card title="单文件上传大小上限" hint="控制用户上传单个文件的最大尺寸（不含头像）">
         <div className="flex items-center gap-2">
-          <input type="number" value={uploadMaxSizeMb}
-            onChange={(e) => setUploadMaxSizeMb(parseInt(e.target.value) || 1)} min={1} max={1024}
-            className="w-32 px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50" />
+          <Input
+            type="number"
+            fieldSize="sm"
+            className="w-28"
+            value={uploadMaxSizeMb}
+            onChange={(e) => setUploadMaxSizeMb(parseInt(e.target.value) || 1)}
+            min={1}
+            max={1024}
+          />
           <span className="text-xs text-textMuted">MB</span>
-          <button
+          <Button
+            size="sm"
+            variant="primary"
+            disabled={saveOff}
             onClick={async () => {
               setSaving(true)
               try {
@@ -233,22 +246,29 @@ export default function SystemSettingsTab() {
               } catch (e: any) { noticeFail(e?.detail || t('admin:updateFailed')) }
               finally { setSaving(false) }
             }}
-            disabled={saving}
-            className="px-3 py-2 bg-primary-500 text-white rounded-card hover:bg-primary-600 text-sm disabled:opacity-40 transition-colors"
-          >{t('settings:save')}</button>
+          >
+            {t('settings:save')}
+          </Button>
         </div>
-      </div>
+      </Card>
 
       {/* 头像上传大小限制（落 runtime 配置组：热生效、重启不丢） */}
-      <div className="bg-surface rounded-card border border-border p-4">
-        <label className="block text-sm font-medium mb-1 text-textSecondary">头像上传大小上限</label>
-        <p className="text-xs text-textMuted mb-2">控制用户/AI 上传头像的最大尺寸</p>
+      <Card title="头像上传大小上限" hint="控制用户/AI 上传头像的最大尺寸">
         <div className="flex items-center gap-2">
-          <input type="number" value={avatarMaxSizeMb}
-            onChange={(e) => setAvatarMaxSizeMb(parseInt(e.target.value) || 1)} min={1} max={100}
-            className="w-32 px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50" />
+          <Input
+            type="number"
+            fieldSize="sm"
+            className="w-28"
+            value={avatarMaxSizeMb}
+            onChange={(e) => setAvatarMaxSizeMb(parseInt(e.target.value) || 1)}
+            min={1}
+            max={100}
+          />
           <span className="text-xs text-textMuted">MB</span>
-          <button
+          <Button
+            size="sm"
+            variant="primary"
+            disabled={saveOff}
             onClick={async () => {
               setSaving(true)
               try {
@@ -257,19 +277,17 @@ export default function SystemSettingsTab() {
               } catch (e: any) { noticeFail(e?.detail || t('admin:updateFailed')) }
               finally { setSaving(false) }
             }}
-            disabled={saving}
-            className="px-3 py-2 bg-primary-500 text-white rounded-card hover:bg-primary-600 text-sm disabled:opacity-40 transition-colors"
-          >{t('settings:save')}</button>
+          >
+            {t('settings:save')}
+          </Button>
         </div>
-      </div>
+      </Card>
 
       {/* 用户行为日志 */}
-      <div className="bg-surface rounded-card border border-border p-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <label className="text-sm font-medium text-textSecondary">用户行为日志</label>
-            <p className="text-xs text-textMuted mt-0.5">记录用户登录、注册等行为（哈希链防篡改）</p>
-          </div>
+      <Card
+        title="用户行为日志"
+        hint="记录用户登录、注册等行为（哈希链防篡改）"
+        action={
           <Toggle
             checked={auditUserActions}
             onChange={(val: boolean) => {
@@ -277,19 +295,14 @@ export default function SystemSettingsTab() {
               handleSave('audit_user_actions', val)
             }}
           />
-        </div>
-      </div>
+        }
+      />
 
       {/* 真实客户端 IP */}
-      <div className="bg-surface rounded-card border border-border p-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <label className="text-sm font-medium text-textSecondary">记录真实客户端 IP</label>
-            <p className="text-xs text-textMuted mt-0.5">
-              开启后审计日志记录经反向代理透传的访客真实 IP；关闭则记录代理地址（无意义）。
-              需部署层传入 X-Real-IP，且仅信任 TRUSTED_PROXY_CIDRS 内的对端。
-            </p>
-          </div>
+      <Card
+        title="记录真实客户端 IP"
+        hint="开启后审计日志记录经反向代理透传的访客真实 IP；关闭则记录代理地址（无意义）。需部署层传入 X-Real-IP，且仅信任 TRUSTED_PROXY_CIDRS 内的对端。"
+        action={
           <Toggle
             checked={auditRealIp}
             onChange={(val: boolean) => {
@@ -297,111 +310,197 @@ export default function SystemSettingsTab() {
               handleSave('audit_use_real_ip', val)
             }}
           />
-        </div>
-      </div>
+        }
+      />
 
-      <div className="bg-surface rounded-card border border-border p-4">
-        <label className="text-sm font-medium text-textSecondary">审计日志保留天数</label>
-        <p className="text-xs text-textMuted mt-0.5 mb-2">超期日志自动清理（7-730 天）</p>
+      {/* 审计日志保留天数 */}
+      <Card title="审计日志保留天数" hint="超期日志自动清理（7-730 天）">
         <div className="flex items-center gap-2">
-          <input type="number" value={auditRetention}
-            onChange={e => setAuditRetention(parseInt(e.target.value) || 90)} min={7} max={730}
-            className="w-24 px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50" />
+          <Input
+            type="number"
+            fieldSize="sm"
+            className="w-28"
+            value={auditRetention}
+            onChange={(e) => setAuditRetention(parseInt(e.target.value) || 90)}
+            min={7}
+            max={730}
+          />
           <span className="text-xs text-textMuted">天</span>
-          <button onClick={() => handleSave('audit_retention', auditRetention)}
-            disabled={saving || auditRetention === (config?.audit_log_retention_days ?? 90)}
-            className="px-3 py-2 bg-primary-500 text-white rounded-card hover:bg-primary-600 text-sm disabled:opacity-40 transition-colors"
-          >{t('settings:save')}</button>
+          <Button
+            size="sm"
+            variant="primary"
+            disabled={saveOff || auditRetention === (config?.audit_log_retention_days ?? 90)}
+            onClick={() => handleSave('audit_retention', auditRetention)}
+          >
+            {t('settings:save')}
+          </Button>
         </div>
-      </div>
+      </Card>
 
-      <div className="bg-surface rounded-card border border-border p-4">
-        <label className="text-sm font-medium text-textSecondary">消息保留天数</label>
-        <p className="text-xs text-textMuted mt-0.5 mb-2">0=永久保留，超期消息自动删除</p>
+      {/* 消息保留天数 */}
+      <Card title="消息保留天数" hint="0=永久保留，超期消息自动删除">
         <div className="flex items-center gap-2">
-          <input type="number" value={messageRetention}
-            onChange={e => setMessageRetention(parseInt(e.target.value) || 0)} min={0} max={3650}
-            className="w-24 px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50" />
+          <Input
+            type="number"
+            fieldSize="sm"
+            className="w-28"
+            value={messageRetention}
+            onChange={(e) => setMessageRetention(parseInt(e.target.value) || 0)}
+            min={0}
+            max={3650}
+          />
           <span className="text-xs text-textMuted">天{messageRetention === 0 ? '（永久）' : ''}</span>
-          <button onClick={() => handleSave('message_retention', messageRetention)}
-            disabled={saving || messageRetention === (config?.message_retention_days ?? 0)}
-            className="px-3 py-2 bg-primary-500 text-white rounded-card hover:bg-primary-600 text-sm disabled:opacity-40 transition-colors"
-          >{t('settings:save')}</button>
+          <Button
+            size="sm"
+            variant="primary"
+            disabled={saveOff || messageRetention === (config?.message_retention_days ?? 0)}
+            onClick={() => handleSave('message_retention', messageRetention)}
+          >
+            {t('settings:save')}
+          </Button>
         </div>
-      </div>
+      </Card>
 
       {/* 每日数据库备份（管理员开关 + 保留份数） */}
-      <div className="bg-surface rounded-card border border-border p-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <label className="text-sm font-medium text-textSecondary">每日数据库备份</label>
-            <p className="text-xs text-textMuted mt-0.5">开启后每天自动 pg_dump，备份文件保存在服务器 data/backups/</p>
-          </div>
-          <button onClick={() => handleSave('daily_backup_enabled', !dailyBackupEnabled)}
-            disabled={saving}
-            className={`relative w-11 h-6 rounded-full transition-colors ${dailyBackupEnabled ? 'bg-primary-500' : 'bg-gray-600'}`}
-            title={t('settings:enable')}
-          >
-            <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${dailyBackupEnabled ? 'left-[22px]' : 'left-0.5'}`} />
-          </button>
-        </div>
-        <div className="flex items-center gap-2 mt-2">
-          <input type="number" value={dailyBackupKeep}
-            onChange={e => setDailyBackupKeep(parseInt(e.target.value) || 7)} min={1} max={365}
-            className="w-24 px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50" />
+      <Card
+        title="每日数据库备份"
+        hint="开启后每天自动 pg_dump，备份文件保存在服务器 data/backups/"
+        action={
+          <Toggle
+            checked={dailyBackupEnabled}
+            onChange={(val: boolean) => {
+              setDailyBackupEnabled(val)
+              handleSave('daily_backup_enabled', val)
+            }}
+          />
+        }
+      >
+        <div className="flex items-center gap-2">
+          <Input
+            type="number"
+            fieldSize="sm"
+            className="w-28"
+            value={dailyBackupKeep}
+            onChange={(e) => setDailyBackupKeep(parseInt(e.target.value) || 7)}
+            min={1}
+            max={365}
+          />
           <span className="text-xs text-textMuted">份（超出自动清除最旧备份）</span>
-          <button onClick={() => handleSave('daily_backup_keep', dailyBackupKeep)}
-            disabled={saving || dailyBackupKeep === (config?.daily_backup_keep ?? 7)}
-            className="px-3 py-2 bg-primary-500 text-white rounded-card hover:bg-primary-600 text-sm disabled:opacity-40 transition-colors"
-          >{t('settings:save')}</button>
+          <Button
+            size="sm"
+            variant="primary"
+            disabled={saveOff || dailyBackupKeep === (config?.daily_backup_keep ?? 7)}
+            onClick={() => handleSave('daily_backup_keep', dailyBackupKeep)}
+          >
+            {t('settings:save')}
+          </Button>
         </div>
-      </div>
+      </Card>
+
+      {/* 容量策略：管理员给的两条内存线（不填就走默认调控） */}
+      <Card
+        title="容量与内存策略"
+        hint="并发过高时按这两条线自动收紧同时运行的对话。口径是本服务占用的内存（含子进程）；留 0 = 不设，走默认算法（事件循环延迟 / 数据库连接池 / 入口队列）。"
+      >
+        <div className="flex flex-wrap items-end gap-3">
+          <Input
+            label="日常内存占用"
+            type="number"
+            fieldSize="sm"
+            className="w-28"
+            value={memoryDailyTarget}
+            min={0}
+            onChange={(e) => setMemoryDailyTarget(Math.max(0, parseInt(e.target.value) || 0))}
+          />
+          <Input
+            label="内存占用上限"
+            type="number"
+            fieldSize="sm"
+            className="w-28"
+            value={memoryLimit}
+            min={0}
+            onChange={(e) => setMemoryLimit(Math.max(0, parseInt(e.target.value) || 0))}
+          />
+          <Button
+            size="sm"
+            variant="primary"
+            disabled={saveOff || (memoryDailyTarget === (config?.memory_daily_target_mb ?? 0)
+              && memoryLimit === (config?.memory_limit_mb ?? 0))}
+            onClick={() => handleSave('memory_policy', { daily: memoryDailyTarget, limit: memoryLimit })}
+          >
+            {t('settings:save')}
+          </Button>
+        </div>
+        {memoryDailyTarget > 0 && memoryLimit > 0 && memoryDailyTarget > memoryLimit && (
+          <p className="text-xs text-rose-400">日常占用不能高于上限</p>
+        )}
+      </Card>
 
       {/* IP 地理位置查询后端 */}
-      <div className="bg-surface rounded-card border border-border p-4">
-        <label className="text-sm font-medium text-textSecondary">IP 地理位置查询后端</label>
-        <p className="text-xs text-textMuted mt-0.5 mb-2">{'支持 {ip} 占位符，留空默认 ip-api.com'}</p>
+      <Card title="IP 地理位置查询后端" hint="支持 {ip} 占位符，留空默认 ip-api.com">
         <div className="flex items-center gap-2">
-          <input
+          <Input
             type="text"
+            fieldSize="sm"
+            className="flex-1 min-w-0"
             value={geoipUrl}
-            onChange={e => setGeoipUrl(e.target.value)}
+            onChange={(e) => setGeoipUrl(e.target.value)}
             placeholder="http://ip-api.com/json/{ip}?fields=..."
-            className="flex-1 px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
           />
-          <button
+          <Button
+            size="sm"
+            variant="primary"
+            disabled={saveOff}
             onClick={() => handleSave('geoip_url', geoipUrl)}
-            disabled={saving}
-            className="px-3 py-2 bg-primary-500 text-white rounded-card hover:bg-primary-600 text-sm disabled:opacity-40 transition-colors"
-          >{t('settings:save')}</button>
+          >
+            {t('settings:save')}
+          </Button>
         </div>
-      </div>
+      </Card>
 
       {/* 新建群聊默认 AI 并发数 */}
-      <div className="bg-surface rounded-card border border-border p-4">
-        <label className="block text-sm font-medium mb-1 text-textSecondary">新建群聊默认 AI 并发数</label>
-        <p className="text-xs text-textMuted mb-2">新建群聊时自动使用的 AI 并发上限（1-20）</p>
+      <Card title="新建群聊默认 AI 并发数" hint="新建群聊时自动使用的 AI 并发上限（1-20）">
         <div className="flex items-center gap-2">
-          <input type="number" value={defaultConcurrentAiLimit}
-            onChange={(e) => setDefaultConcurrentAiLimit(parseInt(e.target.value) || 3)} min={1} max={20}
-            className="w-32 px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50" />
-          <button
+          <Input
+            type="number"
+            fieldSize="sm"
+            className="w-28"
+            value={defaultConcurrentAiLimit}
+            onChange={(e) => setDefaultConcurrentAiLimit(parseInt(e.target.value) || 3)}
+            min={1}
+            max={20}
+          />
+          <Button
+            size="sm"
+            variant="primary"
+            disabled={saveOff || defaultConcurrentAiLimit === (config?.default_concurrent_ai_limit ?? 2)}
             onClick={() => handleSave('concurrent_ai_limit', defaultConcurrentAiLimit)}
-            disabled={saving || defaultConcurrentAiLimit === (config?.default_concurrent_ai_limit ?? 2)}
-            className="px-3 py-2 bg-primary-500 text-white rounded-card hover:bg-primary-600 text-sm disabled:opacity-40 transition-colors"
-          >{t('settings:save')}</button>
+          >
+            {t('settings:save')}
+          </Button>
         </div>
-      </div>
+      </Card>
 
       {/* 批量修改所有群并发数 */}
-<div className="xl:col-span-2 bg-surface rounded-card border border-border p-4">
-        <label className="block text-sm font-medium mb-1 text-textSecondary">批量修改所有群并发数</label>
-        <p className="text-xs text-textMuted mb-2">将已有全部群聊的 AI 并发上限设为同一值（覆盖已有设置）</p>
+      <Card
+        className="xl:col-span-2"
+        title="批量修改所有群并发数"
+        hint="将已有全部群聊的 AI 并发上限设为同一值（覆盖已有设置）"
+      >
         <div className="flex items-center gap-2">
-          <input type="number" value={bulkConcurrency}
-            onChange={(e) => setBulkConcurrency(parseInt(e.target.value) || 3)} min={1} max={20}
-            className="w-32 px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50" />
-          <button
+          <Input
+            type="number"
+            fieldSize="sm"
+            className="w-28"
+            value={bulkConcurrency}
+            onChange={(e) => setBulkConcurrency(parseInt(e.target.value) || 3)}
+            min={1}
+            max={20}
+          />
+          <Button
+            size="sm"
+            variant="accent"
+            disabled={bulking}
             onClick={async () => {
               if (!confirm(t('admin:bulkConcurrencyConfirm', { n: bulkConcurrency }))) return
               setBulking(true)
@@ -411,19 +510,13 @@ export default function SystemSettingsTab() {
               } catch (e: any) { noticeFail(e?.detail || t('admin:bulkUpdateFailed')) }
               finally { setBulking(false) }
             }}
-            disabled={bulking}
-            className="px-3 py-2 bg-accent-500 text-white rounded-card hover:bg-accent-400 text-sm disabled:opacity-40 transition-colors"
-          >{bulking ? t('admin:bulkApplyRunning') : t('admin:bulkApply')}</button>
+          >
+            {bulking ? t('admin:bulkApplyRunning') : t('admin:bulkApply')}
+          </Button>
         </div>
-      </div>
-
-      {/* 通用配置卡片（管理员图形化修改，DB 覆盖 env，带说明文案） */}
-      <ConfigGroupCard groupKey="embedding" />
-
-      <ConfigGroupCard groupKey="runtime" />
+      </Card>
 
       {notice && <p className={`xl:col-span-2 text-sm ${NOTICE_TEXT_CLASS[notice.tone]}`}>{notice.text}</p>}
-
     </div>
   )
 }

@@ -1,11 +1,11 @@
 import { memo, useState, useRef, useCallback, useMemo, forwardRef, useImperativeHandle, useEffect } from 'react'
-import { Send, Plus, ChevronRight, Brain, ArrowDown, ChevronDown, Copy, RefreshCw, ShieldAlert, HelpCircle } from 'lucide-react'
+import { Send, Plus, ChevronRight, Brain, ArrowDown, ChevronDown, Copy, RefreshCw, ShieldAlert } from 'lucide-react'
 import MarkdownContent from './shared/MarkdownContent'
 import CodeRenderer from './shared/CodeRenderer'
 import { CONTENT_W_VAR, ToolBubble, toolIcon, useContentColumnWidth } from './shared/ChatPanelAtoms'
 import { WidthHandles } from './ui'
 import { ApprovalDialog, PendingQueuePanel } from './shared/ChatDialogs'
-import { IconButton, MenuPanel, MenuItem, INSET_CARD, confirmAsync } from './ui'
+import { HelpTip, IconButton, MenuPanel, MenuItem, INSET_CARD, confirmAsync } from './ui'
 import { useWorldChat, type Approval, type ChatMsg } from '../hooks/useWorldChat'
 import { useAttachmentUpload, isImageAttachment, attachmentImageSizing } from '../hooks/useAttachmentUpload'
 import { AttachmentChips, DropMask } from './AttachmentChips'
@@ -683,8 +683,8 @@ const WorldChatPanel = memo(forwardRef<WorldChatHandle, WorldChatPanelProps>(({ 
           <IconButton size="sm" icon={<Plus size={14} />} label={t('tool:world.input.attach')} onClick={() => fileInputRef.current?.click()} />
           <ModePicker mode={mode} busy={modeBusy} onChange={switchMode} />
           <ExpressionModeSwitch />
-          {/* 常驻说明收进 ? 的 title：绝大多数轮次用不到，不该天天占一行 */}
-          <IconButton size="sm" icon={<HelpCircle size={12} />} label={t('tool:world.hint.billing')} />
+          {/* 常驻说明收进 ? 里：绝大多数轮次用不到，不该天天占一行 */}
+          <HelpTip content={t('tool:world.hint.billing')} />
           {(chat.chatSending || chat.chatProcessing) && (
             <span className="hidden sm:inline min-w-0 truncate text-3xs text-textMuted">{t('tool:world.input.busyHint')}</span>
           )}

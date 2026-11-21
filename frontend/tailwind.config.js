@@ -97,10 +97,13 @@ export default {
       /* ── 尺度令牌（全站单一来源，新增代码只用令牌名，不写裸数值）─────
          圆角：control=8px 控件/按钮 · card=12px 卡片/面板 · dialog=16px 弹窗/抽屉
                胶囊与圆头像用 rounded-full，其余裸值不再使用。 */
+      /* 圆角全部读 index.css 的 --r-* 变量：control 8 · card 12 · dialog 16 · pill 胶囊。
+         数值只在 :root 改一处，工具类与语义类（.btn / .field / .card）同步生效。 */
       borderRadius: {
-        control: '0.5rem',
-        card: '0.75rem',
-        dialog: '1rem',
+        control: 'var(--r-control)',
+        card: 'var(--r-card)',
+        dialog: 'var(--r-dialog)',
+        pill: 'var(--r-pill)',
       },
       /* 字号：3xs=10px 极小徽标 · 2xs=11px 次级说明 · xs=12px 正文辅助
               sm=14px 正文 · base=16px 强调 …（其余沿用 Tailwind 默认） */

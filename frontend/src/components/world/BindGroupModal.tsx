@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { X, Link2, Users, CheckSquare, Loader2, AlertCircle, Bot } from 'lucide-react'
 import { api } from '../../api/client'
-import { Dialog } from '../ui'
+import { Dialog, UnderlineTabs } from '../ui'
 import { useT } from '../../i18n/I18nContext'
 
 interface GroupType {
@@ -157,16 +157,17 @@ export default function BindGroupModal({ worldId, initialTypeSlug, initialTab = 
             <span className="text-sm font-semibold text-textPrimary">{t('tool:world.bind.title')}</span>
             <span className="text-3xs text-textMuted">{t('tool:world.bind.hint')}</span>
           </div>
-          {/* Tab：群聊 / AI */}
-          <div className="flex items-center gap-1 bg-elevated rounded-control p-0.5 shrink-0">
-            <button onClick={() => { setTab('group'); setSelected(new Set()); setTypeSlug('') }} className={`inline-flex items-center gap-1 text-xs px-3 py-1 rounded-control ${tab === 'group' ? 'bg-primary-500/15 text-primary-400' : 'text-textSecondary'}`}>
-              <Users size={12} /> {t('tool:world.bind.tabGroup')}
-            </button>
-            <button onClick={() => { setTab('agent'); setSelected(new Set()); setTypeSlug('') }} className={`inline-flex items-center gap-1 text-xs px-3 py-1 rounded-control ${tab === 'agent' ? 'bg-primary-500/15 text-primary-400' : 'text-textSecondary'}`}>
-              <Bot size={12} /> {t('tool:world.bind.tabAgent')}
-            </button>
-          </div>
-          <button onClick={onClose} className="p-1 text-textMuted hover:text-textPrimary transition-colors" title={t('common:close')}><X size={16} /></button>
+          {/* Tab：群聊 / AI —— 统一走下划线页签；切换时清空已选（两种类型不可混选） */}
+          <UnderlineTabs
+            size="sm"
+            items={[
+              { key: 'group' as const, label: t('tool:world.bind.tabGroup'), icon: <Users size={12} /> },
+              { key: 'agent' as const, label: t('tool:world.bind.tabAgent'), icon: <Bot size={12} /> },
+            ]}
+            value={tab}
+            onChange={(k) => { setTab(k); setSelected(new Set()); setTypeSlug('') }}
+          />
+          <button onClick={onClose} className="icon-btn icon-btn-sm" title={t('common:close')}><X size={16} /></button>
         </div>
 
         <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">

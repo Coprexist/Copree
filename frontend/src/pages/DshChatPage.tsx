@@ -819,7 +819,7 @@ export default function DshChatPage() {
 
       {/* ═══ 左栏：DSH 会话（放大后的群视界对话同构——会话在左，对话占满其余） ═══ */}
       <aside className="hidden md:flex w-60 shrink-0 flex-col border-r border-border bg-surface">
-        <div className="flex items-center gap-1.5 px-3 h-10 border-b border-border shrink-0">
+        <div className="top-bar flex items-center gap-1.5 px-3 h-14 shrink-0">
           <MessageSquare size={13} className="text-textMuted shrink-0" />
           <span className="text-xs font-medium text-textSecondary flex-1 truncate">{t('tool:dsh.sessions')}</span>
           <span className="text-3xs text-textMuted shrink-0">{sessions.length}</span>
@@ -860,8 +860,8 @@ export default function DshChatPage() {
       {/* 对话列自己铺白底：页根是 bg-canvas（#f8fafc），列不给底色就会露出那层灰，
           而群视界放大版里这一列就是 bg-surface —— 两处必须同一层白 */}
       <section className="flex-1 min-w-0 flex flex-col bg-surface">
-        {/* 顶栏：与群视界对话一致的高度与分隔线 */}
-        <div className="flex items-center gap-2 px-3 h-10 border-b border-border shrink-0 bg-surface">
+        {/* 顶栏：全站同一个顶部条（.top-bar），与聊天头部等高同阴影 */}
+        <div className="top-bar flex items-center gap-2 px-3 h-14 shrink-0">
           <button onClick={() => navigate('/admin')} className="icon-btn-sm shrink-0" title={t('tool:dsh.page.back')} aria-label={t('tool:dsh.page.back')}>
             <ArrowLeft size={14} />
           </button>
@@ -871,7 +871,7 @@ export default function DshChatPage() {
           <select
             value={sessionId}
             onChange={(event) => pickSession(event.target.value)}
-            className="md:hidden min-w-0 flex-1 text-xs bg-elevated border border-border rounded-control px-2 py-1 text-textPrimary focus:outline-none focus:border-primary-400"
+            className="field field-sm min-w-0 flex-1 field-inline"
           >
             <option value="">{t('tool:dsh.page.pick')}</option>
             {sessions.map((item) => (
@@ -961,7 +961,7 @@ export default function DshChatPage() {
           {/* 回到底部：不在底部才给入口（与群视界对话同款；在底部时它不出现） */}
           {!stick.isAtBottom && <button
             onClick={() => stick.scrollToBottom()}
-            className="absolute right-3 bottom-3 z-overlay p-1.5 rounded-full bg-elevated border border-border text-textSecondary hover:text-textPrimary hover:bg-surface transition-colors"
+            className="float-btn absolute right-3 bottom-3 z-overlay"
             title={t('tool:dsh.scrollBottom')}
             aria-label={t('tool:dsh.scrollBottom')}
           >
@@ -973,14 +973,14 @@ export default function DshChatPage() {
         {error && <div className="px-4 py-1 text-xs text-rose-400 shrink-0">{error}</div>}
 
         {/* 输入区：附件可点选/拖拽/粘贴（与群视界对话同一套），底部一条只放附件与发送 */}
-        <div className="border-t border-border p-3 relative" {...attachments.zoneProps('input')} {...attachments.pasteProps}>
+        <div className="p-3 relative" {...attachments.zoneProps('input')} {...attachments.pasteProps}>
           <DropMask {...attachments.dropState('input')} label={t('tool:dsh.attach.drop')} />
           <AttachmentChips items={attachments.items} onRemove={attachments.remove} />
           {attachments.ready.length > 0 && !imagesSupported && (
             <p className="mb-2 text-3xs text-accent-400">{t('tool:dsh.attach.unsupported')}</p>
           )}
           <div
-            className="mx-auto w-full rounded-2xl border border-border bg-elevated/40 transition-colors focus-within:border-primary-500/60 focus-within:bg-surface"
+            className="glass-float mx-auto w-full"
             style={{ maxWidth: `calc(var(${CONTENT_W_VAR}) + 32px)` }}
           >
             <textarea
@@ -1046,7 +1046,7 @@ export default function DshChatPage() {
               {busy && <button onClick={stop} className="btn btn-sm btn-outline shrink-0"><Square size={12} /> {t('tool:dsh.stop')}</button>}
               {/* 忙时的两种时机：选中的那种给 Enter 和发送按钮，Ctrl/Cmd+Enter 走另一种 */}
               {busy && (
-                <div role="group" aria-label={t('tool:dsh.busySend.title')} className="shrink-0 inline-flex items-center rounded-control border border-border overflow-hidden">
+                <div role="group" aria-label={t('tool:dsh.busySend.title')} className="shrink-0 inline-flex items-center gap-1">
                   {(['queue', 'steer'] as const).map((mode) => (
                     <button
                       key={mode}
@@ -1054,7 +1054,7 @@ export default function DshChatPage() {
                       onClick={() => chooseBusySend(mode)}
                       aria-pressed={busySend === mode}
                       title={t(mode === 'queue' ? 'tool:dsh.busySend.queueHint' : 'tool:dsh.busySend.steerHint')}
-                      className={`h-7 px-2 text-3xs transition-colors ${busySend === mode ? 'bg-primary-500/20 text-textPrimary' : 'text-textMuted hover:text-textPrimary hover:bg-elevated/40'}`}
+                      className={'btn btn-sm btn-outline ' + (busySend === mode ? 'is-active' : '')}
                     >
                       {t(mode === 'queue' ? 'tool:dsh.busySend.queue' : 'tool:dsh.busySend.steer')}
                     </button>

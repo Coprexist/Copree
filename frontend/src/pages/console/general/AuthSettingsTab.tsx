@@ -3,7 +3,7 @@ import { api } from '../../../api/client'
 import { useT } from '../../../i18n/I18nContext'
 import { Mail, Shield, CheckCircle, XCircle, Loader2, Plus, Trash2, ChevronUp, ChevronDown, X } from 'lucide-react'
 import ProviderPresetSelector from '../../../components/ProviderPresetSelector'
-import { Dialog } from '../../../components/ui'
+import { Dialog, SecretInput } from '../../../components/ui'
 
 interface SmtpConfigItem {
   host: string
@@ -291,7 +291,7 @@ export default function AuthSettingsTab() {
   return (
     <div className="columns-1 xl:columns-2 gap-4">
       {/* ── SMTP 多配置管理 ── */}
-      <section className="break-inside-avoid mb-4 bg-surface border border-border rounded-card p-5">
+      <section className="break-inside-avoid mb-4 card p-5">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-sm font-semibold text-textPrimary flex items-center gap-2">
             <Mail size={16} className="text-primary-400" />
@@ -299,7 +299,7 @@ export default function AuthSettingsTab() {
           </h3>
           <button
             onClick={addConfig}
-            className="btn btn-xs btn-outline gap-1"
+            className="btn btn-md btn-outline gap-1"
           >
             <Plus size={14} />
             {t('admin:smtpAdd')}
@@ -388,10 +388,9 @@ export default function AuthSettingsTab() {
                   </div>
                   <div>
                     <label className="block text-3xs text-textMuted mb-0.5">{t('admin:smtpPassword')}</label>
-                    <input
-                      type="password" value={cfg.password}
+                    <SecretInput value={cfg.password}
                       onChange={e => updateConfig(index, { password: e.target.value })}
-                      className="w-full px-2 py-1.5 text-xs rounded border border-border bg-canvas text-textPrimary focus:outline-none focus:ring-1 focus:ring-primary-500/50"
+                      wrapperClassName="w-full"
                       placeholder={cfg.has_password ? t('admin:smtpPasswordPlaceholder') : ''}
                     />
                   </div>
@@ -452,7 +451,7 @@ export default function AuthSettingsTab() {
           <button
             onClick={handleSaveSmtp}
             disabled={smtpSaving || smtpConfigs.length < 1}
-            className="btn btn-sm btn-primary"
+            className="btn btn-md btn-primary"
           >
             {smtpSaving ? t('common:saving') : t('common:save')}
           </button>
@@ -460,7 +459,7 @@ export default function AuthSettingsTab() {
       </section>
 
       {/* ── 邮件模板编辑（v1.1.0: 预设选择）── */}
-      <section className="break-inside-avoid mb-4 bg-surface border border-border rounded-card p-5">
+      <section className="break-inside-avoid mb-4 card p-5">
         <h3 className="text-sm font-semibold text-textPrimary flex items-center gap-2 mb-4">
           <Mail size={16} className="text-accent-400" />
           {t('admin:emailTemplates')}
@@ -565,14 +564,14 @@ export default function AuthSettingsTab() {
                 <div className="flex gap-2">
                   <button
                     onClick={handleResetTemplates}
-                    className="btn btn-xs btn-outline hover:text-rose-400"
+                    className="btn btn-md btn-outline hover:text-rose-400"
                   >
                     {t('admin:emailTemplateResetAll')}
                   </button>
                   <button
                     onClick={handleSaveTemplates}
                     disabled={tplSaving}
-                    className="btn btn-xs btn-primary"
+                    className="btn btn-md btn-primary"
                   >
                     {tplSaving ? t('common:saving') : t('admin:emailTemplatesSave')}
                   </button>
@@ -665,7 +664,7 @@ export default function AuthSettingsTab() {
       </div>
 
       {/* ── 认证设置 ── */}
-      <section className="break-inside-avoid mb-4 bg-surface border border-border rounded-card p-5">
+      <section className="break-inside-avoid mb-4 card p-5">
         <h3 className="text-sm font-semibold text-textPrimary flex items-center gap-2 mb-4">
           <Shield size={16} className="text-accent-400" />
           {t('admin:auth')}
@@ -703,11 +702,7 @@ export default function AuthSettingsTab() {
                 key={opt.key}
                 onClick={() => toggleProvider(opt.key)}
                 disabled={providers.includes(opt.key) && providers.length <= 1}
-                className={`px-3 py-1.5 text-xs rounded-control font-medium transition-colors border ${
-                  providers.includes(opt.key)
-                    ? 'bg-primary-500/10 border-primary-500/30 text-primary-500'
-                    : 'bg-canvas border-border text-textMuted hover:text-textSecondary'
-                } disabled:opacity-30 disabled:cursor-not-allowed`}
+                className="btn btn-sm btn-outline"
               >
                 {t(opt.labelKey)}
               </button>
@@ -718,7 +713,7 @@ export default function AuthSettingsTab() {
         <button
           onClick={handleSaveAuth}
           disabled={authSaving || providers.length < 1}
-          className="btn btn-sm btn-primary mt-3"
+          className="btn btn-md btn-primary mt-3"
         >
           {authSaving ? t('common:saving') : t('common:save')}
         </button>

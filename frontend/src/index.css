@@ -17,6 +17,23 @@
    .pb-nav 只对手机生效（≥768px 导航不渲染），所以配套的 md:pb-* 照常可用。 */
 :root {
   --mobile-nav-reserved: calc(4rem + 0.75rem + env(safe-area-inset-bottom, 0px));
+  /* 圆角语汇（全站唯一出处，规则里不要再写死数值）
+     control 8：小控件、列表项、图标钮 · card 12：卡片/面板 · dialog 16：弹窗/抽屉
+     pill：胶囊——按钮、单行输入、徽标；写 var(--r-pill) 而不是到处抄 9999px */
+  --r-sm: 0.5rem;    /*  8 */
+  --r-md: 0.75rem;   /* 12 */
+  --r-lg: 1rem;      /* 16 */
+  --r-pill: 9999px;  /* 胶囊：按高度取一半 */
+  /* 角色别名（语义类按角色取，别直接写数值） */
+  --r-control: var(--r-sm);
+  --r-card: var(--r-md);
+  --r-dialog: var(--r-lg);
+  /* 控件高度档位（同样只在这里定义）：xs 24 · sm 32 · md 40 · lg 48
+     按钮、单行输入、图标钮共用一套刻度——同一行里的控件天然等高 */
+  --ctl-xs: 1.5rem;
+  --ctl-sm: 2rem;
+  --ctl-md: 2.5rem;
+  --ctl-lg: 3rem;
   /* 结构色 — 浅色主题 */
   --tw-canvas: 248 250 252;        /* slate-50 */
   --tw-surface: 255 255 255;       /* white */
@@ -96,6 +113,9 @@
   /* 自己的消息气泡 — 浅色主题（品牌紫 #8B5CF6 底 + 白字） */
   --tw-bubble: 139 92 246;         /* #8B5CF6 */
   --tw-bubble-ink: 255 255 255;    /* #FFFFFF */
+  /* 自己气泡渐变的亮端：比 primary-300(#C4B5FD) 暗一档，右下角泛亮但不冲、
+     白字压上去也还清楚（2026-11-14 用户："亮处要暗点"） */
+  --tw-bubble-glow: 167 139 250;   /* #A78BFA */
 
   /* 彩色文字适配深/浅背景：加一层极细半透明描边保证可读 */
 
@@ -181,9 +201,12 @@
   --tw-rose-800: 140 34 54;        /* #8C2236 */
   --tw-rose-900: 90 22 34;         /* #5A1622 */
 
-  /* 自己的消息气泡 — 深色主题（深紫 #5a3a99 底 + 白字） */
-  --tw-bubble: 90 58 153;          /* #5A3A99 */
+  /* 自己的消息气泡 — 深色主题（深紫底 + 白字）。
+     比原来的 #5A3A99 再深一档：夜里它和画布 #0C0A14 的差太大时会"浮"出来，
+     压暗之后更像嵌在暗色里，白字对比反而更高。 */
+  --tw-bubble: 76 46 130;          /* #4C2E82 */
   --tw-bubble-ink: 255 255 255;    /* #FFFFFF */
+  --tw-bubble-glow: 167 139 250;   /* #A78BFA —— 夜里关掉渐变，仅保持变量有定义 */
 
 /* 彩色文字适配深/浅背景：加一层极细半透明描边保证可读 */
 
@@ -336,10 +359,63 @@
 .katex {
   @apply text-textPrimary;
 }
+/* 气泡的统一立体感：顶面一道内高光（光从上面来）+ 朝下的投影（浮起来）。
+   同一套参数、只有 alpha 按主题各给一档——深色底上同样的影子显得更弱，不是换一种效果。
+   对面气泡（白/深灰）都用这个类；自己的紫气泡沿用紫色投影（同样的向下偏移，只是色相跟着底色）。 */
+/* 消息气泡的整张外观：对面一个类、己方一个类，组件里只剩这两个语义名 + 圆角方向。
+   底渐变、边框、投影、以及它们各自的夜间档全在这里——调气泡只碰这一处，
+   不再在 TSX 里堆 dark: 变体和两套 shadow-[]。 */
+.bubble-face {
+  background-image: linear-gradient(
+    to bottom,
+    rgb(var(--tw-surface)),
+    rgb(var(--tw-surface)) 50%,
+    rgb(var(--tw-elevated))
+  );
+  border: 1px solid rgb(var(--tw-primary-500) / 0.2);
+  /* 顶面一道内高光（光从上面来）+ 朝下的黑投影 */
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.9),
+    0 8px 22px -8px rgb(0 0 0 / 0.32);
+}
+.dark .bubble-face {
+  border-color: rgb(var(--tw-primary-400) / 0.25);
+  /* 夜里黑色投影在深底上等于没有：贴着底边一圈灰白、再远一层更淡，向外渐隐 */
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.10),
+    0 4px 16px -4px rgb(255 255 255 / 0.10),
+    0 14px 32px -14px rgb(255 255 255 / 0.06);
+}
+
+.bubble-self {
+  /* 亮色走 500→glow 的对角渐变（亮的一头落在右下角，正文底色仍是 500，白字才不糊） */
+  background-image: linear-gradient(
+    to bottom right,
+    rgb(var(--tw-primary-500)),
+    rgb(var(--tw-primary-500)) 50%,
+    rgb(var(--tw-bubble-glow))
+  );
+  border: 1px solid rgb(255 255 255 / 0.2);   /* 紫底上压紫边等于没有，日间用白描边 */
+  box-shadow: 0 4px 18px -8px rgb(var(--tw-primary-500) / 0.45);
+}
+.dark .bubble-self {
+  /* 夜里彩渐变会被深底吃掉、发灰：实色紫打底 + 竖向光（顶面压暗、底部提亮） */
+  background-color: rgb(var(--tw-bubble));
+  background-image: linear-gradient(
+    to bottom,
+    rgb(0 0 0 / 0.12),
+    rgb(255 255 255 / 0.06)
+  );
+  border-color: rgb(var(--tw-primary-400) / 0.25);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.16),
+    0 4px 18px -8px rgb(var(--tw-primary-500) / 0.45);
+}
+
 .bubble-content .katex {
   color: inherit;
 }
-..bubble-content .katex .mathnormal {
+.bubble-content .katex .mathnormal {
   color: inherit;
 }
 /* 隐藏 KaTeX 内联公式的滚动条，保留横向滚动能力 */
@@ -500,7 +576,7 @@
   input[type="range"]:disabled { opacity: .55; cursor: not-allowed; }
   input[type="range"]::-webkit-slider-runnable-track {
     height: var(--slider-track);
-    border-radius: 9999px;
+    border-radius: var(--r-pill);
     background: linear-gradient(to right,
       rgb(var(--slider-c)) 0 var(--slider-pct, 0%),
       rgb(var(--slider-bg, var(--tw-border))) var(--slider-pct, 0%) 100%);
@@ -521,12 +597,12 @@
   input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgb(var(--slider-c) / .3); }
   input[type="range"]::-moz-range-track {
     height: var(--slider-track);
-    border-radius: 9999px;
+    border-radius: var(--r-pill);
     background: rgb(var(--slider-bg, var(--tw-border)));
   }
   input[type="range"]::-moz-range-progress {
     height: var(--slider-track);
-    border-radius: 9999px;
+    border-radius: var(--r-pill);
     background: rgb(var(--slider-c));
   }
   input[type="range"]::-moz-range-thumb {
@@ -590,6 +666,16 @@
 }
 .bubble-content a:hover {
   opacity: 0.85;
+}
+/* 卡片整块是链接（频道卡片等）：不要下划线、也不做 hover 变暗。
+   上面那两条是给正文里的行内链接用的；utility 层的 no-underline 压不过这里（未分层规则优先），
+   所以单独给它一个类，写在后面同权重覆盖。 */
+.bubble-content a.channel-card {
+  text-decoration: none;
+  transition: none;
+}
+.bubble-content a.channel-card:hover {
+  opacity: 1;
 }
 
 /* 行内代码 */
@@ -686,7 +772,7 @@
 
 /* react-easy-crop 方形裁剪圆角 */
 .rounded-crop-area {
-  border-radius: 1rem !important;
+  border-radius: var(--r-dialog) !important;
 }
 
 /* 世界设计页消息气泡淡入（新消息出现时；DOM 复用不重触发） */
@@ -702,8 +788,22 @@
    bg-elevated 按钮/标签与背景分不开。此处统一补一层
    极淡描边 + 极轻阴影建立边界（仅浅色主题，深色不受影响）。
    ──────────────────────────────────────────────── */
-:root:not(.dark) .bg-elevated {
+/* 表单控件排除在外：它们本来就带 border，再补一圈内描边就成了两层灰线（2026-11-14 修） */
+:root:not(.dark) .bg-elevated:not(input):not(textarea):not(select) {
   box-shadow: inset 0 0 0 1px rgb(var(--tw-border) / 0.45);
+}
+
+/* ────────────────────────────────────────────────
+   透明底棋盘格（图片预览用）
+   浅色主题下"透明"与"白底"分不出来，SVG 预览铺一层棋盘格，
+   文件自带的底色与真正的透明一眼可辨。
+   ──────────────────────────────────────────────── */
+.bg-checker {
+  background-image:
+    linear-gradient(45deg, rgb(var(--tw-border)) 25%, transparent 25%, transparent 75%, rgb(var(--tw-border)) 75%),
+    linear-gradient(45deg, rgb(var(--tw-border)) 25%, transparent 25%, transparent 75%, rgb(var(--tw-border)) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 8px 8px;
 }
 
 /* ────────────────────────────────────────────────
@@ -719,7 +819,8 @@
   align-items: center;
   justify-content: center;
   font-weight: 500;
-  border-radius: 0.5rem; /* rounded-control —— 更利落，对齐群视界顶部按钮 */
+  /* 按钮一律胶囊：动作是「一行可以点」，圆角这层语汇留给容器与输入框（2026-11-15 定） */
+  border-radius: var(--r-pill);
   transition: background-color .15s ease, color .15s ease, border-color .15s ease;
   white-space: nowrap;
   cursor: pointer;
@@ -728,10 +829,12 @@
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 .btn:focus-visible { outline: 2px solid rgb(var(--tw-primary-400) / .5); outline-offset: 1px; }
 
-/* 尺寸档位（固定高度，leading-none 由内联 flex 居中兜底） */
-.btn-sm { height: 2rem; padding: 0 0.75rem; font-size: 0.75rem; gap: 0.25rem; }
-.btn-md { height: 2.5rem; padding: 0 1rem; font-size: 0.875rem; gap: 0.5rem; }
-.btn-lg { height: 3rem; padding: 0 1.25rem; font-size: 1rem; gap: 0.5rem; }
+/* 尺寸档位（固定高度，leading-none 由内联 flex 居中兜底）
+   四档都沿用 .btn 的胶囊圆角：形状不再随尺寸变，只有高度与内距在变。
+   md / lg 以前是 8px 圆角，和同排的 sm 胶囊挨在一起会显得「一个方一个圆」，已统一。 */
+.btn-sm { height: var(--ctl-sm); padding: 0 0.875rem; font-size: 0.75rem; gap: 0.25rem; }
+.btn-md { height: var(--ctl-md); padding: 0 1rem; font-size: 0.875rem; gap: 0.5rem; }
+.btn-lg { height: var(--ctl-lg); padding: 0 1.25rem; font-size: 1rem; gap: 0.5rem; }
 
 /* 变体 — hover 一律加深（浅色深一档后对比自然） */
 .btn-primary { background: rgb(var(--tw-primary-500)); color: #fff; }
@@ -756,8 +859,40 @@
 .btn-outline.is-active { background: rgb(var(--tw-primary-500) / .12); border-color: rgb(var(--tw-primary-500) / .45); color: rgb(var(--tw-primary-400)); }
 .btn-outline.is-active:hover { background: rgb(var(--tw-primary-500) / .2); border-color: rgb(var(--tw-primary-500) / .6); }
 
+/* tinted 变体 —— 有语义但不要实心（"让 AI 重新生成"这类次级动作），
+   与 .btn-outline 的区别是带主色/危险色的浅底，用来在一排按钮里分出主次 */
+.btn-tinted { background: rgb(var(--tw-primary-500) / .1); color: rgb(var(--tw-primary-400));
+  border: 1px solid rgb(var(--tw-primary-400) / .2); }
+.btn-tinted:hover { background: rgb(var(--tw-primary-500) / .18); color: rgb(var(--tw-primary-400)); }
+.btn-tinted-danger { background: rgb(var(--tw-rose-500) / .1); color: rgb(var(--tw-rose-400));
+  border: 1px solid rgb(var(--tw-rose-500) / .2); }
+.btn-tinted-danger:hover { background: rgb(var(--tw-rose-500) / .18); color: rgb(var(--tw-rose-400)); }
+
 /* 补档 xs=24px —— 工具条/列表行里的小按钮（此前的 px-2 py-0.5 一族） */
-.btn-xs { height: 1.5rem; padding: 0 0.5rem; font-size: 0.6875rem; gap: 0.25rem; }
+.btn-xs { height: var(--ctl-xs); padding: 0 0.625rem; font-size: 0.6875rem; gap: 0.25rem; border-radius: var(--r-pill); }
+
+/* 全圆角（胶囊）变体：仅作兼容保留 —— .btn 自己已经是胶囊了。
+   写它不会再改变任何东西；新代码不需要它。
+   （当初写成变体类而不是在元素上补 rounded-full，是因为工具类在本层规则之前、同权重会被盖掉。） */
+.btn-pill { border-radius: var(--r-pill); }
+
+/* 实心成功按钮（确认 / 恢复 / 提交这类「正向」动作）。
+   以前这类动作各处手写 bg-mint-400 text-white，绿色深浅与 hover 各写一遍。 */
+.btn-success { background: rgb(var(--tw-mint-400)); color: #fff; }
+.btn-success:hover { background: rgb(var(--tw-mint-500)); }
+
+/* 文字按钮（无底、主色、hover 加深）：列表行与卡片里的「查看原文」「重试」「展开」。
+   必须写在尺寸档位之后 —— 同权重，靠顺序把 sm/xs 的 padding 与固定高度清掉。 */
+.btn-link {
+  background: transparent;
+  color: rgb(var(--tw-primary-400));
+}
+.btn-link:hover { background: transparent; color: rgb(var(--tw-primary-500)); }
+
+/* 浅底（tinted）—— 有语义但不要实心：主色 / 成功 / 危险三色一套 */
+.btn-tinted-success { background: rgb(var(--tw-mint-400) / .12); color: rgb(var(--tw-mint-400));
+  border: 1px solid rgb(var(--tw-mint-400) / .25); }
+.btn-tinted-success:hover { background: rgb(var(--tw-mint-400) / .2); color: rgb(var(--tw-mint-400)); }
 
 /* ────────────────────────────────────────────────
    图标按钮规范（2026-09）
@@ -773,9 +908,9 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  width: 2rem;
-  height: 2rem;
-  border-radius: 0.5rem;
+  width: var(--ctl-sm);
+  height: var(--ctl-sm);
+  border-radius: var(--r-control);
   color: rgb(var(--tw-text-muted));
   transition: background-color .15s ease, color .15s ease;
   cursor: pointer;
@@ -789,8 +924,11 @@
 .icon-btn:focus-visible,
 .icon-btn-sm:focus-visible,
 .icon-btn-lg:focus-visible { outline: 2px solid rgb(var(--tw-primary-400) / .5); outline-offset: 1px; }
-.icon-btn-sm { width: 1.75rem; height: 1.75rem; }
-.icon-btn-lg { width: 2.5rem; height: 2.5rem; }
+.icon-btn-sm { width: 1.75rem; height: var(--ctl-sm); }
+.icon-btn-xs { width: var(--ctl-xs); height: var(--ctl-xs); }
+.icon-btn-lg { width: var(--ctl-md); height: var(--ctl-md); }
+/* 圆形图标钮 —— 定义在尺寸档位之后：同权重下后写的才生效，写前面会被上面的圆角盖掉 */
+.icon-btn-pill { border-radius: var(--r-pill); }
 
 /* 色调变体 —— 与 .btn-primary/.btn-ghost 同规矩：手写按钮只写语义类，不写裸 Tailwind 颜色
    （裸 text-white / hover:bg-* 会被本层规则盖掉，2026-09-17 实测：发送按钮图标变灰）*/
@@ -800,23 +938,56 @@
 .icon-btn-overlay:hover { background: rgb(0 0 0 / .5); color: #fff; }
 .icon-btn-inverse { color: #fff; }
 .icon-btn-inverse:hover { background: rgb(255 255 255 / .1); color: #fff; }
+/* 选中态 —— 开关类图标按钮（表情面板开/关）复用同一颗按钮切状态 */
+.icon-btn.is-active { background: rgb(var(--tw-primary-500) / .12); color: rgb(var(--tw-primary-400)); }
+.icon-btn.is-active:hover { background: rgb(var(--tw-primary-500) / .18); }
+/* 警示态 —— 静音/免打扰这种"已开启但不是好事"的开关，用玫红而不是主色 */
+.icon-btn.is-alert { background: rgb(var(--tw-rose-500) / .12); color: rgb(var(--tw-rose-400)); }
+.icon-btn.is-alert:hover { background: rgb(var(--tw-rose-500) / .18); color: rgb(var(--tw-rose-400)); }
 
 /* ────────────────────────────────────────────────
-   表单控件规范（2026-09）
-   input / select / textarea 共用同一套边框、圆角、焦点态。
-   尺寸：md=40px（默认）/ sm=32px；多行用 textarea.field。
+   顶部条（全站单一来源）
+   以前每个页面各写一句 border-b border-border bg-surface：边界淡到看不见，
+   滚动时也没有"上面这条浮着"的层次。现在统一成 surface 底 + 一层普通的软阴影，
+   一条规则管到底（不再叠 1px 发丝线），左右两端也一起落阴影。
+   ──────────────────────────────────────────────── */
+.top-bar {
+  background: rgb(var(--tw-surface));
+  /* 一层普通的软阴影：不另加 1px 发丝线（那等于算两道），也不用负扩散
+     （负扩散会让左右两端收进去，两条边就得靠贴边描边才看得见）*/
+  box-shadow: 0 2px 12px rgb(0 0 0 / .08);
+  /* 必须抬层级：box-shadow 是跟着元素按顺序绘制的，顶部条在前、内容在后，
+     不抬的话下面那块不透明的卡片会把阴影整段盖掉（2026-11-14 实测：阴影只在不透明内容之外看得见）*/
+  position: relative;
+  z-index: 10;
+}
+/* 吸顶变体：滚动容器内部用。必须写在 .top-bar 之后（同权重后写的生效），
+   否则会被上面那句 position: relative 盖掉 */
+.top-bar-sticky { position: sticky; top: 0; }
+/* 深色底上黑影本来就弱，多给一点浓度，仍然只有一层 */
+.dark .top-bar { box-shadow: 0 2px 12px rgb(0 0 0 / .55); }
+
+/* ────────────────────────────────────────────────
+   表单控件规范（2026-09，2026-11-15 改档）
+   单行输入一律胶囊 —— 「一行」就用胶囊语汇，形状不随高度变。
+   - 单行 input / select：.field（32 胶囊，默认）
+   - 大号单行（少数表单主输入）：.field-lg（40 胶囊），配 .btn-md
+   - 多行 textarea：不是「一行」，圆角给大一号的 12px（与卡片同档），见下方 textarea.field
    ──────────────────────────────────────────────── */
 .field {
   width: 100%;
-  height: 2.5rem;
+  height: var(--ctl-sm);
   padding: 0 0.75rem;
   border: 1px solid rgb(var(--tw-border));
-  border-radius: 0.5rem;
+  border-radius: var(--r-pill);
   background: rgb(var(--tw-canvas));
   color: rgb(var(--tw-text-primary));
   font-size: 0.875rem;
   transition: border-color .15s ease, box-shadow .15s ease;
 }
+/* 大号单行输入：40px 胶囊，与 .btn-md 同档（表单主输入才用，别当默认）。
+   形状归"一行"这个语汇，不归高度——否则同一张表单里会出现「一个圆一个方」 */
+.field-lg { height: var(--ctl-md); }
 .field::placeholder { color: rgb(var(--tw-text-muted)); }
 .field:focus {
   outline: none;
@@ -824,9 +995,20 @@
   box-shadow: 0 0 0 3px rgb(var(--tw-primary-500) / .25);
 }
 .field:disabled { opacity: .6; cursor: not-allowed; }
-.field-sm { height: 2rem; padding: 0 0.5rem; font-size: 0.75rem; }
+/* 小号输入：.field 默认已是 32px 胶囊，这一档退化为「字号更小」的别名（存量代码仍在用） */
+.field-sm { height: var(--ctl-sm); padding: 0 0.75rem; font-size: 0.75rem; border-radius: var(--r-pill); }
+/* 行内控件：跟着内容宽度走（筛选条里的下拉、小输入）。
+   .field 默认 width:100%，在 flex 行里会把同行的标签挤到换行，这里按内容撑开。 */
+.field-inline { width: auto; }
+/* 左侧带图标的单行输入：给图标留出空位。.field 的 padding 是无层级规则，utilities 的 pl-* 盖不过它，
+   所以只能在这一层写；图标定位由调用方的绝对定位负责 */
+.field-with-icon { padding-left: 2.25rem; }
 select.field { padding-right: 0.5rem; cursor: pointer; }
-textarea.field { height: auto; padding: 0.5rem 0.75rem; resize: vertical; }
+/* 多行不是「一行」：高度按行数走，所以不用胶囊（会鼓成药丸）。
+   圆角取大档 16：行数再多也只是四个角，看着是「一块输入区」而不是「一根管子」 */
+textarea.field { height: auto; min-height: 2.5rem; padding: 0.5rem 0.75rem; border-radius: var(--r-lg); resize: vertical; }
+/* 固定行数的多行输入（简介、公告这类）：不要右下角那个可拖的把手 */
+textarea.field.field-noresize { resize: none; }
 
 /* ────────────────────────────────────────────────
    卡片 / 徽标规范（2026-09）
@@ -836,7 +1018,13 @@ textarea.field { height: auto; padding: 0.5rem 0.75rem; resize: vertical; }
 .card {
   background: rgb(var(--tw-surface));
   border: 1px solid rgb(var(--tw-border));
-  border-radius: 0.75rem;
+  border-radius: var(--r-card);
+  /* 浮起档：和 .glass-float 同一套投影语言（大扩散、负扩散收边），只是没有模糊底——
+     卡片因此看着是"放在页面上的一层"，而不是贴纸。要收回去就把扩散值调小即可。 */
+  box-shadow: 0 10px 30px -16px rgb(0 0 0 / .3);
+}
+.dark .card {
+  box-shadow: 0 10px 30px -16px rgb(0 0 0 / .8);
 }
 .card-pad { padding: 1rem; }
 .card-pad-lg { padding: 1.25rem; }
@@ -850,7 +1038,7 @@ textarea.field { height: auto; padding: 0.5rem 0.75rem; resize: vertical; }
   align-items: center;
   gap: 0.25rem;
   padding: 0.125rem 0.5rem;
-  border-radius: 9999px;
+  border-radius: var(--r-pill);
   font-size: 0.6875rem;
   line-height: 1.25rem;
   font-weight: 500;
@@ -861,6 +1049,45 @@ textarea.field { height: auto; padding: 0.5rem 0.75rem; resize: vertical; }
 .chip-accent  { background: rgb(var(--tw-accent-400) / .2);  color: rgb(var(--tw-accent-600)); }
 .chip-rose    { background: rgb(var(--tw-rose-500) / .12);   color: rgb(var(--tw-rose-400)); }
 .chip-muted   { background: rgb(var(--tw-elevated));         color: rgb(var(--tw-text-secondary)); }
+
+/* ────────────────────────────────────────────────
+   悬浮玻璃面板（2026-11）
+   只给"浮在内容之上、要让下面透出来"的块用：手机底部导航、聊天输入框。
+   普通卡片仍走 .card —— 这层是半透明 + 模糊 + 软投影，跟卡片不是同一种东西。
+   透明度和模糊按"能看清后面内容、又不跟图标抢注意力"调过（导航那版实测过）。
+   ──────────────────────────────────────────────── */
+.glass-float {
+  border-radius: 22px;
+  border: 1px solid rgb(0 0 0 / .06);
+  background: rgb(255 255 255 / .7);
+  -webkit-backdrop-filter: blur(16px) saturate(1.5);
+  backdrop-filter: blur(16px) saturate(1.5);
+  box-shadow: 0 10px 30px -14px rgb(0 0 0 / .35);
+}
+.dark .glass-float {
+  border-color: rgb(255 255 255 / .08);
+  background: rgb(255 255 255 / .06);
+}
+
+/* 浮在内容上的圆形小按钮（"回到底部"）：同样是玻璃质感，但圆、小、投影更浅——
+   .glass-float 那套 22px 圆角 + 大投影放在 36px 的圆上会像个贴歪的方块。 */
+.float-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: var(--r-pill);
+  border: 1px solid rgb(var(--tw-border));
+  background: rgb(var(--tw-surface) / .92);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 4px 14px -8px rgb(0 0 0 / .35);
+  color: rgb(var(--tw-text-secondary));
+  transition: color .15s ease, background-color .15s ease, box-shadow .15s ease;
+}
+.float-btn:hover { color: rgb(var(--tw-text-primary)); background: rgb(var(--tw-surface)); }
+.dark .float-btn { background: rgb(var(--tw-surface) / .8); }
 
 /* ────────────────────────────────────────────────
    可缩放卡片的外描边与八向热区（四边 + 四角）
@@ -930,7 +1157,7 @@ textarea.field { height: auto; padding: 0.5rem 0.75rem; resize: vertical; }
 .resize-edge[data-edge='ne']::before,
 .resize-edge[data-edge='sw']::before,
 .resize-edge[data-edge='se']::before {
-  border-radius: 9999px;
+  border-radius: var(--r-pill);
   /* 内缘硬起（否则贴卡片那 1px 是渐入的，看着像描边往内缩）；两端各留过渡，硬切不抗锯齿会出阶梯 */
   background: radial-gradient(circle at 50% 50%,
     transparent 0 calc(var(--edge-r) - .4px),
@@ -942,7 +1169,7 @@ textarea.field { height: auto; padding: 0.5rem 0.75rem; resize: vertical; }
 .resize-edge[data-edge='ne']::after,
 .resize-edge[data-edge='sw']::after,
 .resize-edge[data-edge='se']::after {
-  border-radius: 9999px;
+  border-radius: var(--r-pill);
   border: var(--edge-w) solid rgb(var(--edge-c));
 }
 
@@ -958,10 +1185,34 @@ textarea.field { height: auto; padding: 0.5rem 0.75rem; resize: vertical; }
 /* 手机端：底部余量 + 收起原生滚动条。
    原生滚动条按滚动容器的整条高度绘制，末端会从悬浮胶囊旁边穿出去；它没法单独缩短到
    胶囊上沿，触摸操作本身也不需要它，改由 MobileScrollbar 画一根止于胶囊顶边的细条。
-   两条都限定在手机断点内：桌面没有胶囊，组件上写的 md:pb-* 要能正常生效。 */
+   这一段限定在手机断点内：桌面没有胶囊，组件上写的 md:pb-* 要能正常生效。 */
 @media (max-width: 767px) {
   .pb-nav { padding-bottom: var(--mobile-nav-reserved); scrollbar-width: none; -ms-overflow-style: none; }
   .pb-nav::-webkit-scrollbar { width: 0; height: 0; }
+}
+
+/* 聊天页的原生滚动条两端都收起：它原来只写在手机断点里，桌面上就变成
+   "原生条 + 自绘条"两根并存。全端统一只留 MobileScrollbar 那一根
+   （它画得出的轨道能止于悬浮输入区上沿，原生条做不到）。 */
+.chat-scroll { scrollbar-width: none; -ms-overflow-style: none; }
+.chat-scroll::-webkit-scrollbar { width: 0; height: 0; }
+
+/* 滚动条滑块的位移（MobileScrollbar）：支持滚动驱动动画时交给浏览器算，
+   进度直接取自滚动容器的命名时间轴，和内容同帧；不支持的老浏览器由组件回退到 JS 写 translate */
+@keyframes x-scrollbar-thumb {
+  from { translate: 0 0; }
+  /* 100.1% 与 animation-range 的 100.1% 配成一对：滚动到底时进度 99.9%，乘回来正好是整段 */
+  to   { translate: 0 100.1%; }
+}
+
+/* 聊天页的"浮动输入区让位"：和 .pb-nav / --mobile-nav-reserved 同一套做法——
+   谁浮在内容上，就由容器声明自己要留多高，滚动条与底部留白都读同一个变量。
+   --composer-inset 由 ChatView 按输入区实际高度写进来（输入区会随多行文本变高）。 */
+.chat-scroll {
+  padding-bottom: calc(var(--composer-inset, 7rem) + 0.75rem);
+  /* 顶部同理：聊天头部也浮在消息上，--header-inset 由面板容器声明
+     （没有头部的对话页不声明这个变量，退化成原来的 0.75rem 上留白） */
+  padding-top: calc(var(--header-inset, 0.75rem) + var(--header-strip, 0px));
 }
 
 .mermaid-stage > svg { display: block; width: 100%; height: auto; }

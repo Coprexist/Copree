@@ -36,6 +36,8 @@ interface ModalProps {
   /** 是否显示右上角关闭按钮（无标题时默认显示） */
   showClose?: boolean
   bodyClassName?: string
+  /** 手机端铺满整屏（长内容弹窗用：聊天记录、长列表）。桌面端仍居中留白 */
+  mobileFullscreen?: boolean
 }
 
 export default function Modal({
@@ -49,6 +51,7 @@ export default function Modal({
   closeOnOverlay = true,
   showClose,
   bodyClassName = '',
+  mobileFullscreen = false,
 }: ModalProps) {
   const titleId = useId()
 
@@ -56,13 +59,21 @@ export default function Modal({
   const withClose = showClose ?? true
 
   return (
-    <Dialog onClose={onClose} closeOnOverlay={closeOnOverlay} backdrop="bg-black/60 backdrop-blur-sm">
+    // 手机全屏时把遮罩的留白也去掉：留 16px 就铺不满，边角会露出底色
+    <Dialog
+      onClose={onClose}
+      closeOnOverlay={closeOnOverlay}
+      backdrop="bg-black/60 backdrop-blur-sm"
+      className={`flex items-center justify-center ${mobileFullscreen ? 'p-0 md:p-4' : 'p-4'}`}
+    >
       {/* 卡片 */}
       <div
-        className={`relative w-full ${width || SIZE_CLASS[size]} bg-surface border border-border rounded-dialog shadow-2xl max-h-[85vh] flex flex-col`}
+        className={`relative w-full ${width || SIZE_CLASS[size]} bg-surface border border-border rounded-dialog shadow-2xl max-h-[85vh] flex flex-col ${
+          mobileFullscreen ? 'max-md:h-[100dvh] max-md:max-h-none max-md:max-w-none max-md:rounded-none max-md:border-0' : ''
+        }`}
       >
         {(title || withClose) && (
-          <div className="flex items-center justify-between gap-2 px-5 py-4 border-b border-border shrink-0">
+          <div className="top-bar flex items-center justify-between gap-2 px-5 py-4 shrink-0">
             <h3 id={title ? titleId : undefined} className="font-semibold text-textPrimary text-sm flex items-center gap-2 min-w-0">
               {title}
             </h3>

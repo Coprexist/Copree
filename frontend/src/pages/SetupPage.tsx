@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { SecretInput } from '../components/ui'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useT } from '../i18n/I18nContext'
@@ -614,21 +615,12 @@ export default function SetupPage() {
             </div>
             <div>
               <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup:apiKey')}</label>
-              <div className="relative">
-                <input
-                  type={showApiKey ? 'text' : 'password'}
-                  value={apiKey}
-                  onChange={e => setApiKey(e.target.value)}
-                  placeholder={t('setup:apiKeyPlaceholder')}
-                  className="w-full px-3.5 py-2.5 pr-10 rounded-card bg-canvas border border-border text-textPrimary text-sm focus:border-primary-400 focus:outline-none"
-                />
-                <button
-                  onClick={() => setShowApiKey(!showApiKey)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-textMuted hover:text-textSecondary"
-                >
-                  {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
-                </button>
-              </div>
+              <SecretInput
+                value={apiKey}
+                onChange={e => setApiKey(e.target.value)}
+                placeholder={t('setup:apiKeyPlaceholder')}
+                wrapperClassName="w-full"
+              />
               {apiBaseUrl && getApiKeyUrl(apiBaseUrl) && (
                 <a
                   href={getApiKeyUrl(apiBaseUrl)}
@@ -729,11 +721,10 @@ export default function SetupPage() {
             </div>
             <div>
               <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup:smtpPassword')}</label>
-              <input
-                type="password"
+              <SecretInput
                 value={smtpPassword}
                 onChange={e => setSmtpPassword(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-card bg-canvas border border-border text-textPrimary text-sm focus:border-primary-400 focus:outline-none"
+                wrapperClassName="w-full"
               />
             </div>
             <div className="flex gap-3">
@@ -800,12 +791,11 @@ export default function SetupPage() {
             </div>
             <div>
               <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup:keyPoolKey')}</label>
-              <input
-                type="password"
+              <SecretInput
                 value={poolKey}
                 onChange={e => setPoolKey(e.target.value)}
                 placeholder={t('setup:keyPoolKey')}
-                className="w-full px-3.5 py-2.5 rounded-card bg-canvas border border-border text-textPrimary text-sm focus:border-primary-400 focus:outline-none"
+                wrapperClassName="w-full"
               />
             </div>
             {!poolKey && (

@@ -84,13 +84,6 @@ function FederationShareSection({ groupId }: { groupId: number }) {
               : t('groupSettings:federationShareHint')}
           </div>
         </div>
-        <button
-          onClick={loadPeers}
-          disabled={loading}
-          className="text-xs text-textMuted hover:text-textSecondary transition-colors"
-        >
-          {loading ? <Loader2 size={14} className="animate-spin" /> : t('common:refresh')}
-        </button>
       </div>
 
       {!myDisplayName && loaded && (
@@ -173,6 +166,9 @@ interface GroupSettings {
   searchable?: boolean
   auto_approve_join?: boolean
   approve_invites?: boolean
+  // 决策代理规矩与公告可见性（群主/管理员写）
+  proxy_rules?: string | null
+  proxy_announcement?: boolean
   // 群名跟随外部渠道（QQ 群名），以及这个群接没接渠道（没接就不显示那一块）
   name_from_channel?: boolean
   channel_bound?: boolean
@@ -199,7 +195,16 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
   // 表单状态
   const [name, setName] = useState(group?.name || '')
   const [announcement, setAnnouncement] = useState(group?.announcement || '')
+  // 决策代理：本群规矩与是否让代理读公告（群主/管理员可改）
+  const [proxyRules, setProxyRules] = useState(group?.proxy_rules || '')
+  const [proxyAnnouncement, setProxyAnnouncement] = useState(group?.proxy_announcement ?? true)
   const [bio, setBio] = useState(group?.bio || '')
+  // 简介 / 公告 / 规则 共用一个「保存」：跟群上已存的值比，有改动才可点
+  const profileDirty =
+    bio !== (group?.bio || '') ||
+    announcement !== (group?.announcement || '') ||
+    proxyRules !== (group?.proxy_rules || '') ||
+    proxyAnnouncement !== (group?.proxy_announcement ?? true)
   const [pinned, setPinned] = useState(false)
   const [speakLimit, setSpeakLimit] = useState(group?.speak_limit_per_minute === -1 ? -1 : (group?.speak_limit_per_minute || 0))
   const [speakWindow, setSpeakWindow] = useState(group?.speak_limit_window_seconds || 120)
@@ -249,6 +254,8 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
     if (!group) return
     setName(group.name)
     setAnnouncement(group.announcement || '')
+    setProxyRules(group.proxy_rules || '')
+    setProxyAnnouncement(group.proxy_announcement ?? true)
     setBio(group.bio || '')
     // 从 group 获取 is_pinned（已经在 GET /groups 中返回）
     if (group.is_pinned !== undefined) {
@@ -528,19 +535,10 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
 
       <div className="relative w-full md:w-96 max-w-full h-full bg-surface md:border-l border-border shadow-2xl flex flex-col animate-slide-in">
         {/* 头部 */}
-        <div className="h-14 px-4 border-b border-border flex items-center justify-between shrink-0">
+        <div className="top-bar h-14 px-4 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
-            <button
-              onClick={onClose}
-              className="icon-btn-sm md:hidden -ml-1 text-textSecondary"
-            >
-              <ArrowLeft size={20} />
-            </button>
             <h2 className="font-semibold text-sm text-textPrimary">{t('groupSettings:title')}</h2>
           </div>
-          <button onClick={onClose} className="icon-btn-sm text-textMuted hidden md:block">
-            <X size={16} />
-          </button>
         </div>
 
         {/* Tab 切换 */}
@@ -570,14 +568,14 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                     value={name}
                     onChange={e => setName(e.target.value)}
                     disabled={!isAdmin}
-                    className="flex-1 bg-elevated border border-border rounded-control px-3 py-2 text-sm text-textPrimary disabled:opacity-50 outline-none focus:border-primary-400"
+                    className="field flex-1"
                   />
                   {isAdmin && (
                     <button
                       // 手动改群名 = 收回所有权：后端会把"跟随渠道"关掉，这里同步回显
                       onClick={() => { setNameFromChannel(false); saveSettings({ name }) }}
                       disabled={saving || name === group.name}
-                      className="px-3 py-2 bg-primary-500 text-white rounded-control text-xs font-medium hover:bg-primary-600 disabled:opacity-50 transition-colors"
+                      className="btn btn-md btn-primary shrink-0"
                     >
                       {t('common:save')}
                     </button>
@@ -596,16 +594,9 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                       placeholder={t('groupSettings:bioPlaceholder')}
                       rows={2}
                       maxLength={300}
-                      className="w-full bg-elevated border border-border rounded-control px-3 py-2 text-sm text-textPrimary outline-none focus:border-primary-400 resize-none"
+                      className="field w-full resize-none"
                     />
                     <div className="text-3xs text-textMuted">{t('groupSettings:bioHint')}</div>
-                    <button
-                      onClick={() => saveSettings({ bio })}
-                      disabled={saving || bio === (group.bio || '')}
-                      className="px-3 py-1.5 bg-primary-500 text-white rounded-control text-xs font-medium hover:bg-primary-600 disabled:opacity-50 transition-colors"
-                    >
-                      {t('common:save')}
-                    </button>
                   </div>
                 ) : (
                   <p className="mt-1 text-xs text-textMuted">{group.bio || t('groupSettings:bioEmpty')}</p>
@@ -622,16 +613,9 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                       onChange={e => setAnnouncement(e.target.value)}
                       placeholder={t('groupSettings:announcementPlaceholder')}
                       rows={3}
-                      className="w-full bg-elevated border border-border rounded-control px-3 py-2 text-sm text-textPrimary outline-none focus:border-primary-400 resize-none"
+                      className="field w-full resize-none"
                     />
                     <div className="flex gap-2">
-                      <button
-                        onClick={() => saveSettings({ announcement })}
-                        disabled={saving}
-                        className="px-3 py-1.5 bg-primary-500 text-white rounded-control text-xs font-medium hover:bg-primary-600 disabled:opacity-50 transition-colors"
-                      >
-                        {t('groupSettings:updateAnnouncement')}
-                      </button>
                       {group.announcement && (
                         <button
                           onClick={async () => {
@@ -641,7 +625,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                               onUpdate({ announcement: null })
                             } catch (e: any) { setError(e?.detail || t('error:operationFailed')) }
                           }}
-                          className="px-3 py-1.5 bg-rose-400/10 text-rose-400 rounded-control text-xs font-medium hover:bg-rose-400/20 transition-colors"
+                          className="btn btn-md btn-tinted-danger"
                         >
                           {t('groupSettings:deleteAnnouncement')}
                         </button>
@@ -654,6 +638,52 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                   </p>
                 )}
               </div>
+
+              {/* 决策代理：本群规矩与公告可见性（群主/管理员可改） */}
+              <div>
+                <label className="text-xs font-medium text-textSecondary">{t('groupSettings:proxyRules')}</label>
+                {isAdmin ? (
+                  <div className="mt-1 space-y-2">
+                    <textarea
+                      value={proxyRules}
+                      onChange={e => setProxyRules(e.target.value)}
+                      placeholder={t('groupSettings:proxyRulesPlaceholder')}
+                      rows={3}
+                      maxLength={1000}
+                      className="field field-noresize w-full"
+                    />
+                    <div className="text-3xs text-textMuted">{t('groupSettings:proxyRulesHint')}</div>
+                    <label className="flex items-start gap-2 text-xs text-textSecondary">
+                      <input
+                        type="checkbox"
+                        checked={proxyAnnouncement}
+                        onChange={e => setProxyAnnouncement(e.target.checked)}
+                        className="mt-0.5"
+                      />
+                      <span>{t('groupSettings:proxyAnnouncement')}</span>
+                    </label>
+                    <div className="text-3xs text-textMuted">{t('groupSettings:proxyAnnouncementHint')}</div>
+                  </div>
+                ) : (
+                  <p className="mt-1 text-sm text-textSecondary bg-elevated rounded-control px-3 py-2">
+                    {group.proxy_rules || t('groupSettings:proxyRulesEmpty')}
+                  </p>
+                )}
+              </div>
+
+              {/* 资料统一保存：简介 / 公告 / 规则都是群侧数据，一次提交；群名单独保存
+                  （手动改群名会关闭「跟随渠道」，不能让改公告顺手把它关掉） */}
+              {isAdmin && (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => saveSettings({ bio, announcement, proxy_rules: proxyRules, proxy_announcement: proxyAnnouncement })}
+                    disabled={saving || !profileDirty}
+                    className="btn btn-md btn-primary"
+                  >
+                    {t('common:save')}
+                  </button>
+                </div>
+              )}
 
               {isAdmin && (
               <>
@@ -832,7 +862,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                       <button
                         onClick={handleCustomDnd}
                         disabled={!customDndMinutes.trim()}
-                        className="btn btn-xs btn-primary shrink-0"
+                        className="btn btn-md btn-primary shrink-0"
                       >
                         {t('common:set')}
                       </button>
@@ -1007,7 +1037,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                   {transferModalOpen && (
                     <div className="fixed inset-0 z-toast flex items-center justify-center">
                       <div className="absolute inset-0 bg-black/40" onClick={() => setTransferModalOpen(false)} />
-                      <div className="relative bg-surface border border-border rounded-card shadow-2xl p-4 w-80 max-w-[90vw]">
+                      <div className="relative card shadow-2xl p-4 w-80 max-w-[90vw]">
                         <h3 className="text-sm font-semibold text-textPrimary mb-3">{t('groupSettings:transferOwnerTitle')}</h3>
                         <p className="text-xs text-textMuted mb-3">{t('groupSettings:transferOwnerHint')}</p>
                         <div className="space-y-1 max-h-48 overflow-y-auto mb-3">

@@ -11,7 +11,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { X, Plus, Trash2, Link2, Key, Globe, RefreshCw, Users, BookOpen, CheckCircle2 } from 'lucide-react'
 import { api } from '../api/client'
 import BindGroupModal from './world/BindGroupModal'
-import { Dialog } from './ui'
+import { Dialog, UnderlineTabs, SecretInput } from './ui'
 
 interface GroupType {
   slug: string
@@ -147,14 +147,15 @@ export default function GroupManagerModal({ worldId, isOwner, onClose }: Props) 
         </div>
         {/* Tab */}
         <div className="px-4 shrink-0">
-          <div className="flex items-center gap-1 bg-elevated rounded-control p-0.5 w-fit">
-            <button onClick={() => setTab('types')} className={`inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded-control ${tab === 'types' ? 'bg-primary-500/15 text-primary-400' : 'text-textSecondary'}`}>
-              <Users size={12} /> 入口类型 ({types.length})
-            </button>
-            <button onClick={() => setTab('assistants')} className={`inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded-control ${tab === 'assistants' ? 'bg-primary-500/15 text-primary-400' : 'text-textSecondary'}`}>
-              <Key size={12} /> 群助手 ({assistants.length})
-            </button>
-          </div>
+          <UnderlineTabs
+            size="sm"
+            items={[
+              { key: 'types' as const, label: `入口类型 (${types.length})`, icon: <Users size={12} /> },
+              { key: 'assistants' as const, label: `群助手 (${assistants.length})`, icon: <Key size={12} /> },
+            ]}
+            value={tab}
+            onChange={setTab}
+          />
         </div>
 
         {msg && <div className="px-4 pt-2 text-xs text-accent-400">{msg}</div>}
@@ -207,26 +208,26 @@ export default function GroupManagerModal({ worldId, isOwner, onClose }: Props) 
                 <div className="rounded-card border border-border p-3 space-y-2">
                   <div className="text-xs font-semibold text-textPrimary flex items-center gap-1"><Plus size={12} /> 新建入口类型</div>
                   <div className="grid grid-cols-2 gap-2">
-                    <select value={newType.applies_to} onChange={e => setNewType({ ...newType, applies_to: e.target.value })} className="bg-elevated text-xs px-2 py-1.5 rounded border border-border text-textPrimary">
+                    <select value={newType.applies_to} onChange={e => setNewType({ ...newType, applies_to: e.target.value })} className="field field-sm field-inline">
                       <option value="group">群聊类型（群以什么场景进入）</option>
                       <option value="ai">AI 角色（AI 以什么身份入驻）</option>
                       <option value="both">两者</option>
                     </select>
                     <input value={newType.bind_limit} onChange={e => setNewType({ ...newType, bind_limit: Number(e.target.value) })} type="number" min={-1} placeholder="绑定上限（-1=无限）" className="bg-elevated text-xs px-2 py-1.5 rounded border border-border text-textPrimary" />
                   </div>
-                  <input value={newType.name} onChange={e => setNewType({ ...newType, name: e.target.value })} placeholder={newType.applies_to === 'ai' ? '角色名（如 玩家/NPC/裁判/店员）' : '类型名（如 冒险团/商会/决斗公会）'} className="w-full bg-elevated text-xs px-2 py-1.5 rounded border border-border text-textPrimary" />
-                  <textarea value={newType.rules} onChange={e => setNewType({ ...newType, rules: e.target.value })} rows={2} placeholder={newType.applies_to === 'ai' ? '角色规则（这个身份的行为与权限边界）' : '世界规则（群主可见；群助手行为继承）'} className="w-full bg-elevated text-xs px-2 py-1.5 rounded border border-border resize-none text-textPrimary" />
+                  <input value={newType.name} onChange={e => setNewType({ ...newType, name: e.target.value })} placeholder={newType.applies_to === 'ai' ? '角色名（如 玩家/NPC/裁判/店员）' : '类型名（如 冒险团/商会/决斗公会）'} className="w-full bg-elevated text-xs px-2 py-1.5 rounded border border-border resize-none text-textPrimary" />
+                  <textarea value={newType.rules} onChange={e => setNewType({ ...newType, rules: e.target.value })} rows={2} placeholder={newType.applies_to === 'ai' ? '角色规则（这个身份的行为与权限边界）' : '世界规则（群主可见；群助手行为继承）'} className="field field-sm w-full resize-none" />
                   {newType.applies_to !== 'ai' && (
                     <div className="grid grid-cols-3 gap-2">
                       <input value={newType.count} onChange={e => setNewType({ ...newType, count: Number(e.target.value) })} type="number" min={1} placeholder="助手数量" className="bg-elevated text-xs px-2 py-1.5 rounded border border-border text-textPrimary" />
-                      <input value={newType.default_name} onChange={e => setNewType({ ...newType, default_name: e.target.value })} placeholder="助手默认名" className="bg-elevated text-xs px-2 py-1.5 rounded border border-border text-textPrimary" />
+                      <input value={newType.default_name} onChange={e => setNewType({ ...newType, default_name: e.target.value })} placeholder="助手默认名" className="field field-sm" />
                       <label className="flex items-center gap-1.5 text-3xs text-textSecondary">
                         <input type="checkbox" checked={newType.need_api} onChange={e => setNewType({ ...newType, need_api: e.target.checked })} className="accent-primary-500" />
                         助手需要 API
                       </label>
                     </div>
                   )}
-                  <button onClick={createType} disabled={!newType.name || applying} className="btn btn-xs btn-primary w-full">
+                  <button onClick={createType} disabled={!newType.name || applying} className="btn btn-md btn-primary w-full">
                     {applying ? '创建中…' : '创建类型'}
                   </button>
                 </div>
@@ -260,11 +261,10 @@ export default function GroupManagerModal({ worldId, isOwner, onClose }: Props) 
                   </div>
                   {apiInput?.agentId === a.id && (
                     <div className="flex items-center gap-1.5">
-                      <input
+                      <SecretInput
                         value={apiInput.key}
-                        onChange={e => setApiInput({ ...apiInput, key: e.target.value })}
-                        type="password" placeholder="API Key（加密存储，世界只能调用不能查看）"
-                        className="flex-1 bg-elevated text-xs px-2 py-1.5 rounded border border-border text-textPrimary"
+                        onChange={e => setApiInput({ ...apiInput, key: e.target.value })} placeholder="API Key（加密存储，世界只能调用不能查看）"
+                        wrapperClassName="flex-1 min-w-0"
                       />
                       <input
                         value={apiInput.base}

@@ -15,6 +15,11 @@ export interface EmojiFace {
   name: string
   emoji: string
   file: string
+  // 三段给 AI 读的说明（见后端 catalog.emoji_face）：图片表情靠它们判断"什么时候发"。
+  // 可选——商城/内置包里没写就是空串，渲染层不依赖它们。
+  caption?: string
+  keywords?: string
+  mood?: string
 }
 
 export interface EmojiPack {
