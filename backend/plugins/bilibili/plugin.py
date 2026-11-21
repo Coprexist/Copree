@@ -277,6 +277,87 @@ async def _aid_of(bvid: str, cookie: str = "") -> int:
     return int((await _view_of(bvid, cookie))["aid"])
 
 
+def _pick_rpid(rows: list[dict], rpid: int) -> dict | None:
+    """从一堆评论对象里挑出 rpid 那一条（统一转 int 比较，字符串形状的 rpid 会漏）。"""
+    for row in rows:
+        if int(row.get("rpid") or 0) == rpid:
+            return row
+    return None
+
+
+async def _locate_comment(aid: int, rpid: int, cookie: str = "", *, with_row: bool = True) -> dict:
+    """这个 rpid 落在哪栋楼里、这一条的对象是什么——一个接口问清两件事。
+
+    为什么不再去评论列表里找：以前查状态是翻**视频的顶层评论列表**，而楼中楼的回复
+    根本不在那张表上，于是永远找不到（还一直翻页）。改成问接口本身：
+
+      - `root.rpid == rpid`：它就是根（视频下的顶层评论），对象就在 `data.root` 里，不用再请求
+      - 否则它是楼中楼的一条，`data.root.rpid` 就是它所属的线程根
+
+    楼中楼按时间**正序**排，刚发出去的那条必然在末尾——所以按 `page.count` 直接跳最后一页，
+    不从第一页翻起；那一页没找到再回看第一页，B 站哪天改了排序也不至于失手。
+
+    返回 {"thread": 线程根 rpid, "row": 这条评论的对象或 None, "total": 线程内回复数}。
+    `with_row=False` 只问线程根（回复操作只要这个），省掉翻页那一次请求。
+    """
+    data = await _get(f"{API}/x/v2/reply/reply",
+                      {"type": 1, "oid": aid, "root": rpid, "ps": 20, "pn": 1}, cookie)
+    root = data.get("root") or {}
+    total = int((data.get("page") or {}).get("count") or 0)
+    thread = int(root.get("rpid") or 0) or rpid
+    if thread == rpid:
+        return {"thread": thread, "row": root, "total": total}
+    if not with_row:
+        return {"thread": thread, "row": None, "total": total}
+    row = _pick_rpid([root, *(data.get("replies") or [])], rpid)
+    if row is None and total > 20:
+        tail = await _get(f"{API}/x/v2/reply/reply",
+                          {"type": 1, "oid": aid, "root": thread, "ps": 20,
+                           "pn": (total + 19) // 20}, cookie)
+        row = _pick_rpid([tail.get("root") or {}, *(tail.get("replies") or [])], rpid)
+    return {"thread": thread, "row": row, "total": total}
+
+
+async def _owner_error(bvid: str, aid: int, rpid: int, cookie: str, cfg: dict) -> str:
+    """这条评论要不是自己的，返回"是谁的"，否则返回空串——只在删之前问。
+
+    为什么删之前要问：B 站的 -403「访问权限不足」对模型毫无指导性，它既可能当成
+    "账号没权限"、也可能当成"再试一次"，而它真正犯的错是**拿了别人的 rpid**。
+    自己先看一眼归属，就能把"是谁的"直接说出来，省掉一次白跑的失败请求。
+    """
+    mine = str(cfg.get("bili_mid") or "").strip()
+    if not mine:
+        return ""       # 不知道自己的 mid 就没法判断，交给 B 站兜底
+    try:
+        row = (await _locate_comment(aid, rpid, cookie))["row"]
+    except BiliError:
+        return ""
+    member = (row or {}).get("member") or {}
+    owner = str(member.get("mid") or "").strip()
+    if not owner or owner == mine:
+        return ""
+    who = member.get("uname") or "别人"
+    return (f"这条不是你发的（是「{who}」的），B 站只允许删自己的评论，删别人的一定 403。"
+            f"要删自己的，先用 bili_comments 看你在 {bvid} 下发过哪几条，拿它们的 rpid。")
+
+
+async def _reply_anchor(aid: int, rpid: int, cookie: str = "") -> tuple[int, int]:
+    """「要回的那条评论」→ (root, parent)：楼中楼的这两个字段只能一起算、一起发。
+
+    为什么必须成对：B 站只认这一对才挂得出"回复谁"。只发 root、或者把楼中楼的 rpid
+    当成 root 传上去，它**不报错**，而是直接把这条当成视频下的新评论——回了、谁都
+    看不见，是这条通道代价最高的一次静默失败。
+
+    也为什么只给一个参数：调用方不知道手里那个 rpid 是根评论还是"别人回我的那条"，
+    这个区别由这里问接口问清楚（对根评论回自己，对楼中楼回它所属的顶层），
+    然后把一对结果交出去。返回二元组而不是两个函数，就是为了让"漏一个"写不出来。
+    """
+    # 线程根只从 _locate_comment 出：接口说不上来（这条被删/折叠）时它退回传入值，
+    # 宁可挂错一层，也别让回复整个发不出去
+    thread = (await _locate_comment(aid, rpid, cookie, with_row=False))["thread"]
+    return thread, rpid
+
+
 async def _post(path: str, data: dict, cookie: str = "", *, referer: str = "") -> dict:
     """写操作出口（点赞 / 评论 / 删评论）：按网页端的形状发。
 
@@ -305,14 +386,15 @@ async def _post(path: str, data: dict, cookie: str = "", *, referer: str = "") -
 
 
 async def _comment_status(aid: int, rpid: int, cookie: str, *, tries: int = 1, gap: float = 2.5) -> dict:
-    """这条评论对外是什么样：用**登录态**读列表，看 B 站挂在评论上的状态字段。
+    """这条评论对外是什么样：用**登录态**读这条评论，看 B 站挂在它身上的状态字段。
 
     为什么不拿"匿名能不能查到"当标准：匿名接口的返回会随策略变，可靠的信号是评论对象自己的字段：
       - `state == 0` 正常；`state == 17` 表示被 B 站隐藏——只有作者自己看得到，别人看不到
       - `invisible` 为真 = 不可见
       - `folder.is_folded` 为真 = 收在折叠栏里：仍然公开、点开就能看到。它还会自己恢复——
         2026-11-01 实测刚发出时折叠、过一阵再看已经不折叠，所以它不参与「别人看不看得到」的判断。
-    按时间倒序最多翻 3 页；找不到就是已删 / 被挤到后面。
+    定位交给 _locate_comment：按 rpid 反查线程，顶层评论和楼中楼都同样准（不必翻顶层列表），
+    找不到就是已删 / 被折叠到连自己都看不见。
 
     刚发出的评论会先被标一段时间的隐藏/折叠（2026-11-01 实测：提交后立刻查是 `state=17`，
     3 秒后再查已经是 `state=0`），所以查状态的调用方给 `tries` > 1 等它落定，别把"还在审核"
@@ -322,16 +404,8 @@ async def _comment_status(aid: int, rpid: int, cookie: str, *, tries: int = 1, g
     for attempt in range(max(1, tries)):
         if attempt:
             await asyncio.sleep(gap)
-        row = None
         try:
-            # 明确按时间翻：刚发的评论只可能出现在时间序的前几页，热度序里翻不到
-            async for data in _comment_pages(aid, cookie, mode=2):
-                for item in (data.get("replies") or []):
-                    if int(item.get("rpid") or 0) == rpid:
-                        row = item
-                        break
-                if row:
-                    break
+            row = (await _locate_comment(aid, rpid, cookie))["row"]
         except BiliError as e:
             logger.debug("B 站评论状态自查失败: %s", e)
             return last
@@ -826,14 +900,55 @@ _qr_sessions: dict[str, dict] = {}
 _nav_cache: dict[str, tuple[float, dict]] = {}
 
 
-async def _nav_cached(cookie: str) -> dict:
+async def _nav_cached(cookie: str, instance: str) -> dict:
+    """登录态（isLogin / uname / mid），带缓存；**顺手把 B 站那边的改名同步回配置**。
+
+    缓存是为了卡片被反复拉取时不每次打 nav。副作用只在真正问过接口的那一次发生，
+    同一次查询里发现"B 站叫这个名字、配置还记着旧名字"就回写（见 _sync_profile）——
+    独立发一个同步任务，就得再判断一次该不该跑、什么时候跑，不值得。
+
+    instance 不给默认值：谁调它谁就得说出是哪个实例，否则改名会悄悄同步不到
+    （和不传 parent 就悄悄降级成新评论是同一类坑）。
+    """
     now = time.time()
     hit = _nav_cache.get(cookie)
     if hit and now - hit[0] < NAV_TTL_SECONDS:
         return hit[1]
     info = await _nav(cookie)
     _nav_cache[cookie] = (now, info)
+    await _sync_profile(instance, info)
     return info
+
+
+async def _sync_profile(instance: str, info: dict) -> None:
+    """B 站那边改了名要跟着改：nickname 只在扫码那一刻写过一次，之后谁也不刷。
+
+    卡片看不出来（它读实时 uname），但工具回执里的「账号」读的是配置——不改的话
+    AI 会照着旧名字跟用户报「我（旧名字）回复了」。nav 本来每个实例每 120 秒问一次，
+    顺手把变化写回去，不额外发请求。
+    """
+    if not instance or not info.get("isLogin"):
+        return
+    uname = str(info.get("uname") or "").strip()
+    if not uname:
+        return
+    from app.services.plugin import config as plugin_config
+
+    cfg = await plugin_config.get_config(PLUGIN_ID, instance)
+    patch: dict = {}
+    if uname != str(cfg.get("nickname") or "").strip():
+        patch["nickname"] = uname
+    mid = str(info.get("mid") or "").strip()
+    if mid and mid != str(cfg.get("bili_mid") or "").strip():
+        patch["bili_mid"] = mid
+    if not patch:
+        return
+    try:
+        await plugin_config.set_config(PLUGIN_ID, patch, instance=instance, actor="bilibili-profile-sync")
+    except Exception as e:  # noqa: BLE001 —— 名字同步失败不该把登录态查询一起搞挂
+        logger.warning("B 站账号资料同步失败（%s）: %s", instance, e)
+        return
+    logger.info("B 站账号资料已同步（%s）: %s", instance, patch)
 
 
 async def _qr_start(instance: str) -> dict:
@@ -1207,18 +1322,21 @@ def _reply_row(kind: str, it: dict) -> dict:
     """一条「回复我的 / @我的」压成流水行：渲染要什么就存什么。
 
     为什么不用 JSON：这是给模型看的短行，键名和引号都是白花的 token；字段顺序
-    固定就够读了。楼中楼要把 root_id 带上——不然它知道有人回复了，却接不上话。
+    固定就够读了。楼中楼要能定位到人，所以两个 id 都要：root 是整栋楼的根，
+    src 是"回我的那条"自己的 rpid（回它才算回到这个人，回 root 只会挂到根评论下）。
     """
     item = it.get("item") or {}
     return {
         "kind": kind,
-        "key": str(int(it.get("id") or 0)),          # rpid：站点给这条回复的稳定身份
+        # 消息流水号（1e15 量级），只用来当"念到哪一条"的游标，**不是** rpid
+        "key": str(int(it.get("id") or 0)),
         "ts": int(it.get("reply_time") or 0),
         "who": str((it.get("user") or {}).get("nickname") or "有人").strip()[:128],
         "target": _bv_of(item.get("uri"))[:64],
         "title": _clip(item.get("title") or ""),
         "said": _clip(item.get("source_content") or item.get("desc") or ""),
         "root": str(item.get("root_id") or "").strip()[:32],
+        "src": str(item.get("source_id") or "").strip()[:32],
         "counts": 0,
     }
 
@@ -1266,16 +1384,18 @@ def _dm_row(talker: int, name: str, msg: dict, text: str) -> dict:
 def _row_line(row: dict) -> str:
     """流水行压成一行：类别｜谁｜在哪｜说了什么（赞写累计数）。
 
-    「在哪」的规矩：有 BV 号就用 BV 号，楼中楼再挂一个 #root_id（不带它接不上话），
-    连 BV 号都没有（动态、专栏）才退回标题；私信没有「在哪」，对方就是位置。
+    「在哪」的规矩：有 BV 号就用 BV 号，楼中楼再挂一个 #rpid——挂的是**这条回复自己的**
+    (src)，不是整栋楼的根：拿根去回只会挂到根评论下，接不上这个人。没有 src 的（赞、旧记录）
+    才退回 root。连 BV 号都没有（动态、专栏）才退回标题；私信没有「在哪」，对方就是位置。
     """
     kind = row["kind"]
     if kind == "dm":
         head = f"私信｜{row['who']}"
     else:
         where = row["target"] or _clip(row["title"] or "", 16)
-        if row["target"] and row["root"]:
-            where = f"{where}#{row['root']}"
+        anchor = row.get("src") or row["root"]
+        if row["target"] and anchor:
+            where = f"{where}#{anchor}"
         head = f"{_KIND_CN[kind]}｜{row['who']}｜{where}"
     if kind == "like":
         return f"{head}｜共 {row['counts']} 赞" if row["counts"] else head
@@ -1757,6 +1877,11 @@ def _quote_brief(text: str, limit: int = 40) -> str:
     return body if len(body) <= limit else body[:limit] + "…"
 
 
+def _link_of(row: dict) -> str:
+    """这条评论在网页上的位置：通知里要能点回去核对。"""
+    return f"https://www.bilibili.com/video/{row['bvid']}/#reply{int(row['rpid'])}"
+
+
 # ============================================================
 # 结果整形
 # ============================================================
@@ -1831,12 +1956,17 @@ async def _comment_pages(aid: int, cookie: str, *, mode: int = 2, pages: int = 3
             return
 
 
-def _comment_row(item: dict) -> dict:
-    """一条评论压成给模型看的行（字段名用中文，和本插件其它工具的返回一致）。"""
+def _comment_row(item: dict, root: int | None = None) -> dict:
+    """一条评论压成给模型看的行（字段名用中文，和本插件其它工具的返回一致）。
+
+    root 是这栋楼要挂的根评论 rpid。楼中楼的 root 和 parent 由 _reply_anchor 一起算，
+    缺一个 B 站就把回复当成新评论丢到最顶层且不报错。顶层评论的 root 就是它自己。
+    """
     member = item.get("member") or {}
     content = item.get("content") or {}
     return {
         "rpid": item.get("rpid"),
+        "root": int(root or item.get("rpid") or 0),
         "用户": member.get("uname", ""),
         "内容": _plain(content.get("message", "")),
         "点赞": int(item.get("like") or 0),
@@ -2100,11 +2230,12 @@ class BiliAccount(_BiliTool):
     usage_notes = [(300, "未登录时不要假装能查动态；先让创建者去通道卡片扫码。")]
 
     async def run(self, agent_id: int, arguments: dict):
-        cfg = await _instance_config(_instance_of(agent_id))
+        instance = _instance_of(agent_id)
+        cfg = await _instance_config(instance)
         cookie = _cookie_of(cfg)
         if not cookie:
             return {"ok": True, "logged_in": False, "hint": _NEED_LOGIN}
-        info = await _nav_cached(cookie)
+        info = await _nav_cached(cookie, instance)
         return {
             "ok": True,
             "已登录": bool(info.get("isLogin")),
@@ -2383,7 +2514,8 @@ class BiliComments(_BiliTool):
                 {"type": 1, "oid": aid, "root": int(root), "ps": limit, "pn": 1},
                 cookie,
             )
-            rows = [_comment_row(r) for r in (data.get("replies") or [])]
+            # 楼中楼每一行的 root 都是这一栋的根：模型照着 root 回，就不会漏掉 parent
+            rows = [_comment_row(r, root=int(root)) for r in (data.get("replies") or [])]
         else:
             # 接口口径：mode=3 按热度，mode=2 按时间倒序（实测，见 README「已知限制」）
             async for data in _comment_pages(aid, cookie, mode=2 if sort == "time" else 3, pages=4):
@@ -2661,8 +2793,11 @@ class BiliComment(_BiliTool):
     states = ["active", "dnd"]
     admin_description = "用 AI 自己的账号在视频下发评论、删自己发过的评论。"
     trigger_condition = "用户让 AI 在某条视频下留言"
-    # 唯一必写的约束：提交成功 ≠ 别人看到（B 站会把评论藏成仅自己可见）
-    usage_notes = [(400, "发完只回「发布中」：公开后会收到一条通知，没收到就是被折叠或隐藏了，别说成已经公开。")]
+    # 两条硬约束：提交成功 ≠ 别人看到；发出去 ≠ 落到了该在的位置
+    usage_notes = [
+        (400, "发完只回「发布中」：公开后会收到一条通知，没收到就是被折叠或隐藏了，别说成已经公开。"),
+        (300, "回复落没落到那人下面，你看不到：所以只说「回复已发出」，别说成「已经回在他那条下面了」。"),
+    ]
 
     async def run(self, agent_id: int, arguments: dict):
         action = str(arguments.get("action") or "post").strip().lower()
@@ -2689,6 +2824,10 @@ class BiliComment(_BiliTool):
                     "action": 1 if action == "pin" else 0, "csrf": _csrf_of(cfg),
                 }, cookie, referer=f"https://www.bilibili.com/video/{bvid}/")
                 return {"ok": True, "bvid": bvid, "rpid": rpid, "pinned": action == "pin"}
+            # 先看归属再动手：拿错 rpid 的典型后果是 -403，而那句话对模型毫无指导性
+            wrong = await _owner_error(bvid, aid, rpid, cookie, cfg)
+            if wrong:
+                return {"ok": False, "error": wrong}
             try:
                 await _post("/x/v2/reply/del", {
                     "type": 1, "oid": aid, "rpid": rpid, "csrf": _csrf_of(cfg),
@@ -2710,10 +2849,7 @@ class BiliComment(_BiliTool):
             return {"ok": False, "error": "reply 要给 rpid（回哪条评论）"}
         body: dict = {"oid": aid, "type": 1, "message": message, "csrf": _csrf_of(cfg)}
         if action == "reply":
-            # 楼中楼：root 是根评论；回楼中楼时 parent 填被回复的那条
-            body["root"] = int(arguments["rpid"])
-            if arguments.get("parent"):
-                body["parent"] = int(arguments["parent"])
+            body["root"], body["parent"] = await _reply_anchor(aid, int(arguments["rpid"]), cookie)
         data = await _post("/x/v2/reply/add", body, cookie,
                            referer=f"https://www.bilibili.com/video/{bvid}/")
         rpid = int((data or {}).get("rpid") or 0)
@@ -3357,7 +3493,7 @@ class BilibiliChannel(ServicePlugin):
                 detail["login"] = {"state": "error", "text": str(e)}
             return detail
 
-        info = await _nav_cached(cookie)
+        info = await _nav_cached(cookie, instance)
         if not info.get("isLogin"):
             # 登录失效：清掉凭据，下一次状态调用就会重新出码
             await _clear_login(instance)
@@ -3388,7 +3524,7 @@ class BilibiliChannel(ServicePlugin):
         cfg = await _instance_config(instance)
         cookie = _cookie_of(cfg)
         if cookie:
-            info = await _nav_cached(cookie)
+            info = await _nav_cached(cookie, instance)
             if info.get("isLogin"):
                 return {
                     "held_by_platform": True,
@@ -3512,7 +3648,11 @@ class BilibiliChannel(ServicePlugin):
             await asyncio.sleep(PENDING_TICK_SECONDS)
 
     async def _check_pending(self) -> None:
-        """一条一条落定：公开 → 告诉 AI；已被隐藏 / 追太久 → 告诉 AI 没公开。
+        """一条一条落定，然后按结果分开发——成功合并、失败逐条。
+
+        为什么要合并成功：一次回十条评论是常态，"十条都公开了"对 AI 没有任何增量信息，
+        也没有任何可做的动作，只会在它的账本里糊住别的通知。而失败每条都不一样（被审核卡住、
+        被折叠、被删），细节才是信息，所以失败保持一条一条、带正文与链接。
 
         刚发出的一段时间内 B 站本来就标成隐藏（PENDING_SETTLE_SECONDS），这之前不下结论，
         否则会把"还没放出来"误判成"永远不会公开"。
@@ -3523,30 +3663,60 @@ class BilibiliChannel(ServicePlugin):
         cookie = _cookie_of(await _instance_config(self.instance))
         if not cookie:
             return      # 没登录就先不动：这些行还在，登录后接着追
+        public: list[dict] = []
+        failed: list[tuple[dict, str, str]] = []      # (行, verdict, 文案)
         for row in rows:
             age = time.time() - int(row["created_at"] or 0)
             rpid, aid = int(row["rpid"]), int(row["aid"])
             status = await _comment_status(aid, rpid, cookie)
-            quote = _quote_brief(row["message"])
-            link = f"https://www.bilibili.com/video/{row['bvid']}/#reply{rpid}"
             if status.get("visible"):
-                verdict, action = "公开成功", "comment_public"
-                text = f"【B 站】你刚发的评论已经公开成功：{quote}\n{link}"
-            elif status.get("hidden") and age >= PENDING_SETTLE_SECONDS:
-                verdict, action = "隐藏", "comment_hidden"
+                public.append(row)
+                continue
+            link = f"https://www.bilibili.com/video/{row['bvid']}/#reply{rpid}"
+            quote = _quote_brief(row["message"])
+            if status.get("hidden") and age >= PENDING_SETTLE_SECONDS:
+                verdict = "隐藏"
                 text = f"【B 站】你刚发的评论没公开，被隐藏了（只有这个账号自己能看到）：{quote}\n{link}"
             elif age >= PENDING_TTL_SECONDS:
-                verdict, action = "未确认", "comment_hidden"
+                verdict = "未确认"
                 text = f"【B 站】你刚发的评论没能确认公开（可能被折叠或隐藏了）：{quote}\n{link}"
             else:
                 await _pending_touch(int(row["id"]), int(row["tries"] or 0) + 1)
                 continue
+            failed.append((row, verdict, text))
+
+        # 成功的按"说到哪个对话里"分组：同一次回话批次的评论合成一条
+        buckets: dict[tuple, list[dict]] = {}
+        for row in public:
+            key = (int(row["agent_id"]), row["group_id"], row["session_id"] or "")
+            buckets.setdefault(key, []).append(row)
+        for (agent_id, group_id, session_id), batch in buckets.items():
+            if len(batch) == 1:
+                text = f"【B 站】你刚发的评论已经公开：{_quote_brief(batch[0]['message'])}\n{_link_of(batch[0])}"
+            else:
+                per_bvid: dict[str, int] = {}
+                for row in batch:
+                    per_bvid[row["bvid"]] = per_bvid.get(row["bvid"], 0) + 1
+                where = "、".join(f"{bvid} 下 {n} 条" for bvid, n in per_bvid.items())
+                text = f"【B 站】刚发的 {len(batch)} 条评论都已公开，不用再管了（{where}）。"
+            ids = [int(row["id"]) for row in batch]
+            await _notify(
+                agent_id, group_id, session_id, text,
+                ref=f"bili_comment:public:{min(ids)}-{max(ids)}",
+            )
+            for row in batch:
+                await _pending_drop(int(row["id"]))
+                await _trail_record(self.instance, "comment_public", json.dumps(
+                    {"bvid": row["bvid"], "rpid": int(row["rpid"])}, ensure_ascii=False))
+
+        for row, verdict, text in failed:
+            rpid = int(row["rpid"])
             await _notify(
                 int(row["agent_id"]), row["group_id"], row["session_id"], text,
                 ref=f"bili_comment:{rpid}:{verdict}",
             )
             await _pending_drop(int(row["id"]))
-            await _trail_record(self.instance, action, json.dumps(
+            await _trail_record(self.instance, "comment_hidden", json.dumps(
                 {"bvid": row["bvid"], "rpid": rpid}, ensure_ascii=False))
 
     async def _run_once(self) -> None:
