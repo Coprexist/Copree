@@ -493,6 +493,8 @@
   评论直接说清「是谁的」并给出改法，不再让模型对着一句 `-403 访问权限不足` 猜——2026-11-21
   它就是这么把别人（mid 409293335）的评论 rpid 当成自己的去删的。
 
+- 工具增删与改动**立即生效**，不再等 compact：实测 DeepSeek 的缓存把 `tools` 排在请求最后，改它只重算工具段（末尾追加一个工具约多 480 token 未命中，改/删中间那个从它起到工具段结束），system 前缀与对话历史不动。真正从第 0 字节断掉的是 system 里渲染的**技能目录文字**，那一段仍锁着（`ai/prefix.py` 不动），目录尾句与变更通知都改成「工具有效、目录是快照」。`capability_versioning` 删掉 `get_effective_definitions` / `keep_request_tools` / `freeze_allowed` 系列，取工具处直接用现算结果；`cap_effective_allowed` 列标注已弃用。
+
 ### 🗑 移除
 
 - **协议端控制台不再由平台代管**：撤掉整条控制台反代链路（`/channels/<plugin>/panel/<instance>/…`）

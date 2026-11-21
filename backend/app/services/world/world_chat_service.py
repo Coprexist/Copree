@@ -1485,14 +1485,12 @@ async def _prepare_world_chat(
     from app.tools.world import WORLD_TOOLS
     from app.services.world.world_skill_runtime import build_ai_tools
     from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
-    from app.services.capability_versioning import (
-        ensure_source_version, get_effective_definitions, SCOPE_ALL,
-    )
+    from app.services.capability_versioning import ensure_source_version, SCOPE_ALL
     skill_tools = build_ai_tools()
     if skill_tools:
         await ensure_source_version(SQLAlchemyCapabilityRepository(world_repo.session), "ai-skills", skill_tools, "设计侧能力", scope=SCOPE_ALL)
-    effective_skill_tools = await get_effective_definitions(SQLAlchemyCapabilityRepository(world_repo.session), world.config, "ai-skills", skill_tools)
-    tools_for_world = [*WORLD_TOOLS, *effective_skill_tools]
+    # skill 定义用现算的（与平台工具同一口径：tools 在请求最后，改了只重算工具段）
+    tools_for_world = [*WORLD_TOOLS, *skill_tools]
 
     # 凭证 + 模型
     api_key, api_base = await _resolve_world_credentials(world_repo, world)

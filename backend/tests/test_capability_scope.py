@@ -176,32 +176,6 @@ async def test_scope_outside_state_settles_without_content(migrated_db):
             "已知进度要推到最新，避免每轮重扫同一版本"
 
 
-async def test_legacy_flat_effective_does_not_pin_the_state(migrated_db):
-    """旧 agent 级扁平 effective 不许钉住老状态。
-
-    实测（2026-10-21）：浮生 cap_effective_versions 里只有扁平 platform=12，而平台已到 v60；
-    v12 只有 58 个工具、连 enter_world 都没有——同一个回落让它的工具列表永久停在出土版本。
-    """
-    from app.database import async_session
-    from app.services.capability_versioning import (
-        ensure_source_version, get_effective_definitions, SCOPE_ALL,
-    )
-
-    async with async_session() as db:
-        repo = await _repo(db)
-        await _reset(db, SRC)
-        await ensure_source_version(repo, SRC, _defs("old"), "测试源", scope=SCOPE_ALL)  # v1
-        await ensure_source_version(repo, SRC, _defs("new"), "测试源", scope=SCOPE_ALL)  # v2
-
-        holder = {"cap_effective_versions": {SRC: 1}}    # 迁移期留下的扁平键
-        defs = await get_effective_definitions(repo, holder, SRC, [], state="group:9")
-        assert defs == _defs("new"), "老状态要用最新定义：扁平键说的是别的状态钉在哪版"
-        assert holder["cap_effective_versions"]["group:9|" + SRC] == 2, "并记下本状态的 effective"
-
-        await ensure_source_version(repo, SRC, _defs("third"), "测试源", scope=SCOPE_ALL)  # v3
-        assert await get_effective_definitions(repo, holder, SRC, [], state="group:9") == _defs("new"),             "记下来之后又是锁定态：新的 v3 要等这个状态自己解锁"
-
-
 async def test_effective_is_locked_per_state(migrated_db):
     """一个状态 compact 只换它自己的前缀字节，别的状态照旧读旧快照"""
     from app.database import async_session

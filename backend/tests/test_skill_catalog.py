@@ -73,17 +73,3 @@ def test_budget_drops_the_lowest_priority_and_says_how_many():
     assert lines == ["·（铁律）铁律"]
     assert dropped == 1
 
-
-def test_frozen_allowed_locks_isolates_and_clears():
-    """名单锁：首见为空、写入后读回是排序列表、别的会话互不影响、解锁点清空。"""
-    from app.services.capability_versioning import (
-        freeze_allowed, frozen_allowed, clear_frozen_allowed,
-    )
-
-    holder = {}
-    assert frozen_allowed(holder, "group:7") is None
-    freeze_allowed(holder, "group:7", {"b_tool", "a_tool"})
-    assert frozen_allowed(holder, "group:7") == ["a_tool", "b_tool"]  # 排序后存
-    assert frozen_allowed(holder, "group:8") is None                  # 按会话隔离
-    clear_frozen_allowed(holder, "group:7")
-    assert frozen_allowed(holder, "group:7") is None

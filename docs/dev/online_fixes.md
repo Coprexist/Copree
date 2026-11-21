@@ -1033,3 +1033,36 @@ i18n 闸门（42 命名空间 / 2363 调用点）通过。改动仍全部留在�
   `ai_typing` 事件多带 `state` 发出去；前端 `ChatView` 分到独立的 `speakingAgents`，
   `ActivityBar` 优先级 说话 > 输入 > 思考，文案 `chat:speaking`（录音中…／Recording…／録音中…）。
   清除：新一轮思考、消息落地、轮末各清一次，外加 30 秒兜底。
+
+## 2026-11-22 · 加工具不再断缓存：tools 不再取快照
+
+**现象**：2026-11-14 那次「一天三次能力变更、活跃会话前缀从第 0 字节失效 7 次、多付 283k
+未命中」之后，修法是锁**输出**（system 前缀整段钉住）；为了稳，工具定义也一并取了
+effective 快照。后者留下一笔长期代价：新能力要等这个会话 compact 才出现，中途只能从账本
+通知里知道有它（配好语音后 send_voice 不出现，就是这条）。
+
+**归因修正**：拿 DeepSeek 实测（固定 9.7k 前缀、10 个工具）——只改 `tools` 数组时，system
+与对话历史的缓存**一个字节都没动**：末尾追加第 11 个工具只多 482 token 未命中；改第 5 个
+工具是 1545（从它起到工具段结束重算）。真正从第 0 字节断的是 system 里渲染出来的**技能
+目录文字**（`可用工具：94 个 → 95 个` 加新增一行），不是 `tools=` 数组。当初把这两件事
+当成了一件。
+
+**修法**：拆掉工具定义快照这一层——
+- `capability_versioning` 删掉 `get_effective_definitions` / `keep_request_tools` /
+  `freeze_allowed` / `frozen_allowed` / `clear_frozen_allowed`；`cap_effective_allowed`
+  列保留只为存量数据（注释标「已弃用」），`cap_effective_versions` 仍给文本源用
+- 取工具处直接用现算结果：`response_worker` 的群聊与私信、`world_chat_service` 的
+  `ai-skills`、群 AI 的居民能力
+- 技能目录段继续锁（`ai/prefix.py` 不动）；目录尾句改为「这份目录是本次对话开始时的快照，
+  中途新增的能力以工具表和【能力变更通知】为准」
+- 变更通知头分两半说：「新增或改动的工具这一轮就能调」/「目录是快照，全文下次 compact 刷新」
+
+**验证**：`test_capability_scope` 7、`test_skill_catalog` 6、`test_prefix_freeze` 6、
+`test_prefix_contract` 5、`test_prefix_lock_wiring` 1、`test_bilibili` 39 全绿；后端重启后
+`/health` 200、启动无异常。删除的测试：`test_capability_versioning.py`（只测
+`keep_request_tools`）、`test_skill_catalog` 的名单锁用例、`test_capability_scope` 的
+`test_legacy_flat_effective_does_not_pin_the_state`。
+
+**遗留**：世界 AI 与各会话的 `cap_effective_versions` 里平台工具源的进度不再被读，但也没清——
+不影响行为，等下次 compact 自然对齐。
+

@@ -272,7 +272,9 @@ messages、**不落库**、随轮消失（决策技能那条没人被唤醒时�
 
 ## 8. 快照检测（保留，两件事都干）
 
-- **生效**：锁定态用 effective 快照 → 老会话的 system / tools 字节不变 → **前缀稳定**。
+- **生效**：锁定态用 effective 快照 → 老会话的 **system** 字节不变 → **前缀稳定**；
+  请求里的 tools 自 2026-11-22 起每轮取最新（它排在请求最后，改了只重算工具段，见
+  [能力懒加载](./capability_lazy_loading.md)「tools 不再快照」）。
 - **告知**：known vs latest 的差异 → 决定**该不该通知、通知哪些变化**（增量 changelog）。
 - **本次唯一改动**：通知**落成条目**（不再当轮 append 即丢）；解锁时按 latest 重建（新会话起点）。
 - 涉及现有实现：`capability_versions` / `agents.cap_known_versions` / `agents.cap_effective_versions` / `ensure_text_source_version` / `build_change_notice` / `apply_pending_changes`。

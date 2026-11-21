@@ -6,8 +6,9 @@
 
 ## 背景问题
 
-平台或世界改动 skills/tools 时，目前**没有懒加载保证**：
-- tools 每次请求现算（`get_allowed_tools`），平台/世界一改，下一次请求就带新定义 → 该 AI 所有对话的前缀缓存直接断
+平台或世界改动 skills/tools 时，当时**没有懒加载保证**：
+- tools 每次请求现算（`get_allowed_tools`），平台/世界一改，下一次请求就带新定义 → 以为"该 AI 所有对话的前缀缓存直接断"
+  （**2026-11-22 修正**：真正从第 0 字节断的是渲染出来的目录文字，不是 tools 数组本身——见「tools 不再快照」一节）
 - 现有 `pending_system_prompt` 只覆盖 system prompt（已实现：AI 自修改暂存，压缩时切到 current），
   **tools/skills 没有等价机制**（确认：v2.0.5 pending_system_prompt 真实生效于 executor 压缩后 `apply_pending_config`）
 
@@ -18,7 +19,8 @@
 进度键为 `{状态}|{源}`；状态即会话键（群 `group:{id}`、私信 `{a}_{b}`）。
 
 - **known_version**（告知进度）：该状态已收到变更通知的版本——控制**增量注入**
-- **effective_version**（生效进度）：该状态的前缀实际使用的定义版本——控制 **tools 数组**与文本段（compact 前保持旧定义，前缀缓存稳定）
+- **effective_version**（生效进度）：该状态**前缀文本**实际使用的版本（提示词 / 记忆索引等，compact 前保持旧版）。
+  2026-11-22 起**不再管 tools 数组**——工具用最新定义，见「tools 不再快照」
 
 按状态记账为强制要求：进度若挂在 AI 级，先构建提示词的状态会把版本推平，其余状态再也收不到那条变更。
 
@@ -59,20 +61,13 @@
 
 ### 不变式
 - **锁与状态同构**：effective 表达"这个状态的前缀锁在哪一版"，只能由该状态自己的 compact / clear 推进；任何状态的解锁不得改动其他状态的 effective（否则那些状态的前缀从第 0 字节起 miss）
-- 请求 payload 的 tools 数组 = **effective 快照 ∩ 当前允许集**（同名工具的更新在锁定态不动字节 → 前缀缓存稳定）
+- 请求 payload 的 tools 数组 = **当前定义**（2026-11-22 起不再取快照；见「tools 不再快照」）
 - 变更告知 = 紧跟历史的账本条目（在尾部动态块之前；不进静态前缀，机制见 [帧、锁与重建点](./frame_lifecycle.md)）
-- **改定义不改字节，增删工具会改**——两个源的保护程度不同：
-  - 平台内置工具：请求时还要求一次交集——`response_worker.py:866` 先按现行插件注册表 + 状态白名单算出
-    `allowed_names`，再拿快照过滤。删掉一个工具，它**不会**留在请求里；代价是这次请求的 tools 数组跟着变
-    （一次躲不掉的 miss），模型若凭记忆调它，`dispatch` 回 `UNKNOWN_TOOL`「未知工具「X」：没有此名称的工具」
-    （`tools/base.py:340`）。
-  - 世界技能（`ai-skills` / `world-{id}`）：**没有这层交集**——`tools_for_world = [*WORLD_TOOLS, *effective_skill_tools]`
-    （`world_chat_service.py:1472`），群 AI 的居民能力也直接拼快照（`response_worker.py:890-898`）。
-    删掉一个 skill 后，锁定态的工具数组里仍然有它，模型调用时 `execute_skill` 找不到、同样回 `UNKNOWN_TOOL`。
-    要让世界源也"删了就消失"，得在拼装处补一次交集（会改字节，但删能力这次本来也该 miss）。
-  - 同一条不变式也管状态闸：`thinking_enabled` 隐藏 `toggle_thinking`、`delay_reply_allowed` 裁 `manage_skills`，
-    这些都会改 tools 数组（与平台发布无关），别把"tools 数组稳定"理解成绝对。
-- 平台代码发布：同名工具的旧定义保留在 DB，重启后锁定态会话继续用旧定义请求，等自然 compact 切新版。
+- **改定义、增删工具都立即生效**（2026-11-22）：`response_worker` 直接用 `get_allowed_tools` 的现算结果，
+  平台/世界/状态闸/语音门控怎么变，这一轮请求就带什么——不再有"等 compact 才换"的延迟，
+  也不再有"删了还留在数组里"的旧定义。代价只是工具段本身重算（量级见「tools 不再快照」）。
+- **system 里那段技能目录仍然锁**：它不在 tools 数组里，是渲染出来的文字，改一个字就从第 0 字节断，
+  所以新能力这一轮能调、目录文字要等 compact 才刷新，两者冲突时以【能力变更通知】为准。
 
 ### 与状态帧、触发组合规则的关系
 
@@ -101,7 +96,8 @@
 - `capability_versions`：**统一能力源版本表**（source, version, changelog, definitions JSONB nullable, scope, created_at）
   - 能力源 = **平台**（platform：内置工具定义）+ **每个世界**（world-{id}：世界 skills 生成的工具定义）
   - 世界 skills/tools **同样版本化**：世界 skill 目录哈希变化 → 新版本 + changelog（新增/修改/删除的 skill 摘要）
-  - 平台源存 definitions（内置工具定义快照）；世界源同样存 definitions（该世界 skills 转出的工具定义）——旧版本保留，compact 前照旧用
+  - 平台源存 definitions（内置工具定义快照）；世界源同样存 definitions（该世界 skills 转出的工具定义）——旧版本保留，
+    但自 2026-11-22 起**请求不再从这里取**（tools 每轮现算），只有文本源还按快照取
 - `capability_versions.scope`：变更作用域（`*` 或会话键 / `focus:{id}`，写入必填；存量行为空，读取按 `*` 处理）
 - `agents.cap_known_versions` JSONB：`{"{状态}|{源}": version}` 告知进度
 - `agents.cap_effective_versions` JSONB：`{"{状态}|{源}": version}` 生效进度
@@ -121,7 +117,7 @@
 - `agents.cap_known_versions` / `cap_effective_versions`（JSONB）；世界 AI 用 `worlds.config` 同名字段（holder 泛化：agent 对象或 dict）
 - `app/services/capability_versioning.py`：ensure_source_version（diff 自动 changelog）/ get_effective_definitions（快照回退）/ build_change_notice（增量注入）/ mark_prefix_fresh（前缀换新：effective + known）
 - 已接：平台源（群 AI/DM 对话 tools + 变更通知 + compact 切换）、世界源（世界 AI 工具集 + 变更通知 + compact_context 切换）
-- 验证：幂等 / 增量注入（known=v2 只注入 v3）/ effective 快照（旧定义请求）/ compact 切最新 / dict holder 全过
+- 验证：幂等 / 增量注入（known=v2 只注入 v3）/ effective 快照（旧定义请求；2026-11-22 起工具不再走快照）/ compact 切最新 / dict holder 全过
 
 ---
 
@@ -147,13 +143,14 @@
 
 ### 状态语义
 
-- **锁定态（对话进行中）**：前缀 = effective 版本快照（缓存稳定）；任何外部变更 → 只写新版本 + 落一条变更通知条目（紧跟历史）告知，**不碰前缀**
+- **锁定态（对话进行中）**：前缀 = 锁定快照（缓存稳定）；任何外部变更 → 只写新版本 + 落一条变更通知条目（紧跟历史）告知，**不碰前缀**。
+  例外：**工具定义用最新**（tools 排在请求最后，改它只重算工具段，不碰 system——见「tools 不再快照」）
 - **解锁态（compact / clear 之后 = 新对话）**：上下文重建（缓存本来就断）→ effective 对齐最新 → 前缀用新内容。**变更在这里应用**
 
 ```mermaid
 flowchart TD
     subgraph 锁定态["🔒 锁定态（对话进行中）"]
-        A1["前缀 = effective 快照<br/>（缓存稳定）"]
+        A1["前缀 = 锁定快照<br/>（缓存稳定；工具用最新）"]
         A2["外部变更发生<br/>改提示词 / 系统更新 / 技能变更"]
         A3["写新版本 capability_versions<br/>+ changelog"]
         A4["落一条变更通知条目（紧跟历史）<br/>（不碰前缀）"]
@@ -224,6 +221,35 @@ flowchart TD
 代价与口径：引擎修 bug、目录新增都不立刻进活跃会话，要等一次 compact——这正是"以通知为准"那条
 不变式的另一面。测试见 `backend/tests/test_prefix_freeze.py`（端到端：改目录段渲染后第二轮字节不变）
 与 `backend/tests/test_prefix_contract.py`（段清单、源清单、守卫）。
+
+### tools 不再快照：改工具不会再断前缀（2026-11-22）
+
+上面「锁输出」解决的是**目录文字**。但同一次事故里还有一处被误判：以为 `tools=` 数组一变，整段
+前缀就断，于是把工具定义也冻成 effective 快照——修改要等 compact、删掉的还留在数组里。
+
+实测（2026-11-22，DeepSeek `/chat/completions`，固定约 9.7k 前缀、10 个工具、每个约 240 token）：
+
+| 操作 | prompt | 命中 | 未命中 |
+|---|---|---|---|
+| 10 个工具，重复同一请求 | 11913 | 11776 | 137 |
+| 改第 5 个工具的描述 | 11913 | 10368 | 1545 |
+| 末尾追加第 11 个工具 | 12130 | 11648 | 482 |
+| 删掉第 5 个工具 | 11696 | 10368 | 1328 |
+
+结论：**tools 排在请求最后**，system 与对话历史（命中的大头）一个字节都不动。
+
+- **末尾追加**新工具 → 只多几十 token。这正是「新能力上线」最常见的样子
+- **改 / 删中间某个工具** → 从它起到工具段结束重算（工具越多越贵，但仍是工具段本身）
+- 单工具场景同样：加一个工具只多 31 token 未命中，前面 9600 照旧命中
+
+于是这一层锁被拆掉：`get_effective_definitions` / `keep_request_tools` / `freeze_allowed` 系列
+2026-11-22 删除，取工具处（`response_worker` 的群聊与私信、`world_chat_service` 的 `ai-skills`、
+群 AI 的居民能力）直接用现算的 `get_allowed_tools` / `build_ai_tools`。
+`cap_effective_allowed` 列保留只为存量数据，不再读写；`cap_effective_versions` 仍给文本源用。
+
+**仍然锁着的**：system 里的技能目录（`ai/prefix.py` 的 `locked()`）。对话中途新增的能力不会立刻
+出现在目录文字里，由【能力变更通知】补位——通知头现在明确分两半说：「工具这一轮就能调」、
+「目录是对话开始时的快照，全文下次 compact 刷新」。
 
 ### 锁定态里"只告知"指什么
 

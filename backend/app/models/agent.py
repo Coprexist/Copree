@@ -40,11 +40,11 @@ class Agent(Base):
     pending_system_prompt = Column(Text, nullable=True)  # AI自修改暂存，压缩时切到current
     # 能力懒加载版本（2026-08-06）：{source: version}
     cap_known_versions = Column(json_column(), default=dict, comment="能力源告知进度（已注入变更通知的版本）")
-    cap_effective_versions = Column(json_column(), default=dict, comment="能力源生效进度（请求实际使用的工具定义版本，compact 时更新）")
-    # 锁定态的工具名单：与上面的 effective 版本一起锁。只冻版本不够——名单是
-    # get_allowed_tools(状态/开关) 每轮现算的，状态一变 tools 数组就变，整段前缀 miss。
-    # 解锁点（compact/clear）清空重算，见 capability_versioning.clear_frozen_allowed
-    cap_effective_allowed = Column(json_column(), default=dict, comment="锁定态工具名单（{状态}|allowed → [工具名]，compact 时清空重算）")
+    cap_effective_versions = Column(json_column(), default=dict, comment="能力源生效进度（文本源按它取锁定快照；工具不再用它，见 capability_versioning 模块头）")
+    # 工具名单锁：2026-11-22 起不再读写。当初冻名单是因为假定"改 tools 数组 = 整段前缀 miss"；
+    # 实测 tools 排在请求最后，改了只重算工具段，于是名单每轮现算即可（get_allowed_tools）。
+    # 列保留只为存量数据，新代码不要依赖它。
+    cap_effective_allowed = Column(json_column(), default=dict, comment="【已弃用 2026-11-22】旧锁定态工具名单，仅存量数据")
     # 锁定态的前缀文本快照：锁的若是"输入"（版本号、工具名单），渲染代码一改照样漂字节；
     # 锁"输出"才不靠自觉——首见把渲染结果整段钉下来，之后每轮直接用这份字节，
     # 目录/表情包/索引怎么变都进不了活跃会话。解锁点（compact/clear）清空重算，

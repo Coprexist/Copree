@@ -1098,13 +1098,13 @@ async def _maybe_trigger_ai_reply(
         )
         messages.append({"role": "system", "content": delay_hint})
 
-    # 7.5 获取工具（能力版本化：按 effective 版本取定义快照，前缀缓存稳定）
-    from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
+    # 7.5 获取工具：**用当前值**，不取锁定快照（2026-11-22）
+    # 为什么不用"compact 才换"：DeepSeek 的缓存把 tools 排在请求最后，改它只重算工具段
+    # 本身——末尾加一个工具多几十 token，改/删中间那个重算它后面的定义；system 前缀与
+    # 对话历史（命中大头）不动。所以新能力这一轮就能调，不必等一次 compact。
+    # 真正会从第 0 字节断掉的是 system 里渲染出来的技能目录，那一段仍由 ai/prefix.py 锁着
+    # （实测与归因见 docs/dev/capability_lazy_loading.md「tools 不再快照」）。
     from app.services.tool_registry import get_allowed_tools
-    from app.services.capability_versioning import (
-        get_effective_definitions, keep_request_tools, SOURCE_PLATFORM,
-        freeze_allowed, frozen_allowed,
-    )
     delay_allowed = await _is_delay_reply_allowed(db, agent)
     current_tools = get_allowed_tools(agent.state, thinking_enabled=effective_cfg["thinking_enabled"], delay_reply_allowed=delay_allowed)
     # 语音是可选的平台能力：没配、或配了但没测通，这个工具就不出现在工具表里
@@ -1113,20 +1113,7 @@ async def _maybe_trigger_ai_reply(
     if not await has_voice_capability(db, agent.id):
         current_tools = [t for t in current_tools
                          if (t.get("function") or {}).get("name") != "send_voice"]
-    allowed_names = {t["function"]["name"] for t in current_tools}
-    from app.services.history.context_sync import context_ref
-    _session_ref = context_ref(group_id=group_id)
-    # 名单与定义版本一起锁：锁定态里状态切换/开关变化不再改 tools 数组（改了就是整段前缀 miss）。
-    # 首见（这个会话还没锁过）按此刻算一份并锁上；解锁点由 mark_prefix_fresh 清空重算。
-    _frozen = frozen_allowed(agent, _session_ref)
-    if _frozen is None:
-        freeze_allowed(agent, _session_ref, allowed_names)
-    else:
-        allowed_names = set(_frozen)
-    effective_defs = await get_effective_definitions(
-        SQLAlchemyCapabilityRepository(db), agent, SOURCE_PLATFORM, current_tools,
-        state=_session_ref)
-    tools = keep_request_tools(effective_defs, allowed_names)
+    tools = current_tools
 
     # + 绑定世界的世界侧 skills（居民能力；群绑定或 agent 直接绑定；effective 版本快照，版本化懒加载）
     # 同名冲突策略（2026-08-07）：同名 skill 只注入一个定义（当前群绑定世界优先），
@@ -1134,7 +1121,7 @@ async def _maybe_trigger_ai_reply(
     try:
         from app.services.world.world_service import find_worlds_by_entity
         from app.services.world.world_skill_runtime import build_world_tools
-        from app.services.capability_versioning import ensure_world_version, get_effective_definitions as _get_eff
+        from app.services.capability_versioning import ensure_world_version
         agent_worlds = await find_worlds_by_entity(db, "agent", agent.user_id or 0)
         group_worlds = await find_worlds_by_entity(db, "group", group_id) if group_id is not None else []
         # 优先级：当前群绑定世界 > agent 直接绑定（同名时保留群绑定版本）
@@ -1153,9 +1140,8 @@ async def _maybe_trigger_ai_reply(
                 await ensure_world_version(
                     SQLAlchemyCapabilityRepository(db), w.id, wtools,
                     notice=(w.config or {}).get("tool_notice") if isinstance(w.config, dict) else None)
-            eff = await _get_eff(db, agent, f"world-{w.id}", wtools,
-                                state=context_ref(group_id=group_id) if group_id else None)
-            for d in eff:
+            # 定义用现算的 wtools（与平台工具同一口径：tools 在请求最后，改了只重算工具段）
+            for d in wtools:
                 nm = ((d or {}).get("function") or {}).get("name")
                 if not nm:
                     continue
@@ -1364,13 +1350,8 @@ async def _trigger_dm_ai_reply(
     pending_delivery: list[dict] = []
     messages = await build_dm_messages(db, agent, session_id, api_base_url=api_base, api_key=api_key, trigger_user_id=sender_id, system_prompt_override=effective_cfg.get("system_prompt_override"), prompt_owner=sender_id, pending_delivery=pending_delivery)
 
-    # 获取工具（能力版本化：按 effective 版本取定义快照）
-    from app.repositories.capability_repo import SQLAlchemyCapabilityRepository
+    # 获取工具：用当前值（与群聊 7.5 同一口径——tools 在请求最后，改了只重算工具段）
     from app.services.tool_registry import get_allowed_tools
-    from app.services.capability_versioning import (
-        get_effective_definitions, keep_request_tools, SOURCE_PLATFORM,
-        freeze_allowed, frozen_allowed,
-    )
     delay_allowed = await _is_delay_reply_allowed(db, agent)
     current_tools = get_allowed_tools(agent_state, thinking_enabled=effective_cfg["thinking_enabled"], delay_reply_allowed=delay_allowed)
     # 语音是可选的平台能力：没配、或配了但没测通，这个工具就不出现在工具表里
@@ -1379,19 +1360,7 @@ async def _trigger_dm_ai_reply(
     if not await has_voice_capability(db, agent.id):
         current_tools = [t for t in current_tools
                          if (t.get("function") or {}).get("name") != "send_voice"]
-    allowed_names = {t["function"]["name"] for t in current_tools}
-    from app.services.history.context_sync import context_ref
-    _session_ref = context_ref(session_id=session_id)
-    # 同上：私信与群聊共用同一条锁
-    _frozen = frozen_allowed(agent, _session_ref)
-    if _frozen is None:
-        freeze_allowed(agent, _session_ref, allowed_names)
-    else:
-        allowed_names = set(_frozen)
-    effective_defs = await get_effective_definitions(
-        SQLAlchemyCapabilityRepository(db), agent, SOURCE_PLATFORM, current_tools,
-        state=_session_ref)
-    tools = keep_request_tools(effective_defs, allowed_names)
+    tools = current_tools
 
     # 世界帧：私信里也按同一条帧走——进了世界就只给世界侧技能 + 基础集，不分群聊私信。
     # （他没进世界时 active_world_id 为 None，行为与以前完全一致）

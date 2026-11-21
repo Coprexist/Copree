@@ -19,10 +19,11 @@
 新增：ensure_text_source_version / get_effective_text / apply_pending_changes（解锁）/ guard_apply_change（防御）。
 
 不变式：
-- 请求 payload 的 tools = effective 版本的定义快照（compact 前不动 → 前缀缓存稳定）
+- 请求 payload 的 tools = **当前定义**（2026-11-22 起；tools 排在请求最后，改了只重算工具段）
+- 进 **system 前缀**的内容 = 锁定态快照（compact 前不动 → 第 0 字节的缓存稳定）
 - 变更告知 = 动态尾部 system 消息（不影响前缀）
-- 旧版本定义永远保留在 capability_versions（平台发布后旧对话继续用旧定义请求）
-- 锁定态（对话中）前缀永不因外部变更而变；compact / clear 是唯一解锁点
+- 旧版本定义永远保留在 capability_versions（文本源的旧内容仍按快照取）
+- 锁定态（对话中）**前缀**永不因外部变更而变；compact / clear 是唯一解锁点
 """
 from __future__ import annotations
 
@@ -500,33 +501,6 @@ def write_progress(holder, field: str, state: str | None, source: str, version: 
     _set_holder_map(holder, field, m)
 
 
-# ── 锁定态的工具名单 ──
-# 只冻定义版本不够：请求里的 tools = 快照 ∩ 名单，而名单是 get_allowed_tools(状态/开关) 每轮现算的。
-# 状态一换（active→dnd）、开关一改（thinking/delay_reply），tools 数组就变，带 tools 的整段前缀
-# 一起 miss。所以名单与版本同锁：锁定时记下这一份，解锁点（compact/clear）清空重算。
-ALLOWED_SOURCE = "allowed"
-
-
-def frozen_allowed(holder, state: str | None) -> list[str] | None:
-    """锁定态该状态的工具名单；None = 还没锁过（首见，按当前算一份并锁上）。"""
-    raw = _holder_map(holder, "cap_effective_allowed").get(progress_key(state, ALLOWED_SOURCE))
-    return [str(n) for n in raw] if isinstance(raw, list) else None
-
-
-def freeze_allowed(holder, state: str | None, names) -> None:
-    """把这一份名单锁进 holder（排序后存：顺序本身就是字节，不能依赖 set 遍历）"""
-    m = _holder_map(holder, "cap_effective_allowed")
-    m[progress_key(state, ALLOWED_SOURCE)] = sorted(str(n) for n in (names or ()))
-    _set_holder_map(holder, "cap_effective_allowed", m)
-
-
-def clear_frozen_allowed(holder, state: str | None) -> None:
-    """解锁点清空：前缀刚换新，名单也该按此刻的状态/开关重算一次"""
-    m = _holder_map(holder, "cap_effective_allowed")
-    if m.pop(progress_key(state, ALLOWED_SOURCE), None) is not None:
-        _set_holder_map(holder, "cap_effective_allowed", m)
-
-
 # ── 锁定态的前缀文本快照 ──
 # 上面两把锁锁的都是"输入"（版本号、名单）：渲染代码里任何一处现算，字节照样变，锁白锁。
 # 2026-11-14 实测：send_voice / file_fetch / 大肥鱼表情包三次改动，版本号没变、名单没变，
@@ -654,46 +628,13 @@ def scope_covers(scope: str | None, state: str | None, foci=None) -> bool:
     return False
 
 
-async def get_effective_definitions(
-    cap_repo: CapabilityRepository, holder, source: str, fallback_definitions: list,
-    state: str | None = None,
-) -> list:
-    """请求用的工具定义：按**本状态**的 effective 版本取快照；无记录 → 用当前定义并同步本状态。
-
-    前缀是按会话拼的字节，所以生效进度只能按状态记：别的会话 compact 不该让这个会话的
-    tools 数组换新（那正是"一个会话 compact，其他会话从第 0 字节 miss"的病根）。
-    """
-    ver = state_progress(holder, "cap_effective_versions", state, source)
-    if ver is not None:
-        row = await get_version(cap_repo, source, ver)
-        if row is not None and row.definitions is not None:
-            return row.definitions
-    # 新状态 / 新源：直接用当前（latest）定义，并把本状态的 effective 对齐最新。
-    # 这里**绝不回退**到旧 agent 级扁平 effective：那会让这个状态的工具列表永久停在出土版本
-    # （浮生实测停在 v12，只有 58 个工具，连 enter_world 都没有）。
-    latest = await get_latest_version(cap_repo, source)
-    if latest is not None:
-        write_progress(holder, "cap_effective_versions", state, source, latest.version)
-        if latest.definitions is not None:
-            return latest.definitions
-    return fallback_definitions
-
-
-def keep_request_tools(effective_defs: list, allowed_names: set) -> list:
-    """请求里的 tools = 快照 ∩ 当前允许集，**但已经删掉的工具保留旧定义**。
-
-    为什么留着：锁定态把一个工具从请求里抠掉会改字节、整段前缀 miss；"这个能力没了"由变更
-    通知条目告知，解锁时 effective 对齐最新，它自然消失（apply_pending_changes）。
-    """
-    from app.tools.base import ToolRegistry
-
-    registered = {t["function"]["name"] for t in ToolRegistry.get_all_definitions()}
-    out = []
-    for d in effective_defs or []:
-        name = ((d or {}).get("function") or {}).get("name")
-        if name in allowed_names or name not in registered:
-            out.append(d)
-    return out
+# ── 请求里的工具：2026-11-22 起不再冻结 ──
+# 旧做法是按本状态的 effective 版本取定义快照 + 冻结名单，动机是"对话进行中增删能力不改请求
+# 字节"。这个动机被实测推翻：DeepSeek 把 tools 排在请求最后，改它只重算**工具段本身**——
+# 末尾追加一个工具多几十 token，改/删中间那个重算它后面的工具定义；system 前缀与对话历史
+# （命中大头）一个字节都不动。真正会从第 0 字节断掉的是 system 里那段渲染出来的技能目录，
+# 那一段仍由 ai/prefix.py 锁着。于是「工具马上能用」与「前缀不动」可以同时成立。
+# 取工具的地方（response_worker / world_chat_service）直接用现算结果，不再过这里。
 
 
 # 自己刚改过的源：{agent_id: {source}} —— 只是"下一轮通知别念变更量"的记号。
@@ -796,11 +737,14 @@ async def build_change_notice(
         write_progress(holder, "cap_known_versions", state, source, latest.version)
     if not changed:
         return None
-    # 版本链保证「前缀缓存稳定」：强注入段/工具定义的新版本要等 compact / 清空上下文才整体生效，
-    # 但 changelog 是当轮就到的。世界 AI 曾经看到通知 v10 却仍按旧段去找不存在的工具
-    # （2026-09-18 反馈：「不只费 token，我会去找不存在的工具、白烧轮次」）→ 明确谁说了算。
-    head = ("【能力变更通知】以下变更**立即生效**：与系统提示 / 工具描述里的旧表述冲突时以本通知为准；"
-            "系统提示全文会在下次 compact / 清空上下文时整体刷新。\n")
+    # 谁说了算要分清两件事（2026-11-22：工具不再等 compact，只有文本还在快照里）：
+    # - 工具：请求里的 tools 数组**已是最新**，通知里提到的能力这一轮就能直接调；
+    # - 文本（提示词 / 技能目录 / 记忆索引）：仍是锁定态快照，下次 compact / 清空才整体刷新。
+    # 世界 AI 曾经看到通知 v10 却仍按旧段去找不存在的工具（2026-09-18 反馈：「不只费 token，
+    # 我会去找不存在的工具、白烧轮次」）→ 所以必须说清哪一半已经生效、哪一半要等。
+    head = ("【能力变更通知】新增或改动过的工具**这一轮就能直接调**（请求里的工具表已是最新）；"
+            "系统提示里那份技能目录是对话开始时的快照，与本章通知冲突时以本通知为准，"
+            "全文会在下次 compact / 清空上下文时整体刷新。\n")
     return head + "\n\n".join(lines)
 
 
@@ -829,8 +773,6 @@ async def mark_prefix_fresh(
             continue
         write_progress(holder, "cap_effective_versions", state, source, latest.version)
         write_progress(holder, "cap_known_versions", state, source, latest.version)
-    # 名单与版本同进同退：解锁之后按此刻的状态/开关重新算一次
-    clear_frozen_allowed(holder, state)
     # 前缀文本快照同理，而且更长线：它锁的是**发出去的字节**，只要有人宣布"前缀换新了"，
     # 那份旧快照就必须作废，否则下次请求还会把旧字节端回来（锁定态拒绝覆盖，见 freeze_prefix）。
     # 放在这里而不是只放解锁清单里：世界侧也会走这条"会话起点对齐"，一处漏清就永远换不掉。
@@ -879,7 +821,7 @@ async def get_effective_text(
 ) -> str:
     """锁定态取**本状态**的 effective 快照文本；无记录（新状态/新源）→ 用当前文本并同步本状态。
 
-    与 get_effective_definitions 同一口径：不回落旧 agent 级扁平键，否则老状态的提示词会一直
+    与文本源进度同一口径：不回落旧 agent 级扁平键，否则老状态的提示词会一直
     停在出土版本（工具与提示词是同一套进程，不能一个换新一个不换）。
     """
     ver = state_progress(holder, "cap_effective_versions", state, source)

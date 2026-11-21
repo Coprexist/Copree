@@ -834,7 +834,9 @@ async def _build_tools_segment(db, agent, is_dm: bool = False, emoji_note: str =
     """tools 段：技能目录 + 要点——告诉模型「有什么、怎么调、要注意什么」。
 
     目录给全（每个可用工具一行，含最小调用形态），要点按层级与场景排；两者都不含 schema
-    （schema 在 tools 数组里，只在解锁点变）。渲染完全确定，避免前缀字节漂移。
+    （schema 在请求的 tools 数组里，那一份**每轮取最新**，所以新能力立即可调）。这一段本身
+    锁在 system 前缀里，渲染完全确定以避免字节漂移——代价是对话中途新增的能力不会立刻出现在
+    目录里，由【能力变更通知】补位说明。
     """
     from app.services.tool_registry import get_allowed_tools
     from app.services.skill.skill_engine import _is_delay_reply_allowed
@@ -899,7 +901,9 @@ async def _build_tools_segment(db, agent, is_dm: bool = False, emoji_note: str =
 
     lines.append("")
     lines.append(
-        "目录不含的工具说明它此刻不可用（状态或状态帧限定）；要看全部能力调 list_available_skills。"
+        "这份目录是本次对话开始时的快照：对话中途新增或改动过的能力可能没反映在这里，"
+        "以工具表和【能力变更通知】为准；目录里还写着、但已经被撤掉的能力，调用会返回未知工具。"
+        "要看全部能力调 list_available_skills。"
     )
     return "\n".join(lines)
 
