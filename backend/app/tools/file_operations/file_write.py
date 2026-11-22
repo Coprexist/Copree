@@ -32,6 +32,11 @@ class FileWrite(ToolPlugin):
 
         path = arguments["path"]
         content = arguments["content"]
+        from app.services.agent import knowledge_service as kb
+        try:
+            await kb.ensure_ai_can_edit(db, agent_id, path)
+        except ValueError as e:
+            return {"error": True, "message": str(e)}
         collaboration_mode = arguments.get("collaboration_mode", "solo")
         try:
             metadata = await ai_write_file(db, agent_id, path, content, collaboration_mode)

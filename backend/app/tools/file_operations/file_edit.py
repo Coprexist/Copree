@@ -72,6 +72,11 @@ class FileEdit(ToolPlugin):
         from app.utils.pure.file_edit import infer_operation
 
         path = arguments["path"]
+        from app.services.agent import knowledge_service as kb
+        try:
+            await kb.ensure_ai_can_edit(db, agent_id, path)
+        except ValueError as e:
+            return {"error": True, "message": str(e)}
         operation = infer_operation(arguments)
         new_string = arguments.get("new_string", "")
 

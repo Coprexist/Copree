@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import select
@@ -62,17 +63,140 @@ def _safe_rel(agent_id: int, rel: str) -> str:
     return inner
 
 
-def _row(entry: AgentKnowledge) -> dict:
+INDEX_MAX_ENTRIES = 40
+
+
+def derive_meta(rel: str, content: str) -> tuple[str, str]:
+    """正文 → (标题, 摘要)：标题取首个「# 」行，没有就用文件名；摘要取首个正文段落。
+
+    只用于「文件写进来了、索引里还没有它」这种派生场景；创建者在界面上手写的
+    标题/摘要不会被它覆盖（见 sync_on_write）。
+    """
+    title, summary = "", ""
+    for line in (content or "").splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        if not title and text.startswith("#"):
+            title = text.lstrip("#").strip()[:120]
+        elif not summary and not text.startswith(("#", "```", "|", "---", "![")):
+            summary = text[:120]
+        if title and summary:
+            break
+    return (title or Path(rel).stem[:120], summary)
+
+
+def _stored_rel(agent_id: int, stored_path: str) -> str | None:
+    """文件服务视角的 stored path → knowledge/ 里的相对路径；不在知识库内就 None"""
+    view = ai_view_path(agent_id, stored_path)
+    prefix = f"{KNOWLEDGE_DIR}/"
+    if not view.startswith(prefix):
+        return None
+    rel = view[len(prefix):]
+    if not rel or Path(rel).suffix.lower() not in TEXT_SUFFIXES:
+        return None
+    return rel
+
+
+async def ensure_ai_can_edit(db, agent_id: int, file_path: str) -> None:
+    """AI 要动 knowledge/ 下的文件时，先问一句创建者的开关（agents.is_ai_editable）。
+
+    放在工具层而不是 file_service：创建者的接口也走 ai_write_file，
+    这个总开关只约束「AI 自己动手」那一条路。
+    """
+    stored = ai_stored_path(agent_id, file_path)
+    if _stored_rel(agent_id, stored) is None:
+        return
+    from app.models.agent import Agent as AgentModel
+
+    agent = await db.get(AgentModel, int(agent_id))
+    if agent is not None and not agent.is_ai_editable:
+        raise ValueError("创建者关闭了你的自我编辑权限，知识库只能由创建者改")
+
+
+async def _entry_by_path(db, agent_id: int, rel: str):
+    return (await db.execute(
+        select(AgentKnowledge).where(
+            AgentKnowledge.agent_id == int(agent_id),
+            AgentKnowledge.path == rel,
+        )
+    )).scalar_one_or_none()
+
+
+async def sync_on_write(db, agent_id: int, stored_path: str, content: str) -> None:
+    """文件写完了 → 索引行跟上（upsert）。由 file_service 写盘后调用。
+
+    这是「AI 编辑自己的知识库」的唯一实现：AI 用 file_write / file_edit 写 knowledge/ 就够了，
+    不必再学一个知识库专有工具（那会让 file_write 和它抢同一件事）。
+    """
+    rel = _stored_rel(agent_id, stored_path)
+    if rel is None:
+        return
+    raw = (content or "").encode("utf-8")
+    title, summary = derive_meta(rel, content)
+    entry = await _entry_by_path(db, agent_id, rel)
+    if entry is None:
+        db.add(AgentKnowledge(
+            agent_id=int(agent_id), path=rel, title=title, summary=summary,
+            size=len(raw), enabled=True,
+        ))
+        await db.flush()
+        return
+    # 创建者手改过的元数据不覆盖：只有「摘要还空着」「标题还是文件名」时才刷新
+    if not (entry.summary or "").strip():
+        entry.summary = summary
+    if not (entry.title or "").strip() or entry.title == Path(rel).stem[:120]:
+        entry.title = title
+    entry.size = len(raw)
+    await db.flush()
+
+
+async def sync_on_move(db, agent_id: int, old_stored: str, new_stored: str) -> None:
+    old_rel = _stored_rel(agent_id, old_stored)
+    if old_rel is None:
+        return
+    entry = await _entry_by_path(db, agent_id, old_rel)
+    if entry is None:
+        return
+    new_rel = _stored_rel(agent_id, new_stored)
+    if new_rel is None:
+        await db.delete(entry)          # 挪出 knowledge/ = 不再是一份资料
+    else:
+        entry.path = new_rel
+    await db.flush()
+
+
+async def sync_on_delete(db, agent_id: int, stored_path: str) -> None:
+    rel = _stored_rel(agent_id, stored_path)
+    if rel is None:
+        return
+    entry = await _entry_by_path(db, agent_id, rel)
+    if entry is not None:
+        await db.delete(entry)
+        await db.flush()
+
+
+def _row(entry: AgentKnowledge, agent_id: int | None = None) -> dict:
+    size = entry.size or 0
+    updated = entry.updated_at.isoformat() if entry.updated_at else None
+    if agent_id is not None:
+        # 前端看到的大小与时间以文件为准：正文被任何路径改过（含 run_script 直接写盘）都不落后
+        try:
+            st = (knowledge_root(agent_id) / entry.path).stat()
+            size = st.st_size
+            updated = datetime.fromtimestamp(st.st_mtime).isoformat()
+        except OSError:
+            pass
     return {
         "id": entry.id,
         "agent_id": entry.agent_id,
         "title": entry.title,
         "summary": entry.summary or "",
         "path": entry.path,
-        "size": entry.size or 0,
+        "size": size,
         "enabled": bool(entry.enabled),
         "created_at": entry.created_at.isoformat() if entry.created_at else None,
-        "updated_at": entry.updated_at.isoformat() if entry.updated_at else None,
+        "updated_at": updated,
     }
 
 
@@ -83,7 +207,7 @@ async def list_entries(db, agent_id: int) -> list[dict]:
         .where(AgentKnowledge.agent_id == int(agent_id))
         .order_by(AgentKnowledge.created_at, AgentKnowledge.id)
     )).scalars().all()
-    return [_row(r) for r in rows]
+    return [_row(r, agent_id) for r in rows]
 
 
 async def get_entry(db, agent_id: int, knowledge_id: int) -> AgentKnowledge | None:
@@ -129,18 +253,17 @@ async def add_entry(db, agent_id: int, *, title: str, summary: str = "",
         name += ".md"
     rel = _unique_rel(agent_id, _safe_rel(agent_id, name))
 
-    # 正文交给文件服务写：它同时登记 files 行，AI 的 file_list 与存储页才看得见这份文档
+    # 正文交给文件服务写：它同时登记 files 行与知识库索引行（钩子在 file_service.ai_write_file）
     await ai_write_file(db, agent_id, f"{KNOWLEDGE_DIR}/{rel}", content)
 
-    entry = AgentKnowledge(
-        agent_id=int(agent_id),
-        title=(str(title or "").strip() or Path(rel).stem)[:120],
-        summary=(str(summary or "").strip())[:1000],
-        path=rel,
-        size=len(raw),
-        enabled=True,
-    )
-    db.add(entry)
+    entry = await _entry_by_path(db, agent_id, rel)
+    if entry is None:               # 文件服务没挂钩子（测试替身 / 旧内核）时兜底建行
+        entry = AgentKnowledge(agent_id=int(agent_id), path=rel)
+        db.add(entry)
+    entry.title = (str(title or "").strip() or Path(rel).stem)[:120]
+    entry.summary = (str(summary or "").strip())[:1000]
+    entry.size = len(raw)
+    entry.enabled = True
     await db.flush()
     # 时间戳由 server_default 生成，flush 后是"过期"状态；这里刷一次，返回给界面的行才完整
     await db.refresh(entry)
@@ -264,16 +387,18 @@ async def delete_entry(db, agent_id: int, knowledge_id: int) -> None:
     entry = await get_entry(db, agent_id, knowledge_id)
     if entry is None:
         raise ValueError("文档不存在")
+    rel = entry.path
+    # 先删行、再删文件：文件服务的钩子按路径找行，行没了它就不会再动一次
+    await db.delete(entry)
+    await db.flush()
     try:
-        await ai_delete_file(db, agent_id, f"{KNOWLEDGE_DIR}/{entry.path}")
+        await ai_delete_file(db, agent_id, f"{KNOWLEDGE_DIR}/{rel}")
     except ValueError:
         # 早于"文件服务写入"的文档没有 files 登记行，直接删文件
         try:
-            (knowledge_root(agent_id) / _safe_rel(agent_id, entry.path)).unlink(missing_ok=True)
+            (knowledge_root(agent_id) / _safe_rel(agent_id, rel)).unlink(missing_ok=True)
         except (OSError, ValueError) as e:
-            logger.warning("删除知识库文件失败 %s: %s", entry.path, e)
-    await db.delete(entry)
-    await db.flush()
+            logger.warning("删除知识库文件失败 %s: %s", rel, e)
 
 
 async def read_entry(db, agent_id: int, knowledge_id: int) -> dict:
@@ -298,8 +423,13 @@ async def knowledge_index_text(db, agent_id: int) -> str:
     if not rows:
         return ""
     lines = ["## 知识库（你的资料；需要细节用 file_read 取正文，别整段背）"]
-    for r in rows:
+    # 索引全量进系统提示，每轮都要付 token：多的只报数量，让 AI 自己 file_list 去看
+    shown = rows[:INDEX_MAX_ENTRIES]
+    for r in shown:
         summary = (r.summary or "").strip()
         hint = f"：{summary}" if summary else ""
         lines.append(f"- 《{r.title}》{hint} → file_read \"knowledge/{r.path}\"")
+    rest = len(rows) - len(shown)
+    if rest > 0:
+        lines.append(f"- 另有 {rest} 份没列出（用 file_list \"knowledge/\" 看全部）")
     return "\n".join(lines)

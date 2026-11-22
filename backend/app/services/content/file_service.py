@@ -1669,6 +1669,13 @@ async def ai_write_file(db: AsyncSession, agent_id: int, file_path: str,
         await db.refresh(metadata)
         await track_file_reference(db, metadata.id, "ai", agent_id, "write")
 
+    # 知识库：正文就是文件，写完顺手让索引行跟上——这是「AI 编辑自己的知识库」的唯一入口
+    try:
+        from app.services.agent import knowledge_service as _kb
+        await _kb.sync_on_write(db, agent_id, file_path, content)
+    except Exception as e:  # noqa: BLE001 —— 索引没跟上不该让文件写入失败
+        logger.warning("知识库索引同步失败 %s: %s", file_path, e)
+
     return metadata
 
 
@@ -1694,6 +1701,12 @@ async def ai_move_file(db: AsyncSession, agent_id: int, old_path: str, new_path:
         await db.flush()
         await notify_file_changed(db, metadata.id, "modified", "ai", agent_id)
 
+    try:
+        from app.services.agent import knowledge_service as _kb
+        await _kb.sync_on_move(db, agent_id, old_stored, new_stored)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("知识库路径同步失败 %s: %s", new_stored, e)
+
 
 async def ai_list_files(db: AsyncSession, agent_id: int, path: str = "/") -> list[dict]:
     """AI 列出目录（回显 AI 视角的路径，不带 agents/{id}/ 前缀）"""
@@ -1715,6 +1728,13 @@ async def ai_delete_file(db: AsyncSession, agent_id: int, file_path: str) -> boo
     metadata = result.scalar_one_or_none()
     if metadata is None:
         raise ValueError("文件不存在")
+
+    stored = metadata.path
+    try:
+        from app.services.agent import knowledge_service as _kb
+        await _kb.sync_on_delete(db, agent_id, stored)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("知识库索引删除失败 %s: %s", stored, e)
 
     return await delete_file(db, metadata.id, "ai", agent_id)
 

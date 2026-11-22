@@ -196,6 +196,8 @@
 
 - 表情包支持三档显示尺寸：插件在 `emoji.json` 里用 `default_size`（整包）或 `size`（单张）挑 `s` / `m` / `l`，不写默认 `m`。只影响输入框表情面板，消息正文里的表情尺寸不变。
 
+- AI 可以编辑自己的知识库了，而且**不存在第二个编辑入口**：知识库正文本来就是文件空间里的 `knowledge/<path>`，索引维护挂在文件写路径上（`file_service` 的 `ai_write_file` / `ai_move_file` / `ai_delete_file` 调 `knowledge_service.sync_on_write/move/delete`），所以 `file_write`、`file_edit`、`file_delete` 照写就行，不必新学一个知识库专有工具（也避免和 `manage_records` 抢语义）。新建文档的标题取正文首个 `#`、摘要取首个段落；**创建者在界面上手改过的标题/摘要不会被 AI 覆盖**。写入受 `agents.is_ai_editable`（AI 自修改总开关）约束，关闭时三个文件工具碰 `knowledge/` 会明确报错。AI 详情页的知识库列表大小与时间改为以磁盘 `stat` 为准，所以 AI 通过任何路径改了正文（含 `run_script` 直写），创建者刷新就能看到最新。索引注入另加上限 `INDEX_MAX_ENTRIES = 40` 条，其余只报数量——109 份文档全量铺进系统提示，每轮都要为它付 token。
+
 ### 🐛 修复
 
 - **滚动条不再并排出现两条**：iOS / iPadOS 的滚动指示器是系统 overlay，`scrollbar-width`

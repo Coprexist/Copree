@@ -25,6 +25,11 @@ class FileDelete(ToolPlugin):
         from app.services.content.file_service import ai_delete_file
 
         path = arguments["path"]
+        from app.services.agent import knowledge_service as kb
+        try:
+            await kb.ensure_ai_can_edit(db, agent_id, path)
+        except ValueError as e:
+            return {"error": True, "message": str(e)}
         try:
             await ai_delete_file(db, agent_id, path)
             return {"success": True, "path": path, "message": "文件已删除"}
