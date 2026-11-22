@@ -242,7 +242,9 @@ export default function ProviderCards({
                 {/* 钥匙挂在厂商名右上角：绝对定位、不参与布局，长名字也不会把它挤走。
                     图标、说明文案与打开方式（悬停 + 点击）都在 KeyMark 里，别在这里重写。 */}
                 <span className="relative shrink-0 max-w-full">
-                  <span className="text-sm font-medium text-textPrimary truncate block pr-2.5">
+                  {/* 厂商是卡片的标题级：用品牌主色把这一层和下面的配置档行（中性色）分开，
+                      不是强调按钮，所以只要一点点颜色，别加粗也别改字号。 */}
+                  <span className="text-sm font-medium text-primary-400 truncate block pr-2.5">
                     {provider.name}
                   </span>
                   {provider.has_key && (
