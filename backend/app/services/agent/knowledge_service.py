@@ -65,6 +65,9 @@ def _safe_rel(agent_id: int, rel: str) -> str:
 
 INDEX_MAX_ENTRIES = 40
 
+# 摘要不要这些东西：标题、代码块、表格、分隔线、图片、引用块、列表项（目录几乎都在列表里）
+_SKIP_SUMMARY_RE = re.compile(r"^(#|```|\||---|!\[|>|<|[-*+] |\d+\. )")
+
 
 def derive_meta(rel: str, content: str) -> tuple[str, str]:
     """正文 → (标题, 摘要)：标题取首个「# 」行，没有就用文件名；摘要取首个正文段落。
@@ -79,7 +82,8 @@ def derive_meta(rel: str, content: str) -> tuple[str, str]:
             continue
         if not title and text.startswith("#"):
             title = text.lstrip("#").strip()[:120]
-        elif not summary and not text.startswith(("#", "```", "|", "---", "![")):
+        elif not summary and not _SKIP_SUMMARY_RE.match(text) and "](#" not in text:
+            # 目录行（](# 链接）与列表行都不算摘要：索引里要的是一句话讲清这篇是什么
             summary = text[:120]
         if title and summary:
             break
