@@ -296,8 +296,24 @@ def with_transcripts(attachments, transcripts: dict[int, str] | None) -> list | 
     return out
 
 
+def emoji_mark(att: dict) -> str:
+    """表情附件 → "[表情:名字]"；不是表情返回空串。
+
+    为什么不让标记层自己猜：入口已经把表情落成**普通图片附件**（见
+    plugin.catalog.take_image_faces），字节层面它和随手发的一张图完全一样。
+    身份只来自 `emoji_asset_file` 写进附件快照的元数据，也只有新消息有——
+    已经进账本的旧消息不回溯，仍旧渲染成 [图片]（2026-11-22 定的口径）。
+    """
+    face = att.get("emoji")
+    if not isinstance(face, dict):
+        return ""
+    name = " ".join(str(face.get("name") or "").split())
+    return "[表情:" + name + "]" if name else "[表情]"
+
+
 def attachment_marks(attachments, *, said: str = "") -> str:
-    """把附件铺成一行文字标记：图片 [图片]，语音 [语音]（带文稿），其余 [文件] 名（大小）。
+    """把附件铺成一行文字标记：表情 [表情:名字]、图片 [图片]、语音 [语音]（带文稿）、
+    其余 [文件] 名（大小）。
 
     群聊与私信共用（私信原先自己有套 [文件: a, b] 的写法，两处口径会分叉）。
     卡片类附件（好友/群邀请）没有文件语义，不进标记。
@@ -314,7 +330,10 @@ def attachment_marks(attachments, *, said: str = "") -> str:
         if not isinstance(att, dict) or att.get("type"):
             continue
         if is_image(att):
-            if IMAGE_PLACEHOLDER not in (said or ""):
+            mark = emoji_mark(att)
+            if mark:
+                marks.append(mark)
+            elif IMAGE_PLACEHOLDER not in (said or ""):
                 marks.append(IMAGE_PLACEHOLDER)
             continue
         if is_audio(att):

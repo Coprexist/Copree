@@ -294,7 +294,10 @@ def emoji_face(raw: Any, default_size: str = EMOJI_SIZE_DEFAULT) -> dict[str, st
     if not isinstance(raw, dict):
         return None
     face_id = str(raw.get("id") or "").strip()
-    name = str(raw.get("name") or "").strip()[:24]
+    # 名字要能原样往返：它出现在 AI 上下文的 [表情:名字] 里，AI 抄回正文时还得被
+    # EMOJI_LEGACY_RE 认出来——那个正则只吃到 ] 和换行为止，所以这两个字符不能留。
+    # 24 字上限与正则的 {1,24} 对齐，超了 AI 抄回去就对不上名字。
+    name = " ".join(str(raw.get("name") or "").split()).replace("]", "").replace("[", "")[:24]
     if not EMOJI_ID_RE.match(face_id) or not name:
         return None
     emoji = str(raw.get("emoji") or "").strip()
@@ -663,6 +666,13 @@ async def emoji_asset_file(db: AsyncSession, face: dict[str, Any]) -> dict[str, 
         "path": rel,
         "size": int(metadata.size or 0),
         "mime_type": metadata.mime_type or guess_mime(rel),
+        # 身份随附件走：表情落成普通图片后，字节上和随手一张图没有区别，
+        # 全靠这份元数据让上下文层铺出 [表情:名字]（multimodal.emoji_mark）
+        "emoji": {
+            "pack": pack_id,
+            "id": str(face.get("id") or ""),
+            "name": str(face.get("name") or ""),
+        },
     }
 
 
