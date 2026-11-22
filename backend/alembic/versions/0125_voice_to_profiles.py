@@ -56,18 +56,26 @@ def upgrade() -> None:
         ident = (row.owner_id, pkey, row.base_url)
         provider_id = providers.get(ident)
         if provider_id is None:
-            preset = PRESETS.get(pkey) if pkey else None
-            if preset is not None and preset.get("kind") != "voice":
-                preset = None
-            label = (preset or {}).get("label") or pkey or "语音厂商"
-            provider_id = _create_provider(
-                conn, row.owner_id, _unique_provider_name(conn, row.owner_id, label),
-                preset, pkey, row.base_url, key_enc, voice, model,
-            )
+            # 幂等：迁移集合指纹失效、手工 alembic upgrade 都会让这条迁移再跑一遍。
+            # 同一家厂商（同用户 + 同根地址）已经建过就复用，别再插一行——
+            # 插进去只会撞唯一约束被改名成「BreezeBlue 2」，界面上多一张空壳卡片。
+            provider_id = _find_provider(conn, row.owner_id, row.base_url)
+            if provider_id is None:
+                preset = PRESETS.get(pkey) if pkey else None
+                if preset is not None and preset.get("kind") != "voice":
+                    preset = None
+                label = (preset or {}).get("label") or pkey or "语音厂商"
+                provider_id = _create_provider(
+                    conn, row.owner_id, _unique_provider_name(conn, row.owner_id, label),
+                    preset, pkey, row.base_url, key_enc, voice, model,
+                )
             providers[ident] = provider_id
 
         pident = (provider_id, key_enc or "", voice, model)
         profile_id = profiles.get(pident)
+        if profile_id is None:
+            # 同理：同一条厂商下，音色与模型都一样的档就是同一个档，不重复建。
+            profile_id = _find_profile(conn, provider_id, voice, model)
         if profile_id is None:
             provider_default_key = conn.execute(sa.text(
                 "SELECT default_api_key_encrypted FROM user_api_providers WHERE id = :i"
@@ -78,7 +86,7 @@ def upgrade() -> None:
                 None if provider_default_key == key_enc else key_enc,
                 voice, model,
             )
-            profiles[pident] = profile_id
+        profiles[pident] = profile_id
 
         conn.execute(sa.text(
             "UPDATE agent_voice_configs SET voice_profile_id = :p WHERE id = :i"
@@ -116,6 +124,34 @@ def _create_profile(conn, user_id: int, provider_id: int, name: str,
         "u": user_id, "pr": provider_id, "n": name, "k": key_enc,
         "p": voice or None, "s": model or None,
     }).scalar_one()
+
+
+def _find_provider(conn, user_id: int, base_url: str) -> int | None:
+    """这个用户名下已经接过同一根地址的语音厂商？有就返回它（幂等用）。
+
+    按 base_url 认，不按 name：name 是展示名，用户随时会改；
+    同一家厂商在同一个人名下本来就该只存在一条。
+    """
+    return conn.execute(sa.text(
+        "SELECT id FROM user_api_providers "
+        "WHERE user_id = :u AND kind = 'voice' AND base_url = :b "
+        "ORDER BY id LIMIT 1"
+    ), {"u": user_id, "b": base_url}).scalar_one_or_none()
+
+
+def _find_profile(conn, provider_id: int, voice: str, model: str) -> int | None:
+    """这条厂商下已经有一模一样的档（音色 + 副型号）？有就返回它。
+
+    用 IS NOT DISTINCT FROM 而不是 =：这两列都可能是 NULL（没填副型号），
+    而 NULL = NULL 在 SQL 里不成立，会漏判成"没有"进而重复插入。
+    """
+    return conn.execute(sa.text(
+        "SELECT id FROM user_api_profiles "
+        "WHERE provider_id = :p "
+        "  AND primary_model IS NOT DISTINCT FROM :v "
+        "  AND secondary_model IS NOT DISTINCT FROM :m "
+        "ORDER BY id LIMIT 1"
+    ), {"p": provider_id, "v": voice or None, "m": model or None}).scalar_one_or_none()
 
 
 def _unique_provider_name(conn, user_id: int, base: str) -> str:

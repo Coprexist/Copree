@@ -53,18 +53,25 @@ async def _probe(url: str) -> tuple[bool, str]:
 
 
 def _fingerprint(backend_dir: Path) -> str:
-    """迁移集合的指纹：文件名 + 大小 + mtime。集合没变过 = 不会有未应用的迁移。"""
+    """迁移集合的指纹：文件名 + **内容哈希**。
+
+    为什么不用 size + mtime：编辑器里"保存一下但没改动"、git checkout、touch
+    都会改 mtime，指纹一变就要白跑一次 alembic upgrade（2 秒起，还得指望每条
+    迁移都幂等）。真正决定"有没有未应用迁移"的是文件内容，不是它什么时候被写过。
+    """
     versions = backend_dir / "alembic" / "versions"
+    files = sorted(versions.glob("*.py"))
+    if not files:
+        return ""
+    digest = hashlib.sha256()
     try:
-        parts = sorted(
-            f"{p.name}:{p.stat().st_size}:{int(p.stat().st_mtime)}"
-            for p in versions.glob("*.py")
-        )
+        for p in files:
+            digest.update(p.name.encode())
+            digest.update(b"\0")
+            digest.update(p.read_bytes())
     except OSError:
         return ""
-    if not parts:
-        return ""
-    return hashlib.sha256("\n".join(parts).encode()).hexdigest()[:16]
+    return digest.hexdigest()[:16]
 
 
 def _marker(backend_dir: Path) -> Path:
