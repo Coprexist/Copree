@@ -10,11 +10,15 @@
  */
 import { api } from '../api/client'
 
+/** 显示档位：s 行内小 / m 中 / l 大（后端 emoji_face 已归一成三档之一） */
+export type EmojiSize = 's' | 'm' | 'l'
+
 export interface EmojiFace {
   id: string
   name: string
   emoji: string
   file: string
+  size?: EmojiSize
   // 三段给 AI 读的说明（见后端 catalog.emoji_face）：图片表情靠它们判断"什么时候发"。
   // 可选——商城/内置包里没写就是空串，渲染层不依赖它们。
   caption?: string

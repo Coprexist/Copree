@@ -1,8 +1,12 @@
 import { useState, useCallback, useEffect, useRef, useMemo, forwardRef, useImperativeHandle } from 'react'
 import { Paperclip, Send, Smile, Square } from 'lucide-react'
-import { MenuPanel, MenuItem } from './ui'
+import { MenuPanel, MenuItem, UnderlineTabs } from './ui'
 import { useEmojiPacks } from '../hooks/useEmojiPacks'
 import { faceAssetUrl, faceMarkup } from '../utils/emojiPacks'
+
+/** 输入框表情面板的显示档位（px）：面板是「挑图」的地方，比正文里的行内表情大得多——
+ *  细致的大图按 20px 根本看不清。s 保持原样，后两档按 1.15 / 4 / 6 的比例放大。 */
+const EMOJI_PANEL_PX: Record<'s' | 'm' | 'l', number> = { s: 20, m: 56, l: 84 }
 
 /** @提及 的终止字符：与后端 app/utils/text.py 的 _MENTION_STOP 同一套口径
  *  （两处必须一致，否则前端提醒的名字和后端认的名字会对不上） */
@@ -61,6 +65,9 @@ const ChatInputFunc = ({ conversationType, conversationId, t, onSend, onSendFile
   const [contentH, setContentH] = useState(CHAT_INPUT_MIN_H)
   const [emojiOpen, setEmojiOpen] = useState(false)
   const emojiPacks = useEmojiPacks()
+  // 面板按表情包分页（下划线页签）：换的是「一屏表情」，属于切换视图
+  const [emojiPackId, setEmojiPackId] = useState('')
+  const activePack = emojiPacks.find((p) => p.id === emojiPackId) || emojiPacks[0]
   const valueRef = useRef('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   useImperativeHandle(ref, () => textareaRef.current!, [])
@@ -279,28 +286,39 @@ const ChatInputFunc = ({ conversationType, conversationId, t, onSend, onSendFile
                   <Smile size={17} />
                 </button>
                 {emojiOpen && (
-                  <MenuPanel className="absolute bottom-full left-0 mb-1 w-72 max-h-64 overflow-y-auto p-2 z-modal">
-                    <div className="text-3xs text-textMuted px-1 pb-1">{t('chat:emojiPacks')}</div>
-                    {emojiPacks.map((pack) => (
-                      <div key={pack.id} className="mb-2 last:mb-0">
-                        <div className="text-3xs text-textMuted px-1 mb-1" title={pack.usage}>{pack.name}</div>
-                        <div className="flex flex-wrap gap-0.5">
-                          {pack.faces.map((face) => (
-                            <button
-                              key={face.id}
-                              type="button"
-                              title={face.name}
-                              onMouseDown={(e) => { e.preventDefault(); insertEmoji(faceMarkup(face)) }}
-                              className="w-8 h-8 flex items-center justify-center rounded-control text-base hover:bg-elevated transition-colors"
-                            >
-                              {face.emoji || (face.file
-                                ? <img src={faceAssetUrl(pack, face)} alt={face.name} className="w-5 h-5" loading="lazy" />
-                                : face.name.slice(0, 1))}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
+                  <MenuPanel className="absolute bottom-full left-0 mb-1 w-80 max-h-72 overflow-y-auto z-modal">
+                    {/* 表情包用下划线页签分页：换的是「一屏表情」，属于切换视图 */}
+                    <div className="px-2 pt-1">
+                      <UnderlineTabs
+                        grow
+                        size="sm"
+                        items={emojiPacks.map((p) => ({ key: p.id, label: p.name }))}
+                        value={activePack?.id || ''}
+                        onChange={setEmojiPackId}
+                      />
+                    </div>
+                    <div className="flex flex-wrap gap-1 p-2">
+                      {(activePack?.faces || []).map((face) => {
+                        const px = EMOJI_PANEL_PX[face.size || 'm']
+                        return (
+                          <button
+                            key={face.id}
+                            type="button"
+                            title={face.name}
+                            onMouseDown={(e) => { e.preventDefault(); insertEmoji(faceMarkup(face)) }}
+                            className="flex items-center justify-center rounded-control hover:bg-elevated transition-colors"
+                            style={{ width: px + 8, height: px + 8 }}
+                          >
+                            {face.emoji || (face.file
+                              ? <img src={faceAssetUrl(activePack!, face)} alt={face.name} style={{ width: px, height: px, objectFit: 'contain' }} loading="lazy" />
+                              : face.name.slice(0, 1))}
+                          </button>
+                        )
+                      })}
+                      {(activePack?.faces || []).length === 0 && (
+                        <div className="px-1 py-2 text-3xs text-textMuted">{t('chat:emojiPacks')}</div>
+                      )}
+                    </div>
                   </MenuPanel>
                 )}
               </div>

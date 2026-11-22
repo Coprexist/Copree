@@ -61,6 +61,17 @@ EMOJI_ASSET_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".webp")
 # 上限只用来挡住明显的垃圾输入，正常表情不该被截断
 EMOJI_CHARS_MAX = 32
 
+# 表情的显示档位：插件在 emoji.json 里按包（default_size）或按图（size）挑一档，
+# 渲染层只认档名。最小档是行内小表情，后两档是贴纸级——细致的大图需要更大的尺寸。
+EMOJI_SIZES = ("s", "m", "l")
+EMOJI_SIZE_DEFAULT = "m"
+
+
+def emoji_size(raw: Any, fallback: str = EMOJI_SIZE_DEFAULT) -> str:
+    """档位规范化：认不出的当没写，落回给定默认档"""
+    value = str(raw or "").strip().lower()
+    return value if value in EMOJI_SIZES else fallback
+
 # 表情在正文里的两种规范写法，新增表达方式前先读这段：
 #   标准表情  unicode 字符本身，各通道天然可用，无需解析；
 #   自定义表情 ASCII 短码 :id:（Slack / Mastodon / Misskey 同款）。
@@ -275,7 +286,7 @@ def get_skill_defs(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     return [s for s in skills if isinstance(s, dict) and s.get("type")]
 
 
-def emoji_face(raw: Any) -> dict[str, str] | None:
+def emoji_face(raw: Any, default_size: str = EMOJI_SIZE_DEFAULT) -> dict[str, str] | None:
     """一条表情 → 规范形状；不合法的单条丢掉，不让一个坏表情带崩整包
 
     公开：插件扫描与「用户自制表情包」的写入走同一次校验，写进去的和读出来的才算同一种东西。
@@ -310,6 +321,8 @@ def emoji_face(raw: Any) -> dict[str, str] | None:
     return {
         "id": face_id, "name": name, "emoji": emoji, "file": file_name,
         "caption": caption, "keywords": keywords, "mood": mood,
+        # 没写就继承包的默认档（默认 m = 最小档的上一档）
+        "size": emoji_size(raw.get("size"), default_size),
     }
 
 
@@ -320,8 +333,9 @@ def get_emoji_pack(manifest: dict[str, Any]) -> dict[str, Any]:
     payload = load_entry_payload(manifest)
     faces: list[dict[str, str]] = []
     seen: set[str] = set()
+    default_size = emoji_size(payload.get("default_size"))
     for raw in (payload.get("faces") or [])[:EMOJI_FACE_MAX]:
-        face = emoji_face(raw)
+        face = emoji_face(raw, default_size=default_size)
         if face and face["id"] not in seen:
             seen.add(face["id"])
             faces.append(face)

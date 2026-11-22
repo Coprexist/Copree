@@ -391,3 +391,22 @@ import { SecretInput } from '../components/ui'
 
 闸门：`scripts/check-ui.mjs` 扫到 `type="password"` 且没有 `ui-standard-ignore` 就报错，
 所以这条规矩不靠记性，靠 CI。
+
+## 10. 左栏收起（四处同一套）
+
+聊天列表、设置、DSH、控制台四处左栏都能收起，状态与动作只有一份：
+
+- 状态：`hooks/useRailCollapsed`（localStorage 布尔，键各自独立：`chat_sidebar_collapsed` / `settings_sidebar_collapsed` / `dsh_sidebar_collapsed` / `admin_rail_collapsed`）
+- 宽度：收起后 `RAIL_COLLAPSED_WIDTH`（52px）
+- 图标：收起 `‹`（ChevronLeft），展开 `›`（ChevronRight）；只有 DSH 顶栏用 `☰`（Menu），避免和旁边的返回箭头混淆
+- 聊天列表收起后是一列头像（复用 `GroupAvatarGroup` / `DmAvatar`，私信圆形、群聊圆角方块）；点收起时用 FLIP 把头像从列表位置平移过去——只动 transform，起点在视口外或系统开了「减少动态效果」时不做
+- 分组：收起态按「置顶 / 群聊 / 私信」分段，线拉通整栏、线下一层竖向渐变淡出；这条线本身就是该组的折叠开关（展开态则是整行可点）
+- 颜色一律沿用现有语义色（`bg-surface` / `border-border` / `hover:bg-elevated` / `primary-*`），不为收起态另造一套
+
+## 11. 表情包的显示档位
+
+插件在 `emoji.json` 里挑档，渲染层只认档名：
+
+- `default_size`（整包）/ `size`（单张）：`s` / `m` / `l`，不写就是 `m`
+- 只影响**输入框表情面板**（`s` 20px、`m` 56px、`l` 84px）；消息正文里发出去的表情尺寸不变
+- 面板按表情包用 `UnderlineTabs` 分页——换的是「一屏表情」，属于切换视图
