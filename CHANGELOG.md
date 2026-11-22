@@ -493,6 +493,8 @@
 
 - 修复接入 API 配置档后 AI 全线不回消息：`UserApiProvider.options` 少了 `Column(...)` 包装，ORM 没有映射这一列，运行时读到的是类型对象而不是模型清单，回复链路每轮都在 `provider_info_of` 里抛 `AttributeError`。
 
+- 本地推理服务（ollama / vLLM / LM Studio）不需要 API Key，但回复 worker 在 Key 为空时直接发「缺少 API Key」并跳过，请求根本没发出去。现在选了配置档（`credit_source == "profile"`）时照常请求，空 Key 只是不带 `Authorization` 头；真需要 Key 的服务会回 401，提示更准确。
+
 ### 🔧 变更
 
 - **评论通知只在需要动手时报**：一次回十条评论时，十条「公开成功」对 AI 没有任何增量信息，

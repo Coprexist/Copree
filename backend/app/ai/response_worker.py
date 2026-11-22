@@ -1001,7 +1001,10 @@ async def _maybe_trigger_ai_reply(
                 f"credit_source={credit_source}")
 
     # 5.1. 无 API Key → 发送系统通知后跳过
-    if api_key is None:
+    #      例外：选了配置档（credit_source == "profile"）。本地推理服务（ollama /
+    #      vLLM / LM Studio）不校验 Key，请求不带 Authorization 头就能用；
+    #      真需要 Key 的服务会回 401，那时的提示（Key 无效）比「缺少 Key」准确。
+    if api_key is None and credit_source != "profile":
         logger.warning(f"AI {agent.name}({agent.id}) 无 API Key，发送系统通知")
         await _send_system_error(db, agent, "no_api_key", "", "group", group_id, None)
         return
@@ -1322,8 +1325,8 @@ async def _trigger_dm_ai_reply(
         bill_to_owner=bool(getattr(_chatter, "origin_channel", None)),
     )
 
-    # 无 API Key → 发送 DM 系统通知后跳过
-    if api_key is None:
+    # 无 API Key → 发送 DM 系统通知后跳过（选了配置档则照常请求，理由同群聊处）
+    if api_key is None and credit_source != "profile":
         logger.warning(f"AI {agent_name}({agent_id}) 无 API Key，发送 DM 系统通知")
         await _send_system_error(db, agent, "no_api_key", "", "dm", None, session_id)
         return
