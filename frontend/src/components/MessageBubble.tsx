@@ -1,4 +1,4 @@
-import { memo, useState, useMemo, useEffect, useRef } from 'react'
+import { memo, useState, useMemo, useEffect, useRef, type ReactNode } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { useBubbleDark } from '../hooks/useBubbleDark'
 import { FileIcon, Download, Globe, ShieldAlert, MessageSquare, MoreHorizontal } from 'lucide-react'
@@ -10,6 +10,7 @@ import { scrollToInContainer } from '../utils/scroll'
 import { copyText } from '../utils/clipboard'
 import { useLang, useT } from '../i18n/I18nContext'
 import { api, fileDownloadUrl } from '../api/client'
+import { voiceCollectName } from '../utils/voiceCollectName'
 import { attachmentImageSizing } from '../hooks/useAttachmentUpload'
 import FilePreviewModal from './FilePreviewModal'
 import InvitationCard from './InvitationCard'
@@ -43,6 +44,9 @@ const LIGHT_VARS = [
   '--b-text-green:20 150 60', '--b-text-blue:50 100 220', '--b-text-purple:130 80 200',
   '--b-text-pink:220 80 150', '--b-text-gray:100 100 100',
 ]
+
+/** 「收进我的文件」在单个附件上的状态：收进去之后这一项就变成「移出」 */
+type CollectState = 'idle' | 'keep' | 'remove' | 'done' | 'failed'
 
 /** 弹跳三点 */
 const BouncingDots = ({ className = '' }: { className?: string }) => (
@@ -104,12 +108,16 @@ const MessageBubble = memo(function MessageBubble({
 
   const [previewFile, setPreviewFile] = useState<{ file_id: number; name: string; size: number; mime_type: string } | null>(null)
   const [invStatus, setInvStatus] = useState<string | null>(null)
-  const [menuOpen, setMenuOpen] = useState(false)
+  // 哪一层的菜单开着：'msg' = 这条消息，'a:{file_id}' = 某一个附件。
+  // 一条消息能带好几份文件，操作单位是附件，所以不能只有一个布尔。
+  const [openMenuKey, setOpenMenuKey] = useState<string | null>(null)
+  // 「收进我的文件」按附件记状态：收完那一项变成「移出我的文件」，
+  // 别的附件不受影响（多附件消息里这不是一条整体状态）
+  const [collect, setCollect] = useState<Record<number, CollectState>>({})
   // 文稿默认展开；收了之后这条消息记住（只在这一条上生效，不落库）
   const [showTranscript, setShowTranscript] = useState(true)
   const [copied, setCopied] = useState(false)
   const [avatarBroken, setAvatarBroken] = useState(false)
-  const menuRef = useRef<HTMLDivElement | null>(null)
 
   /** 复制这条消息的正文（就是界面上看到的那份：@ 已经渲染成名字） */
   const handleCopy = async () => {
@@ -118,18 +126,20 @@ const MessageBubble = memo(function MessageBubble({
     // 让「已复制」在菜单里停留一下再收起，不然点完什么都没有只剩下安静
     setTimeout(() => {
       setCopied(false)
-      setMenuOpen(false)
+      setOpenMenuKey(null)
     }, 900)
   }
 
-  // 操作菜单：点外面或按 Esc 就收（挂在消息上的浮层不该逼人再点一次）
+  // 操作菜单：点外面或按 Esc 就收。菜单现在有多个（消息一个、每个附件一个），
+  // 靠 data-menu-anchor 认"点的是不是当前这层"——点别的附件的三点时直接切过去，不该先关再点。
   useEffect(() => {
-    if (!menuOpen) return
+    if (!openMenuKey) return
     const onDown = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false)
+      const anchor = (e.target as Element | null)?.closest?.('[data-menu-anchor]')
+      if (!anchor || anchor.getAttribute('data-menu-anchor') !== openMenuKey) setOpenMenuKey(null)
     }
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setMenuOpen(false)
+      if (e.key === 'Escape') setOpenMenuKey(null)
     }
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)
@@ -137,7 +147,7 @@ const MessageBubble = memo(function MessageBubble({
       document.removeEventListener('mousedown', onDown)
       document.removeEventListener('keydown', onKey)
     }
-  }, [menuOpen])
+  }, [openMenuKey])
 
   // 气泡里表格/代码/链接的昼夜配色，转成 inline style 挂在气泡上。
   // 深浅判定只有 useBubbleDark 一处：它读主题上下文而非 <html> 的 dark class（那个 class 由
@@ -158,11 +168,6 @@ const MessageBubble = memo(function MessageBubble({
   const isInvitation = messageType === 'group_invitation' && invAtt
   const currentStatus = invStatus || invAtt?.status || 'pending'
   const fileAtts = attachments?.filter(a => a.type !== 'group_invitation') || []
-  // 这条消息里有没有可展开的语音文稿（有才在菜单里出"显示/隐藏文稿"）
-  const hasTranscript = fileAtts.some(a => {
-    if (!a.file_id || !String(a.mime_type || '').startsWith('audio/')) return false
-    return !!(transcripts?.[a.file_id] ?? a.transcript)
-  })
   // 可下载的附件（邀请卡片不是文件）。单附件下它自己，多附件一次下全部：
   // 菜单文案跟着数量走，不能还写"下载"却只给第一个
   const downloadable = fileAtts.filter(a => a.file_id)
@@ -176,6 +181,59 @@ const MessageBubble = memo(function MessageBubble({
       a.click()
     }
   }
+  // 「收进我的文件」：操作单位是**附件**——一条消息能带好几份语音/图/文件，
+  // 收哪一份必须说清楚。语音的标题是「谁发的 + 前几个字」，因为收进去之后
+  // 文件名就是它在存储里的标题（见 utils/voiceCollectName）。
+  const transcriptOf = (att: { file_id?: number; transcript?: string }) =>
+    (att.file_id ? transcripts?.[att.file_id] : undefined) ?? att.transcript
+  const collectStateOf = (fid: number): CollectState => collect[fid] ?? 'idle'
+  const collectLabelFor = (fid: number) => {
+    const state = collectStateOf(fid)
+    return state === 'remove' ? t('chat:removing')
+      : state === 'done' ? t('chat:removeFromMine')
+        : state === 'keep' ? t('chat:collecting')
+          : state === 'failed' ? t('chat:collectFailed')
+            : t('chat:collectToMine')
+  }
+  /** 收藏或移出这一份：收进去之后菜单项就变「移出我的文件」，再点就是移出 */
+  const collectAttachment = async (att: {
+    file_id?: number
+    name?: string
+    mime_type?: string
+    transcript?: string
+  }) => {
+    const fid = att.file_id
+    if (!fid) return
+    const current = collectStateOf(fid)
+    if (current === 'keep' || current === 'remove') return
+    const removing = current === 'done'
+    // 标题在收藏与移出两边必须同一个：移出按「我的空间里叫这个名字的那一条」精确删，
+    // 只凭内容哈希会误伤我自己上传过的同字节文件
+    const name = String(att.mime_type || '').startsWith('audio/')
+      ? voiceCollectName({ sender: senderName, transcript: transcriptOf(att), createdAt })
+      : (att.name || null)
+    setCollect((v) => ({ ...v, [fid]: removing ? 'remove' : 'keep' }))
+    try {
+      if (removing) {
+        await api.post('/fs/unkeep', name ? { file_id: fid, name } : { file_id: fid })
+      } else {
+        await api.post('/fs/keep', name ? { file_id: fid, name } : { file_id: fid })
+      }
+      setCollect((v) => ({ ...v, [fid]: removing ? 'idle' : 'done' }))
+    } catch {
+      setCollect((v) => ({ ...v, [fid]: 'failed' }))
+      setTimeout(() => setCollect((v) => ({ ...v, [fid]: 'idle' })), 2000)
+    }
+  }
+  /** 只下载这一份（多附件时的"全部下载"在消息菜单里，这里不做第二遍） */
+  const downloadAttachment = (att: { file_id?: number; name?: string }) => {
+    if (!att.file_id) return
+    const a = document.createElement('a')
+    a.href = fileDownloadUrl(att.file_id)
+    a.download = att.name || 'file'
+    a.click()
+  }
+
   // 通道把卡片/聊天记录拍平成了正文：能还原就还原，认不出就照原样显示（解析器是纯函数，见 utils/channelText）
   const channelBlock = useMemo(
     () => (fileAtts.length ? null : parseChannelContent(content)),
@@ -254,52 +312,115 @@ const MessageBubble = memo(function MessageBubble({
       ? 'text-rose-900 dark:text-rose-300'
       : 'text-textPrimary'
 
-  // 纯语音消息：菜单挂到语音行时长后面（VoiceMessage 的 menuSlot），不再浮在内容右上角
-  const inlineVoiceMenu = bareShell && fileAtts.some(a => String(a.mime_type || '').startsWith('audio/'))
+  // 菜单分两层：'msg' 管这条消息（回复/复制/撤回/全部下载），'a:{file_id}' 管某一个附件
+  // （下载这一份 / 收进我的文件 / 这一份的文稿）。一条消息发三份文件时，
+  // 操作单位是附件——"收进我的文件"必须能指到具体哪一份。
   const showMenu = messageId != null
     && (onReply || onRevoke || displayContent || fileAtts.length > 0)
+  const messageMenuKey = 'msg'
+  // 纯语音消息的三点插在语音行尾（VoiceMessage 的 menuSlot）；此时气泡角上不再重复一颗
+  const onlyVoice = fileAtts.length > 0
+    && fileAtts.every(a => String(a.mime_type || '').startsWith('audio/'))
+  // 气泡角上的消息级三点：有正文、或根本没有附件时才出现。
+  // 纯附件消息（只发一张图/一条语音）已经有附件自己的三点，再来一颗就是两个三点并排，
+  // 人还得猜哪个是哪个——消息级的「回复/撤回」这时并进附件菜单里。
+  const messageMenuAtCorner = showMenu && (!!displayContent || fileAtts.length === 0)
+  const bubbleMenu = messageMenuAtCorner
 
-  // 菜单主体只写一份：浮在气泡角上、还是插进语音行尾，差别只在外面那层壳
-  const menuBody = (
-    <>
-      <button
-        onClick={() => setMenuOpen(v => !v)}
-        className={bareShell
-          ? `w-6 h-6 rounded-control grid place-items-center shrink-0 transition-colors text-textMuted hover:text-textPrimary hover:bg-elevated ${menuShadow}`
-          : `w-[22px] h-[22px] rounded-full bg-surface/90 text-primary-500 border border-primary-500/20 dark:border-primary-400/25 flex items-center justify-center hover:bg-primary-500/10 dark:hover:bg-elevated transition-colors ${menuShadow}`}
-        title={t('chat:actions')}
-      >
-        <MoreHorizontal size={bareShell ? 14 : 13} />
-      </button>
-      {menuOpen && (
-        <MenuPanel className={`absolute top-full mt-1 w-24 z-modal ${menuAlign}`}>
-          {onReply && (
-            <MenuItem onClick={() => { setMenuOpen(false); onReply(messageId!, senderName, content) }}>
-              {t('chat:reply')}
-            </MenuItem>
-          )}
-          {!!content && (
-            <MenuItem onClick={handleCopy}>{copied ? t('chat:copied') : t('chat:copy')}</MenuItem>
-          )}
-          {downloadable.length > 0 && (
-            <MenuItem onClick={() => { setMenuOpen(false); downloadAttachments() }}>
-              {downloadable.length > 1 ? t('chat:downloadAll') : t('chat:download')}
-            </MenuItem>
-          )}
-          {hasTranscript && (
-            <MenuItem onClick={() => { setMenuOpen(false); setShowTranscript(v => !v) }}>
-              {showTranscript ? t('chat:hideTranscript') : t('chat:showTranscript')}
-            </MenuItem>
-          )}
-          {onRevoke && (
-            <MenuItem onClick={() => { setMenuOpen(false); onRevoke(messageId!) }}>
-              {t('chat:revoke')}
-            </MenuItem>
-          )}
+  /** 三点触发器：气泡角上是圆球，语音行尾是扁的，附件卡片角上是小圆点 */
+  const menuTrigger = (key: string, variant: 'bubble' | 'media' | 'attach') => (
+    <button
+      type="button"
+      onClick={() => setOpenMenuKey(v => (v === key ? null : key))}
+      className={
+        variant === 'bubble'
+          ? `w-[22px] h-[22px] rounded-full bg-surface/90 text-primary-500 border border-primary-500/20 dark:border-primary-400/25 flex items-center justify-center hover:bg-primary-500/10 dark:hover:bg-elevated transition-colors ${menuShadow}`
+          : variant === 'media'
+            ? `w-6 h-6 rounded-control grid place-items-center shrink-0 transition-colors text-textMuted hover:text-textPrimary hover:bg-elevated ${menuShadow}`
+            : 'w-6 h-6 rounded-full bg-surface/90 border border-border text-textMuted grid place-items-center hover:text-textPrimary hover:bg-elevated transition-colors shadow-sm'
+      }
+      title={t('chat:actions')}
+    >
+      <MoreHorizontal size={variant === 'bubble' ? 13 : 14} />
+    </button>
+  )
+
+  /** 一层菜单 = 触发器 + 面板；key 就是这一层的身份，data-menu-anchor 让外点关闭认得它 */
+  const menuLayer = (key: string, variant: 'bubble' | 'media' | 'attach', items: ReactNode) => (
+    <span data-menu-anchor={key} className="relative shrink-0">
+      {menuTrigger(key, variant)}
+      {openMenuKey === key && (
+        <MenuPanel className={`absolute top-full mt-1 min-w-[6rem] w-max max-w-[14rem] z-modal ${menuAlign}`}>
+          {items}
         </MenuPanel>
+      )}
+    </span>
+  )
+
+  /** 消息层的菜单：只有"这条消息"才有意义的事 */
+  const messageMenuItems = (
+    <>
+      {onReply && (
+        <MenuItem onClick={() => { setOpenMenuKey(null); onReply(messageId!, senderName, content) }}>
+          {t('chat:reply')}
+        </MenuItem>
+      )}
+      {!!content && (
+        <MenuItem onClick={handleCopy}>{copied ? t('chat:copied') : t('chat:copy')}</MenuItem>
+      )}
+      {/* 单附件的下载在附件菜单里，这里只在多附件时给"全部" */}
+      {downloadable.length > 1 && (
+        <MenuItem onClick={() => { setOpenMenuKey(null); downloadAttachments() }}>
+          {t('chat:downloadAll')}
+        </MenuItem>
+      )}
+      {onRevoke && (
+        <MenuItem onClick={() => { setOpenMenuKey(null); onRevoke(messageId!) }}>
+          {t('chat:revoke')}
+        </MenuItem>
       )}
     </>
   )
+
+  /** 附件层的菜单：这一份能不能下载、能不能收进我的文件、有没有文稿 */
+  const attachmentMenuItems = (att: {
+    file_id?: number
+    name?: string
+    mime_type?: string
+    transcript?: string
+  }) => {
+    const fid = att.file_id!
+    return (
+      <>
+        <MenuItem onClick={() => { setOpenMenuKey(null); downloadAttachment(att) }}>
+          {t('chat:download')}
+        </MenuItem>
+        <MenuItem onClick={() => collectAttachment(att)}>{collectLabelFor(fid)}</MenuItem>
+        {String(att.mime_type || '').startsWith('audio/') && transcriptOf(att) && (
+          <MenuItem onClick={() => { setOpenMenuKey(null); setShowTranscript(v => !v) }}>
+            {showTranscript ? t('chat:hideTranscript') : t('chat:showTranscript')}
+          </MenuItem>
+        )}
+        {/* 没有正文的纯附件消息：回复/撤回没有别的入口，跟着附件菜单走，
+            这样一颗三点就把这条消息能做的事说完了（有正文时这些在气泡角那颗上） */}
+        {!messageMenuAtCorner && onReply && (
+          <MenuItem onClick={() => { setOpenMenuKey(null); onReply(messageId!, senderName, content) }}>
+            {t('chat:reply')}
+          </MenuItem>
+        )}
+        {!messageMenuAtCorner && onRevoke && (
+          <MenuItem onClick={() => { setOpenMenuKey(null); onRevoke(messageId!) }}>
+            {t('chat:revoke')}
+          </MenuItem>
+        )}
+        {!messageMenuAtCorner && downloadable.length > 1 && (
+          <MenuItem onClick={() => { setOpenMenuKey(null); downloadAttachments() }}>
+            {t('chat:downloadAll')}
+          </MenuItem>
+        )}
+      </>
+    )
+  }
 
   // 头像地址坏掉（文件被删、格式不对）时退回首字母渐变，别把浏览器的裂图图标露给用户
   const hasAvatar = !!senderAvatarUrl && !avatarBroken
@@ -396,7 +517,7 @@ const MessageBubble = memo(function MessageBubble({
           <div data-mv-force className={`absolute inset-0 ${bubbleBg}`} aria-hidden="true" />
           {/* 内容层：文字/图片/布局，不参与旋转（图片保持清晰） */}
           {/* 媒体消息右侧留出一点空：操作菜单（···）浮在内容右上角，不留空会压住时长 */}
-          <div className={`bubble-content relative ${bareShell ? (inlineVoiceMenu ? '' : 'pr-5') : 'px-2.5 py-2 md:px-4 md:py-2.5'} text-sm leading-relaxed break-words ${bubbleText} ${layoutCls}`} style={tableVars}>
+          <div className={`bubble-content relative ${bareShell ? (onlyVoice ? '' : 'pr-5') : 'px-2.5 py-2 md:px-4 md:py-2.5'} text-sm leading-relaxed break-words ${bubbleText} ${layoutCls}`} style={tableVars}>
           {replyTo != null && (
             <div className={`flex items-start gap-1.5 mb-1.5 pb-1.5 border-b ${isMine ? 'border-white/20' : 'border-border'} cursor-pointer hover:opacity-80 transition-opacity`}
               onClick={() => {
@@ -433,10 +554,18 @@ const MessageBubble = memo(function MessageBubble({
                 const fname = att.name!
                 const fsize = att.size!
                 const fmime = att.mime_type!
+                const menuKey = 'a:' + fid
                 if (fmime.startsWith('image/')) return (
-                  <button key={fid} type="button" onClick={() => setPreviewFile({ file_id: fid, name: fname, size: fsize, mime_type: fmime })} className="block max-w-full">
-                    <img src={dlUrl} alt={fname} className={`max-w-[280px] max-h-[200px] rounded-control cursor-pointer hover:opacity-90 transition-opacity border border-white/10 ${attachmentImageSizing(att)}`} title={fname} loading="lazy" />
-                  </button>
+                  // 每张图带自己的三点：图多的时候"收进我的文件"得知道是哪张
+                  <span key={fid} className="relative inline-block max-w-full group/att">
+                    <button type="button" onClick={() => setPreviewFile({ file_id: fid, name: fname, size: fsize, mime_type: fmime })} className="block max-w-full">
+                      <img src={dlUrl} alt={fname} className={`max-w-[280px] max-h-[200px] rounded-control cursor-pointer hover:opacity-90 transition-opacity border border-white/10 ${attachmentImageSizing(att)}`} title={fname} loading="lazy" />
+                    </button>
+                    {/* 三点跟着气泡的方向走：自己的消息在左（和气泡角标同一侧），对方在右 */}
+                    <span className={`absolute top-1.5 ${isMine ? 'left-1.5' : 'right-1.5'} opacity-0 group-hover/att:opacity-100 transition-opacity`}>
+                      {menuLayer(menuKey, 'attach', attachmentMenuItems(att))}
+                    </span>
+                  </span>
                 )
                 if (fmime.startsWith('audio/')) return (
                   // 没有气泡当底时（只发语音）按浅色底配色，否则白字白底看不见
@@ -447,33 +576,44 @@ const MessageBubble = memo(function MessageBubble({
                       isMine={bareShell ? false : isMine}
                       transcript={transcripts?.[fid] ?? att.transcript}
                       showTranscript={showTranscript}
-                      menuSlot={inlineVoiceMenu ? (
-                        <span ref={menuRef} className="relative shrink-0">{menuBody}</span>
-                      ) : undefined}
+                      menuSlot={menuLayer(menuKey, 'media', attachmentMenuItems(att))}
                     />
                 )
                 return (
-                  // ui-standard-ignore: 气泡内文件胶囊（配色随气泡明暗 isMine 切换），不是按钮形态
-                  <button key={fid} onClick={() => setPreviewFile({ file_id: fid, name: fname, size: fsize, mime_type: fmime })}
-                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-control text-xs transition-colors ${isMine ? 'bg-white/10 hover:bg-white/20 text-white/90' : 'bg-canvas hover:bg-elevated text-textSecondary hover:text-textPrimary border border-border'}`}
-                    title={`${fname} (${formatFileSize(fsize)})`}>
-                    <FileIcon size={12} className={isMine ? 'text-white/80' : fileIconColor(fmime)} />
-                    <span className="max-w-[100px] truncate">{fname}</span>
-                    <span className="text-3xs opacity-60">{formatFileSize(fsize)}</span>
-                    <Download size={11} className="opacity-60" />
-                  </button>
+                  // 每个文件胶囊也有自己的三点：这条消息发了三个文件时，收哪一个得点哪一个
+                  <span key={fid} className="relative inline-flex items-center gap-0.5 group/att">
+                    {/* 自己的消息：三点在胶囊左侧，和气泡角标同一边；对方在右侧 */}
+                    {isMine && (
+                      <span className="opacity-0 group-hover/att:opacity-100 transition-opacity">
+                        {menuLayer(menuKey, 'attach', attachmentMenuItems(att))}
+                      </span>
+                    )}
+                    {/* ui-standard-ignore: 气泡内文件胶囊（配色随气泡明暗 isMine 切换），不是按钮形态 */}
+                    <button onClick={() => setPreviewFile({ file_id: fid, name: fname, size: fsize, mime_type: fmime })}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-control text-xs transition-colors ${isMine ? 'bg-white/10 hover:bg-white/20 text-white/90' : 'bg-canvas hover:bg-elevated text-textSecondary hover:text-textPrimary border border-border'}`}
+                      title={`${fname} (${formatFileSize(fsize)})`}>
+                      <FileIcon size={12} className={isMine ? 'text-white/80' : fileIconColor(fmime)} />
+                      <span className="max-w-[100px] truncate">{fname}</span>
+                      <span className="text-3xs opacity-60">{formatFileSize(fsize)}</span>
+                      <Download size={11} className="opacity-60" />
+                    </button>
+                    {!isMine && (
+                      <span className="opacity-0 group-hover/att:opacity-100 transition-opacity">
+                        {menuLayer(menuKey, 'attach', attachmentMenuItems(att))}
+                      </span>
+                    )}
+                  </span>
                 )
               })}
             </div>
           )}
 
-          {/* 操作菜单：纯语音消息插进语音行尾（menuSlot），其余浮在气泡角上 */}
-          {showMenu && !inlineVoiceMenu && (
+          {/* 消息层的菜单浮在气泡角上；附件各挂各的（语音在行尾、图和文件在卡片角） */}
+          {bubbleMenu && (
             <div
-              ref={menuRef}
-              className={`absolute ${menuAnchor} transition-opacity md:opacity-0 group-hover:opacity-100 ${menuOpen ? 'md:opacity-100' : ''}`}
+              className={`absolute ${menuAnchor} transition-opacity md:opacity-0 group-hover:opacity-100 ${openMenuKey === messageMenuKey ? 'md:opacity-100' : ''}`}
             >
-              {menuBody}
+              {menuLayer(messageMenuKey, 'bubble', messageMenuItems)}
             </div>
           )}
         </div>

@@ -3,6 +3,7 @@
 文件 CRUD、权限检查、协作模式判定、O(n) 引用通知
 """
 import os
+import re
 import shutil
 import uuid
 import json
@@ -716,6 +717,10 @@ async def list_files(
                 "owner_id": f.owner_id,
                 "size": f.size,
                 "mime_type": f.mime_type,
+                # 语音在列表里要显示成「语音行」而不是一个 webm 文件名：
+                # 文稿与时长本来就跟着这条元数据走，列表顺手带上比前端再取一次省事
+                "transcript": f.transcript,
+                "duration_ms": f.duration_ms,
                 "collaboration_mode": f.collaboration_mode,
                 "created_at": str(f.created_at) if f.created_at else None,
                 "updated_at": str(f.updated_at) if f.updated_at else None,
@@ -1478,12 +1483,36 @@ async def ai_fetch_attachment(db: AsyncSession, agent_id: int, file_id: int) -> 
     return result
 
 
-async def keep_to_my_files(db: AsyncSession, user_id: int, file_id: int) -> dict:
+# 收藏时可以带一个「显示名」（语音就是「谁发的 + 说了什么的前几个字」）。
+# 名字只影响目录项，不影响字节与权限；但仍得是能用的文件名：路径分隔符、控制字符
+# 一律剔掉，长度截断，扩展名永远跟随源文件（名字里没写就不写，绝不丢类型）。
+_ALIAS_BAD_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+_ALIAS_MAX_CHARS = 48
+
+
+def collect_alias(raw: str | None, src_name: str) -> str:
+    """把「收藏时给的名字」规范成一个安全文件名：扩展名跟随源文件。"""
+    stem, ext = os.path.splitext(src_name or "")
+    alias = _ALIAS_BAD_CHARS.sub("", str(raw or ""))
+    alias = " ".join(alias.split()).strip(" .")
+    if ext and alias.lower().endswith(ext.lower()):
+        alias = alias[: -len(ext)]
+    alias = alias[:_ALIAS_MAX_CHARS].strip(" .")
+    return f"{alias or stem or 'file'}{ext}"
+
+
+async def keep_to_my_files(
+    db: AsyncSession, user_id: int, file_id: int, name: str | None = None,
+) -> dict:
     """把一份文件「收进我的文件」（第一栏的唯一入口，§7.3）
 
     做的是硬链接：`users/{uid}/files/` 多一个目录项、`file_metadata` 多一行归我；原件的
     行与字节都不动——对话里那份照样能被清理梯度收走，字节因为还有活链接而留下（§5.7）。
     收进来之后就占我的 100 MB、平台不再自动删（§3.1）。动作本身见 _adopt_into。
+
+    name 是可选的显示名（语音收藏用「谁发的 + 前几个字」当标题）。同一份内容
+    （content_hash 相同）已经在我的空间里时直接认那一条——标题不该让同一份字节
+    在配额里变成两份。
     """
     db = _ensure_repo(db)
     uid = int(user_id)
@@ -1491,7 +1520,21 @@ async def keep_to_my_files(db: AsyncSession, user_id: int, file_id: int) -> dict
     if src is None:
         raise LookupError("这个文件你现在看不到")
 
-    name = os.path.basename(str(src.path or "")) or f"file-{int(file_id)}"
+    if src.content_hash:
+        existing = (await db.execute(
+            select(FileMetadata).where(
+                FileMetadata.owner_type == "human",
+                FileMetadata.owner_id == uid,
+                FileMetadata.content_hash == src.content_hash,
+                FileMetadata.path.like(f"{user_space_dir(uid)}/%"),
+                FileMetadata.physical_key.is_not(None),
+            ).limit(1)
+        )).scalar_one_or_none()
+        if existing is not None:
+            return _adopt_receipt(existing, str(existing.path), already=True)
+
+    src_name = os.path.basename(str(src.path or "")) or f"file-{int(file_id)}"
+    name = collect_alias(name, src_name) if name else src_name
     result = await _adopt_into(
         db, src,
         target_rel=f"{user_space_dir(uid)}/{name}",
@@ -1501,6 +1544,57 @@ async def keep_to_my_files(db: AsyncSession, user_id: int, file_id: int) -> dict
         how = "硬链接" if result["linked"] else "复制"
         logger.info(f"用户 {uid} 把 #{int(file_id)} 收进我的文件 → {result['path']}（{how}）")
     return result
+
+
+async def unkeep_from_my_files(
+    db: AsyncSession, user_id: int, file_id: int, name: str | None = None,
+) -> dict:
+    """把「收进我的文件」的那一份移出（只删我的目录项，原消息里的那份完好）
+
+    带 name（收藏时用的标题）时按**目标路径**精确定位：同名同内容才算我收藏的那一条，
+    不碰我空间里别的同字节文件。没带 name 的老入口退回 content_hash 判据。
+    硬链接删除只减一个目录项，原件的行与字节都还在（§5.7）。
+    源文件本来就在我的空间里时不删——那是原文件，不是收藏品。
+    """
+    db = _ensure_repo(db)
+    uid = int(user_id)
+    src = await check_file_access(db, int(file_id), "human", uid, "read")
+    if src is None:
+        raise LookupError("这个文件你现在看不到")
+    src_name = os.path.basename(str(src.path or "")) or f"file-{int(file_id)}"
+    removed: list[int] = []
+    if name:
+        exact = f"{user_space_dir(uid)}/{collect_alias(name, src_name)}"
+        row = (await db.execute(
+            select(FileMetadata).where(
+                FileMetadata.owner_type == "human",
+                FileMetadata.owner_id == uid,
+                FileMetadata.path == exact,
+            )
+        )).scalar_one_or_none()
+        # 同名但内容已被换掉时不删：那已经不是这条消息收藏的那一份
+        if row is not None and int(row.id) != int(src.id) and (
+            not src.content_hash or row.content_hash == src.content_hash
+        ):
+            await delete_file(db, int(row.id), "human", uid)
+            removed.append(int(row.id))
+        return {"removed": removed, "count": len(removed)}
+    if src.content_hash:
+        rows = (await db.execute(
+            select(FileMetadata).where(
+                FileMetadata.owner_type == "human",
+                FileMetadata.owner_id == uid,
+                FileMetadata.content_hash == src.content_hash,
+                FileMetadata.path.like(f"{user_space_dir(uid)}/%"),
+                FileMetadata.physical_key.is_not(None),
+            )
+        )).scalars().all()
+        for row in rows:
+            if int(row.id) == int(src.id):
+                continue
+            await delete_file(db, int(row.id), "human", uid)
+            removed.append(int(row.id))
+    return {"removed": removed, "count": len(removed)}
 
 
 async def ai_write_file(db: AsyncSession, agent_id: int, file_path: str,

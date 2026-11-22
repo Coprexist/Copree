@@ -198,10 +198,40 @@ async def keep_file_endpoint(
     file_id = int(body.get("file_id") or 0)
     if not file_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="缺少 file_id")
+    # 可选显示名：语音收藏传「谁发的 + 前几个字」，落成目录项就是它的标题。
+    # 只影响名字，不改变硬链接与权限（规范在 collect_alias 一处做）。
+    alias = body.get("name")
     try:
-        return await keep_to_my_files(db, current_user["user_id"], file_id)
+        return await keep_to_my_files(
+            db, current_user["user_id"], file_id,
+            name=str(alias) if alias else None,
+        )
     except StorageQuotaExceeded as e:
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(e))
+    except LookupError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post("/unkeep")
+async def unkeep_file_endpoint(
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """把收藏的那一份移出我的文件（只删我这边的目录项，原消息里的语音不受影响）"""
+    file_id = int(body.get("file_id") or 0)
+    if not file_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="缺少 file_id")
+    from app.services.content.file_service import unkeep_from_my_files
+    # 可选 name：与收藏时同一个标题，按目标路径精确删那一份（没有就退回内容哈希）
+    alias = body.get("name")
+    try:
+        return await unkeep_from_my_files(
+            db, current_user["user_id"], file_id,
+            name=str(alias) if alias else None,
+        )
     except LookupError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except ValueError as e:

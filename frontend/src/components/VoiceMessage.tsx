@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Pause, Play } from 'lucide-react'
 import { fileDownloadUrl } from '../api/client'
+// m:ss 的口径放在 utils/format 里只写一份：播放时间与存储页的语音时长共用
+import { formatClock as clock } from '../utils/format'
 
 /**
  * 语音消息播放条
@@ -85,14 +87,10 @@ function cssVar(name: string, fallback: string): string {
   }
 }
 
-function clock(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds <= 0) return '0:00'
-  const total = Math.round(seconds)
-  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
-}
-
 interface Props {
-  fileId: number
+  /** 音频来源二选一：附件走 fileId，世界文件/预览弹窗里的直链走 src */
+  fileId?: number
+  src?: string
   name: string
   isMine: boolean
   /** 这条语音说了什么（AI 的语音由它自己的文字合成，文稿是现成的；人的语音要等 ASR） */
@@ -101,9 +99,11 @@ interface Props {
   showTranscript?: boolean
   /** 操作菜单（···）插槽：纯语音消息没有气泡依附，把菜单挂到时长后面 */
   menuSlot?: ReactNode
+  /** 尺寸：聊天里 inline（240px 一行），预览弹窗里 large（更宽更高，一屏不该只剩一个小条） */
+  size?: 'inline' | 'large'
 }
 
-export default function VoiceMessage({ fileId, name, isMine, transcript, showTranscript = true, menuSlot }: Props) {
+export default function VoiceMessage({ fileId, src, name, isMine, transcript, showTranscript = true, menuSlot, size = 'inline' }: Props) {
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const timeRef = useRef<HTMLSpanElement | null>(null)
@@ -125,9 +125,22 @@ export default function VoiceMessage({ fileId, name, isMine, transcript, showTra
   const draggingRef = useRef(false)
   const loopRef = useRef(0)                  // rAF 循环令牌：新循环一起，旧循环立刻失效
 
+  // 尺寸只在这里分档：波形画多大、按钮多大、文稿几行，都从这一处派生
+  const large = size === 'large'
+  const canvasW = large ? 300 : CANVAS_W
+  const canvasH = large ? 44 : HEIGHT
+  const boxW = large ? 420 : WIDTH
+  const initialBars = large ? 44 : 32
+
+  const audioUrl = src ?? (fileId != null ? fileDownloadUrl(fileId) : '')
+  // 静态波形的种子按文件身份取：同一个文件每次打开都是同一个形状，不同文件各不相同
+  const seed = fileId ?? [...audioUrl].reduce((acc, ch) => (acc * 31 + ch.charCodeAt(0)) | 0, 7)
+
   const [playing, setPlaying] = useState(false)
-  const [barCount, setBarCount] = useState(32)
-  const [shape, setShape] = useState<number[]>(() => barsOf(fileId, 32))
+  // 文稿默认只露两行（聊天列表不该被一段转写撑高），点一下展开全文、再点收回
+  const [expanded, setExpanded] = useState(false)
+  const [barCount, setBarCount] = useState(initialBars)
+  const [shape, setShape] = useState<number[]>(() => barsOf(seed, initialBars))
 
   const accent = isMine ? 'rgba(255,255,255,0.95)' : cssVar('--tw-primary-400', 'rgb(139, 92, 246)')
   const track = isMine ? 'rgba(255,255,255,0.32)' : cssVar('--tw-border', 'rgba(128,128,128,0.35)')
@@ -138,17 +151,20 @@ export default function VoiceMessage({ fileId, name, isMine, transcript, showTra
     const ctx = canvas.getContext('2d')
     if (!ctx) return
     const dpr = window.devicePixelRatio || 1
-    if (canvas.width !== Math.round(CANVAS_W * dpr) || canvas.height !== Math.round(HEIGHT * dpr)) {
-      canvas.width = Math.round(CANVAS_W * dpr)
-      canvas.height = Math.round(HEIGHT * dpr)
+    if (canvas.width !== Math.round(canvasW * dpr) || canvas.height !== Math.round(canvasH * dpr)) {
+      canvas.width = Math.round(canvasW * dpr)
+      canvas.height = Math.round(canvasH * dpr)
     }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    ctx.clearRect(0, 0, CANVAS_W, HEIGHT)
+    ctx.clearRect(0, 0, canvasW, canvasH)
 
     const count = shape.length || barCount
-    const step = CANVAS_W / count
+    const step = canvasW / count
     const barW = Math.max(1.5, step * 0.55)
-    const mid = HEIGHT / 2
+    const mid = canvasH / 2
+    // 大尺寸（预览弹窗）用「上窄下宽、左边竖直、右边外扩」的锥形条——尺寸够大才看得出笔锋；
+    // 聊天里一根只有 2px 多宽，锥形看不出来还会让边缘发毛，那里保持规整圆角条
+    const taper = large ? 0.16 : 0
 
     // 先整条铺灰色底（一次 fill），已播放的部分再用强调色叠上去（一次 fill）。
     // 结束时用 globalAlpha 把紫色整段渐隐到灰色，而不是从右往左退。
@@ -156,14 +172,21 @@ export default function VoiceMessage({ fileId, name, isMine, transcript, showTra
       const level = active
         ? Math.max(0.08, levelsRef.current[i] || 0)
         : Math.max(0.08, shape[i] || 0.28)
-      const h = Math.min(HEIGHT, Math.max(2, level * HEIGHT))
+      const h = Math.min(canvasH, Math.max(2, level * canvasH))
+      const top = mid - h / 2
+      const bottom = mid + h / 2
       const x = i * step + (step - barW) / 2
-      const r = Math.min(barW / 2, 1.2)
-      ctx.moveTo(x, mid - h / 2 + r)
-      ctx.arc(x + r, mid - h / 2 + r, r, Math.PI, 0)
-      ctx.lineTo(x + barW, mid + h / 2 - r)
-      ctx.arc(x + r, mid + h / 2 - r, r, 0, Math.PI)
-      ctx.closePath()
+      const wTop = barW * (1 - taper / 2)
+      const wBot = barW * (1 + taper / 2)
+      // 造型：顶部小半圆、左边竖直、底部左半圆、右下尖角、右边缘外斜——就是原来那个「好看的样子」，
+      // 只是半径由条宽按比例给出，不再写死：large 取顶宽 0.32 倍（小而利落，不是胶囊那两个大圆头），
+      // inline（taper=0）取消锥度、半径取半宽，退化为规整的圆角细条，正好是聊天里要的那种。
+      const r = Math.min(wTop * (large ? 0.32 : 0.5), h / 2)
+      ctx.moveTo(x, top + r)
+      ctx.arc(x + r, top + r, r, Math.PI, 0)      // 顶：半圆
+      ctx.lineTo(x + wBot, bottom - r)            // 右：斜线直落（右下角保持尖）
+      ctx.arc(x + r, bottom - r, r, 0, Math.PI)   // 底：左半圆
+      ctx.closePath()                              // 左：竖直收口
     }
 
     ctx.fillStyle = track
@@ -182,13 +205,13 @@ export default function VoiceMessage({ fileId, name, isMine, transcript, showTra
       }
       ctx.fill()
       // 进度线：开始从 0 长到满高，结束时从中间缩到 0，同时跟着整段淡出
-      const lineH = HEIGHT * lineScale * playedAlpha
+      const lineH = canvasH * lineScale * playedAlpha
       if (lineVisible && progress > 0 && lineH > 0.5) {
-        ctx.fillRect(Math.min(CANVAS_W - 1, Math.max(0, progress * CANVAS_W)), (HEIGHT - lineH) / 2, 1.5, lineH)
+        ctx.fillRect(Math.min(canvasW - 1, Math.max(0, progress * canvasW)), (canvasH - lineH) / 2, 1.5, lineH)
       }
       ctx.globalAlpha = 1
     }
-  }, [accent, track, shape, barCount])
+  }, [accent, track, shape, barCount, canvasW, canvasH, large])
 
   const drawRef = useRef(draw)
   useEffect(() => { drawRef.current = draw }, [draw])
@@ -444,8 +467,8 @@ export default function VoiceMessage({ fileId, name, isMine, transcript, showTra
 
   useEffect(() => {
     setPlaying(false)
-    setBarCount(32)
-    setShape(barsOf(fileId, 32))
+    setBarCount(initialBars)
+    setShape(barsOf(seed, initialBars))
     settleRef.current = null
     envHistRef.current = []
     envPosRef.current = 0
@@ -460,8 +483,9 @@ export default function VoiceMessage({ fileId, name, isMine, transcript, showTra
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current)
       rafRef.current = null
     }
-    // 只认 fileId：draw 随形状变，放进依赖会打断播放
-  }, [fileId])
+    // 只认身份（fileId / src）：draw 随形状变，放进依赖会打断播放
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seed])
 
   useEffect(() => () => {
     if (rafRef.current != null) cancelAnimationFrame(rafRef.current)
@@ -483,12 +507,12 @@ export default function VoiceMessage({ fileId, name, isMine, transcript, showTra
     setPlaying(true)
     // 开始：从静态形状平滑过渡到实时波形
     settleRef.current = {
-      from: (shapeRef.current.length ? shapeRef.current : barsOf(fileId, barCount)).slice(),
+      from: (shapeRef.current.length ? shapeRef.current : barsOf(seed, barCount)).slice(),
       start: performance.now(),
       to: 'live',
     }
     startLoop()
-  }, [startLoop, fileId, barCount])
+  }, [startLoop, seed, barCount])
 
   const onStop = useCallback(() => {
     // 播完时浏览器还会补一个 pause 事件，别让它打断结束动画
@@ -515,11 +539,11 @@ export default function VoiceMessage({ fileId, name, isMine, transcript, showTra
 
   return (
     // 文稿在波形下面：语音条本身保持 240px 宽的一行，文字换行不挤压控制按钮
-    <div className="flex flex-col gap-1 shrink-0" style={{ width: WIDTH }}>
+    <div className={`flex flex-col shrink-0 ${large ? 'gap-2' : 'gap-1'}`} style={{ width: boxW }}>
       <div className="flex items-center gap-2">
       <audio
         ref={audioRef}
-        src={fileDownloadUrl(fileId)}
+        src={audioUrl}
         preload="metadata"
         onPlay={onPlay}
         onPause={onStop}
@@ -538,7 +562,7 @@ export default function VoiceMessage({ fileId, name, isMine, transcript, showTra
           const el = e.currentTarget
           const next = barsForDuration(el.duration)
           setBarCount(next)
-          setShape(barsOf(fileId, next))
+          setShape(barsOf(seed, next))
           entrySmoothRef.current = []
           levelsRef.current = []
           smoothRef.current = []
@@ -552,16 +576,16 @@ export default function VoiceMessage({ fileId, name, isMine, transcript, showTra
         onClick={toggle}
         aria-label={playing ? '暂停' : '播放'}
         title={name}
-        className={`shrink-0 w-7 h-7 rounded-full flex items-center justify-center transition-colors ${isMine ? 'bg-white/20 hover:bg-white/30 text-white' : 'bg-primary-500/15 hover:bg-primary-500/25 text-primary-400'}`}
+        className={`shrink-0 ${large ? 'w-10 h-10' : 'w-7 h-7'} rounded-full flex items-center justify-center transition-colors ${isMine ? 'bg-white/20 hover:bg-white/30 text-white' : 'bg-primary-500/15 hover:bg-primary-500/25 text-primary-400'}`}
       >
         <span className="w-full h-full grid place-items-center">
-          {playing ? <Pause size={13} className="block" /> : <Play size={13} className="block" />}
+          {playing ? <Pause size={large ? 18 : 13} className="block" /> : <Play size={large ? 18 : 13} className="block" />}
         </span>
       </button>
       <canvas
         ref={canvasRef}
-        className="h-6 cursor-pointer touch-none min-w-0 shrink-0"
-        style={{ width: CANVAS_W, height: HEIGHT }}
+        className={`${large ? 'h-11' : 'h-6'} cursor-pointer touch-none min-w-0 shrink-0`}
+        style={{ width: canvasW, height: canvasH }}
         title="拖动可以跳转"
         onPointerDown={(e) => {
           draggingRef.current = true
@@ -577,7 +601,7 @@ export default function VoiceMessage({ fileId, name, isMine, transcript, showTra
         }}
         onPointerCancel={() => { draggingRef.current = false }}
       />
-      <span ref={timeRef} className={`shrink-0 text-3xs tabular-nums ${isMine ? 'text-white/90' : 'text-textMuted'}`}>
+      <span ref={timeRef} className={`shrink-0 ${large ? 'text-xs' : 'text-3xs'} tabular-nums ${isMine ? 'text-white/90' : 'text-textMuted'}`}>
         {'0:00'}
       </span>
       {/* 操作菜单（···）挂在时长之后：下载也收进这个菜单，行尾不再单独放一个下载按钮 */}
@@ -591,7 +615,15 @@ export default function VoiceMessage({ fileId, name, isMine, transcript, showTra
             showTranscript ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
           }`}
         >
-          <p className={`overflow-hidden text-2xs leading-relaxed line-clamp-2 select-text ${isMine ? 'text-white/70' : 'text-textMuted'}`}>
+          <p
+            onClick={() => { if (!large) setExpanded((v) => !v) }}
+            title={large ? undefined : expanded ? '点一下收起' : '点一下展开全文'}
+            className={
+              'overflow-hidden leading-relaxed select-text ' +
+              (large ? 'text-sm' : 'text-2xs cursor-pointer ' + (expanded ? '' : 'line-clamp-2 ')) +
+              (isMine ? 'text-white/70' : 'text-textMuted')
+            }
+          >
             {transcript}
           </p>
         </div>

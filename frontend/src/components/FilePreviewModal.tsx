@@ -6,6 +6,8 @@ import { formatFileSize } from '../utils/format'
 import { isTextPreviewable, getCodeLang, isMarkdownFile, resolveMimeType, EXT_LANG_MAP } from '../utils/mime'
 import { PREVIEW_SANDBOX, buildPreviewDocument } from '../utils/previewSandbox'
 import MarkdownContent from './shared/MarkdownContent'
+// 语音在预览弹窗里也用全站唯一那套波形条，不再另写一个原生 <audio>
+import VoiceMessage from './VoiceMessage'
 import ForwardFileModal from './ForwardFileModal'
 import { Button, Dialog, HelpTip, Input, MenuItem, MenuPanel, Modal, ResizeEdges } from './ui'
 import { saveBlob } from '../utils/download'
@@ -28,9 +30,11 @@ interface FilePreviewModalProps {
   src?: string
   /** 可选：已加载的文本内容（设计页编辑器已有内容时直接复用，免二次请求） */
   initialContent?: string | null
+  /** 可选：语音文稿。收进我的文件之后，这条语音的文字也跟着元数据走，点开就能看 */
+  transcript?: string | null
 }
 
-export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType, onClose, src, initialContent }: FilePreviewModalProps) {
+export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType, onClose, src, initialContent, transcript }: FilePreviewModalProps) {
   const t = useT()
   const [content, setContent] = useState<string | null>(initialContent ?? null)
   const [loading, setLoading] = useState(initialContent == null)
@@ -139,7 +143,9 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
     || fileName.endsWith('.docx')
   const isText = isTextPreviewable(resolvedMime)
   const isHtml = resolvedMime === 'text/html' || fileName.endsWith('.html') || fileName.endsWith('.htm')
-  const previewable = isImage || isPDF || isDocx || isText || isHtml
+  // 语音：播放器 + 文稿，不下载、也不当文本读
+  const isAudio = resolvedMime.startsWith('audio/')
+  const previewable = isImage || isPDF || isDocx || isText || isHtml || isAudio
   const isMd = isMarkdownFile(fileName, resolvedMime)
   const codeLang = isHtml ? '' : getCodeLang(fileName, resolvedMime)  // HTML 用 iframe 渲染
   const isRichText = isMd || isHtml || !!codeLang
@@ -166,8 +172,8 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
       return
     }
 
-    // 图片 / PDF：不需要 fetch 文本内容
-    if (isImage || isPDF) {
+    // 图片 / PDF / 语音：不需要 fetch 文本内容
+    if (isImage || isPDF || isAudio) {
       // 但可能还没处理完，加个 retry key 让 etag/cache 失效
       setLoading(false)
       return
@@ -522,6 +528,19 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
                   draggable={false}
                   onLoad={zoom.onImgLoad}
                   onError={() => { if (retry < RETRY_MAX) setTimeout(() => setRetry(r => r + 1), 1000) }}
+                />
+              </div>
+            ) : isAudio ? (
+              /* 语音就用平台上唯一那套波形条（VoiceMessage）——控件全站只该有一种长相，
+                 它自带文稿、拖动与时长，不在这里另写一个原生播放器 */
+              <div className="w-full h-full flex items-center justify-center px-6 py-10">
+                <VoiceMessage
+                  fileId={fileId}
+                  src={src}
+                  name={fileName}
+                  isMine={false}
+                  size="large"
+                  transcript={transcript ?? undefined}
                 />
               </div>
             ) : isPDF || (isHtml && content && !showSource) ? (

@@ -20,6 +20,13 @@ export function cacheHitRatePct(promptTokens: number, cachedTokens: number): num
   return Math.round(((cachedTokens || 0) / promptTokens) * 1000) / 10
 }
 
+/** 秒 → m:ss。语音时长与播放时间共用（语音都在几分钟内，不做小时档） */
+export function formatClock(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '0:00'
+  const total = Math.round(seconds)
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
+}
+
 /** 文件大小格式化（全站唯一一份：附件、存储、商城、备份、知识库都走这里，别再各写各的档位） */
 export function formatFileSize(bytes: number): string {
   const n = Number(bytes) || 0

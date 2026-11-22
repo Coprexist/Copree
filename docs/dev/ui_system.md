@@ -204,6 +204,21 @@ if (await confirmAsync({ title: '删除？', message: '不可恢复', danger: tr
 <ExpandPanel title="QQ 通道" collapseLabel={t('tool:ui.collapse')} onCollapse={close}>
   …表单 / 实例列表…
 </ExpandPanel>
+
+// 语音播放：**全站唯一**的音频控件（VoiceMessage）。聊天里的语音消息、存储页点开
+// 收藏的语音、预览弹窗，全都用它——不要另写 <audio controls>，浏览器原生控件是另一种长相。
+// 波形是一根根细竖条：条数按时长算，高度取自频谱（播放时实时波动），静止时按文件身份
+// 生成固定形状（同一个文件每次打开形状一致）。文稿默认两行，点一下展开全文、再点收起。
+// 条的造型是定稿的，并绑定到尺寸档：每根 = 顶部小半圆 + 左边竖直 + 底部左半圆 + 右下尖角 +
+// 右边外斜；圆角半径由条宽按比例给（large = 顶宽 × 0.32，inline = 半宽），别写固定像素值。
+// inline（聊天）taper = 0，退化为规整圆角胶囊；large（弹窗）taper = 0.16，上窄下宽、圆角小而利落。
+// 可调项只有两个常量：锥度 taper（0 = 完全竖直）与圆角比例 0.32。
+<VoiceMessage
+  fileId={att.file_id}                 // 附件走 fileId
+  src={url}                            // 直链/世界文件走 src（二选一）
+  size="large"                         // inline（聊天，240px）| large（弹窗，420px）
+  transcript={transcript}              // 有就显示，没有只显示波形
+/>
 ```
 
 ### 宽度档位（页面留白唯一来源）

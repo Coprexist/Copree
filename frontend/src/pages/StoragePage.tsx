@@ -10,13 +10,13 @@
  */
 import { Fragment, useState, useEffect, useRef, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { HardDrive, FileText, Loader2, Forward, Upload } from 'lucide-react'
+import { HardDrive, FileText, Loader2, Forward, Upload, AudioLines } from 'lucide-react'
 import { api } from '../api/client'
 import { useT } from '../i18n/I18nContext'
 import FilePreviewModal from '../components/FilePreviewModal'
 import ForwardFileModal from '../components/ForwardFileModal'
 import { PageShell, Card, Button, Badge, UnderlineTabs, type UnderlineTabItem } from '../components/ui'
-import { formatFileSize } from '../utils/format'
+import { formatClock, formatFileSize } from '../utils/format'
 
 type Scope = 'mine' | 'produced' | 'viewed'
 
@@ -31,6 +31,9 @@ interface FileItem {
   is_available?: boolean
   /** 非空＝这一条到点会被回收（「上传了但没发」，§3.5）；值为无时区 UTC */
   reclaim_after?: string | null
+  /** 语音的文稿与时长：列表里直接显示成语音行，不用再单独取一次 */
+  transcript?: string | null
+  duration_ms?: number | null
 }
 
 interface StorageInfo {
@@ -78,19 +81,37 @@ function FileRow({
   trailing?: ReactNode
 }) {
   const t = useT()
+  // 语音在这里是「一种条目」而不是一个文件名：标题＋时长，下面带一行文稿。
+  // 没有文稿的语音（还没转写）就只显示标题，不占两行。
+  const isVoice = String(file.mime_type || '').startsWith('audio/')
+  const title = isVoice ? fileName(file.path).replace(/\.[^./]+$/, '') : fileName(file.path)
   return (
-    <li className="group flex items-center gap-3 h-10 px-2 -mx-2 rounded-control hover:bg-elevated transition-colors">
+    <li className="group flex items-center gap-3 min-h-10 px-2 -mx-2 py-1.5 rounded-control hover:bg-elevated transition-colors">
       <button
         type="button"
         onClick={onOpen}
         disabled={!onOpen}
         className="flex items-center gap-3 min-w-0 flex-1 text-left disabled:cursor-default"
       >
-        <FileText size={14} className={`shrink-0 ${unavailable ? 'text-textMuted/40' : 'text-textMuted'}`} />
-        <span className={`text-xs truncate flex-1 ${unavailable ? 'text-textMuted' : 'text-textPrimary'}`}>
-          {fileName(file.path)}
+        {isVoice
+          ? <AudioLines size={14} className={`shrink-0 ${unavailable ? 'text-textMuted/40' : 'text-textMuted'}`} />
+          : <FileText size={14} className={`shrink-0 ${unavailable ? 'text-textMuted/40' : 'text-textMuted'}`} />}
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-1.5 min-w-0">
+            <span className={`text-xs truncate ${unavailable ? 'text-textMuted' : 'text-textPrimary'}`}>
+              {title}
+            </span>
+            {isVoice && file.duration_ms ? (
+              <span className="text-3xs text-textMuted tabular-nums shrink-0">
+                {formatClock(file.duration_ms / 1000)}
+              </span>
+            ) : null}
+            {unavailable && <Badge tone="muted">{t('me:storageCleaned')}</Badge>}
+          </span>
+          {isVoice && file.transcript && (
+            <span className="block text-3xs text-textMuted truncate">{file.transcript}</span>
+          )}
         </span>
-        {unavailable && <Badge tone="muted">{t('me:storageCleaned')}</Badge>}
       </button>
       {/* 没发出去的附件到点会被清掉：说清楚还剩多久，别让文件某天自己消失（§3.5） */}
       {file.reclaim_after && (
@@ -310,6 +331,7 @@ export default function StoragePage() {
           fileName={fileName(previewFile.path)}
           fileSize={previewFile.size}
           mimeType={previewFile.mime_type}
+          transcript={previewFile.transcript}
           onClose={() => setPreviewFile(null)}
         />
       )}
