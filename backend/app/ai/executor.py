@@ -476,6 +476,27 @@ async def _get_api_config(
     user_result = await db.execute(select(UserModel).where(UserModel.id == bill_user_id))
     user = user_result.scalar_one_or_none()
 
+    # Tier 0: AI 选了一条配置档 —— 整包生效（地址、Key、能力全来自它）
+    #
+    # 这一档在"账单人"之后、Agent 自有 Key 之前：选了配置档就不该再被别的来源掺一脚，
+    # 否则用户以为换的是整套，实际只有模型换了、Key 还是旧的。
+    if getattr(agent, "llm_profile_id", None):
+        from app.services.agent.api_config_resolver import (
+            _load_profile, provider_info_of, resolve_from,
+        )
+        profile, provider = await _load_profile(db, agent.llm_profile_id, "llm")
+        if profile is not None and provider is not None:
+            resolved = resolve_from(
+                agent=agent, user=user, profile=profile, provider=provider,
+                default_base_url=settings.deepseek_base_url,
+            )
+            return (resolved.api_key, resolved.base_url, "profile", None,
+                    provider_info_of(provider, resolved))
+        logger.warning(
+            "AI %s(%s) 的配置档 %s 无效，回落到原有链路",
+            agent.name, agent.id, agent.llm_profile_id,
+        )
+
     # Tier 1: Agent 自有 Key
     if "agent_key" not in excluded_sources and agent.api_key_encrypted:
         key = _try_decrypt(f"Agent「{agent.name}」自有 Key", agent.api_key_encrypted)
@@ -667,6 +688,7 @@ async def _tool_call_loop(
     credit_source: str = "user_key",
     pool_key_id: int | None = None,
     provider_supports_thinking: bool | None = None,
+    system_layout: str = "anywhere",
     trigger: str = "user",
     is_federated: bool = False,
     pending_delivery: list[dict] | None = None,
@@ -1185,6 +1207,7 @@ async def _tool_call_loop(
                                 stream=True,
                                 pool_key_id=current_pool_key_id,
                                 provider_supports_thinking=provider_supports_thinking,
+                                system_layout=system_layout,
                                 on_tool_call=_dispatch_one_tool,
                                 agent_id=agent.id,
                                 db=db,

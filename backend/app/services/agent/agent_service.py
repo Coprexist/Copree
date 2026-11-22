@@ -662,6 +662,68 @@ async def delete_agent(
     }
 
 
+def _invalidate_voice_probe(cfg) -> None:
+    """语音换档/清档后旧结论作废：那是上一个地址的答案，不能拿来判"现在能用"。
+    地址、Key、音色任一变化都意味着重新检测成本远低于误用一次。
+    """
+    cfg.probe_ok = False
+    cfg.probe_kind = ""
+    cfg.probe_message = ""
+    cfg.probed_at = None
+
+
+async def _bind_profile(
+    db: AsyncSession, agent, *, kind: str, profile_id: int | None,
+    operator_id: int, is_admin: bool,
+) -> None:
+    """把一个 AI 绑到一条配置档上（kind='llm' | 'voice'）
+
+    三件判断只在这里：档存在、档所属厂商的种类对（不能把语音档绑成 LLM）、
+    档属于你或这家 AI 的主人（合作者可以绑自己的——用谁的 Key 谁付钱）。
+    写回位置按 kind 分：LLM 是 agents 上的列；语音是 agent_voice_configs 行上的一列
+    （行不存在就建，语音能力本身就带着这张行的检测结论）。
+    """
+    from app.models.agent_voice import AgentVoiceConfig
+    from app.models.api_profile import UserApiProfile, UserApiProvider
+
+    voice_cfg = None
+    if kind == "voice":
+        voice_cfg = (await db.execute(
+            select(AgentVoiceConfig).where(AgentVoiceConfig.agent_id == int(agent.id)).limit(1)
+        )).scalars().first()
+        if voice_cfg is None:
+            voice_cfg = AgentVoiceConfig(agent_id=int(agent.id))
+            db.add(voice_cfg)
+
+    if profile_id is None:
+        if voice_cfg is not None:
+            voice_cfg.voice_profile_id = None
+            _invalidate_voice_probe(voice_cfg)
+        else:
+            agent.llm_profile_id = None
+        return
+
+    profile = await db.get(UserApiProfile, int(profile_id))
+    if profile is None:
+        raise ValueError("这条配置档不存在（可能已被删除），请刷新后重新选择")
+    provider = await db.get(UserApiProvider, profile.provider_id)
+    if provider is None or provider.kind != kind:
+        raise ValueError(
+            "这条配置档不是语音类型，请重新选择" if kind == "voice"
+            else "这条配置档的厂商不存在或类型不对，请重新选择"
+        )
+    if profile.user_id not in {agent.owner_id, operator_id} and not is_admin:
+        raise ValueError(
+            f"这条配置档属于另一个账号（{profile.user_id}），"
+            f"既不是你的，也不是这家 AI 主人（{agent.owner_id}）的"
+        )
+    if voice_cfg is not None:
+        voice_cfg.voice_profile_id = profile.id
+        _invalidate_voice_probe(voice_cfg)
+    else:
+        agent.llm_profile_id = profile.id
+
+
 async def update_agent_config(
     db: AsyncSession,
     agent_id: int,
@@ -784,6 +846,14 @@ async def update_agent_config(
     # 头像 URL
     if "avatar_url" in updates:
         agent.avatar_url = updates.get("avatar_url")
+
+    # 选哪一条配置档（整包）。LLM 与语音是同一件事，只是写回的位置和种类不同
+    for kind, field in (("llm", "llm_profile_id"), ("voice", "voice_profile_id")):
+        if field in updates:
+            await _bind_profile(
+                db, agent, kind=kind, profile_id=updates[field],
+                operator_id=operator_id, is_admin=is_admin,
+            )
 
     # 单 AI 级 API 配置
     if "api_base_url" in updates:
@@ -1612,6 +1682,7 @@ def agent_to_dict(agent: Agent) -> dict:
         "api_credit_cost": agent.api_credit_cost,
         "api_base_url": agent.api_base_url,
         "has_api_key": agent.api_key_encrypted is not None,
+        "llm_profile_id": getattr(agent, "llm_profile_id", None),
         "avatar_url": agent.avatar_url,
         "api_token": agent.api_token,
         "created_at": str(agent.created_at) if agent.created_at else None,

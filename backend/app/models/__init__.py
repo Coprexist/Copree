@@ -54,6 +54,7 @@ from app.models.agent_creation import AgentCreationDraft
 from app.models.proxy_judgement import ProxyJudgement
 from app.models.agent_emoji_pack import AgentEmojiPack
 from app.models.agent_voice import AgentVoiceConfig
+from app.models.api_profile import UserApiProvider, UserApiProfile
 from app.models.world import (World, WorldBinding, WorldAgent, WorldChatMessage, WorldAI, WorldAIMemory, WorldStructuredRecord, WorldLLMUsage, WorldMarketItem, GroupAssistant, WorldData)
 
 __all__ = [
@@ -134,6 +135,8 @@ __all__ = [
     "ProxyJudgement",
     "AgentEmojiPack",
     "AgentVoiceConfig",
+    "UserApiProvider",
+    "UserApiProfile",
     "AgentKnowledge",
     "UserGroupPreference",
     "UserDMPreference",

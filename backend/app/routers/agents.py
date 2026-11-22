@@ -1381,6 +1381,7 @@ class VoiceConfigResponse(_BaseModel):
     base_url: str
     voice_id: str
     model: str
+    voice_profile_id: int | None = None
     has_key: bool
     probe_ok: bool
     probe_kind: str
@@ -1392,7 +1393,7 @@ def _voice_payload(cfg) -> VoiceConfigResponse:
     """对外形状：**不回传 key 明文**，只回"配没配" """
     if cfg is None:
         return VoiceConfigResponse(
-            provider="", base_url="", voice_id="", model="",
+            provider="", base_url="", voice_id="", model="", voice_profile_id=None,
             has_key=False, probe_ok=False, probe_kind="", probe_message="", probed_at=None,
         )
     return VoiceConfigResponse(
@@ -1400,6 +1401,7 @@ def _voice_payload(cfg) -> VoiceConfigResponse:
         base_url=cfg.base_url or "",
         voice_id=cfg.voice_id or "",
         model=cfg.model or "",
+        voice_profile_id=cfg.voice_profile_id,
         has_key=bool(cfg.api_key_encrypted),
         probe_ok=bool(cfg.probe_ok),
         probe_kind=cfg.probe_kind or "",
@@ -1454,18 +1456,19 @@ async def preview_voice_settings(
     db: AsyncSession = Depends(get_db),
 ):
     """试听：合一句短话直接回 mp3（会消耗一次合成额度，只给"听听像不像"用）"""
-    from app.services.agent.voice_config import api_key_of, get_voice_config
+    from app.services.agent.voice_config import voice_of
     from app.services.agent.voice_tts import VoiceSynthError, synthesize
 
-    cfg = await get_voice_config(db, agent_id)
-    if cfg is None or not cfg.base_url or not cfg.voice_id:
+    # 解析后的那一套：选了语音配置档时，行上的字段是空的，不能拿它判"不完整"
+    _, eff = await voice_of(db, agent_id)
+    if eff is None or not eff.base_url or not eff.voice_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail="这套语音配置还不完整（缺 Base URL 或音色）")
     try:
         audio = await synthesize(
-            provider=cfg.provider, base_url=cfg.base_url, api_key=api_key_of(cfg),
-            voice_id=cfg.voice_id, text="你好，这是我的声音。",
-            style="自然、日常，像随口说的。", model=cfg.model or "",
+            provider=eff.provider, base_url=eff.base_url, api_key=eff.api_key or "",
+            voice_id=eff.voice_id, text="你好，这是我的声音。",
+            style="自然、日常，像随口说的。", model=eff.model or "",
         )
     except VoiceSynthError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,

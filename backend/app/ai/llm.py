@@ -17,6 +17,7 @@ from app.models.context_config import ContextConfig
 from app.chat import chat_api
 from app.services.memory.memory_service import recall_relevant_memories
 from app.utils.display_name import display_name
+from app.utils.pure.chat_template import ANYWHERE, fit_system_layout
 from app.utils.pure.llm_usage import normalize_usage
 from app.utils.pure.prompting import (
     resolve_model, build_personality_segment, format_time_shanghai,
@@ -120,6 +121,7 @@ async def chat_completion(
     on_tool_call: callable = None,
     agent_id: int | None = None,
     db=None,
+    system_layout: str = ANYWHERE,
 ) -> dict:
     """
     LLM 聊天补全（支持流式/非流式，v0.1.3 拆分）。
@@ -145,12 +147,14 @@ async def chat_completion(
                 temperature, top_p, presence_penalty, frequency_penalty,
                 max_tokens, response_format, thinking_enabled, user_id,
                 pool_key_id, provider_supports_thinking, on_tool_call,
+                system_layout=system_layout,
             )
         return await _chat_completion_non_streaming(
             msgs, model, api_base_url, api_key, tools,
             temperature, top_p, presence_penalty, frequency_penalty,
             max_tokens, response_format, thinking_enabled, user_id,
             pool_key_id, provider_supports_thinking,
+            system_layout=system_layout,
         )
 
     try:
@@ -203,14 +207,19 @@ def _build_chat_payload(
     user_id: str | None = None,
     provider_supports_thinking: bool | None = None,
     stream: bool = False,
+    system_layout: str = ANYWHERE,
 ) -> dict:
     """构建 LLM chat completions 请求 payload（流式/非流式共用主体）。
 
     thinking_enabled 三态：None=不表态、True=显式开、False=显式关（摘要等短输出调用必须显式关，
-    否则思考 token 会吃满 max_tokens）。"""
+    否则思考 token 会吃满 max_tokens）。
+
+    **这里是 system 摆放的唯一出口**（流式与非流式都经过它）：`system_layout` 由调用方
+    从通道能力里读出来，`fit_system_layout` 按它调整。`anywhere` 原对象返回，payload
+    与今天逐字节一致——DeepSeek 的前缀缓存不受这个功能影响。"""
     payload = {
         "model": model,
-        "messages": messages,
+        "messages": fit_system_layout(messages, system_layout),
         "temperature": temperature,
         "top_p": top_p,
         "max_tokens": max_tokens,
@@ -254,6 +263,7 @@ async def _chat_completion_non_streaming(
     user_id: str | None = None,
     pool_key_id: int | None = None,
     provider_supports_thinking: bool | None = None,
+    system_layout: str = ANYWHERE,
 ) -> dict:
     """
     非流式聊天补全 — 当前生产路径。
@@ -265,6 +275,7 @@ async def _chat_completion_non_streaming(
         presence_penalty=presence_penalty, frequency_penalty=frequency_penalty,
         thinking_enabled=thinking_enabled, user_id=user_id,
         provider_supports_thinking=provider_supports_thinking,
+        system_layout=system_layout,
     )
 
     async with httpx.AsyncClient(timeout=LLM_REQUEST_TIMEOUT_SECONDS) as client:
@@ -312,6 +323,7 @@ async def _chat_completion_streaming(
     pool_key_id: int | None = None,
     provider_supports_thinking: bool | None = None,
     on_tool_call: callable = None,
+    system_layout: str = ANYWHERE,
 ) -> dict:
     """
     SSE 流式聊天补全。
@@ -330,6 +342,7 @@ async def _chat_completion_streaming(
         presence_penalty=presence_penalty, frequency_penalty=frequency_penalty,
         thinking_enabled=thinking_enabled, user_id=user_id,
         provider_supports_thinking=provider_supports_thinking, stream=True,
+        system_layout=system_layout,
     )
 
     full_content = ""

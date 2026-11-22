@@ -23,7 +23,7 @@ import httpx
 
 from app.services.agent.api_probe import (
     ProbeResult,
-    _allow_internal_policy,
+    allow_internal_policy,
     _blocked_result,
     probe_provider,
 )
@@ -192,12 +192,12 @@ async def probe_voice(
 ) -> ProbeResult:
     """探测一套语音配置能不能用。client 只给测试注入（MockTransport）。
 
-    私网政策与主站探针共用同一份（_allow_internal_policy）：这个接口不许变成内网扫描器。
+    私网政策与主站探针共用同一份（allow_internal_policy）：这个接口不许变成内网扫描器。
     """
     if not _base(base_url):
         return ProbeResult(False, "bad_url", "请先选择或者填写 Base URL")
 
-    allow_internal = _allow_internal_policy(allow_private, allow_private_hosts)
+    allow_internal = allow_internal_policy(allow_private, allow_private_hosts)
     owns_client = client is None
     if owns_client:
         client = httpx.AsyncClient(timeout=VOICE_PROBE_TIMEOUT)

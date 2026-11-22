@@ -27,6 +27,10 @@ class ProviderPreset(TypedDict):
     work_model: NotRequired[str]
     embedding_model: NotRequired[str]
     thinking_supported: NotRequired[bool]
+    # 对端模板认不认"中间 system"（见 utils/pure/chat_template.py）：
+    # anywhere（缺省，OpenAI/DeepSeek 语义）| leading（只能开头）| none（没有 system 角色）。
+    # 只给**已知必然受限**的家写死；探测（template_probe）拿到的结论优先于它。
+    system_layout: NotRequired[str]
     models: NotRequired[list[dict]]  # {value, label}
     # ── 语音（kind="voice"）──
     voice_id: NotRequired[str]       # 默认音色；用户可换成自己的（各家 id 体系不同，不校验格式）
@@ -95,6 +99,9 @@ PRESETS: dict[str, ProviderPreset] = {
         "work_model": "qwen3:14b",
         "embedding_model": "nomic-embed-text",
         "thinking_supported": False,
+        # ollama 的 Go 模板只有开头一个 .System；多条 system 会被它合并到开头，
+        # 每轮变的内容跑到最前面 → 前缀每轮失效（本地实测 0.21s vs 39.45s）
+        "system_layout": "leading",
         "models": [
             {"value": "qwen3", "label": "Qwen3"},
             {"value": "qwen3:14b", "label": "Qwen3 14B"},
@@ -102,6 +109,40 @@ PRESETS: dict[str, ProviderPreset] = {
             {"value": "mistral", "label": "Mistral"},
             {"value": "deepseek-r1:8b", "label": "DeepSeek R1 8B"},
         ],
+    },
+
+    # ── llama.cpp（llama-server --jinja）──
+    # 模板是模型自带的 Jinja，直接执行：Qwen 系对非首条 system 会 raise_exception（500）
+    "llama.cpp": {
+        "key": "llama.cpp",
+        "label": "llama.cpp（本地 llama-server）",
+        "base_url": "http://localhost:8080",
+        "api_key_url": "",
+        "chat_model": "",
+        "system_layout": "leading",
+        "models": [],
+    },
+
+    # ── LM Studio（本地）──
+    "lmstudio": {
+        "key": "lmstudio",
+        "label": "LM Studio（本地）",
+        "base_url": "http://localhost:1234",
+        "api_key_url": "",
+        "chat_model": "",
+        "system_layout": "anywhere",
+        "models": [],
+    },
+
+    # ── vLLM（自托管）──
+    "vllm": {
+        "key": "vllm",
+        "label": "vLLM（自托管）",
+        "base_url": "http://localhost:8000",
+        "api_key_url": "",
+        "chat_model": "",
+        "system_layout": "anywhere",
+        "models": [],
     },
 
     # ── 通义千问 / DashScope ──
@@ -540,6 +581,8 @@ def get_all_presets(kind: str = "llm") -> list[ProviderPreset]:
             "work_model": p.get("work_model", ""),
             "embedding_model": p.get("embedding_model", ""),
             "thinking_supported": bool(p.get("thinking_supported")),
+            # 接入用户自己的厂商时要把它一起带过去：中转站经常要改成 leading/none
+            "system_layout": p.get("system_layout", "anywhere"),
             "models": p.get("models") or [],
             "global_default_chat_model": p.get("global_default_chat_model"),
             "global_default_work_model": p.get("global_default_work_model"),

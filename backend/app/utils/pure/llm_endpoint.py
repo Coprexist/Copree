@@ -30,6 +30,17 @@ def api_root(base_url: str) -> str:
     return f"{base}/v1"
 
 
+def server_root(base_url: str) -> str:
+    """服务根：剥掉版本段（/vN）与 Gemini 的 /openai 尾巴。
+
+    用途只一条：问"服务本身"的端点（llama.cpp 的 `/props`、Ollama 的 `/api/*`）——
+    这些挂在根上，不在 /v1 下。聊天端点一律用 `chat_completions_url`，不要用这个。
+    """
+    root = api_root(base_url)
+    root = _VERSION_TAIL.sub("", root)
+    return _OPENAI_TAIL.sub("", root)
+
+
 def chat_completions_url(base_url: str) -> str:
     return f"{api_root(base_url)}/chat/completions"
 

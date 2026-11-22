@@ -47,6 +47,19 @@ def test_empty_or_none_base_url_does_not_crash():
     assert chat_completions_url(None) == "/v1/chat/completions"
 
 
+def test_server_root_strips_version_segment():
+    """服务根端点（/props、/api/*）挂在根上，不在 /v1 下。"""
+    from app.utils.pure.llm_endpoint import server_root
+
+    assert server_root("http://localhost:11434/v1") == "http://localhost:11434"
+    assert server_root("http://localhost:11434") == "http://localhost:11434"
+    assert server_root("https://api.deepseek.com") == "https://api.deepseek.com"
+    assert server_root("https://open.bigmodel.cn/api/paas/v4") == "https://open.bigmodel.cn/api/paas"
+    assert server_root("https://generativelanguage.googleapis.com/v1beta/openai") == (
+        "https://generativelanguage.googleapis.com/v1beta"
+    )
+
+
 def test_embeddings_accepts_a_full_path():
     """embedding 的 base_url 允许直接给到 /embeddings，此时不再拼接。"""
     full = "http://localhost:11434/v1/embeddings"

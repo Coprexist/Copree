@@ -36,6 +36,10 @@ class AgentVoiceConfig(Base):
                       comment="音色 id，用户自己填（各家体系不同，不校验格式）")
     model = Column(String(120), nullable=False, default="",
                    comment="OpenAI 兼容 TTS 的模型名（tts-1 之类）；其它家留空")
+    voice_profile_id = Column(
+        Integer, ForeignKey("user_api_profiles.id", ondelete="SET NULL"), nullable=True,
+        comment="这个 AI 用哪条语音配置档（kind=voice）；NULL = 用本行手填的厂商/Key/音色",
+    )
 
     # ── 检测结论（缓存：不允许每次发语音都先打一次供应商）──
     probe_ok = Column(Boolean, nullable=False, default=False, server_default="0",

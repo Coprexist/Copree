@@ -3372,6 +3372,8 @@ class SaveProviderBody(BaseModel):
     embedding_model: str | None = None
     model_options: list[dict] | None = None
     thinking_supported: bool | None = None
+    # 用户手选：anywhere / leading / none。留空=交给探测与预设
+    system_layout: str | None = None
     is_default: bool = False
     index: int | None = None
 
@@ -3396,6 +3398,7 @@ async def save_provider(
             model_options=body.model_options or [],
             thinking_supported=body.thinking_supported or False,
             is_default=body.is_default,
+            system_layout="anywhere",
         )
     else:
         preset = get_preset(body.provider)
@@ -3410,9 +3413,14 @@ async def save_provider(
             model_options=body.model_options or preset["models"],
             thinking_supported=body.thinking_supported if body.thinking_supported is not None else preset["thinking_supported"],
             is_default=body.is_default,
+            system_layout=preset.get("system_layout", "anywhere"),
         )
 
     providers = await get_providers(db)
+    existing = next((p for p in providers if p.get("name") == body.name), None)
+    layout_note = await _apply_system_layout(
+        config, body, preset if body.provider != "manual" else None, existing,
+    )
     providers = upsert_provider(providers, config, body.index)
 
     from app.models.system_settings import SystemSettings
@@ -3424,7 +3432,85 @@ async def save_provider(
     row.provider_config = providers        # list 交给 JSON 列自己序列化：手动 dumps 会双重编码
     await db.commit()
 
-    return {"message": f"已保存供应商 {body.name}", "providers": providers}
+    return {
+        "message": f"已保存供应商 {body.name}",
+        "providers": providers,
+        "system_layout": layout_note,
+    }
+
+
+class ProbeTemplateBody(BaseModel):
+    base_url: str
+    chat_model: str | None = None
+
+
+@router.post("/provider-presets/probe-template")
+async def probe_provider_template(
+    body: ProbeTemplateBody,
+    admin: dict = Depends(require_admin),
+):
+    """只探测对端模板、不落库 —— 给「重新识别」按钮用。
+
+    与保存时的探测是同一个函数：用户改完模型或换了服务再点一下，就能看到新结论。
+    """
+    from app.services.agent.template_probe import probe_chat_template
+
+    probe = await probe_chat_template(
+        body.base_url, model=body.chat_model or None, allow_private=True,
+    )
+    return {
+        "ok": probe.ok,
+        "layout": probe.layout,
+        "dialect": probe.dialect,
+        "provider": probe.provider,
+        "provider_label": probe.label,
+        "hash": probe.template_hash,
+        "message": probe.message,
+    }
+
+
+async def _apply_system_layout(
+    config: dict, body: "SaveProviderBody", preset: dict | None, existing: dict | None = None,
+) -> dict:
+    """决定这条通道的 system 摆放：用户手选 > 保存时探测 > 出厂预设 > anywhere。
+
+    探测是**增强项**：5 秒上限、失败不阻塞保存、拿不到就保持预设值。
+    对话路径永远不探测，只读这里写下的结论。
+    """
+    from datetime import datetime, timezone
+
+    from app.services.agent.template_probe import probe_chat_template
+    from app.utils.pure.chat_template import normalize_layout
+
+    if body.system_layout:
+        config["system_layout"] = normalize_layout(body.system_layout)
+        config["system_layout_source"] = "user"
+        return {"layout": config["system_layout"], "source": "user", "message": "已按手动指定保存"}
+
+    preset_layout = (preset or {}).get("system_layout")
+    config.setdefault("system_layout", normalize_layout(preset_layout))
+    config["system_layout_source"] = "preset"
+    base_url = config.get("base_url") or ""
+    if not base_url:
+        return {"layout": config["system_layout"], "source": "preset", "message": "未填地址，沿用预设"}
+
+    probe = await probe_chat_template(
+        base_url, model=config.get("chat_model") or None, allow_private=True,
+    )
+    if not probe.ok:
+        return {"layout": config["system_layout"], "source": "preset", "message": "未识别到模板，沿用预设"}
+
+    previous = normalize_layout((existing or {}).get("system_layout") or preset_layout)
+    config["system_layout"] = probe.layout
+    config["system_layout_source"] = "detected"
+    config["system_template_hash"] = probe.template_hash
+    config["system_layout_checked_at"] = datetime.now(timezone.utc).isoformat()
+    return {
+        "layout": probe.layout,
+        "source": "detected",
+        "message": probe.message,
+        "changed": probe.layout != previous,
+    }
 
 
 @router.delete("/provider-presets/{provider_name}")

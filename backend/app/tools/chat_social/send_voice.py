@@ -51,7 +51,7 @@ class SendVoice(ToolPlugin):
         from app.chat.dm import get_or_create_dm_session, send_dm_message
         from app.chat.gm import gm_message_to_dict, send_gm_message
         from app.models.agent import Agent as AgentModel
-        from app.services.agent.voice_config import api_key_of, get_voice_config
+        from app.services.agent.voice_config import voice_of
         from app.services.agent.voice_tts import VoiceSynthError, synthesize
         from app.services.content.file_service import ai_stored_path, upload_file
 
@@ -73,8 +73,9 @@ class SendVoice(ToolPlugin):
         if target_group is None and target_user is None:
             return {"error": True, "message": "请指定 group_id（群聊）或 target_user_id（私信）"}
 
-        cfg = await get_voice_config(db, agent_id)
-        if cfg is None or not cfg.base_url or not cfg.voice_id:
+        # 行 + 生效配置一次取齐：选了配置档就用档里的，否则用这行手填的（与门控同一处）
+        cfg, eff = await voice_of(db, agent_id)
+        if cfg is None or eff is None or not eff.base_url or not eff.voice_id:
             return {"error": True, "message": "这个 AI 还没配语音，先用文字说"}
         if not cfg.probe_ok:
             return {
@@ -86,8 +87,8 @@ class SendVoice(ToolPlugin):
         # ── 合成 ──
         try:
             audio = await synthesize(
-                provider=cfg.provider, base_url=cfg.base_url, api_key=api_key_of(cfg),
-                voice_id=cfg.voice_id, text=text, style=style, model=cfg.model or "",
+                provider=eff.provider, base_url=eff.base_url, api_key=eff.api_key or "",
+                voice_id=eff.voice_id, text=text, style=style, model=eff.model or "",
             )
         except VoiceSynthError as e:
             logger.warning(f"send_voice 合成失败（agent={agent_id}, kind={e.kind}）: {e.message}")

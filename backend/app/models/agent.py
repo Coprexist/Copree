@@ -91,7 +91,14 @@ class Agent(Base):
     # API 调用额度成本（创建时从用户 api_credit 扣除，删除时返还）
     api_credit_cost = Column(Integer, default=0)
 
-    # 单 AI 级 API 配置覆盖（NULL = 继承用户全局设置）
+    # 单 AI 级 API 配置（三档，见 services/agent/api_config_resolver.py）：
+    #   llm_profile_id 有值 → 整包用这条配置档（厂商 + 这把 Key + 模型覆盖）
+    #   否则看下面两列 → 本 AI 单独填的地址/Key（老数据与「单独配置」）
+    #   都没有 → 用户全局默认
+    llm_profile_id = Column(
+        Integer, ForeignKey("user_api_profiles.id", ondelete="SET NULL"), nullable=True,
+        comment="这个 AI 用哪条配置档；NULL = 不用配置档（看 api_base_url/全局）",
+    )
     api_base_url = Column(Text)
     api_key_encrypted = Column(Text)
 

@@ -43,6 +43,30 @@ class UpdateSettingsRequest(BaseModel):
         return validate_status_text(v)
 
 
+@router.get("/provider-presets")
+async def list_provider_presets(
+    kind: str = "llm",
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """普通用户可读的厂商选项：平台已配置的供应商 + 内置预设（只读镜像）。
+
+    与 /agents/models 不是一回事：那个是"这个账号**运行期真能走**的通道"
+    （有额度走池 Key、配了本人 Key 走那条，去重后常常只剩一条），
+    这里是"平台配了哪些厂商"，用来给"选预设 → 自动填地址"当选项。
+
+    不含任何密钥：provider 配置本身不存 key（池 Key 在 api_key_pool，
+    本人的 key 由用户自己填）。
+    """
+    from app.services.agent.provider_presets import get_all_presets
+    from app.services.infrastructure.system_settings_service import get_providers
+
+    return {
+        "presets": get_all_presets(kind),
+        "providers": await get_providers(db),
+    }
+
+
 class RedeemRequest(BaseModel):
     """兑换码请求"""
     code: str = Field(..., min_length=1, max_length=32)

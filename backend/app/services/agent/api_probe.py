@@ -177,7 +177,7 @@ async def _private_hint(base_url: str) -> str:
             "192.168.x.x 是内网）。请填公网能访问的地址，或者把 Base URL 清空、改走平台通道。")
 
 
-def _allow_internal_policy(allow_private: bool, allow_private_hosts: Collection[str]):
+def allow_internal_policy(allow_private: bool, allow_private_hosts: Collection[str]):
     """探针自己的出站政策：管理员免检；普通用户只放行"自己保存过"的那个 host:port。
 
     这段是**政策**，不是解析——解析与钉地址在 outbound_http 一处，两者不各写一份。
@@ -227,7 +227,7 @@ async def probe_provider(
     if not (base_url or "").strip():
         return ProbeResult(False, "bad_url", "请先填写 Base URL")
 
-    allow_internal = _allow_internal_policy(allow_private, allow_private_hosts)
+    allow_internal = allow_internal_policy(allow_private, allow_private_hosts)
     owns_client = client is None
     if owns_client:
         client = httpx.AsyncClient(timeout=PROBE_TIMEOUT)

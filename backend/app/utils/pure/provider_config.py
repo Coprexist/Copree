@@ -56,6 +56,22 @@ def find_provider_for_pool_key(providers: list[dict], provider_name: str | None,
     return find_default_provider(providers)
 
 
+def resolve_system_layout(provider: dict | None, preset_layout: str | None = None) -> str:
+    """这一轮该用哪一档 system 摆放（anywhere / leading / none）。
+
+    **只认一处存储**：provider_config 条目里的 `system_layout` —— 探测结论与用户手选
+    都写在这一个字段。条目没有就回落到出厂预设，再没有就 anywhere。
+    宁可宽松：认不出就保持现状，不把能跑的通道误判成严格档。
+    """
+    from app.utils.pure.chat_template import LAYOUTS, normalize_layout
+
+    stored = (provider or {}).get("system_layout")
+    if isinstance(stored, str) and stored.strip().lower() in LAYOUTS:
+        return normalize_layout(stored)
+    # 没存 / 存了脏值：都当"没结论"，回落到出厂预设
+    return normalize_layout(preset_layout)
+
+
 def channel_provider_info(provider: dict | None, api_base_url: str,
                           *, models: list | None = None, default_model: str | None = None) -> dict:
     """组装「这一次真正要用的通道」：地址 + 它能用的模型 + 默认模型 + 思考开关。
@@ -74,10 +90,14 @@ def channel_provider_info(provider: dict | None, api_base_url: str,
             if isinstance(m, dict) and m.get("value")
         ]
     preset_default = provider.get("global_default_chat_model") or provider.get("chat_model") or None
+    from app.services.agent.provider_presets import get_preset
+
+    preset = get_preset(str(provider.get("provider") or "")) or {}
     return {
         "base_url": api_base_url,
         "provider_name": provider.get("name", ""),
         "thinking_supported": provider.get("thinking_supported", "deepseek.com" in (api_base_url or "")),
+        "system_layout": resolve_system_layout(provider, preset.get("system_layout")),
         "models": ids,
         "default_model": default_model or preset_default,
         "global_default_chat_model": preset_default,
@@ -109,12 +129,11 @@ def build_provider_summaries(providers: list[dict]) -> list[dict]:
     result: list[dict] = []
     for p in providers:
         provider_key = p.get("provider", "unknown")
+        preset = get_preset(provider_key) or {}
         # 从预设中获取 api_key_url（优先用配置中手动指定的，否则用预设的）
         api_key_url = p.get("api_key_url", "")
-        if not api_key_url:
-            preset = get_preset(provider_key)
-            if preset:
-                api_key_url = preset.get("api_key_url", "")
+        if not api_key_url and preset:
+            api_key_url = preset.get("api_key_url", "")
 
         result.append({
             "name": p.get("name", p.get("provider", "?")),
@@ -126,6 +145,11 @@ def build_provider_summaries(providers: list[dict]) -> list[dict]:
             "thinking_supported": p.get("thinking_supported", False),
             "is_default": p.get("is_default", False),
             "models": p.get("model_options", []),
+            # system 摆放：与运行期**同一口径**（条目没存就回落预设）。
+            # 不写库也能跟着预设升级走：老条目打开时看到的就是它实际会用的档位。
+            "system_layout": resolve_system_layout(p, preset.get("system_layout")),
+            "system_layout_source": p.get("system_layout_source") or "preset",
+            "system_layout_checked_at": p.get("system_layout_checked_at") or "",
         })
     return result
 
@@ -195,6 +219,7 @@ def build_provider_config(
     model_options: list[dict] | None = None,
     thinking_supported: bool = False,
     is_default: bool = False,
+    system_layout: str = "anywhere",
 ) -> dict:
     """构建一个规范化的供应商配置字典（纯函数）"""
     return {
@@ -207,6 +232,7 @@ def build_provider_config(
         "model_options": model_options or [],
         "thinking_supported": thinking_supported,
         "is_default": is_default,
+        "system_layout": system_layout,
     }
 
 

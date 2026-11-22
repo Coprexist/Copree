@@ -109,6 +109,14 @@ class AgentUpdateConfigRequest(BaseModel):
     avatar_url: str | None = None
     api_base_url: str | None = None
     api_key: str | None = None
+    llm_profile_id: int | None = Field(
+        default=None,
+        description="用哪条 API 配置档（整包：厂商+Key+模型）；null = 不用配置档",
+    )
+    voice_profile_id: int | None = Field(
+        default=None,
+        description="用哪条语音配置档（整包：厂商+Key+音色）；null = 不用配置档",
+    )
     memory_load_mode: str | None = Field(default=None, description="记忆加载模式: index_only|index_plus_recent|index_plus_semantic")
     memory_recent_count: int | None = Field(default=None, ge=0, le=50, description="index_plus_recent 模式下加载最近 N 个文件内容")
     memory_shared_scope: str | None = Field(default=None, description="共享记忆范围: private_only|private_plus_shared_by_user|private_plus_shared_all")
