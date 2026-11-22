@@ -4,6 +4,7 @@ import { ArrowLeft, BookOpen, ChevronRight, PanelLeftClose, PanelLeftOpen } from
 import { MANUAL_URL, ADMIN_MANUAL_URL } from '../../constants'
 import { useT } from '../../i18n/I18nContext'
 import { useResizableSidebar } from '../../hooks/useResizableSidebar'
+import { useRailCollapsed } from '../../hooks/useRailCollapsed'
 import { ContentColumn, UnderlineTabs } from '../../components/ui'
 import { CONSOLE_WORKSPACES, findConsoleItem, workspaceOf } from './workspaces'
 import { rememberTab } from './recentTabs'
@@ -36,7 +37,7 @@ export default function ConsolePage() {
   // 移动端的「列表 / 详情」不另存一份 state：它完全由 URL 里有没有 tab 决定。
   // 以前是 state + URL 两个来源，返回按钮只改 state、URL 还带着 tab，物理返回键与刷新就各走一套。
   const mobileView: 'list' | 'detail' = searchParams.get('tab') ? 'detail' : 'list'
-  const [collapsed, setCollapsed] = useState(() => localStorage.getItem(RAIL_KEY) === '1')
+  const [collapsed, toggleRail] = useRailCollapsed(RAIL_KEY)
   // 每个工作区记住上次看的那一页：切回来还是原来那页，不用重新找
   const lastVisited = useRef<Record<string, string>>({ [workspace.key]: current.key })
   const navigate = useNavigate()
@@ -76,12 +77,6 @@ export default function ConsolePage() {
     const target = CONSOLE_WORKSPACES.find(w => w.key === key)
     if (!target) return
     openItem(lastVisited.current[key] || target.items[0].key)
-  }
-
-  const toggleRail = () => {
-    const next = !collapsed
-    setCollapsed(next)
-    localStorage.setItem(RAIL_KEY, next ? '1' : '0')
   }
 
   return (

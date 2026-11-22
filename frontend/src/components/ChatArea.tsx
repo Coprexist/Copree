@@ -10,10 +10,11 @@ import ChatHeader from './shared/ChatHeader'
 import { CHAT_HEADER_INSET } from './shared/chatHeaderInset'
 import ProfileCard from './ProfileCard'
 import SearchOverlay from './SearchOverlay'
-import { Bell, BellOff, UserPlus, Settings, Bot, User, Globe, X, Check, Users, AlertTriangle } from 'lucide-react'
+import { Bell, BellOff, UserPlus, Settings, Bot, User, Globe, X, Check, Users, AlertTriangle, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { useT } from '../i18n/I18nContext'
 import { APP_DATA_READY_EVENT } from './EnterTransition'
 import { useResizableSidebar } from '../hooks/useResizableSidebar'
+import { useRailCollapsed, RAIL_COLLAPSED_WIDTH as RAIL_W } from '../hooks/useRailCollapsed'
 import { refreshChatLists } from '../hooks/useChatLists'
 import { isEmbedded } from '../embed/bridge'
 import { Dialog } from './ui'
@@ -77,6 +78,8 @@ export default function ChatArea({ groupId, dmSessionId }: ChatAreaProps) {
   // 用 state 而不是 ref：首次渲染时 ref.current 还是空，浮层拿不到宿主
   const [groupPanelEl, setGroupPanelEl] = useState<HTMLDivElement | null>(null)
   const { sidebarWidth, handleResizeStart } = useResizableSidebar('chat_sidebar_width', sidebarRef)
+  // 聊天列表收起：和管理页、设置页、DSH 共用一份存法
+  const [collapsed, toggleRail] = useRailCollapsed('chat_sidebar_collapsed')
 
   // 加载群聊列表
   useEffect(() => {
@@ -119,6 +122,9 @@ export default function ChatArea({ groupId, dmSessionId }: ChatAreaProps) {
     return !hasActiveConversation && window.innerWidth < 768
   })
 
+  // 手机上是全屏抽屉（mobileSidebarOpen），那时不套用桌面收起态
+  const railCollapsed = collapsed && !mobileSidebarOpen
+
   // 活跃对话状态变化时，自动切换移动端侧边栏
   useEffect(() => {
     if (window.innerWidth >= 768) return
@@ -136,8 +142,22 @@ export default function ChatArea({ groupId, dmSessionId }: ChatAreaProps) {
       <div
         ref={sidebarRef}
         className={`shrink-0 ${mobileSidebarOpen ? 'absolute inset-0 z-overlay' : 'hidden md:block'} md:relative md:z-auto`}
-        style={!mobileSidebarOpen ? { width: sidebarWidth } : undefined}
+        style={!mobileSidebarOpen ? { width: railCollapsed ? RAIL_W : sidebarWidth } : undefined}
       >
+        {railCollapsed ? (
+          /* 收起态：只留一条窄栏（展开按钮在顶部），宽度全部让给对话区 */
+          <div className="h-full flex flex-col items-center border-r border-border bg-surface pt-1">
+            <button
+              onClick={toggleRail}
+              className="icon-btn-sm text-textMuted hover:text-textPrimary"
+              title={t('common:expand')}
+              aria-label={t('common:expand')}
+            >
+              <PanelLeftOpen size={16} />
+            </button>
+          </div>
+        ) : (
+        <>
         <ChatSidebar
           activeGroupId={groupId}
           activeSessionId={dmSessionId}
@@ -147,12 +167,15 @@ export default function ChatArea({ groupId, dmSessionId }: ChatAreaProps) {
           hideOnMobile={hasActiveConversation && !mobileSidebarOpen}
           onMobileBack={mobileSidebarOpen ? () => setMobileSidebarOpen(false) : undefined}
           mobileFullscreen={mobileSidebarOpen}
+          onCollapse={toggleRail}
         />
         {/* 拖拽手柄（仅桌面端） */}
         <div
           className="hidden md:block absolute top-0 -right-1.5 w-1.5 h-full cursor-col-resize hover:bg-primary-400/30 active:bg-primary-400/50 transition-colors z-overlay"
           onMouseDown={handleResizeStart}
         />
+        </>
+        )}
       </div>
       )}
 

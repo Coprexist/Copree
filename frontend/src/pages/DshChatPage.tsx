@@ -11,9 +11,10 @@
  */
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowLeft, ArrowDown, Bot, Brain, CheckCircle2, ChevronDown, Circle, ImagePlus, Info, MessageSquare, Plus, RefreshCw, Send, Square, Terminal, XCircle } from 'lucide-react'
+import { ArrowLeft, ArrowDown, Bot, Brain, CheckCircle2, ChevronDown, Circle, ImagePlus, Info, MessageSquare, Plus, RefreshCw, Send, Square, Terminal, XCircle, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { api, fileDownloadUrl, getApiBaseUrl } from '../api/client'
 import { useT } from '../i18n/I18nContext'
+import { useRailCollapsed, RAIL_COLLAPSED_WIDTH as RAIL_W } from '../hooks/useRailCollapsed'
 import { DropMask, AttachmentChips } from '../components/AttachmentChips'
 import { Button, IconButton, MENU_CAPTION, MenuItem, MenuPanel, WidthHandles } from '../components/ui'
 import { ApprovalDialog, QuestionDialog, type AskPrompt, type ChatApproval } from '../components/shared/ChatDialogs'
@@ -27,6 +28,9 @@ import {
   imageMarker, imageRefsIn,
   stripImageMarkers, supportsImageAttachments, type DshAttachmentRef, type DshImageRef,
 } from '../utils/dshAttachments'
+
+/** 左栏展开时的宽度（原来是 w-60）；收起宽度走 useRailCollapsed 的统一定义 */
+const DSH_RAIL_W = 240
 
 interface Status {
   detected: boolean
@@ -464,6 +468,8 @@ export default function DshChatPage() {
   const navigate = useNavigate()
   const agoLabel = useAgoLabel()
   const [status, setStatus] = useState<Status | null>(null)
+  // 左栏会话列表的收起状态：与聊天列表、设置、控制台共用一份存法
+  const [railCollapsed, toggleRail] = useRailCollapsed('dsh_sidebar_collapsed')
   const [sessions, setSessions] = useState<SessionItem[]>([])
   const [sessionId, setSessionId] = useState('')
   const [lines, setLines] = useState<Line[]>([])
@@ -818,11 +824,32 @@ export default function DshChatPage() {
       <DropMask {...attachments.dropState('page')} label={t('tool:dsh.attach.drop')} />
 
       {/* ═══ 左栏：DSH 会话（放大后的群视界对话同构——会话在左，对话占满其余） ═══ */}
-      <aside className="hidden md:flex w-60 shrink-0 flex-col border-r border-border bg-surface">
+      <aside className="hidden md:flex shrink-0 flex-col border-r border-border bg-surface" style={{ width: railCollapsed ? RAIL_W : DSH_RAIL_W }}>
+        {railCollapsed ? (
+          <div className="h-full flex flex-col items-center pt-1">
+            <button
+              onClick={toggleRail}
+              className="icon-btn-sm text-textMuted hover:text-textPrimary"
+              title={t('common:expand')}
+              aria-label={t('common:expand')}
+            >
+              <PanelLeftOpen size={16} />
+            </button>
+          </div>
+        ) : (
+        <>
         <div className="top-bar flex items-center gap-1.5 px-3 h-14 shrink-0">
           <MessageSquare size={13} className="text-textMuted shrink-0" />
           <span className="text-xs font-medium text-textSecondary flex-1 truncate">{t('tool:dsh.sessions')}</span>
           <span className="text-3xs text-textMuted shrink-0">{sessions.length}</span>
+          <button
+            onClick={toggleRail}
+            className="icon-btn-sm text-textMuted hover:text-textPrimary shrink-0"
+            title={t('common:collapse')}
+            aria-label={t('common:collapse')}
+          >
+            <PanelLeftClose size={16} />
+          </button>
         </div>
         <div className="flex-1 min-h-0 overflow-y-auto scroll-floor py-1">
           {sessions.length === 0 && (
@@ -859,6 +886,8 @@ export default function DshChatPage() {
         >
           {t('tool:dsh.newSession')}
         </Button>
+        </>
+        )}
       </aside>
 
       {/* 对话列自己铺白底：页根是 bg-canvas（#f8fafc），列不给底色就会露出那层灰，

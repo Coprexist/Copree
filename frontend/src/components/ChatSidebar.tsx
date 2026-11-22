@@ -1,6 +1,6 @@
 import { memo, useState, useEffect, useRef, useMemo, useCallback, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, BellOff, Menu, UserPlus, Users, Bot, Globe, ShieldAlert, MessageCircle, Inbox, Pin, ChevronDown, ChevronRight } from 'lucide-react'
+import { Plus, BellOff, Menu, UserPlus, Users, Bot, Globe, ShieldAlert, MessageCircle, Inbox, Pin, ChevronDown, ChevronRight, PanelLeftClose } from 'lucide-react'
 import { EmptyState, MenuPanel, MenuItem } from './ui'
 import { getStateDotColor, CHAT_REFRESH_EVENT } from '../constants'
 import { formatRelativeTime } from '../utils/time'
@@ -172,6 +172,8 @@ interface ChatSidebarProps {
   onMobileBack?: () => void
   /** 移动端全屏覆盖模式 */
   mobileFullscreen?: boolean
+  /** 桌面端「收起聊天列表」：由外层给，不传就不显示那枚按钮 */
+  onCollapse?: () => void
 }
 
 /** 从 localStorage 读取折叠状态，默认展开 */
@@ -198,6 +200,7 @@ const ChatSidebar = memo(function ChatSidebar({
   hideOnMobile,
   onMobileBack,
   mobileFullscreen,
+  onCollapse,
 }: ChatSidebarProps) {
   // 会话列表来自唯一来源（hooks/useChatLists）：一条新消息就地改那一份，不重拉；
   // 这里只负责在「列表本身可能变了」时喊它重拉（建群、进新私信、自己发过消息）
@@ -448,6 +451,17 @@ const ChatSidebar = memo(function ChatSidebar({
           </button>
           <span>{t('chatlist:chat')}</span>
         </div>
+        <div className="flex items-center gap-0.5">
+        {onCollapse && (
+          <button
+            onClick={onCollapse}
+            className="icon-btn-sm hidden md:inline-flex text-textMuted hover:text-textPrimary"
+            title={t('common:collapse')}
+            aria-label={t('common:collapse')}
+          >
+            <PanelLeftClose size={16} />
+          </button>
+        )}
         <div className="relative">
           <button
             onClick={() => setShowPlusMenu(!showPlusMenu)}
@@ -478,6 +492,7 @@ const ChatSidebar = memo(function ChatSidebar({
               </MenuPanel>
             </>
           )}
+        </div>
         </div>
       </div>
 

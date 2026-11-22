@@ -14,12 +14,13 @@ import SkinPicker from '../components/SkinPicker'
 import { normalizePrefs, defaultPrefs, loadFromStorage, saveToStorage, apply } from '../utils/cssFilters'
 import type { MagicVisionPrefs } from '../utils/cssFilters'
 import { useResizableSidebar } from '../hooks/useResizableSidebar'
+import { useRailCollapsed, RAIL_COLLAPSED_WIDTH as RAIL_W } from '../hooks/useRailCollapsed'
 import VerificationCodeInput from '../components/VerificationCodeInput'
 import { LANGUAGES } from '../i18n/languages'
 import { NOTICE_BOX_CLASS, NOTICE_TEXT_CLASS, useNotice } from '../hooks/useNotice'
 import { isDesktop } from '../utils/platform'
 import { invoke } from '../utils/tauri'
-import { Key, Zap, Save, Clock, Palette, Bell, Eye, EyeOff, CheckCircle, XCircle, Loader2, Globe, Layout, Bot, Pencil, X, Ticket, Plus, ChevronDown, ChevronRight, Shield, AlertTriangle, ArrowLeft, Mail, Monitor, HardDrive, Trash2, Cpu, Wrench, Box, ExternalLink, BarChart3, Star } from 'lucide-react'
+import { Key, Zap, Save, Clock, Palette, Bell, Eye, EyeOff, CheckCircle, XCircle, Loader2, Globe, Layout, Bot, Pencil, X, Ticket, Plus, ChevronDown, ChevronRight, Shield, AlertTriangle, ArrowLeft, Mail, Monitor, HardDrive, Trash2, Cpu, Wrench, Box, ExternalLink, BarChart3, Star, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { useNavigate, useBlocker, useLocation, useSearchParams } from 'react-router-dom'
 
 // 常用时区列表
@@ -202,6 +203,8 @@ export default function SettingsPage() {
   // ── 可拖拽侧边栏 ──
   const sidebarRef = useRef<HTMLDivElement>(null)
   const { sidebarWidth, handleResizeStart } = useResizableSidebar('settings_sidebar_width', sidebarRef)
+  // 左侧分类导航的收起状态：与聊天列表、DSH、控制台共用一份存法
+  const [collapsed, toggleRail] = useRailCollapsed('settings_sidebar_collapsed')
 
   // ── 滚动监听：高亮当前可见 section ──
   const contentRef = useRef<HTMLDivElement>(null)
@@ -1025,18 +1028,36 @@ export default function SettingsPage() {
       {/* ── 主体：桌面端侧边栏 + 内容，移动端纯内容 ── */}
       <div className={`flex-1 flex min-h-0 ${mobileView === 'list' ? 'md:flex hidden' : ''}`}>
         {/* 桌面端侧边栏导航（可拖拽宽度） */}
-        <div ref={sidebarRef} className="hidden md:flex shrink-0 relative border-r border-border bg-surface" style={{ width: sidebarWidth }}>
-          <div className="overflow-y-auto py-1 w-full">
+        <div ref={sidebarRef} className="hidden md:flex shrink-0 relative border-r border-border bg-surface" style={{ width: collapsed ? RAIL_W : sidebarWidth }}>
+          <div className="flex flex-col w-full min-w-0">
+            {/* 收起 / 展开：和管理页左栏同一个位置（顶部右端）与同一对图标 */}
+            <div className={'flex items-center shrink-0 border-b border-border mt-1 ' + (collapsed ? 'justify-center' : 'pl-3 pr-1.5')}>
+              {!collapsed && (
+                <span className="flex-1 min-w-0 truncate text-2xs font-medium text-textMuted uppercase tracking-wider">
+                  {t('settings:title')}
+                </span>
+              )}
+              <button
+                onClick={toggleRail}
+                className="icon-btn-sm text-textMuted hover:text-textPrimary shrink-0"
+                title={collapsed ? t('common:expand') : t('common:collapse')}
+                aria-label={collapsed ? t('common:expand') : t('common:collapse')}
+              >
+                {collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+              </button>
+            </div>
+          <div className="overflow-y-auto py-1 w-full flex-1 min-h-0">
             {/* 管理员快捷入口 */}
             {user?.role === 'admin' && (
               // ui-standard-ignore: 管理员入口横幅，不是按钮形态
               <button
                 onClick={() => navigate('/admin')}
-                className="w-full flex items-center gap-2 mx-2 px-2 py-1.5 mb-1 rounded-control bg-primary-500/10 border border-primary-500/20 text-primary-400 hover:bg-primary-500/15 text-sm font-medium transition-colors"
-                style={{ width: 'calc(100% - 16px)' }}
+                title={t('settings:adminButton')}
+                className={'flex items-center gap-2 mb-1 rounded-control bg-primary-500/10 border border-primary-500/20 text-primary-400 hover:bg-primary-500/15 text-sm font-medium transition-colors ' + (collapsed ? 'mx-auto w-9 h-9 justify-center' : 'mx-2 px-2 py-1.5')}
+                style={collapsed ? undefined : { width: 'calc(100% - 16px)' }}
               >
                 <Shield size={14} />
-                {t('settings:adminButton')}
+                {!collapsed && t('settings:adminButton')}
               </button>
             )}
 
@@ -1048,23 +1069,28 @@ export default function SettingsPage() {
                   const items = NAV_SECTIONS.filter(s => s.category === cat)
                   return (
                     <div key={cat}>
-                      <div className="px-3 h-7 border-b border-border font-medium text-2xs text-textMuted uppercase tracking-wider flex items-center shrink-0">
-                        {t(cat)}
-                      </div>
+                      {!collapsed && (
+                        <div className="px-3 h-7 border-b border-border font-medium text-2xs text-textMuted uppercase tracking-wider flex items-center shrink-0">
+                          {t(cat)}
+                        </div>
+                      )}
                       <div className="py-0.5">
                         {items.map(({ id, icon: Icon, labelKey }) => (
                           // ui-standard-ignore: 设置分类导航行，不是按钮形态
                           <button
                             key={id}
                             onClick={() => switchTab(id)}
-                            className={`w-full flex items-center gap-2 px-3 py-1.5 text-sm transition-colors text-left ${
+                            title={collapsed ? t(labelKey) : undefined}
+                            className={`w-full flex items-center gap-2 text-sm transition-colors text-left ${
+                              collapsed ? 'justify-center px-0 py-2' : 'px-3 py-1.5'
+                            } ${
                               activeTab === id
                                 ? 'bg-primary-500/10 text-primary-600 dark:text-primary-400 font-medium border-r-2 border-primary-400'
                                 : 'text-textSecondary hover:text-textPrimary hover:bg-elevated border-r-2 border-transparent'
                             }`}
                           >
-                            <Icon size={14} className="shrink-0 opacity-70" />
-                            <span className="truncate">{t(labelKey)}</span>
+                            <Icon size={collapsed ? 16 : 14} className="shrink-0 opacity-70" />
+                            {!collapsed && <span className="truncate">{t(labelKey)}</span>}
                           </button>
                         ))}
                       </div>
@@ -1074,12 +1100,15 @@ export default function SettingsPage() {
               })()}
             </nav>
           </div>
+          </div>
 
-          {/* 拖拽手柄 */}
-          <div
-            className="absolute top-0 -right-1.5 w-1.5 h-full cursor-col-resize hover:bg-primary-400/30 active:bg-primary-400/50 transition-colors z-overlay content-width-handles"
-            onMouseDown={handleResizeStart}
-          />
+          {/* 拖拽手柄：收起后没有宽度可拖，整条收起来 */}
+          {!collapsed && (
+            <div
+              className="absolute top-0 -right-1.5 w-1.5 h-full cursor-col-resize hover:bg-primary-400/30 active:bg-primary-400/50 transition-colors z-overlay content-width-handles"
+              onMouseDown={handleResizeStart}
+            />
+          )}
         </div>
 
         {/* 内容区域 */}
