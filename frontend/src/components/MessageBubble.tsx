@@ -265,12 +265,11 @@ const MessageBubble = memo(function MessageBubble({
       .trim()
   }, [content, fileAtts.length, attachmentNames])
 
-  // 只发媒体/邀请、没有文字的消息不套气泡：图片自己就是内容，外面再包一层圆角底只会显得脏。
-  // 卡片/转发**不在这里**：它们的排版自己不带壳（见 ChannelContent），外面照样用气泡那层外观——
-  // 看着像气泡，但不会再套出一层小卡片。
+  // 只发媒体、没有文字的消息不套气泡：图片自己就是内容，外面再包一层圆角底只会显得脏。
+  // 邀请卡与转发卡片**一律留气泡**：它们自己不画壳（见 InvitationCard / ChannelContent），
+  // 气泡就是那张卡片的外框。两边都画，才是「框里套框」。
   // 撤回已在下面早返回，这里不再判 revoked
-  const bareShell = !displayContent && !isTyping
-    && (fileAtts.length > 0 || !!(isInvitation && invAtt))
+  const bareShell = !displayContent && !isTyping && fileAtts.length > 0
 
   const handleAcceptInvitation = async (invitationId: number) => {
     try {

@@ -1,4 +1,4 @@
-import { memo, useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback, type ReactNode } from 'react'
+import { memo, useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback, Fragment, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Plus, BellOff, Menu, UserPlus, Users, Bot, Globe, ShieldAlert, MessageCircle, Inbox, Pin, ChevronDown, ChevronRight, ChevronLeft } from 'lucide-react'
 import { EmptyState, MenuPanel, MenuItem } from './ui'
@@ -85,7 +85,8 @@ function DmAvatar({ session }: { session: DMSession }) {
         </div>
       )}
       {p.type !== 'system' && (
-        <span data-mv-force className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-surface ${getStateDotColor(p.state)}`} />
+        // z-10：收起态头像外面套了一圈 ring 描边，状态点不抬起来会被描边压掉一个缺口
+        <span data-mv-force className={`absolute z-10 -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-surface ${getStateDotColor(p.state)}`} />
       )}
     </div>
   )
@@ -104,20 +105,20 @@ function CollapsibleHeader({
   unreadCount?: number
 }) {
   return (
-    <div className="flex items-center px-3 py-1 group">
-      <button
-        onClick={onToggle}
-        className="flex items-center gap-1 text-3xs font-semibold uppercase tracking-wider text-textMuted hover:text-textSecondary transition-colors"
-      >
-        {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-        {label}
-        {unreadCount !== undefined && unreadCount > 0 && (
-          <span className="ml-1 min-w-[14px] h-[14px] rounded-full bg-primary-500/70 text-white flex items-center justify-center text-[9px] font-bold">
-            {unreadCount > 99 ? '99+' : unreadCount}
-          </span>
-        )}
-      </button>
-    </div>
+    // ui-standard-ignore: 分组标题整行可点（那条线本身就是开关），不是按钮形态
+    <button
+      onClick={onToggle}
+      aria-expanded={!collapsed}
+      className="w-full flex items-center gap-1 px-3 py-1 text-left text-3xs font-semibold uppercase tracking-wider text-textMuted hover:text-textSecondary hover:bg-elevated transition-colors"
+    >
+      {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+      {label}
+      {unreadCount !== undefined && unreadCount > 0 && (
+        <span className="ml-1 min-w-[14px] h-[14px] rounded-full bg-primary-500/70 text-white flex items-center justify-center text-[9px] font-bold">
+          {unreadCount > 99 ? '99+' : unreadCount}
+        </span>
+      )}
+    </button>
   )
 }
 
@@ -309,10 +310,66 @@ const ChatSidebar = memo(function ChatSidebar({
   // ── 收起态：整栏收成一列头像 ──
   // 数据与展开时同源、同顺序（置顶 → 群聊 → 私信），不另建一份列表
   const railItems = useMemo(() => [
-    ...pinnedItems,
-    ...unpinnedGroups.map(g => ({ kind: 'group' as const, data: g, lastMessageAt: g.last_message_at })),
-    ...unpinnedDMs.map(s => ({ kind: 'dm' as const, data: s, lastMessageAt: s.last_message_at })),
+    ...pinnedItems.map(it => ({ ...it, section: 'pinned' as const })),
+    ...unpinnedGroups.map(g => ({ kind: 'group' as const, data: g, lastMessageAt: g.last_message_at, section: 'groups' as const })),
+    ...unpinnedDMs.map(s => ({ kind: 'dm' as const, data: s, lastMessageAt: s.last_message_at, section: 'dm' as const })),
   ], [pinnedItems, unpinnedGroups, unpinnedDMs])
+
+  // 收起态按「置顶 / 群聊 / 私信」分段渲染：段与段之间那条线，就是展开态的分组标题
+  const railSections = useMemo(() => {
+    const out: Array<{ key: 'pinned' | 'groups' | 'dm'; items: typeof railItems }> = []
+    for (const item of railItems) {
+      const last = out[out.length - 1]
+      if (last && last.key === item.section) last.items.push(item)
+      else out.push({ key: item.section, items: [item] })
+    }
+    return out
+  }, [railItems])
+
+  /** 收起态里每一段的折叠状态与展开态共用（同一个 localStorage 键） */
+  const railSectionMeta = (key: 'pinned' | 'groups' | 'dm') => {
+    if (key === 'pinned') {
+      return { label: t('chatlist:pinned'), collapsed: pinnedCollapsed, toggle: () => setPinnedCollapsed(v => !v) }
+    }
+    if (key === 'dm') {
+      return { label: t('chatlist:dm'), collapsed: dmCollapsed, toggle: () => setDmCollapsed(v => !v) }
+    }
+    return { label: t('chatlist:chat'), collapsed: groupsCollapsed, toggle: () => setGroupsCollapsed(v => !v) }
+  }
+
+  /** 收起态的一个头像按钮：私信是圆的、群聊是圆角方块，描边跟着形状走 */
+  const renderRailItem = (item: (typeof railItems)[number]) => {
+    const key = item.kind === 'group' ? `g-${item.data.id}` : `dm-${item.data.session_id}`
+    const active = item.kind === 'group'
+      ? item.data.id === activeGroupId
+      : item.data.session_id === activeSessionId
+    const unread = item.data.unread_count || 0
+    const mention = item.kind === 'group' ? item.data.has_mention : false
+    const name = item.kind === 'group' ? item.data.name : item.data.partner?.name || ''
+    const shape = item.kind === 'dm' ? 'rounded-full' : 'rounded-control'
+    return (
+      // ui-standard-ignore: 收起态的头像按钮（方图，无文字）
+      <button
+        key={key}
+        data-avatar-key={key}
+        onClick={() => navigate(item.kind === 'group'
+          ? `/chat/gm/${item.data.id}`
+          : `/chat/dm/${item.data.session_id}`)}
+        title={name}
+        aria-label={name}
+        className={'relative shrink-0 transition-colors ' + shape + ' ' + (
+          active ? 'ring-2 ring-primary-400' : 'hover:bg-elevated'
+        )}
+      >
+        {item.kind === 'group'
+          ? <GroupAvatarGroup g={item.data} />
+          : <DmAvatar session={item.data} />}
+        {unread > 0 && (
+          <span className={'absolute top-0 right-0 w-2 h-2 rounded-full ' + (mention ? 'bg-rose-500' : 'bg-primary-500')} />
+        )}
+      </button>
+    )
+  }
 
   const rootRef = useRef<HTMLDivElement>(null)
   // 收起动画的起点：点收起之前把每个头像此刻的位置量下来，收起后按差值补一段 FLIP。
@@ -497,7 +554,7 @@ const ChatSidebar = memo(function ChatSidebar({
         <>
           {/* 收起态：只剩一列头像。样式全部沿用展开时的语义色（surface / border / 主色高亮），
               不另造一套配色；头像组件本身也不变，群头像三种模式与私信头像都原样缩到 36px。 */}
-          <div className="h-14 flex items-center justify-center shrink-0">
+          <div className="top-bar h-14 flex items-center justify-center shrink-0">
             <button
               onClick={onCollapse}
               className="icon-btn-sm text-textMuted hover:text-textPrimary"
@@ -508,35 +565,23 @@ const ChatSidebar = memo(function ChatSidebar({
             </button>
           </div>
           <div className="flex-1 min-h-0 w-full overflow-y-auto overflow-x-hidden scroll-floor flex flex-col items-center gap-1 py-1">
-            {railItems.map((item) => {
-              const key = item.kind === 'group' ? `g-${item.data.id}` : `dm-${item.data.session_id}`
-              const active = item.kind === 'group'
-                ? item.data.id === activeGroupId
-                : item.data.session_id === activeSessionId
-              const unread = item.data.unread_count || 0
-              const mention = item.kind === 'group' ? item.data.has_mention : false
-              const name = item.kind === 'group' ? item.data.name : item.data.partner?.name || ''
+            {railSections.map((section, si) => {
+              const meta = railSectionMeta(section.key)
               return (
-                // ui-standard-ignore: 收起态的头像按钮（方图，无文字）
-                <button
-                  key={key}
-                  data-avatar-key={key}
-                  onClick={() => navigate(item.kind === 'group'
-                    ? `/chat/gm/${item.data.id}`
-                    : `/chat/dm/${item.data.session_id}`)}
-                  title={name}
-                  aria-label={name}
-                  className={'relative shrink-0 rounded-control transition-colors ' + (
-                    active ? 'ring-2 ring-primary-400' : 'hover:bg-elevated'
-                  )}
-                >
-                  {item.kind === 'group'
-                    ? <GroupAvatarGroup g={item.data} />
-                    : <DmAvatar session={item.data} />}
-                  {unread > 0 && (
-                    <span className={'absolute top-0 right-0 w-2 h-2 rounded-full ' + (mention ? 'bg-rose-500' : 'bg-primary-500')} />
-                  )}
-                </button>
+                <Fragment key={section.key}>
+                  {/* 分组线就是折叠开关：收起态没有字可点，那条线本身就是入口 */}
+                  <button
+                    onClick={meta.toggle}
+                    aria-expanded={!meta.collapsed}
+                    title={meta.label}
+                    aria-label={meta.label}
+                    className="w-full flex flex-col items-center gap-0.5 py-1 shrink-0 text-textMuted hover:text-textSecondary transition-colors"
+                  >
+                    {si > 0 && <span className="w-8 h-px bg-border" />}
+                    {meta.collapsed ? <ChevronRight size={10} /> : <ChevronDown size={10} />}
+                  </button>
+                  {!meta.collapsed && section.items.map(renderRailItem)}
+                </Fragment>
               )
             })}
           </div>

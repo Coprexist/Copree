@@ -12,6 +12,13 @@ interface InvitationCardProps {
   isMine?: boolean
 }
 
+/**
+ * 群聊邀请卡片。
+ *
+ * **自己不画壳**——和转发的 channel 卡片同一条规矩：外面那层气泡就是卡片的外框，
+ * 里面再套一层圆角边框就成了「框里套框」（用户看到的就是这个）。
+ * 所以这里只排内容：一行身份（图标 + 谁邀请 + 群名 + 状态），下面是动作。
+ */
 export default function InvitationCard({
   invitationId, groupName, inviterName, message, status,
   onAccept, onReject, isMine,
@@ -20,23 +27,18 @@ export default function InvitationCard({
 
   const isResolved = status !== 'pending'
 
-  // 深色气泡（自己发的）用白字 + 半透明背景
+  // 文字颜色跟着气泡走：自己的消息是深色气泡，对方的浅色
   const txt = isMine ? 'text-white/90' : 'text-textPrimary'
   const txtSec = isMine ? 'text-white/60' : 'text-textSecondary'
-  const cardBg = isMine
-    ? 'bg-white/10 border-white/20'
-    : isResolved
-      ? 'border-border bg-canvas/50'
-      : 'border-mint-400/40 bg-mint-50/30 dark:bg-mint-900/10'
 
   return (
-    <div className={`rounded-card border-2 overflow-hidden transition-all ${cardBg}`}>
-      {/* 头部 */}
-      <div className="flex items-center gap-2 px-4 pt-3 pb-2">
+    <div className="min-w-[220px] max-w-[340px] text-left">
+      {/* 身份行 */}
+      <div className="flex items-center gap-2">
         <div className={`
-          w-8 h-8 rounded-full flex items-center justify-center
+          w-8 h-8 rounded-full flex items-center justify-center shrink-0
           ${isResolved
-            ? 'bg-border text-textMuted'
+            ? isMine ? 'bg-white/15 text-white/70' : 'bg-border text-textMuted'
             : isMine ? 'bg-white/20 text-white' : 'bg-mint-400/20 text-mint-500'}
         `}>
           {status === 'accepted' ? <Check size={16} /> :
@@ -51,7 +53,6 @@ export default function InvitationCard({
             {t('invitation:groupLabel')}：<span className={`${txt} font-medium`}>{groupName}</span>
           </p>
         </div>
-        {/* 状态标签 */}
         {isResolved && (
           <span className={`
             shrink-0 text-xs px-2 py-0.5 rounded-full font-medium
@@ -66,14 +67,12 @@ export default function InvitationCard({
 
       {/* 附言 */}
       {message && (
-        <div className="px-4 pb-1">
-          <p className={`text-xs ${txtSec} italic`}>"{message}"</p>
-        </div>
+        <p className={`mt-1.5 text-xs ${txtSec} italic`}>"{message}"</p>
       )}
 
-      {/* 按钮区（仅 pending） */}
+      {/* 动作：和卡片正文之间一条发丝线，同转发卡片的页脚 */}
       {!isResolved && (
-        <div className="flex gap-2 px-4 pb-3 pt-1">
+        <div className={`mt-2.5 pt-2 flex gap-2 border-t ${isMine ? 'border-white/25' : 'border-border'}`}>
           <button
             onClick={(e) => { e.stopPropagation(); onAccept(invitationId) }}
             className="btn btn-sm btn-success flex-1"
