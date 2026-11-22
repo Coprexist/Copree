@@ -18,6 +18,10 @@ from app.chat import chat_api
 from app.services.memory.memory_service import recall_relevant_memories
 from app.utils.display_name import display_name
 from app.utils.pure.chat_template import ANYWHERE, fit_system_layout
+from app.utils.pure.llm_endpoint import chat_completions_url, is_local_endpoint
+from app.utils.pure.llm_capability import (
+    is_tools_unsupported_error, remember_no_tools, supports_tools,
+)
 from app.utils.pure.llm_usage import normalize_usage
 from app.utils.pure.prompting import (
     resolve_model, build_personality_segment, format_time_shanghai,
@@ -36,7 +40,11 @@ logger = logging.getLogger(__name__)
 # 常量
 # ══════════════════════════════════════════════════════════════
 
-LLM_REQUEST_TIMEOUT_SECONDS = 120.0  # httpx 请求超时
+LLM_REQUEST_TIMEOUT_SECONDS = 120.0  # httpx 请求超时（云端）
+# 本地/内网自建推理的超时。CPU 上跑 7B、prompt 几千 token，一轮两三分钟是常态：
+# 2026-11-22 实测 deepseek-r1:7b 在 CPU 上回一条私信用了 181 秒，120 秒的云端口径
+# 把它判成 ReadTimeout，用户看到的却是"AI 永远不回"。
+LLM_LOCAL_TIMEOUT_SECONDS = 600.0
 LLM_MAX_TOKENS_DEFAULT = 64000     # 默认最大 token 数
 
 
@@ -139,40 +147,71 @@ async def chat_completion(
     from app.services.infrastructure.metrics_collector import metrics
     t0 = _time.monotonic()
 
-    async def _dispatch(msgs: list[dict]):
+    async def _dispatch(msgs: list[dict], tools_now: list[dict] | None):
         """一次实际请求（流式/非流式由调用方决定）。"""
         if stream:
             return await _chat_completion_streaming(
-                msgs, model, api_base_url, api_key, tools,
+                msgs, model, api_base_url, api_key, tools_now,
                 temperature, top_p, presence_penalty, frequency_penalty,
                 max_tokens, response_format, thinking_enabled, user_id,
                 pool_key_id, provider_supports_thinking, on_tool_call,
                 system_layout=system_layout,
             )
         return await _chat_completion_non_streaming(
-            msgs, model, api_base_url, api_key, tools,
+            msgs, model, api_base_url, api_key, tools_now,
             temperature, top_p, presence_penalty, frequency_penalty,
             max_tokens, response_format, thinking_enabled, user_id,
             pool_key_id, provider_supports_thinking,
             system_layout=system_layout,
         )
 
-    try:
-        try:
-            result = await _dispatch(messages)
-        except Exception as e:
-            # 模型不吃图片（纯文本模型收到 image_url 多半 400）→ 剥掉图片重试一次，
-            # 并在消息里明确告诉 AI"你看不到图"，避免它编造图片内容。
-            if not (messages_have_images(messages) and is_vision_unsupported_error(str(e))):
+    # 通道能力降级阶梯：只剥掉"对端明确说不支持"的东西，每剥一层重试一次。
+    # 每一层都是同一个取舍——宁可这一轮少一项能力，也不能整轮没有回复。
+    # 已记过结论的通道（10 分钟内）直接按结论发，省掉那次必然失败的往返。
+    msgs = messages
+    tools_now = tools
+    if tools_now and not supports_tools(api_base_url, model):
+        logger.info(f"🔧 该通道已记为不接受工具调用，本轮不带 tools: {api_base_url} / {model}")
+        tools_now = None
+    marks: list[str] = []
+
+    async def _dispatch_with_degrade() -> dict:
+        nonlocal msgs, tools_now
+        while True:
+            try:
+                return await _dispatch(msgs, tools_now)
+            except Exception as e:
+                text = str(e)
+                # 1) 模型不吃图片（纯文本模型收到 image_url 多半 400）→ 剥掉图片重试，
+                #    并在消息里明确告诉 AI"你看不到图"，避免它编造图片内容。
+                if messages_have_images(msgs) and is_vision_unsupported_error(text):
+                    msgs, removed = strip_image_parts(msgs)
+                    logger.warning(f"🖼️ 当前模型似乎不支持图片，降级为纯文本重试（剥掉 {removed} 张）: {e}")
+                    marks.append("vision")
+                    continue
+                # 2) 模型不吃 tools（本地小模型常见，如 ollama 的 deepseek-r1）→
+                #    去掉工具清单重试。这不是"配置错误"，是本轮请求形状要适配模型能力。
+                if tools_now and is_tools_unsupported_error(text):
+                    tools_now = None
+                    remember_no_tools(api_base_url, model)
+                    logger.warning(
+                        f"🔧 当前模型不接受工具调用，降级为无工具重试"
+                        f"（{api_base_url} / {model}）: {e}"
+                    )
+                    marks.append("tools")
+                    continue
                 raise
-            degraded, removed = strip_image_parts(messages)
-            logger.warning(f"🖼️ 当前模型似乎不支持图片，降级为纯文本重试（剥掉 {removed} 张）: {e}")
-            result = await _dispatch(degraded)
-            result["vision_unsupported"] = True
+
+    try:
+        result = await _dispatch_with_degrade()
     except Exception:
         await metrics.record_llm_call(_time.monotonic() - t0, success=False)
         raise
     await metrics.record_llm_call(_time.monotonic() - t0, success=True)
+    if "vision" in marks:
+        result["vision_unsupported"] = True
+    if "tools" in marks:
+        result["tools_unsupported"] = True
     # AI 调用计数（分状态帧）：情感/记忆衰减的时间尺度
     if agent_id and db is not None:
         try:
@@ -183,9 +222,13 @@ async def chat_completion(
     return result
 
 
+def _request_timeout(api_base_url: str) -> float:
+    """这次请求该等多久：本机/内网自建推理给长超时，云端维持 120 秒。"""
+    return LLM_LOCAL_TIMEOUT_SECONDS if is_local_endpoint(api_base_url) else LLM_REQUEST_TIMEOUT_SECONDS
+
+
 def _build_request_url_and_headers(api_base_url: str, api_key: str | None) -> tuple[str, dict]:
     """构建 LLM API 请求 URL 和 headers（流式/非流式共用）。"""
-    from app.utils.pure.llm_endpoint import chat_completions_url
     url = chat_completions_url(api_base_url)
     headers = {"Content-Type": "application/json"}
     if api_key:
@@ -278,7 +321,7 @@ async def _chat_completion_non_streaming(
         system_layout=system_layout,
     )
 
-    async with httpx.AsyncClient(timeout=LLM_REQUEST_TIMEOUT_SECONDS) as client:
+    async with httpx.AsyncClient(timeout=_request_timeout(api_base_url)) as client:
         response = await client.post(url, json=payload, headers=headers)
 
         if response.status_code != 200:
@@ -354,7 +397,7 @@ async def _chat_completion_streaming(
     tool_call_acc: dict[int, dict] = {}  # index → {id, name, arguments}
     dispatched: set[int] = set()  # 已通过 on_tool_call 分发的 index
 
-    async with httpx.AsyncClient(timeout=LLM_REQUEST_TIMEOUT_SECONDS) as client:
+    async with httpx.AsyncClient(timeout=_request_timeout(api_base_url)) as client:
         async with client.stream("POST", url, json=payload, headers=headers) as response:
             if response.status_code != 200:
                 error_text = (await response.aread()).decode()[:500]

@@ -49,6 +49,22 @@ def test_model_outside_the_channel_falls_back_to_the_channel_default():
     assert resolve_model(_agent(None), provider_info=channel) == "deepseek-flash"
 
 
+def test_profile_model_wins_even_when_the_vendor_list_is_stale():
+    """通道自带的模型是这套配置的一部分，不参与清单过滤。
+
+    2026-11-22：陈屿的配置档选了 qwen3:4b，但厂商行的 options 还是旧的（没有 qwen3:4b），
+    于是 resolve_model 把它换成全局默认 deepseek-flash，发到 ollama → 每轮 404
+    "model 'deepseek-flash' not found"，界面上选的是 qwen3:4b，日志里却是另一个名字。
+    """
+    from app.utils.pure.prompting import resolve_model
+
+    stale = {"models": ["deepseek-r1:7b", "deepseek-r1:14b"], "default_model": "qwen3:4b"}
+    # 配置档选中的模型清单里没有 → 仍然用它（它和 base_url、Key 同属一套配置）
+    assert resolve_model(_agent(None), provider_info=stale) == "qwen3:4b"
+    # AI 自选的是清单外的名字 → 落到配置档的模型（而不是全局默认）
+    assert resolve_model(_agent("grok-4.6"), provider_info=stale) == "qwen3:4b"
+
+
 def test_unknown_channel_does_not_touch_the_choice():
     """通道给不出清单（自建中转没登记）时不约束模型名——否则没登记就用不了"""
     from app.utils.pure.prompting import resolve_model

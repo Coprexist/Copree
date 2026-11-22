@@ -46,6 +46,23 @@ def _targets():
     )
 
 
+def preset_models_for_alignment(presets) -> dict[str, dict]:
+    """把预设表收敛成 align_provider_models 要的 {key: {chat_model, work_model, models}}。
+
+    `work_model` 在 ProviderPreset 里是 NotRequired（有些档只有一个模型），`chat_model`
+    同理。这里必须用 `.get`：直接下标会在启动时抛 KeyError，于是整段"库里的清单
+    对齐到现役预设"永远不执行——管理台看到的模型下拉一直是旧清单（2026-11-22 实测）。
+    """
+    return {
+        p["key"]: {
+            "chat_model": p.get("chat_model"),
+            "work_model": p.get("work_model"),
+            "models": p.get("models") or [],
+        }
+        for p in presets
+    }
+
+
 async def upgrade_provider_config(db: AsyncSession) -> int:
     """供应商配置（system_settings.provider_config 那份 JSON）里的旧模型名同样平升，返回改动处数
 
@@ -70,11 +87,7 @@ async def upgrade_provider_config(db: AsyncSession) -> int:
     # 只看 LLM 预设：语音预设没有 models/chat_model（见 provider_presets.ProviderPreset）
     llm_presets = [p for p in PRESETS.values() if (p.get("kind") or "llm") == "llm"]
     labels = {m["value"]: m["label"] for p in llm_presets for m in p.get("models") or []}
-    presets = {
-        p["key"]: {"chat_model": p["chat_model"], "work_model": p["work_model"],
-                   "models": p.get("models") or []}
-        for p in llm_presets
-    }
+    presets = preset_models_for_alignment(llm_presets)
     new_items, changed = align_provider_models(
         items, presets=presets, aliases=MODEL_ALIASES, labels=labels,
     )

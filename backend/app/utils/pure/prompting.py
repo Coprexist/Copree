@@ -23,7 +23,8 @@ def resolve_model(agent, default_model: str = "deepseek-flash", global_default_m
     """
     解析这一轮实际要发的模型（纯函数）。
 
-    优先级：AI 自选（且这条通道认识它）> 通道默认 > 全局默认 > 传入默认。
+    优先级：AI 自选（且这条通道认识它）> 通道自带（配置档/厂商默认，不校验清单）
+            > 全局默认（校验清单）> 传入默认（校验清单）。
 
     provider_info 是凭证解析顺手带回来的「这一轮真正走的通道」（见 channel_provider_info）：
     池 Key 自己记着能用哪些模型，自带 Key 则来自它 base_url 对应的供应商预设。
@@ -35,7 +36,17 @@ def resolve_model(agent, default_model: str = "deepseek-flash", global_default_m
     own = getattr(agent, "chat_model", None)
     if own and (not allowed or own in allowed):
         return own
-    for candidate in (info.get("default_model"), global_default_model, default_model):
+    # 通道自带的模型（配置档的 primary_model / 厂商默认）**不参与清单过滤**：
+    # 它和 base_url、Key 同属这一套配置，是用户在这一档上显式选中的东西。
+    # 过滤它等于「界面上选上了、请求里却是别的名字」——本地模型场景尤其致命：
+    # 配置档选了 qwen3:4b，但厂商清单是旧的、没有它，于是静默换成 deepseek-flash
+    # 去敲 ollama，每轮 404 而用户只看到 AI 不说话。
+    channel_default = info.get("default_model")
+    if channel_default:
+        if own and channel_default != own:
+            _warn_model_fallback(agent, own, channel_default, allowed)
+        return channel_default
+    for candidate in (global_default_model, default_model):
         if candidate and (not allowed or candidate in allowed):
             _warn_model_fallback(agent, own, candidate, allowed)
             return candidate

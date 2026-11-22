@@ -15,7 +15,9 @@
 """
 from __future__ import annotations
 
+import ipaddress
 import re
+from urllib.parse import urlsplit
 
 _VERSION_TAIL = re.compile(r"/v\d+$")
 # Gemini 的 OpenAI 兼容根是 .../v1beta/openai：本身就是完整根，再补 /v1 会 404
@@ -48,6 +50,40 @@ def chat_completions_url(base_url: str) -> str:
 def models_url(base_url: str) -> str:
     """模型列表端点（连接测试用）——与 chat 同一套 base_url 语义，别再少一个 /v1"""
     return f"{api_root(base_url)}/models"
+
+
+# 自建推理服务常出现的写法：容器网关、宿主机别名、mDNS
+_LOCAL_HOSTS = {
+    "localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]",
+    "host.docker.internal", "gateway.docker.internal", "host.containers.internal",
+}
+
+
+def is_local_endpoint(base_url: str) -> bool:
+    """这个地址是不是本机 / 内网的自建推理服务。纯函数，零 IO。
+
+    用途只有一条：**超时**。云端一轮几秒，本地 CPU 上跑 7B、prompt 几千 token，
+    一轮两三分钟是常态。拿云端的 120 秒去卡它，等于把"正在正常思考"判成故障——
+    用户看到的现象是 AI 永远不回，日志里只有一句空的 ReadTimeout。
+    """
+    raw = (base_url or "").strip()
+    if not raw:
+        return False
+    if "://" not in raw:
+        raw = f"//{raw}"
+    try:
+        host = (urlsplit(raw).hostname or "").lower()
+    except ValueError:
+        return False
+    if not host:
+        return False
+    if host in _LOCAL_HOSTS or host.endswith(".local"):
+        return True
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return bool(addr.is_loopback or addr.is_private or addr.is_link_local)
 
 
 def embeddings_url(base_url: str) -> str:

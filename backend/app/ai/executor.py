@@ -1394,6 +1394,24 @@ async def _tool_call_loop(
                 reminder_max = 1
             else:  # 'every_time'
                 reminder_max = 10
+            # ── 本轮请求没有带工具（模型不接受 function calling）──
+            # 工具根本不在它的可选范围里，"改用工具说"是自相矛盾的指令；而且每提醒一次
+            # 都要把整段上下文重跑一遍——本地 CPU 推理一轮三分钟，白烧两轮还不一定出声。
+            # 文字如实收进账本（_seal 统一认领），与"提醒后仍只说话"同一个出口。
+            if response.get("tools_unsupported") and content and not tool_calls and not _pending_results:
+                _unsent_text = content.strip()
+                logger.info(
+                    f"AI {agent.name}({agent.id}) 通道不带工具（模型不支持 function calling），"
+                    f"文字收进账本不发: {content[:60]}"
+                )
+                await _seal(response.get("reasoning_content") or "")
+                await _save_conversation_log_safe(
+                    db, agent, messages, conversation_type,
+                    group_id, session_id,
+                    has_output=_has_sent_message, model=model, token_usage=total_usage,
+                )
+                return
+
             if content and not tool_calls and not _pending_results:
                 # 记下来：这一轮可能被提醒后改走工具收尾，那句话不能跟着 messages 一起没掉
                 _unsent_text = content.strip()
