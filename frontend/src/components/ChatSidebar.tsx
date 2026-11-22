@@ -1,6 +1,6 @@
 import { memo, useState, useEffect, useRef, useMemo, useCallback, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, BellOff, Menu, UserPlus, Users, Bot, Globe, ShieldAlert, MessageCircle, Inbox, Pin, ChevronDown, ChevronRight, PanelLeftClose } from 'lucide-react'
+import { Plus, BellOff, Menu, UserPlus, Users, Bot, Globe, ShieldAlert, MessageCircle, Inbox, Pin, ChevronDown, ChevronRight, ChevronLeft } from 'lucide-react'
 import { EmptyState, MenuPanel, MenuItem } from './ui'
 import { getStateDotColor, CHAT_REFRESH_EVENT } from '../constants'
 import { formatRelativeTime } from '../utils/time'
@@ -459,7 +459,7 @@ const ChatSidebar = memo(function ChatSidebar({
             title={t('common:collapse')}
             aria-label={t('common:collapse')}
           >
-            <PanelLeftClose size={16} />
+            <ChevronLeft size={16} />
           </button>
         )}
         <div className="relative">

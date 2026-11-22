@@ -10,7 +10,7 @@ import ChatHeader from './shared/ChatHeader'
 import { CHAT_HEADER_INSET } from './shared/chatHeaderInset'
 import ProfileCard from './ProfileCard'
 import SearchOverlay from './SearchOverlay'
-import { Bell, BellOff, UserPlus, Settings, Bot, User, Globe, X, Check, Users, AlertTriangle, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
+import { Bell, BellOff, UserPlus, Settings, Bot, User, Globe, X, Check, Users, AlertTriangle, ChevronLeft, Menu } from 'lucide-react'
 import { useT } from '../i18n/I18nContext'
 import { APP_DATA_READY_EVENT } from './EnterTransition'
 import { useResizableSidebar } from '../hooks/useResizableSidebar'
@@ -153,7 +153,7 @@ export default function ChatArea({ groupId, dmSessionId }: ChatAreaProps) {
               title={t('common:expand')}
               aria-label={t('common:expand')}
             >
-              <PanelLeftOpen size={16} />
+              <Menu size={16} />
             </button>
           </div>
         ) : (

@@ -11,7 +11,7 @@
  */
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowLeft, ArrowDown, Bot, Brain, CheckCircle2, ChevronDown, Circle, ImagePlus, Info, MessageSquare, Plus, RefreshCw, Send, Square, Terminal, XCircle, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
+import { ArrowLeft, ArrowDown, Bot, Brain, CheckCircle2, ChevronDown, Circle, ImagePlus, Info, MessageSquare, Plus, RefreshCw, Send, Square, Terminal, XCircle, ChevronLeft, Menu } from 'lucide-react'
 import { api, fileDownloadUrl, getApiBaseUrl } from '../api/client'
 import { useT } from '../i18n/I18nContext'
 import { useRailCollapsed, RAIL_COLLAPSED_WIDTH as RAIL_W } from '../hooks/useRailCollapsed'
@@ -833,7 +833,7 @@ export default function DshChatPage() {
               title={t('common:expand')}
               aria-label={t('common:expand')}
             >
-              <PanelLeftOpen size={16} />
+              <Menu size={16} />
             </button>
           </div>
         ) : (
@@ -848,7 +848,7 @@ export default function DshChatPage() {
             title={t('common:collapse')}
             aria-label={t('common:collapse')}
           >
-            <PanelLeftClose size={16} />
+            <ChevronLeft size={16} />
           </button>
         </div>
         <div className="flex-1 min-h-0 overflow-y-auto scroll-floor py-1">
