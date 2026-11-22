@@ -105,3 +105,39 @@ async def test_key_only_returns_last4(migrated_db):
         await update_profile(prof["id"], ProfileIn(api_key=""), _me(), db)
         listed = await list_providers("llm", _me(), db)
         assert listed["providers"][0]["profiles"][0]["has_key"] is False
+
+async def test_provider_key_is_saved_and_cleared(migrated_db):
+    """厂商自己的默认 Key 必须真落库。
+
+    两张表的列名不同（厂商 default_api_key_encrypted / 配置档 api_key_encrypted），
+    写错名字不会报错——SQLAlchemy 允许在实例上挂任意属性，只是那一次保存落不了库。
+    表现就是「填了 Key、点保存、重开还是空」（2026-11-22 oxo 报）。
+    """
+    from app.database import async_session
+    from app.routers.user_api_config import (
+        create_provider, list_providers, update_provider, ProviderIn,
+    )
+
+    async with async_session() as db:
+        await _seed(db)
+        created = await create_provider(
+            ProviderIn(kind="llm", name="自建", base_url="https://example.invalid",
+                       api_key="sk-provider-9876"),
+            _me(), db,
+        )
+        assert created["has_key"] is True, "新建厂商时填的 Key 必须落库"
+        assert created["key_last4"] == "9876"
+        assert "sk-provider-9876" not in str(created), "接口不许回明文 Key"
+
+        pid = created["id"]
+        await update_provider(pid, ProviderIn(api_key="sk-new-4321"), _me(), db)
+        provider = (await list_providers("llm", _me(), db))["providers"][0]
+        assert provider["has_key"] is True and provider["key_last4"] == "4321"
+
+        # 不传 api_key = 不改：改个名字不该顺手把 Key 清掉
+        await update_provider(pid, ProviderIn(name="改名"), _me(), db)
+        assert (await list_providers("llm", _me(), db))["providers"][0]["has_key"] is True
+
+        # 空串 = 清空
+        await update_provider(pid, ProviderIn(api_key=""), _me(), db)
+        assert (await list_providers("llm", _me(), db))["providers"][0]["has_key"] is False

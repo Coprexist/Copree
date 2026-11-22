@@ -113,11 +113,18 @@ def _check_kind(kind: str) -> str:
     return kind
 
 
-def _apply_key(model, raw: str | None) -> None:
+# 两张表的 Key 列名不同（厂商 default_api_key_encrypted / 配置档 api_key_encrypted），
+# 所以字段名必须显式传：写错的名字不会报错——SQLAlchemy 允许在实例上挂任意属性，只是
+# 那一次保存永远落不了库。表现就是「填了 Key、点保存、重开还是空」（2026-11-22 oxo 报）。
+PROVIDER_KEY_FIELD = "default_api_key_encrypted"
+PROFILE_KEY_FIELD = "api_key_encrypted"
+
+
+def _apply_key(model, raw: str | None, field: str) -> None:
     """Key 的三态：不传=不改，空串=清空，其它=加密保存"""
     if raw is None:
         return
-    model.api_key_encrypted = encrypt_api_key(raw) if raw.strip() else None
+    setattr(model, field, encrypt_api_key(raw) if raw.strip() else None)
 
 
 # ── 厂商 ──────────────────────────────────────────────────────────────
@@ -177,7 +184,7 @@ async def create_provider(
         system_layout=req.system_layout or (preset.get("system_layout") if preset else None)
         or "anywhere",
     )
-    _apply_key(provider, req.api_key)
+    _apply_key(provider, req.api_key, PROVIDER_KEY_FIELD)
     db.add(provider)
     await db.flush()
     return _provider_dict(provider, [])
@@ -235,7 +242,7 @@ async def update_provider(
                   "thinking_supported", "system_layout", "options"):
         if field in req.model_fields_set and getattr(req, field) is not None:
             setattr(provider, field, getattr(req, field))
-    _apply_key(provider, req.api_key)
+    _apply_key(provider, req.api_key, PROVIDER_KEY_FIELD)
     await db.flush()
     profiles = (await db.execute(
         select(UserApiProfile).where(UserApiProfile.provider_id == provider.id)
@@ -306,7 +313,7 @@ async def create_profile(
         primary_model=req.primary_model,
         secondary_model=req.secondary_model,
     )
-    _apply_key(profile, req.api_key)
+    _apply_key(profile, req.api_key, PROFILE_KEY_FIELD)
     db.add(profile)
     await db.flush()
     # 第一条档自动成为默认档：否则新用户没有默认可用
@@ -330,7 +337,7 @@ async def update_profile(
         profile.primary_model = req.primary_model
     if "secondary_model" in req.model_fields_set:
         profile.secondary_model = req.secondary_model
-    _apply_key(profile, req.api_key)
+    _apply_key(profile, req.api_key, PROFILE_KEY_FIELD)
     await db.flush()
     return _profile_dict(profile)
 
