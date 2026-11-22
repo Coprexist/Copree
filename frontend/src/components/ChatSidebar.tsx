@@ -569,18 +569,20 @@ const ChatSidebar = memo(function ChatSidebar({
               const meta = railSectionMeta(section.key)
               return (
                 <Fragment key={section.key}>
-                  {/* 分组线就是折叠开关：收起态没有字可点，那条线本身就是入口 */}
-                  {/* ui-standard-ignore: 收起态的分组线折叠开关，整条线可点，不是按钮形态 */}
-                  <button
-                    onClick={meta.toggle}
-                    aria-expanded={!meta.collapsed}
-                    title={meta.label}
-                    aria-label={meta.label}
-                    className="w-full flex flex-col items-center gap-0.5 py-1 shrink-0 text-textMuted hover:text-textSecondary transition-colors"
-                  >
-                    {si > 0 && <span className="w-8 h-px bg-border" />}
-                    {meta.collapsed ? <ChevronRight size={10} /> : <ChevronDown size={10} />}
-                  </button>
+                  <div className="w-full shrink-0">
+                    {/* 分组线拉通整栏；线下面一层竖向渐变淡出到栏底色，表示「这一组从这里开始」 */}
+                    {si > 0 && <div className="w-full h-px bg-border" />}
+                    {/* ui-standard-ignore: 收起态的分组线折叠开关，整条线可点，不是按钮形态 */}
+                    <button
+                      onClick={meta.toggle}
+                      aria-expanded={!meta.collapsed}
+                      title={meta.label}
+                      aria-label={meta.label}
+                      className="w-full h-5 flex items-center justify-center bg-gradient-to-b from-border/50 to-transparent text-textMuted hover:text-textSecondary transition-colors"
+                    >
+                      {meta.collapsed ? <ChevronRight size={10} /> : <ChevronDown size={10} />}
+                    </button>
+                  </div>
                   {!meta.collapsed && section.items.map(renderRailItem)}
                 </Fragment>
               )
