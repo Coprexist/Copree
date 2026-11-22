@@ -80,12 +80,10 @@ export default function InvitationCard({
             <Check size={14} />
             {t('invitation:accept')}
           </button>
-          {/* ui-standard-ignore: 邀请卡片内拒绝按钮，底色随卡片明暗切换（isMine），无对应 .btn 变体 */}
+          {/* 和接受按钮同一套 .btn（高度、圆角、字号、间距都从那儿来），只分主次，不另写一套 */}
           <button
             onClick={(e) => { e.stopPropagation(); onReject(invitationId) }}
-            className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5
-              ${isMine ? 'bg-white/10 hover:bg-white/20 text-white/80' : 'bg-canvas hover:bg-elevated text-textSecondary hover:text-textPrimary'}
-              text-sm rounded-control border ${isMine ? 'border-white/20' : 'border-border'} transition-colors`}
+            className="btn btn-sm btn-outline flex-1"
           >
             <X size={14} />
             {t('invitation:reject')}

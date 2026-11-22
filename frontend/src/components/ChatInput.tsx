@@ -177,6 +177,9 @@ const ChatInputFunc = ({ conversationType, conversationId, t, onSend, onSendFile
   const doSend = useCallback(() => {
     onSend(value.trim())
     setValue('')
+    // 发完把「内容撑出来的高度」清掉：高度 = max(单行, 用户拖出来的, contentH)，
+    // 只清 contentH —— 用户自己拉高的那一截要留着，那是他的选择，不是内容的。
+    setContentH(CHAT_INPUT_MIN_H)
   }, [value, onSend])
 
   const handleChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
