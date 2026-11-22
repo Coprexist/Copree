@@ -491,6 +491,8 @@
 
 - 接本地模型不再每轮 500：llama.cpp `--jinja` 直接执行模型自带的 Jinja 模板，Qwen 系对非首位的 system 会 `raise_exception`（辰天实测每轮 500）。现在按对端模板决定 system 摆放——**稳定块**（人格/帧清单/会话定位）合并成头部一条，**动态块**（记忆召回、上一轮交接、上下文读数）就地降级为 user 并在正文前加 `[系统]` 标记，位置不动、缓存断点位置不变；`anywhere` 通道（DeepSeek / OpenAI）行为逐字节不变。
 
+- 修复接入 API 配置档后 AI 全线不回消息：`UserApiProvider.options` 少了 `Column(...)` 包装，ORM 没有映射这一列，运行时读到的是类型对象而不是模型清单，回复链路每轮都在 `provider_info_of` 里抛 `AttributeError`。
+
 ### 🔧 变更
 
 - **评论通知只在需要动手时报**：一次回十条评论时，十条「公开成功」对 AI 没有任何增量信息，

@@ -53,8 +53,11 @@ class UserApiProvider(Base):
         comment="这家的默认 Key（Fernet 加密）：名下配置档没填 Key 时用它；"
                 "**只对这一家有效**，绝不跨厂商回退",
     )
-    options = json_column(),
-    # ↑ [{value, label}]：LLM 是模型清单，语音是音色清单。通用形状换来两边一条代码路径。
+    options = Column(
+        json_column(),
+        comment="[{value, label}]：LLM 是模型清单，语音是音色清单。"
+                "通用形状换来两边一条代码路径",
+    )
     default_primary = Column(String(200), nullable=True,
                              comment="默认主型号：LLM 的聊天模型 / 语音的音色 id")
     default_secondary = Column(String(200), nullable=True,
