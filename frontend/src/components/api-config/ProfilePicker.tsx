@@ -47,12 +47,19 @@ export default function ProfilePicker({
   const { node, providers, presets, reloadProviders, openProfile, openProvider, openKeyPicker } =
     useApiDialogs({ kind, onChanged: () => onChanged?.() })
 
+  /**
+   * 点一条 = 选中；**再点同一条 = 取消**（回到「不绑定配置档」，走 AI 自己的 Key / 全局默认）。
+   *
+   * 取消是 PUT null 而不是删东西：后端 _bind_profile(profile_id=None) 就是把这一列置空，
+   * 配置档本身还留在设置页里，随时能再选回来。
+   */
   const choose = async (profileId: number) => {
     setError('')
+    const next = profileId === selected ? null : profileId
     try {
       await api.put('/agents/' + agentId + '/config',
-        voice ? { voice_profile_id: profileId } : { llm_profile_id: profileId })
-      setSelected(profileId)
+        voice ? { voice_profile_id: next } : { llm_profile_id: next })
+      setSelected(next)
       onChanged?.()
     } catch (e) {
       setError(errorText(e, t('apiConfig:loadFailed')))
