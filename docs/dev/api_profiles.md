@@ -105,6 +105,7 @@ components/api-config/
 - AI 详情：`<ProfilePicker agentId={id} kind="llm|voice" />`，点一行就 `PUT /agents/{id}/config`。
 - 厂商字段**只在 ProviderEditor** 维护，配置档里不再放一份（避免两处漂移）。
 - 内置厂商**点开只预填、保存才落库**（不再"点一下就被加入配置"）。
+- 已绑的那条**再点一次即取消**：`PUT` 传 `null` 把指针清空（`_bind_profile(profile_id=None)`），不是删除配置档。
 
 ## 5. 迁移
 
@@ -117,6 +118,10 @@ components/api-config/
 三条都可重放：`downgrade` 只清指针与迁移出来的档（`name LIKE '%· 迁移配置%' / '%· 迁移语音%'`），
 再 `upgrade` 结果一致。老库 `alembic upgrade head` 一次到位；新库 `create_all + stamp head`。
 
+0125 可重复执行：按「同一用户 + 同根地址」复用已有厂商，按「厂商 + 音色 + 副型号」复用配置档
+（否则每跑一次就多一张 0 档的空壳卡片）。prestart 的迁移集合指纹是**内容哈希**——原先用
+「大小 + mtime」，保存一下文件就会白跑一次 upgrade。
+
 ## 6. 约束与坑（改之前先看）
 
 - **跨厂商永不借 Key / 模型**（见 §2），改回退链时别顺手"复用一下上一层的 Key"。
@@ -125,4 +130,23 @@ components/api-config/
   解析层只读一处所以没有歧义，但确定不再支持手填后应把这几列删掉。
 - **大表单弹窗不要 `backdrop-blur`**：滚动时每帧重算整屏模糊，长表单会卡死。
 - **`Dialog` 必须 portal 到 body**；页面级浮层（宽度拖条等）层级不得超过 `z-modal`。
+- **两张表的 Key 列名不同**：厂商是 `default_api_key_encrypted`，配置档是 `api_key_encrypted`。
+  写入端必须按常量列名赋值——SQLAlchemy 允许在实例上挂任意属性，列名写错既不报错也不落库
+  （表现：填了 Key、点保存、重开还是空）。
+- **ORM 列必须用 `Column(...)` 包**：`options` 漏掉包装时 ORM 根本没映射这一列，运行时读到的是
+  类型对象，回复链路每轮在 `provider_info_of` 里抛 `AttributeError`，AI 全线不回消息。
 - Key 只回末四位，没有"读出明文"的接口。
+
+## 7. 本地推理服务（ollama / vLLM / LM Studio）
+
+这类端点不校验 Key，所以「没 Key 就不发请求」的旧判断在这里是错的（2026-11 真机：配置档选好了、
+Key 留空，worker 直接发「缺少 API Key」并跳过，请求根本没出去）。现在的口径：
+
+- **选了配置档就照常请求**（`credit_source == "profile"`），空 Key 只是不带 `Authorization` 头；
+  真需要 Key 的服务会回 401，那时提示「Key 无效」比「缺少 Key」准确。
+- **超时单独放宽**：`llm._request_timeout()` 按 `is_local_endpoint()` 分流，本地/内网走
+  `LLM_LOCAL_TIMEOUT_SECONDS`（CPU 上跑 7B，一轮两三分钟是常态）。
+- **没有原生函数调用就走文本协议**：`utils/pure/tool_text_protocol.py` 把工具写进 system 前缀、
+  模型在正文里写调用标记。调用标记要等整段输出才解析得出，所以这条路径**强制非流式**。
+- **模型以配置档为准**：档里显式选的 `primary_model` 优先，不被厂商行的模型清单覆盖
+  （旧清单里没有它就会被静默换成全局默认，发到本地服务上每轮 `model not found`）。
