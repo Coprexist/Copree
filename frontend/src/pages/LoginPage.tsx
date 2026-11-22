@@ -266,7 +266,10 @@ export default function LoginPage() {
 
             {/* 高度随内容平滑收放：AutoHeight 量出内容真实高度、写成像素再过渡（height:auto 不能插值）。
                 不用 View Transition——那个只给整块位图做缩放，容器高度会瞬变。 */}
-            <AutoHeight duration={320}>
+            {/* 左右各留 6px：AutoHeight 外层是 overflow-hidden，
+                .field:focus 的 3px 光圈贴着容器边缘会被切平（见该组件头注释「外面要留出内边距」）。
+                -mx 让裁切框外扩、px 把内容收回来，净宽度不变，只多出光圈溢出的余地。 */}
+            <AutoHeight duration={320} className="-mx-1.5 px-1.5">
               {/* 登录方式选择（多方式时显示） */}
               {mode === 'login' && availableMethods.length > 1 && (
                 <div data-flip="method" className="flex gap-1.5 mb-4 flex-wrap">
