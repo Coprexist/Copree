@@ -570,6 +570,7 @@ const ChatSidebar = memo(function ChatSidebar({
               return (
                 <Fragment key={section.key}>
                   {/* 分组线就是折叠开关：收起态没有字可点，那条线本身就是入口 */}
+                  {/* ui-standard-ignore: 收起态的分组线折叠开关，整条线可点，不是按钮形态 */}
                   <button
                     onClick={meta.toggle}
                     aria-expanded={!meta.collapsed}
