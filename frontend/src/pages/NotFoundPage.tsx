@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom'
 import { useT } from '../i18n/I18nContext'
+import { Button } from '../components/ui'
 
 export default function NotFoundPage() {
   const navigate = useNavigate()
@@ -13,12 +14,13 @@ export default function NotFoundPage() {
         <p className="text-sm text-textMuted mb-6 max-w-xs mx-auto leading-relaxed">
           {t('notFound:desc')}
         </p>
-        <button
+        <Button
+          variant="primary"
+          size="md"
           onClick={() => navigate('/')}
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-card bg-primary-500 text-white hover:bg-primary-600 transition-colors text-sm font-medium"
         >
           {t('notFound:backHome')}
-        </button>
+        </Button>
       </div>
     </div>
   )

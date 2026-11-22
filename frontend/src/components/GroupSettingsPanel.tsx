@@ -6,7 +6,7 @@ import { useT } from '../i18n/I18nContext'
 import { getStateDotColor } from '../constants'
 import { X, Bell, Pause, BellOff, LogOut, UserX, Shield, ShieldOff, UserPlus, Volume2, VolumeX, Download, Clock, Globe, Loader2, ArrowLeft, Crown, Pin, PinOff, Image, Camera, Users, CheckCircle2, MessageSquare, RefreshCw } from 'lucide-react'
 import Toggle from './Toggle'
-import { Slider, UnderlineTabs } from './ui'
+import { Button, Slider, UnderlineTabs } from './ui'
 import AvatarPickerModal from './AvatarPickerModal'
 
 // ── 联邦共享状态（v0.2.0: 群主/AI制作者按群控制联邦共享） ──
@@ -692,6 +692,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                 <label className="text-xs font-medium text-textSecondary mb-3 block">{t('groupSettings:groupAvatar')}</label>
                 <div className="grid grid-cols-3 gap-2">
                   {/* default 模式 */}
+                  {/* ui-standard-ignore: 整块可点的卡片（头像模式 tile），不是按钮形态 */}
                   <button
                     onClick={() => { setAvatarMode('default'); saveSettings({ avatar_mode: 'default' }) }}
                     className={`card card-interactive relative p-3 text-center ${
@@ -709,6 +710,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                   </button>
 
                   {/* members 模式 */}
+                  {/* ui-standard-ignore: 整块可点的卡片（头像模式 tile），不是按钮形态 */}
                   <button
                     onClick={() => { setAvatarMode('members'); saveSettings({ avatar_mode: 'members', include_ai_in_avatar: includeAiAvatar }) }}
                     className={`card card-interactive relative p-3 text-center ${
@@ -726,6 +728,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                   </button>
 
                   {/* custom 模式 */}
+                  {/* ui-standard-ignore: 整块可点的卡片（头像模式 tile），不是按钮形态 */}
                   <button
                     onClick={() => setAvatarMode('custom')}
                     className={`card card-interactive relative p-3 text-center ${
@@ -770,7 +773,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                     <button
                       onClick={() => setAvatarPickerOpen(true)}
                       disabled={uploadingAvatar}
-                      className="flex items-center justify-center gap-2 px-4 py-2.5 bg-elevated hover:bg-canvas border border-border border-dashed rounded-control w-full text-sm text-textSecondary hover:text-textPrimary transition-colors disabled:opacity-50"
+                      className="btn btn-md btn-outline w-full gap-2"
                     >
                       <Camera size={16} />
                       {uploadingAvatar ? t('common:uploading') : t('groupSettings:customAvatar')}
@@ -841,7 +844,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                         <button
                           key={d.key}
                           onClick={() => handleSetDnd(d.minutes)}
-                          className="flex items-center justify-center gap-1.5 px-3 py-2.5 bg-elevated hover:bg-primary-500/10 hover:text-primary-400 text-textSecondary border border-border rounded-control text-xs font-medium transition-colors"
+                          className="btn btn-sm btn-outline"
                         >
                           <Clock size={12} />
                           {t(d.key)}
@@ -857,7 +860,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                         min={1}
                         max={10080}
                         onKeyDown={(e) => { if (e.key === 'Enter') handleCustomDnd() }}
-                        className="flex-1 bg-elevated border border-border rounded-control px-3 py-2 text-sm text-textPrimary outline-none focus:border-primary-400 placeholder:text-textMuted"
+                        className="field flex-1 min-w-0"
                       />
                       <button
                         onClick={handleCustomDnd}
@@ -981,6 +984,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                   </div>
 
                   {/* 审批入口：审批权在后端，这里只把人送到申请列表 */}
+                  {/* ui-standard-ignore: 入口行（整行可点），不是按钮形态 */}
                   <button
                     onClick={() => navigate('/list?tab=requests')}
                     className="w-full flex items-center justify-between px-3 py-2 rounded-control bg-elevated hover:bg-canvas text-xs text-textSecondary transition-colors"
@@ -998,7 +1002,9 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
 
               {/* 暂停对话（仅管理员） */}
               {isAdmin && (
-                <button
+                <Button
+                  variant={group?.is_paused ? 'tinted-success' : 'tinted-accent'}
+                  className="w-full"
                   onClick={async () => {
                     setPausing(true)
                     try {
@@ -1006,11 +1012,10 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                       onUpdate({ is_paused: (r as any).is_paused } as Partial<GroupSettings>)
                     } catch (e: any) { setError(e?.detail || "操作失败") } finally { setPausing(false) }
                   }}
-                  className={`w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-control text-sm font-medium transition-colors disabled:opacity-50 ${group?.is_paused ? "bg-mint-400/10 text-mint-400 hover:bg-mint-400/20" : "bg-accent-400/10 text-accent-400 hover:bg-accent-400/20"}`}
                 >
                   {pausing ? <Loader2 size={16} className="animate-spin" /> : <Pause size={16} />}
                   {group?.is_paused ? "恢复对话" : "暂停对话"}
-                </button>
+                </Button>
               )}
 
               <hr className="border-border" />
@@ -1027,7 +1032,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                       setTransferModalOpen(true)
                     }}
                     disabled={members.filter(m => m.role === 'admin' || m.role === 'member').length === 0}
-                    className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-primary-500/10 text-primary-400 rounded-control text-sm font-medium hover:bg-primary-500/20 border border-primary-400/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    className="btn btn-md btn-tinted w-full gap-2"
                   >
                     <Crown size={16} />
                     {t('groupSettings:transferOwner')}
@@ -1042,6 +1047,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                         <p className="text-xs text-textMuted mb-3">{t('groupSettings:transferOwnerHint')}</p>
                         <div className="space-y-1 max-h-48 overflow-y-auto mb-3">
                           {members.filter(m => m.role !== 'owner').map(m => (
+                            /* ui-standard-ignore: 转让目标列表行（整行可点），不是按钮形态 */
                             <button
                               key={`${m.type}:${m.id}`}
                               onClick={() => {
@@ -1062,7 +1068,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                         </div>
                         <button
                           onClick={() => setTransferModalOpen(false)}
-                          className="w-full px-3 py-2 text-xs text-textMuted hover:text-textSecondary rounded-control hover:bg-elevated transition-colors"
+                          className="btn btn-sm btn-ghost w-full"
                         >
                           {t('common:cancel')}
                         </button>
@@ -1076,7 +1082,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
               <button
                 onClick={handleLeave}
                 disabled={isOwner && !group.name.startsWith('DM:')}
-                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-rose-400/10 text-rose-400 rounded-control text-sm font-medium hover:bg-rose-400/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="btn btn-md btn-tinted-danger w-full gap-2"
                 title={isOwner && !group.name.startsWith('DM:') ? t('groupSettings:ownerLeaveHint') : t('groupSettings:leaveGroup')}
               >
                 <LogOut size={16} />
@@ -1087,7 +1093,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
               {isOwner && (
                 <button
                   onClick={handleDisband}
-                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-rose-500/10 text-rose-500 rounded-control text-sm font-medium hover:bg-rose-500/20 transition-colors border border-rose-500/20"
+                  className="btn btn-md btn-tinted-danger w-full gap-2"
                 >
                   {t('groupSettings:disbandGroup')}
                 </button>
@@ -1108,7 +1114,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                     const event = new CustomEvent('open-invite-modal')
                     window.dispatchEvent(event)
                   }}
-                  className="flex items-center gap-1 px-2 py-1 text-xs text-primary-400 hover:bg-primary-400/10 rounded-control transition-colors"
+                  className="btn btn-xs btn-tinted"
                 >
                   <UserPlus size={14} />
                   {t('groupSettings:invite')}
@@ -1147,7 +1153,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                         {isOwner && (
                           <button
                             onClick={() => handleRoleChange(m, m.role === 'admin' ? 'member' : 'admin')}
-                            className="p-1 rounded hover:bg-elevated text-textMuted hover:text-primary-400 transition-colors"
+                            className="icon-btn icon-btn-sm"
                             title={m.role === 'admin' ? t('groupSettings:demoteToMember') : t('groupSettings:promoteToAdmin')}
                           >
                             {m.role === 'admin' ? <ShieldOff size={14} /> : <Shield size={14} />}
@@ -1155,7 +1161,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                         )}
                         <button
                           onClick={() => handleKick(m)}
-                          className="p-1 rounded hover:bg-rose-400/10 text-textMuted hover:text-rose-400 transition-colors"
+                          className="icon-btn icon-btn-sm"
                           title={t('groupSettings:kick')}
                         >
                           <UserX size={14} />
@@ -1244,7 +1250,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                       speak_limit_window_seconds: speakWindow,
                     })}
                     disabled={saving}
-                    className="w-full px-4 py-2.5 bg-primary-500 text-white rounded-control text-sm font-medium hover:bg-primary-600 disabled:opacity-50 transition-colors"
+                    className="btn btn-md btn-primary w-full"
                   >
                     {saving ? t('common:saving') : t('groupSettings:saveSpeakLimit')}
                   </button>
@@ -1267,11 +1273,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                     <button
                       key={f.key}
                       onClick={() => setExportFormat(f.key)}
-                      className={`flex-1 py-3 px-2 rounded-card border text-center transition-colors ${
-                        exportFormat === f.key
-                          ? 'border-primary-400 bg-primary-500/10 text-primary-600 dark:text-primary-300'
-                          : 'border-border bg-canvas text-textSecondary hover:bg-elevated'
-                      }`}
+                      className={`card card-interactive card-pad flex-1 text-center ${exportFormat === f.key ? 'is-active' : ''}`}
                     >
                       <div className="text-sm font-medium">{f.labelKey}</div>
                       <div className="text-3xs text-textMuted">{t(f.descKey)}</div>
@@ -1287,14 +1289,14 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
                     type="date"
                     value={dateFrom}
                     onChange={e => setDateFrom(e.target.value)}
-                    className="flex-1 bg-elevated border border-border rounded-control px-3 py-2 text-sm text-textPrimary"
+                    className="field flex-1 min-w-0"
                   />
                   <span className="text-textMuted text-xs">{t('common:to')}</span>
                   <input
                     type="date"
                     value={dateTo}
                     onChange={e => setDateTo(e.target.value)}
-                    className="flex-1 bg-elevated border border-border rounded-control px-3 py-2 text-sm text-textPrimary"
+                    className="field flex-1 min-w-0"
                   />
                 </div>
               </div>

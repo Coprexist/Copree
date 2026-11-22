@@ -4,7 +4,7 @@ import { useT } from '../../../i18n/I18nContext'
 import { getApiKeyUrl } from '../../../utils/providers'
 import { Key, Plus, Trash2, ToggleLeft, ToggleRight, Loader2, BarChart3, X } from 'lucide-react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts'
-import { Dialog, SecretInput } from '../../../components/ui'
+import { Button, Dialog, IconButton, SecretInput, Select } from '../../../components/ui'
 
 interface PoolKey {
   id: number
@@ -123,12 +123,9 @@ export default function ApiKeyPoolTab() {
           <Key size={32} className="mx-auto mb-3 text-textMuted" />
           <p className="text-sm text-textSecondary">{t('admin:noApiKeys')}</p>
           <p className="text-xs text-textMuted mt-1">{t('admin:noKeysDesc')}</p>
-          <button
-            onClick={() => setShowAdd(true)}
-            className="mt-4 px-4 py-2 bg-primary-500 text-white rounded-card hover:bg-primary-600 text-sm font-medium transition-colors"
-          >
+          <Button className="mt-4" onClick={() => setShowAdd(true)}>
             {t('admin:addFirstKey')}
-          </button>
+          </Button>
         </div>
       ) : (
  <div className="card overflow-x-auto">
@@ -169,51 +166,49 @@ export default function ApiKeyPoolTab() {
                     {k.concurrent_limit ?? t('admin:keyConcurrentDefault')}
                   </td>
                   <td className="py-2.5 px-3 text-center">
-                    <button
-                      onClick={() => handleToggle(k.id, k.is_active)}
-                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-control text-xs font-medium transition-colors ${
-                        k.is_active
-                          ? 'bg-mint-400/10 text-mint-400'
-                          : 'bg-rose-400/10 text-rose-400'
-                      }`}
+                    <Button
+                      size="xs"
+                      variant={k.is_active ? 'tinted-success' : 'tinted-danger'}
+                      icon={k.is_active ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}
                       title={k.is_active ? t('admin:clickToDisable') : t('admin:clickToEnable')}
+                      onClick={() => handleToggle(k.id, k.is_active)}
                     >
-                      {k.is_active ? <ToggleRight size={14} /> : <ToggleLeft size={14} />}
                       {k.is_active ? t('common:enabled') : t('common:disabled')}
-                    </button>
+                    </Button>
                   </td>
                   <td className="py-2.5 px-3 text-center">
-                    <button
+                    <IconButton
+                      icon={<BarChart3 size={14} />}
+                      label={t('admin:viewKeyStats')}
+                      size="sm"
                       onClick={() => setStatsKeyId(k.id)}
-                      className="p-1.5 rounded-control hover:bg-primary-500/10 text-textMuted hover:text-primary-400 transition-colors"
-                      title={t('admin:viewKeyStats')}
-                    >
-                      <BarChart3 size={14} />
-                    </button>
+                    />
                   </td>
                   <td className="py-2.5 px-3 text-right whitespace-nowrap">
-                    <button
-                      onClick={() => handleTest(k.id)}
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      className="mr-1"
                       disabled={testingId === k.id}
-                      className="px-2 py-1 mr-1 rounded-control text-xs text-textMuted hover:text-mint-400 hover:bg-mint-400/10 transition-colors disabled:opacity-50"
-                      title={t('admin:testKey')}
+                      onClick={() => handleTest(k.id)}
                     >
                       {testingId === k.id ? t('admin:testing') : t('admin:testKey')}
-                    </button>
-                    <button
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      className="mr-1"
                       onClick={() => setEditingKey(k)}
-                      className="px-2 py-1 mr-1 rounded-control text-xs text-textMuted hover:text-primary-400 hover:bg-primary-500/10 transition-colors"
-                      title={t('admin:editKey')}
                     >
                       {t('admin:editKey')}
-                    </button>
-                    <button
+                    </Button>
+                    <IconButton
+                      icon={<Trash2 size={14} />}
+                      label={t('common:delete')}
+                      size="sm"
+                      tone="danger"
                       onClick={() => handleDelete(k.id, k.name)}
-                      className="p-1.5 rounded-control hover:bg-rose-400/10 text-textMuted hover:text-rose-400 transition-colors"
-                      title={t('common:delete')}
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                    />
                   </td>
                 </tr>
               ))}
@@ -302,7 +297,7 @@ function AddPoolKeyModal({ onClose, onSaved, editing }: {
             <input
               type="text" value={name} onChange={(e) => setName(e.target.value)}
               placeholder={t('admin:keyNamePlaceholder')}
-              className="w-full px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+              className="field"
               autoFocus
             />
           </div>
@@ -311,7 +306,7 @@ function AddPoolKeyModal({ onClose, onSaved, editing }: {
             <input
               type="text" value={apiBaseUrl} onChange={(e) => setApiBaseUrl(e.target.value)}
               placeholder={t('admin:keyApiUrlPlaceholder')}
-              className="w-full px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+              className="field"
             />
           </div>
           <div>
@@ -319,7 +314,7 @@ function AddPoolKeyModal({ onClose, onSaved, editing }: {
             <input
               type="text" value={modelsText} onChange={(e) => setModelsText(e.target.value)}
               placeholder={t('admin:keyModelsPlaceholder')}
-              className="w-full px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+              className="field"
             />
             <p className="text-3xs text-textMuted mt-1">{t('admin:keyModelsHint')}</p>
           </div>
@@ -357,7 +352,7 @@ function AddPoolKeyModal({ onClose, onSaved, editing }: {
             <input
               type="number" value={priority} onChange={(e) => setPriority(parseInt(e.target.value) || 0)}
               min={0} max={100}
-              className="w-24 px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+              className="field field-sm w-24"
             />
           </div>
           <div>
@@ -365,7 +360,7 @@ function AddPoolKeyModal({ onClose, onSaved, editing }: {
             <input
               type="number" value={concurrentLimit ?? ''} onChange={(e) => setConcurrentLimit(e.target.value ? parseInt(e.target.value) : null)}
               min={1} placeholder={t('admin:keyConcurrentLimitPlaceholder')}
-              className="w-28 px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+              className="field field-sm w-28"
             />
           </div>
         </div>
@@ -422,15 +417,16 @@ function KeyStatsModal({ keyId, onClose }: { keyId: number; onClose: () => void 
             {t('admin:keyStatsTitle').replace('{name}', stats?.key_name || `#${keyId}`)}
           </h3>
           <div className="flex items-center gap-2">
-            <select
-              value={days}
+            <Select
+              fieldSize="sm"
+              className="field-inline"
+              value={String(days)}
               onChange={(e) => handleDaysChange(parseInt(e.target.value))}
-              className="field field-sm field-inline"
-            >
-              <option value={7}>{t('admin:lastNDays').replace('{n}', '7')}</option>
-              <option value={30}>{t('admin:lastNDays').replace('{n}', '30')}</option>
-              <option value={90}>{t('admin:lastNDays').replace('{n}', '90')}</option>
-            </select>
+              options={[7, 30, 90].map((n) => ({
+                value: String(n),
+                label: t('admin:lastNDays').replace('{n}', String(n)),
+              }))}
+            />
             <button onClick={onClose}
               className="icon-btn-sm text-textMuted">
               <X size={18} />

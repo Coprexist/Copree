@@ -32,8 +32,9 @@ export function AttachmentChips({ items, onRemove, errorText = '上传失败' }:
           <span className="text-textMuted text-3xs shrink-0">{formatFileSize(att.size)}</span>
           <button
             onClick={() => onRemove(att.id)}
-            className="shrink-0 p-0.5 rounded text-textMuted hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+            className="icon-btn icon-btn-xs shrink-0"
             title="移除"
+            aria-label="移除"
           ><X size={12} /></button>
         </div>
       ))}

@@ -4,7 +4,7 @@ import { api } from '../../../api/client'
 import { invalidateEmojiPacks } from '../../../utils/emojiPacks'
 import { useT } from '../../../i18n/I18nContext'
 import { useAuth } from '../../../context/AuthContext'
-import { Button, Dialog, EmptyState, Input, Select, confirmAsync } from '../../../components/ui'
+import { Button, Dialog, EmptyState, IconButton, Input, Select, confirmAsync } from '../../../components/ui'
 import { CATEGORY_ICON, CATEGORY_LABEL_KEY, PLUGIN_CATEGORIES } from '../../../utils/pluginCategories'
 import { formatFileSize } from '../../../utils/format'
 
@@ -250,13 +250,14 @@ export default function PluginMarketSection() {
                       {t('tool:store.uninstall')}
                     </Button>
                   )}
-                  <button
-                      onClick={() => removePackage(pkg)}
-                      className="ml-auto p-1.5 rounded-control text-textMuted hover:text-rose-400 transition-colors"
-                      title={t('tool:store.deletePackage')}
-                  >
-                    <Trash2 size={14} />
-                  </button>
+                  <IconButton
+                    className="ml-auto"
+                    icon={<Trash2 size={14} />}
+                    label={t('tool:store.deletePackage')}
+                    size="sm"
+                    tone="danger"
+                    onClick={() => removePackage(pkg)}
+                  />
                 </div>
               </div>
             )

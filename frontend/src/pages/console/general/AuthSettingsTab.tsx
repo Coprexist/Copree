@@ -3,7 +3,7 @@ import { api } from '../../../api/client'
 import { useT } from '../../../i18n/I18nContext'
 import { Mail, Shield, CheckCircle, XCircle, Loader2, Plus, Trash2, ChevronUp, ChevronDown, X } from 'lucide-react'
 import ProviderPresetSelector from '../../../components/ProviderPresetSelector'
-import { Dialog, SecretInput } from '../../../components/ui'
+import { Badge, Button, Dialog, IconButton, INSET_CARD, SecretInput } from '../../../components/ui'
 
 interface SmtpConfigItem {
   host: string
@@ -297,13 +297,9 @@ export default function AuthSettingsTab() {
             <Mail size={16} className="text-primary-400" />
             {t('admin:smtpConfig')}
           </h3>
-          <button
-            onClick={addConfig}
-            className="btn btn-md btn-outline gap-1"
-          >
-            <Plus size={14} />
+          <Button variant="outline" icon={<Plus size={14} />} onClick={addConfig}>
             {t('admin:smtpAdd')}
-          </button>
+          </Button>
         </div>
 
         <div className="space-y-3">
@@ -326,89 +322,88 @@ export default function AuthSettingsTab() {
                     type="text"
                     value={cfg.host}
                     onChange={e => updateConfig(index, { host: e.target.value })}
-                    className="flex-1 min-w-0 px-2 py-1 text-xs rounded border border-border bg-canvas text-textPrimary focus:outline-none focus:ring-1 focus:ring-primary-500/50"
+                    className="field field-sm flex-1 min-w-0"
                     placeholder="smtp.example.com"
                   />
                   {/* 启用/停用 */}
                   <button
                     onClick={() => updateConfig(index, { is_active: !cfg.is_active })}
-                    className={`px-2 py-0.5 text-3xs rounded-full font-medium transition-colors ${
-                      cfg.is_active
-                        ? 'bg-mint-500/10 text-mint-400 border border-mint-500/20'
-                        : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
-                    }`}
+                    className="shrink-0"
                   >
-                    {cfg.is_active ? t('admin:smtpActive') : t('admin:smtpInactive')}
+                    <Badge tone={cfg.is_active ? 'mint' : 'rose'}>
+                      {cfg.is_active ? t('admin:smtpActive') : t('admin:smtpInactive')}
+                    </Badge>
                   </button>
                   {/* 上移/下移 */}
-                  <div className="flex gap-0.5">
-                    <button
+                  <div className="flex gap-0.5 shrink-0">
+                    <IconButton
+                      icon={<ChevronUp size={14} />}
+                      label={t('admin:smtpMoveUp')}
+                      size="sm"
                       onClick={() => moveConfig(index, -1)}
                       disabled={index === 0}
-                      className="p-0.5 rounded text-textMuted hover:text-textPrimary disabled:opacity-20 transition-colors"
-                    >
-                      <ChevronUp size={14} />
-                    </button>
-                    <button
+                    />
+                    <IconButton
+                      icon={<ChevronDown size={14} />}
+                      label={t('admin:smtpMoveDown')}
+                      size="sm"
                       onClick={() => moveConfig(index, 1)}
                       disabled={index === smtpConfigs.length - 1}
-                      className="p-0.5 rounded text-textMuted hover:text-textPrimary disabled:opacity-20 transition-colors"
-                    >
-                      <ChevronDown size={14} />
-                    </button>
+                    />
                   </div>
                   {/* 删除 */}
-                  <button
+                  <IconButton
+                    icon={<Trash2 size={14} />}
+                    label={t('admin:smtpDelete')}
+                    size="sm"
+                    tone="danger"
                     onClick={() => removeConfig(index)}
                     disabled={smtpConfigs.length <= 1}
-                    className="p-1 rounded text-textMuted hover:text-rose-400 disabled:opacity-20 transition-colors"
-                    title={t('admin:smtpDelete')}
-                  >
-                    <Trash2 size={14} />
-                  </button>
+                  />
                 </div>
 
                 {/* 表单字段 */}
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   <div>
-                    <label className="block text-3xs text-textMuted mb-0.5">{t('admin:smtpPort')}</label>
+                    <label className="block text-xs text-textSecondary mb-1">{t('admin:smtpPort')}</label>
                     <input
                       type="number" value={cfg.port}
                       onChange={e => updateConfig(index, { port: parseInt(e.target.value) || 587 })}
-                      className="w-full px-2 py-1.5 text-xs rounded border border-border bg-canvas text-textPrimary focus:outline-none focus:ring-1 focus:ring-primary-500/50"
+                      className="field field-sm"
                     />
                   </div>
                   <div>
-                    <label className="block text-3xs text-textMuted mb-0.5">{t('admin:smtpUsername')}</label>
+                    <label className="block text-xs text-textSecondary mb-1">{t('admin:smtpUsername')}</label>
                     <input
                       type="text" value={cfg.username}
                       onChange={e => updateConfig(index, { username: e.target.value })}
-                      className="w-full px-2 py-1.5 text-xs rounded border border-border bg-canvas text-textPrimary focus:outline-none focus:ring-1 focus:ring-primary-500/50"
+                      className="field field-sm"
                     />
                   </div>
                   <div>
-                    <label className="block text-3xs text-textMuted mb-0.5">{t('admin:smtpPassword')}</label>
+                    <label className="block text-xs text-textSecondary mb-1">{t('admin:smtpPassword')}</label>
                     <SecretInput value={cfg.password}
+                      fieldSize="sm"
                       onChange={e => updateConfig(index, { password: e.target.value })}
                       wrapperClassName="w-full"
                       placeholder={cfg.has_password ? t('admin:smtpPasswordPlaceholder') : ''}
                     />
                   </div>
                   <div>
-                    <label className="block text-3xs text-textMuted mb-0.5">{t('admin:smtpFromEmail')}</label>
+                    <label className="block text-xs text-textSecondary mb-1">{t('admin:smtpFromEmail')}</label>
                     <input
                       type="email" value={cfg.from_email}
                       onChange={e => updateConfig(index, { from_email: e.target.value })}
-                      className="w-full px-2 py-1.5 text-xs rounded border border-border bg-canvas text-textPrimary focus:outline-none focus:ring-1 focus:ring-primary-500/50"
+                      className="field field-sm"
                       placeholder="noreply@example.com"
                     />
                   </div>
                   <div>
-                    <label className="block text-3xs text-textMuted mb-0.5">{t('admin:smtpFromName')}</label>
+                    <label className="block text-xs text-textSecondary mb-1">{t('admin:smtpFromName')}</label>
                     <input
                       type="text" value={cfg.from_name}
                       onChange={e => updateConfig(index, { from_name: e.target.value })}
-                      className="w-full px-2 py-1.5 text-xs rounded border border-border bg-canvas text-textPrimary focus:outline-none focus:ring-1 focus:ring-primary-500/50"
+                      className="field field-sm"
                     />
                   </div>
                   <div className="flex items-end pb-1">
@@ -425,13 +420,15 @@ export default function AuthSettingsTab() {
 
                 {/* 测试结果 + 按钮 */}
                 <div className="flex items-center gap-2 mt-3">
-                  <button
+                  <Button
+                    variant="outline"
+                    size="sm"
                     onClick={() => handleTestSmtp(index)}
-                    disabled={!cfg.host || !cfg.username || isTesting}
-                    className="px-3 py-1.5 text-xs rounded-control border border-border text-textSecondary hover:text-textPrimary hover:bg-elevated disabled:opacity-30 transition-colors"
+                    disabled={!cfg.host || !cfg.username}
+                    loading={isTesting}
                   >
                     {isTesting ? t('admin:smtpTesting') : t('admin:smtpTest')}
-                  </button>
+                  </Button>
                   {testResult && (
                     <span className={`text-xs flex items-center gap-1 ${
                       testResult.ok ? 'text-mint-400' : 'text-rose-400'
@@ -448,13 +445,14 @@ export default function AuthSettingsTab() {
 
         <div className="flex justify-between items-center mt-4">
           <p className="text-3xs text-textMuted">{t('admin:smtpPriority')}</p>
-          <button
+          <Button
+            size="sm"
             onClick={handleSaveSmtp}
-            disabled={smtpSaving || smtpConfigs.length < 1}
-            className="btn btn-md btn-primary"
+            disabled={smtpConfigs.length < 1}
+            loading={smtpSaving}
           >
             {smtpSaving ? t('common:saving') : t('common:save')}
-          </button>
+          </Button>
         </div>
       </section>
 
@@ -474,8 +472,11 @@ export default function AuthSettingsTab() {
             {/* 预设选择 */}
             <div className="flex gap-2 mb-4">
               {(['gradient', 'simple', 'custom'] as const).map(p => (
-                <button
+                <Button
                   key={p}
+                  variant="outline"
+                  size="sm"
+                  className={`flex-1 ${templatePreset === p ? 'is-active' : ''}`}
                   onClick={async () => {
                     if (p === templatePreset) return
                     try {
@@ -483,16 +484,11 @@ export default function AuthSettingsTab() {
                       await loadTemplates()
                     } catch { /* */ }
                   }}
-                  className={`flex-1 py-2 text-xs rounded-control font-medium border-2 transition-all ${
-                    templatePreset === p
-                      ? 'border-primary-400 bg-primary-500/10 text-primary-500 shadow-sm'
-                      : 'border-border bg-canvas text-textMuted hover:text-textSecondary hover:border-borderHover'
-                  }`}
                 >
                   {p === 'gradient' ? t('admin:emailPresetGradient') :
                    p === 'simple' ? t('admin:emailPresetSimple') :
                    t('admin:emailPresetCustom')}
-                </button>
+                </Button>
               ))}
             </div>
 
@@ -502,34 +498,30 @@ export default function AuthSettingsTab() {
                 {/* 语言 Tab */}
                 <div className="flex gap-1 mb-3">
                   {LANGS.map(l => (
-                    <button
+                    <Button
                       key={l.key}
+                      variant="ghost"
+                      size="xs"
+                      className={templateLang === l.key ? 'is-active' : ''}
                       onClick={() => setTemplateLang(l.key)}
-                      className={`px-3 py-1 text-xs rounded-control font-medium transition-colors ${
-                        templateLang === l.key
-                          ? 'bg-primary-500 text-white'
-                          : 'bg-canvas border border-border text-textMuted hover:text-textSecondary'
-                      }`}
                     >
                       {l.label}
-                    </button>
+                    </Button>
                   ))}
                 </div>
 
                 {/* 用途 Tab */}
                 <div className="flex gap-1 mb-4">
                   {PURPOSES.map(p => (
-                    <button
+                    <Button
                       key={p.key}
+                      variant="ghost"
+                      size="xs"
+                      className={templatePurpose === p.key ? 'is-active' : ''}
                       onClick={() => setTemplatePurpose(p.key)}
-                      className={`px-3 py-1 text-xs rounded-control font-medium transition-colors ${
-                        templatePurpose === p.key
-                          ? 'bg-primary-500/10 border border-primary-500/30 text-primary-500'
-                          : 'bg-canvas border border-border text-textMuted hover:text-textSecondary'
-                      }`}
                     >
                       {t(p.labelKey)}
-                    </button>
+                    </Button>
                   ))}
                 </div>
 
@@ -540,7 +532,7 @@ export default function AuthSettingsTab() {
                     type="text"
                     value={editSubject}
                     onChange={e => setEditSubject(e.target.value)}
-                    className="w-full px-3 py-2 text-sm rounded-control border border-border bg-canvas text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                    className="field"
                   />
                 </div>
 
@@ -551,30 +543,23 @@ export default function AuthSettingsTab() {
                     value={editBody}
                     onChange={e => setEditBody(e.target.value)}
                     rows={10}
-                    className="w-full px-3 py-2 text-xs font-mono rounded-control border border-border bg-canvas text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50 resize-y"
+                    className="field font-mono"
                   />
                 </div>
 
                 {/* 变量提示 */}
-                <p className="text-3xs text-textMuted mb-4 bg-canvas rounded-control px-3 py-2 border border-border/50">
+                <p className={`text-3xs text-textMuted mb-4 px-3 py-2 ${INSET_CARD}`}>
                   {t('admin:emailTemplateVarHint')}
                 </p>
 
                 {/* 按钮 */}
-                <div className="flex gap-2">
-                  <button
-                    onClick={handleResetTemplates}
-                    className="btn btn-md btn-outline hover:text-rose-400"
-                  >
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" size="sm" onClick={handleResetTemplates}>
                     {t('admin:emailTemplateResetAll')}
-                  </button>
-                  <button
-                    onClick={handleSaveTemplates}
-                    disabled={tplSaving}
-                    className="btn btn-md btn-primary"
-                  >
+                  </Button>
+                  <Button size="sm" onClick={handleSaveTemplates} loading={tplSaving}>
                     {tplSaving ? t('common:saving') : t('admin:emailTemplatesSave')}
-                  </button>
+                  </Button>
                 </div>
               </>
             ) : (
@@ -591,12 +576,9 @@ export default function AuthSettingsTab() {
                 <p className="text-xs text-textMuted mb-3">
                   {t('admin:emailPresetHint')}
                 </p>
-                <button
-                  onClick={() => setShowPreview(true)}
-                  className="text-xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 underline underline-offset-2"
-                >
+                <Button variant="link" size="sm" onClick={() => setShowPreview(true)}>
                   {t('admin:emailTemplateViewPreview')}
-                </button>
+                </Button>
               </div>
             )}
           </>
@@ -614,40 +596,34 @@ export default function AuthSettingsTab() {
               <h3 className="text-sm font-semibold text-textPrimary">
                 {t('admin:emailTemplateViewPreview')}
               </h3>
-              <button onClick={() => setShowPreview(false)} className="p-1 rounded-control text-textMuted hover:text-textPrimary hover:bg-elevated transition-colors">
-                <X size={16} />
-              </button>
+              <IconButton icon={<X size={16} />} label={t('common:close')} onClick={() => setShowPreview(false)} />
             </div>
             {/* 语言 Tab */}
             <div className="flex gap-2 px-5 pt-4 pb-2 shrink-0">
               {LANGS.map(l => (
-                <button
+                <Button
                   key={l.key}
+                  variant="ghost"
+                  size="xs"
+                  className={previewLang === l.key ? 'is-active' : ''}
                   onClick={() => setPreviewLang(l.key)}
-                  className={`px-3 py-1 text-xs rounded-control font-medium transition-colors ${
-                    previewLang === l.key
-                      ? 'bg-primary-500 text-white'
-                      : 'bg-canvas border border-border text-textMuted hover:text-textSecondary'
-                  }`}
                 >
                   {l.label}
-                </button>
+                </Button>
               ))}
             </div>
             {/* 用途 Tab */}
             <div className="flex gap-2 px-5 pb-2 shrink-0">
               {PURPOSES.map(p => (
-                <button
+                <Button
                   key={p.key}
+                  variant="ghost"
+                  size="xs"
+                  className={previewPurpose === p.key ? 'is-active' : ''}
                   onClick={() => setPreviewPurpose(p.key)}
-                  className={`px-3 py-1 text-xs rounded-control font-medium transition-colors ${
-                    previewPurpose === p.key
-                      ? 'bg-primary-500 text-white'
-                      : 'bg-canvas border border-border text-textMuted hover:text-textSecondary'
-                  }`}
                 >
                   {t(p.labelKey)}
-                </button>
+                </Button>
               ))}
             </div>
             {/* 预览内容 */}
@@ -710,13 +686,16 @@ export default function AuthSettingsTab() {
           </div>
         </div>
 
-        <button
-          onClick={handleSaveAuth}
-          disabled={authSaving || providers.length < 1}
-          className="btn btn-md btn-primary mt-3"
-        >
-          {authSaving ? t('common:saving') : t('common:save')}
-        </button>
+        <div className="flex justify-end mt-3">
+          <Button
+            size="sm"
+            onClick={handleSaveAuth}
+            disabled={authSaving || providers.length < 1}
+            loading={authSaving}
+          >
+            {authSaving ? t('common:saving') : t('common:save')}
+          </Button>
+        </div>
       </section>
     </div>
   )

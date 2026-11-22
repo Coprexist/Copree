@@ -53,6 +53,7 @@ export default function SubOptionModal({
         </p>
         <div className="space-y-3">
           {subOptions.map(sub => (
+            // ui-standard-ignore: 整块可点的子选项卡片（图标+标题+说明），不是按钮形态
             <button
               key={sub.id}
               onClick={() => onSelect(sub.id)}

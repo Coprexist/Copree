@@ -453,6 +453,7 @@ const MessageBubble = memo(function MessageBubble({
                     />
                 )
                 return (
+                  // ui-standard-ignore: 气泡内文件胶囊（配色随气泡明暗 isMine 切换），不是按钮形态
                   <button key={fid} onClick={() => setPreviewFile({ file_id: fid, name: fname, size: fsize, mime_type: fmime })}
                     className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-control text-xs transition-colors ${isMine ? 'bg-white/10 hover:bg-white/20 text-white/90' : 'bg-canvas hover:bg-elevated text-textSecondary hover:text-textPrimary border border-border'}`}
                     title={`${fname} (${formatFileSize(fsize)})`}>

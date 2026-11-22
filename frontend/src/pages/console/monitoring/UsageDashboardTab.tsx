@@ -274,21 +274,12 @@ export default function UsageDashboardTab() {
       />
 
       {/* 日期选择：两个版面共用 */}
-      <div className="flex gap-2">
-        {[7, 30, 60, 90].map(d => (
-          <button
-            key={d}
-            onClick={() => setDays(d)}
-            className={`px-4 py-2 rounded-card text-xs font-medium transition-colors ${
-              days === d
-                ? 'bg-primary-500/15 text-primary-600 dark:text-primary-300 border border-primary-400/30'
-                : 'bg-surface border border-border text-textSecondary hover:bg-elevated'
-            }`}
-          >
-            {d} {t('admin:daysSuffix')}
-          </button>
-        ))}
-      </div>
+      <UnderlineTabs
+        size="sm"
+        items={[7, 30, 60, 90].map(d => ({ key: String(d), label: `${d} ${t('admin:daysSuffix')}` }))}
+        value={String(days)}
+        onChange={k => setDays(Number(k))}
+      />
 
       {loading ? (
         <div className="flex justify-center py-16"><Loader2 className="animate-spin" size={28} /></div>
@@ -403,6 +394,7 @@ export default function UsageDashboardTab() {
                     {expandedUsers.has(uid) && (
                       <div className="bg-canvas/50">
                         {ug.agents.map(a => (
+                          // ui-standard-ignore: 整行可点（展开 AI 明细），不是按钮形态
                           <button
                             key={a.agent_id}
                             onClick={() => loadAgentDaily(a.agent_id)}

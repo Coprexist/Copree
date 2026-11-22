@@ -36,7 +36,7 @@ function ModePicker({ mode, busy, onChange }: { mode: string; busy: boolean; onC
         onClick={() => !busy && setOpen((v) => !v)}
         disabled={busy}
         title={`${t('tool:world.mode.label')}：${t(cur.labelKey)} —— ${t(cur.hintKey)}`}
-        className="inline-flex items-center gap-1 h-6 px-1.5 rounded-control text-2xs text-textMuted hover:text-textPrimary hover:bg-elevated transition-colors disabled:opacity-60"
+        className="btn btn-xs btn-ghost"
       >
         <ShieldAlert size={11} className="shrink-0" />
         <span className="max-w-[64px] truncate font-medium">{t(cur.labelKey)}</span>
@@ -457,12 +457,14 @@ const WorldChatPanel = memo(forwardRef<WorldChatHandle, WorldChatPanelProps>(({ 
           <div className="flex items-center gap-0.5 pl-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity">
             <button
               onClick={() => { void copyText(m.content || '') }}
-              className="p-1 rounded text-textMuted hover:text-textSecondary hover:bg-elevated transition-colors"
+              className="icon-btn icon-btn-xs"
+              aria-label="复制回复"
               title="复制回复"
             ><Copy size={12} /></button>
             <button
               onClick={() => handleRegenerate(m.id)}
-              className="p-1 rounded text-textMuted hover:text-textSecondary hover:bg-elevated transition-colors"
+              className="icon-btn icon-btn-xs"
+              aria-label="重新生成（截断此回复并重发，旧回复被取代）"
               title="重新生成（截断此回复并重发，旧回复被取代）"
             ><RefreshCw size={12} /></button>
           </div>
@@ -473,12 +475,14 @@ const WorldChatPanel = memo(forwardRef<WorldChatHandle, WorldChatPanelProps>(({ 
           <div className="space-y-1.5 pl-1 w-full max-w-[420px]">
             <div className="text-3xs text-textMuted">你可以：</div>
             <div className={`flex items-stretch ${INSET_CARD} overflow-hidden w-full`}>
+              {/* ui-standard-ignore: 分段条（选项 + 图标钮共用一条底色），不是独立按钮形态 */}
               <button
                 onClick={() => handleSubmit('继续')}
                 className="flex-1 min-w-0 px-2.5 py-1.5 text-left text-xs text-textSecondary hover:bg-primary-500/20 hover:text-primary-500 dark:hover:text-primary-300 transition-colors truncate"
                 title="继续之前的工作"
               >继续之前的工作</button>
               <div className="w-px bg-border shrink-0" />
+              {/* ui-standard-ignore: 分段条（选项 + 图标钮共用一条底色），不是独立按钮形态 */}
               <button
                 onClick={(e) => { e.stopPropagation(); handleSubmit('继续') }}
                 className="px-2 flex items-center text-textMuted hover:text-primary-500 dark:hover:text-primary-300 hover:bg-primary-500/20 transition-colors shrink-0"
@@ -494,18 +498,21 @@ const WorldChatPanel = memo(forwardRef<WorldChatHandle, WorldChatPanelProps>(({ 
             <div className="text-3xs text-textMuted">你可以：</div>
             {chat.suggestions.map((q, i) => (
               <div key={i} className={`flex items-stretch ${INSET_CARD} overflow-hidden w-full`}>
+                {/* ui-standard-ignore: 分段条（选项 + 图标钮共用一条底色），不是独立按钮形态 */}
                 <button
                   onClick={() => confirmAndSendSuggestion(q)}
                   className="flex-1 min-w-0 px-2.5 py-1.5 text-left text-xs text-textSecondary hover:bg-primary-500/20 hover:text-primary-500 dark:hover:text-primary-300 transition-colors truncate"
                   title={q}
                 >{q}</button>
                 <div className="w-px bg-border shrink-0" />
+                {/* ui-standard-ignore: 分段条（选项 + 图标钮共用一条底色），不是独立按钮形态 */}
                 <button
                   onClick={(e) => { e.stopPropagation(); confirmAndSendSuggestion(q) }}
                   className="px-2 flex items-center text-textMuted hover:text-primary-500 dark:hover:text-primary-300 hover:bg-primary-500/20 transition-colors shrink-0"
                   title="发送这条"
                 ><Send size={11} /></button>
                 <div className="w-px bg-border shrink-0" />
+                {/* ui-standard-ignore: 分段条（选项 + 图标钮共用一条底色），不是独立按钮形态 */}
                 <button
                   onClick={(e) => { e.stopPropagation(); handleInsertSuggestion(q) }}
                   className="px-2 flex items-center text-textMuted hover:text-primary-500 dark:hover:text-primary-300 hover:bg-primary-500/20 transition-colors shrink-0"
@@ -527,18 +534,21 @@ const WorldChatPanel = memo(forwardRef<WorldChatHandle, WorldChatPanelProps>(({ 
         <div className="flex flex-col items-center gap-1.5 w-full max-w-[420px]">
           {chat.suggestions.map((q, i) => (
             <div key={i} className={`flex items-stretch ${INSET_CARD} overflow-hidden w-full`}>
+              {/* ui-standard-ignore: 分段条（选项 + 图标钮共用一条底色），不是独立按钮形态 */}
               <button
                 onClick={() => confirmAndSendSuggestion(q)}
                 className="flex-1 min-w-0 px-2.5 py-1.5 text-left text-xs text-textSecondary hover:bg-primary-500/20 hover:text-primary-500 dark:hover:text-primary-300 transition-colors truncate"
                 title={q}
               >{q}</button>
               <div className="w-px bg-border shrink-0" />
+              {/* ui-standard-ignore: 分段条（选项 + 图标钮共用一条底色），不是独立按钮形态 */}
               <button
                 onClick={(e) => { e.stopPropagation(); confirmAndSendSuggestion(q) }}
                 className="px-2 flex items-center text-textMuted hover:text-primary-500 dark:hover:text-primary-300 hover:bg-primary-500/20 transition-colors shrink-0"
                 title="发送这条"
               ><Send size={11} /></button>
               <div className="w-px bg-border shrink-0" />
+              {/* ui-standard-ignore: 分段条（选项 + 图标钮共用一条底色），不是独立按钮形态 */}
               <button
                 onClick={(e) => { e.stopPropagation(); handleInsertSuggestion(q) }}
                 className="px-2 flex items-center text-textMuted hover:text-primary-500 dark:hover:text-primary-300 hover:bg-primary-500/20 transition-colors shrink-0"
@@ -596,10 +606,8 @@ const WorldChatPanel = memo(forwardRef<WorldChatHandle, WorldChatPanelProps>(({ 
             <div className="sticky bottom-3 flex justify-end pointer-events-none z-drawer">
               <button
                 onClick={() => chat.scrollToBottom(true)}
-                className={`pointer-events-auto flex items-center justify-center gap-1 px-3 h-8 rounded-full shadow-lg transition-all ${
-                  chat.unreadCount > 0
-                    ? 'bg-rose-500 hover:bg-rose-600 text-white border border-rose-400 animate-bounce'
-                    : 'bg-elevated border border-border text-textSecondary hover:text-textPrimary hover:bg-surface'
+                className={`pointer-events-auto btn btn-sm shadow-lg ${
+                  chat.unreadCount > 0 ? 'btn-danger animate-bounce' : 'btn-secondary'
                 }`}
                 title="回到底部"
               >
@@ -643,6 +651,7 @@ const WorldChatPanel = memo(forwardRef<WorldChatHandle, WorldChatPanelProps>(({ 
           className="mx-auto w-full rounded-2xl border border-border bg-elevated/40 transition-colors focus-within:border-primary-500/60 focus-within:bg-surface"
           style={{ maxWidth: `calc(var(${CONTENT_W_VAR}) + 32px)` }}
         >
+        {/* ui-standard-ignore: 输入框外观由外层容器给（单层聚焦高亮），textarea 自己不画边框 */}
         <textarea
           ref={chat.chatInputRef}
           value={localInput}
@@ -692,7 +701,7 @@ const WorldChatPanel = memo(forwardRef<WorldChatHandle, WorldChatPanelProps>(({ 
           <button
             onClick={() => handleSubmit(localInputRef.current)}
             disabled={!localInput.trim() && attachments.ready.length === 0}
-            className="shrink-0 inline-flex items-center gap-1 h-7 px-2.5 rounded-control bg-primary-500 hover:bg-primary-600 text-white text-xs font-medium transition-colors disabled:opacity-40"
+            className="btn btn-sm btn-primary shrink-0"
           >
             {(chat.chatSending || chat.chatProcessing) ? t('tool:world.input.queue') : t('tool:world.input.send')}
             <Send size={12} />

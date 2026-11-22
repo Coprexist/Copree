@@ -204,6 +204,7 @@ export default function AvatarPickerModal({
           {step === 'pick' && (
             <div className="grid grid-cols-2 gap-3">
               {/* 选项1：从个人空间选择 */}
+              {/* ui-standard-ignore: 整块可点的头像来源卡片（图标/标题/说明），不是按钮形态 */}
               <button
                 onClick={() => setStep('select-file')}
                 className="card card-interactive flex flex-col items-center justify-center gap-2 p-4"
@@ -220,6 +221,7 @@ export default function AvatarPickerModal({
               </button>
 
               {/* 选项2：上传新图片 */}
+              {/* ui-standard-ignore: 整块可点的头像来源卡片（图标/标题/说明），不是按钮形态 */}
               <button
                 onClick={() => fileInputRef.current?.click()}
                 className="card card-interactive flex flex-col items-center justify-center gap-2 p-4"
@@ -236,6 +238,7 @@ export default function AvatarPickerModal({
               </button>
 
               {/* 选项3：从官方素材选择（横跨两列：它是"现成的"，跟上面两条"自己的"不是一个来路） */}
+              {/* ui-standard-ignore: 整块可点的头像来源卡片（图标/标题/说明），不是按钮形态 */}
               <button
                 onClick={() => setStep('select-official')}
                 className="card card-interactive col-span-2 flex items-center gap-3 p-3 text-left"

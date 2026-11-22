@@ -54,7 +54,8 @@ export default function Sidebar({ mobile, onClose, translucent }: { mobile?: boo
         ) : (
           <button
             onClick={() => setCollapsed(!collapsed)}
-            className="p-1.5 rounded-control hover:bg-elevated text-textMuted hover:text-textSecondary transition-colors"
+            className="icon-btn icon-btn-sm"
+            aria-label={collapsed ? t('sidebar:expand') : t('sidebar:collapse')}
             title={collapsed ? t('sidebar:expand') : t('sidebar:collapse')}
           >
             {collapsed ? <Menu size={16} /> : <ChevronLeft size={16} />}
@@ -170,6 +171,7 @@ export default function Sidebar({ mobile, onClose, translucent }: { mobile?: boo
 
       {/* 小工具（三根杠菜单） */}
       <div className="p-2 shrink-0 relative">
+        {/* ui-standard-ignore: 与上方 NavLink 导航行同一套外观（整行可点），不是按钮形态 */}
         <button
           onClick={() => setToolsOpen(!toolsOpen)}
           className={`flex items-center rounded-card text-textSecondary hover:text-textPrimary hover:bg-elevated transition-all duration-200 text-sm ${
@@ -186,6 +188,7 @@ export default function Sidebar({ mobile, onClose, translucent }: { mobile?: boo
             <div
               className={`absolute bottom-full mb-2 z-modal w-44 rounded-card border border-border bg-surface shadow-2xl py-1.5 ${collapsed ? 'left-0' : 'left-2'}`}
             >
+              {/* ui-standard-ignore: 浮层菜单行（整行可点），不是按钮形态 */}
               <button
                 onClick={() => { setToolsOpen(false); navigate('/study') }}
                 className="w-full flex items-center gap-3 px-3 py-2 text-sm text-textSecondary hover:text-textPrimary hover:bg-elevated transition-colors"
@@ -200,6 +203,7 @@ export default function Sidebar({ mobile, onClose, translucent }: { mobile?: boo
 
       {/* 退出 */}
       <div className="p-2 border-t border-border shrink-0">
+        {/* ui-standard-ignore: 与上方 NavLink 导航行同一套外观（整行可点），不是按钮形态 */}
         <button
           onClick={handleLogout}
           className={`flex items-center rounded-card text-textSecondary hover:text-rose-400 hover:bg-rose-500/10 transition-all duration-200 text-sm ${

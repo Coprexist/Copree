@@ -101,7 +101,7 @@ export default function WidthHandles({ varName, dragging, title, onHandleDown, o
           key={side}
           onPointerMove={onZoneMove(side)}
           onPointerLeave={onZoneLeave}
-          className="absolute top-0 bottom-0 z-overlay"
+          className="absolute top-0 bottom-0 z-overlay content-width-handles"
           style={{
             // 单侧留白（内容列居中），再按 ZONE_PX 封顶
             width: `min(calc((100% - var(${varName})) / 2), ${ZONE_PX}px)`,

@@ -101,7 +101,7 @@ export default function InstanceSetupPage() {
                   setTestResult(null)
                   setError('')
                 }}
-                className="w-full px-3.5 py-2.5 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                className="field field-lg w-full"
                 placeholder={t('desktop:instanceUrlPlaceholder')}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') handleTest()

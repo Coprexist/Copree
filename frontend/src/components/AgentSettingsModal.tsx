@@ -1,10 +1,9 @@
 import { useState } from 'react'
 import { api } from '../api/client'
 import { useT } from '../i18n/I18nContext'
-import { ArrowLeft, X, Loader2, RotateCw, Ticket, ChevronRight, MessageSquare } from 'lucide-react'
+import { ArrowLeft, X, Loader2, RotateCw, Ticket, ChevronRight } from 'lucide-react'
 import StatusColorPicker from './shared/StatusColorPicker'
 import SkillBackpack from './SkillBackpack'
-import ChannelModal from './channels/ChannelModal'
 import Toggle from './Toggle'
 import { SliderField, SecretInput } from './ui'
 // 档位预设与创建弹窗共用一份，避免两处各维护一套数字
@@ -127,7 +126,6 @@ export default function AgentSettingsModal({
   // ── 视图状态 ──
   const [view, setView] = useState<'main' | 'detailed'>('main')
   // QQ 通道配置项多，单独开弹窗（这里是入口）
-  const [qqOpen, setQqOpen] = useState(false)
 
   // ── 主设置状态 ──
   const [name, setName] = useState(agent.name)
@@ -339,7 +337,7 @@ export default function AgentSettingsModal({
         {/* 移动端头部 */}
         <div className="flex items-center justify-between mb-5 md:hidden shrink-0">
           {view === 'detailed' ? (
-            <button onClick={() => setView('main')} className="p-1 -ml-1 rounded-control hover:bg-elevated text-textSecondary transition-colors">
+            <button onClick={() => setView('main')} className="icon-btn icon-btn-sm -ml-1" aria-label={t('modal:backToMainSettings')} title={t('modal:backToMainSettings')}>
               <ArrowLeft size={20} />
             </button>
           ) : (
@@ -357,7 +355,7 @@ export default function AgentSettingsModal({
         <div className="hidden md:flex items-center justify-between mb-5">
           <div className="flex items-center gap-3">
             {view === 'detailed' && (
-              <button onClick={() => setView('main')} className="p-1 -ml-1 rounded-control hover:bg-elevated text-textSecondary transition-colors">
+              <button onClick={() => setView('main')} className="icon-btn icon-btn-sm -ml-1" aria-label={t('modal:backToMainSettings')} title={t('modal:backToMainSettings')}>
                 <ArrowLeft size={18} />
               </button>
             )}
@@ -390,10 +388,8 @@ export default function AgentSettingsModal({
                     {PROFILE_OPTIONS.map((opt) => (
                       <button key={opt.value} type="button"
                         onClick={() => applyPreset(opt.value)}
-                        className={`flex flex-col items-center gap-1 p-2 rounded-card border text-center transition-all ${
-                          configProfile === opt.value
-                            ? `border-primary-400 bg-primary-500/10 text-primary-600 dark:text-primary-300`
-                            : 'border-border bg-canvas text-textSecondary hover:bg-elevated'
+                        className={`card card-interactive card-pad flex flex-col items-center gap-1 text-center ${
+                          configProfile === opt.value ? 'is-active text-primary-400' : 'text-textSecondary'
                         }`}
                       >
                         <span className="text-2xs font-semibold">{t(opt.label)}</span>
@@ -437,10 +433,8 @@ export default function AgentSettingsModal({
                     { value: 'resonance', label: t('modal:detailSettingsAiTypeResonance'), desc: t('modal:detailSettingsAiTypeResonanceDesc') },
                   ] as const).map((type) => (
                     <button key={type.value} type="button" onClick={() => setAiType(type.value)}
-                      className={`flex flex-col items-center gap-1 p-2.5 rounded-card border text-center transition-all ${
-                        aiType === type.value
-                          ? 'border-primary-400 bg-primary-500/10 text-primary-600 dark:text-primary-300'
-                          : 'border-border bg-canvas text-textSecondary hover:bg-elevated'
+                      className={`card card-interactive card-pad flex flex-col items-center gap-1 text-center ${
+                        aiType === type.value ? 'is-active text-primary-400' : 'text-textSecondary'
                       }`}
                     >
                       <span className="text-xs font-semibold">{type.label}</span>
@@ -640,7 +634,7 @@ export default function AgentSettingsModal({
                             <span className="text-2xs text-textMuted">{t('agents:othersChatUsed')}: {othersChatUsed}</span>
                             <button type="button"
                               onClick={async () => { try { await api.post(`/agents/${agent.id}/reset-others-chat-used`); setOthersChatUsed(0) } catch { /* ignore */ } }}
-                              className="text-3xs px-2 py-0.5 rounded border border-border text-textMuted hover:text-textSecondary transition-colors"
+                              className="btn btn-xs btn-outline"
                             >{t('agents:othersChatUsedReset')}</button>
                           </div>
                           <p className="text-3xs text-textMuted leading-relaxed">{t('agents:othersChatQuotaDesc')}</p>
@@ -696,68 +690,11 @@ export default function AgentSettingsModal({
                 <NumberField label={t('modal:detailSettingsApiCreditCost')} value={apiCreditCost} setValue={setApiCreditCost} min={0} max={100000} desc={t('modal:detailSettingsApiCreditCostDesc')} />
               </Section>
 
-              {/* API 提供商 */}
-              <Section title={t('modal:detailSettingsApiProvider')} desc={t('modal:detailSettingsApiProviderDesc')} defaultCollapsed>
-                <div>
-                  <label className="block text-xs font-medium mb-1 text-textSecondary">API Base URL</label>
-                  <input type="text" value={apiBaseUrl} onChange={(e) => setApiBaseUrl(e.target.value)}
-                    className="field w-full"
-                    placeholder={t('modal:detailSettingsApiBaseUrlPlaceholder')} />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium mb-1 text-textSecondary flex items-center gap-2">
-                    API Key
-                    <ApiKeyGetLink providers={providers} />
-                  </label>
-                  <SecretInput value={apiKey} onChange={(e) => setApiKey(e.target.value)}
-                    wrapperClassName="w-full"
-                    placeholder={agent.has_api_key ? '•••••••• (unchanged if empty)' : t('modal:detailSettingsApiKeyPlaceholder')} />
-                </div>
-                <button onClick={handleTestApi} disabled={testingApi || (!apiBaseUrl.trim() && !apiKey.trim())}
-                  className="btn btn-md btn-outline gap-1.5"
-                >
-                  {testingApi ? <Loader2 size={12} className="animate-spin" /> : <RotateCw size={12} />}
-                  {t('settings:testConnection')}
-                </button>
-                {testApiMsg && (
-                  <p className={`text-xs ${testApiOk === true ? 'text-mint-400' : 'text-rose-400'}`}>{testApiMsg}</p>
-                )}
-              </Section>
-
               {/* 技能背包 */}
               <Section title={t('backpack:title')} desc={t('backpack:desc')} defaultCollapsed>
                 <SkillBackpack agentId={agent.id} />
               </Section>
 
-              {/* QQ 通道：配置项多，单独开一个弹窗（这里是入口，不是表单本体） */}
-              <Section title={t('tool:channel.title')} desc={t('tool:channel.desc')}>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-xs text-textSecondary flex-1 min-w-[12rem]">{t('tool:channel.entryHint')}</span>
-                  <button onClick={() => setQqOpen(true)} className="btn btn-sm btn-outline gap-1.5 shrink-0">
-                    <MessageSquare size={13} /> {t('tool:channel.configure')}
-                  </button>
-                </div>
-              </Section>
-
-              {/* 兑换码 */}
-              <Section title={t('modal:detailSettingsRedeemCode')} desc={t('modal:detailSettingsRedeemCodeDesc')} defaultCollapsed>
-                <div className="flex items-center gap-2">
-                  <div className="flex-1 relative">
-                    <Ticket size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-textMuted" />
-                    <input type="text" value={redeemCode} onChange={(e) => setRedeemCode(e.target.value)}
-                      className="field field-with-icon w-full"
-                      placeholder={t('modal:detailSettingsRedeemPlaceholder')} />
-                  </div>
-                  <button onClick={handleRedeem} disabled={redeeming || !redeemCode.trim()}
-                    className="btn btn-sm btn-primary gap-1 shrink-0"
-                  >
-                    {redeeming ? <Loader2 size={14} className="animate-spin" /> : <span>{t('me:redeem')}</span>}
-                  </button>
-                </div>
-                {redeemMsg && (
-                  <p className={`text-xs ${redeemOk === false ? 'text-rose-400' : 'text-mint-400'}`}>{redeemMsg}</p>
-                )}
-              </Section>
             </>
           )}
         </div>
@@ -770,13 +707,13 @@ export default function AgentSettingsModal({
         <div className="flex gap-3">
           {view === 'main' ? (
             <button onClick={() => setView('detailed')}
-              className="flex-1 py-2.5 text-sm border border-primary-400/30 text-primary-500 rounded-card hover:bg-primary-500/10 font-medium transition-colors flex items-center justify-center gap-1"
+              className="btn btn-md btn-tinted flex-1"
             >
               {t('modal:goToDetailedSettings')} <ChevronRight size={14} />
             </button>
           ) : (
             <button onClick={() => setView('main')}
-              className="flex-1 py-2.5 text-sm border border-border text-textSecondary rounded-card hover:bg-elevated font-medium transition-colors"
+              className="btn btn-md btn-outline flex-1"
             >
               {t('modal:backToMainSettings')}
             </button>
@@ -796,8 +733,6 @@ export default function AgentSettingsModal({
     </div>
   </div>
 
-    {/* QQ 通道：配置项多，单独一间屋子，别和这张长表单挤在一起 */}
-    {qqOpen && <ChannelModal agentId={agent.id} onClose={() => setQqOpen(false)} />}
     </>
   )
 }
@@ -807,6 +742,7 @@ function Section({ title, desc, children, defaultCollapsed }: { title: string; d
   const [open, setOpen] = useState(!defaultCollapsed)
   return (
     <div className="bg-canvas/50 rounded-card border border-border/50 overflow-hidden">
+      {/* ui-standard-ignore: 折叠标题行（整行可点），不是按钮形态 */}
       <button
         onClick={() => setOpen(!open)}
         className="w-full flex items-center gap-2 px-4 py-3 text-left hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition-colors"

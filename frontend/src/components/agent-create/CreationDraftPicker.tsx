@@ -56,6 +56,7 @@ export default function CreationDraftPicker({ onPick, onPlain }: {
               {/* 左：两个入口 */}
               <div className="space-y-3">
                 {open && (
+                  // ui-standard-ignore: 整块可点的草稿卡片（标题+摘要+时间，渐变底），不是按钮形态
                   <button
                     onClick={() => onPick(open)}
                     className="w-full text-left rounded-card border border-primary-400/50 bg-gradient-to-b from-primary-500/15 to-primary-600/5 p-4 hover:border-primary-400 transition-colors"
@@ -68,10 +69,11 @@ export default function CreationDraftPicker({ onPick, onPlain }: {
                   </button>
                 )}
 
+                // ui-standard-ignore: 整块可点的新建入口卡片（图标+标题+说明），padding 属卡片内距
                 <button
                   onClick={startNew}
                   disabled={busy}
-                  className="w-full rounded-card border border-border p-4 text-left hover:border-primary-500/40 transition-colors disabled:opacity-60"
+                  className="card card-interactive w-full p-4 text-left disabled:opacity-60"
                 >
                   <div className="flex items-center gap-1.5 text-sm font-semibold text-textPrimary">
                     <Plus size={14} /> {t('modal:createStartNew')}

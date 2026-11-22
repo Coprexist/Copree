@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { SecretInput } from '../components/ui'
+import { Button, SecretInput } from '../components/ui'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useT } from '../i18n/I18nContext'
@@ -421,11 +421,7 @@ export default function SetupPage() {
               <button
                 key={l.code}
                 onClick={() => handleSelectLang(l.code)}
-                className={`w-full flex items-center gap-4 p-4 rounded-card border-2 text-left transition-all duration-200 ${
-                  selectedLang === l.code
-                    ? 'border-primary-400 bg-primary-500/10 shadow-sm shadow-primary-500/10'
-                    : 'border-border hover:border-borderHover bg-canvas'
-                }`}
+                className={`w-full flex items-center gap-4 card card-pad card-interactive text-left ${selectedLang === l.code ? 'is-active' : ''}`}
               >
                 <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 ${
                   selectedLang === l.code ? 'border-primary-400 bg-primary-400' : 'border-border'
@@ -457,17 +453,15 @@ export default function SetupPage() {
               <label className="block text-sm font-medium text-textSecondary mb-1.5">{t('setup:instanceDefaultLang')}</label>
               <div className="flex gap-2">
                 {LANGUAGES.map(l => (
-                  <button
+                  <Button
                     key={l.code}
+                    variant="outline"
+                    size="md"
+                    className={`flex-1 ${instanceLang === l.code ? 'is-active' : ''}`}
                     onClick={() => setInstanceLang(l.code)}
-                    className={`flex-1 py-2.5 rounded-card border-2 text-sm font-medium transition-all ${
-                      instanceLang === l.code
-                        ? 'border-primary-400 bg-primary-500/10 text-textPrimary'
-                        : 'border-border bg-canvas text-textSecondary hover:border-borderHover'
-                    }`}
                   >
                     {l.nativeName}
-                  </button>
+                  </Button>
                 ))}
               </div>
             </div>
@@ -477,7 +471,7 @@ export default function SetupPage() {
                 type="number" min={0}
                 value={instanceCredit}
                 onChange={e => setInstanceCredit(parseInt(e.target.value) || 0)}
-                className="w-full px-3.5 py-2.5 rounded-card bg-canvas border border-border text-textPrimary text-sm focus:border-primary-400 focus:outline-none"
+                className="field field-lg w-full"
               />
             </div>
             <div>
@@ -486,7 +480,7 @@ export default function SetupPage() {
                 type="number" min={1}
                 value={instanceFileQuota}
                 onChange={e => setInstanceFileQuota(parseInt(e.target.value) || 1)}
-                className="w-full px-3.5 py-2.5 rounded-card bg-canvas border border-border text-textPrimary text-sm focus:border-primary-400 focus:outline-none"
+                className="field field-lg w-full"
               />
             </div>
             <div>
@@ -495,7 +489,7 @@ export default function SetupPage() {
                 type="number" min={1} max={20}
                 value={instanceConcurrency}
                 onChange={e => setInstanceConcurrency(parseInt(e.target.value) || 3)}
-                className="w-full px-3.5 py-2.5 rounded-card bg-canvas border border-border text-textPrimary text-sm focus:border-primary-400 focus:outline-none"
+                className="field field-lg w-full"
               />
             </div>
           </div>
@@ -548,7 +542,7 @@ export default function SetupPage() {
               onChange={e => setBio(e.target.value)}
               placeholder={t('setup:bioPlaceholder')}
               rows={3}
-              className="w-full px-3.5 py-2.5 rounded-card bg-canvas border border-border text-textPrimary text-sm focus:border-primary-400 focus:outline-none resize-none"
+              className="field field-noresize w-full"
             />
           </div>
 
@@ -560,7 +554,7 @@ export default function SetupPage() {
               onChange={e => setStatusText(e.target.value)}
               placeholder={t('setup:statusTextPlaceholder')}
               maxLength={100}
-              className="w-full px-3.5 py-2.5 rounded-card bg-canvas border border-border text-textPrimary text-sm focus:border-primary-400 focus:outline-none"
+              className="field field-lg w-full"
             />
           </div>
 
@@ -589,17 +583,15 @@ export default function SetupPage() {
                 <label className="block text-sm font-medium text-textSecondary mb-1.5">供应商</label>
                 <div className="flex flex-wrap gap-1.5">
                   {providerPresets.map(p => (
-                    <button
+                    <Button
                       key={p.name}
+                      variant="outline"
+                      size="sm"
+                      className={apiBaseUrl === p.base_url ? 'is-active' : ''}
                       onClick={() => setApiBaseUrl(p.base_url)}
-                      className={`px-3 py-1.5 text-xs rounded-control font-medium transition-colors border ${
-                        apiBaseUrl === p.base_url
-                          ? 'bg-primary-500/15 border-primary-500/40 text-primary-500'
-                          : 'bg-canvas border-border text-textSecondary hover:text-textPrimary hover:border-primary-500/30'
-                      }`}
                     >
                       {p.name}{p.is_default ? <Star size={10} className="fill-current text-accent-400" /> : null}
-                    </button>
+                    </Button>
                   ))}
                 </div>
               </div>
@@ -610,7 +602,7 @@ export default function SetupPage() {
                 value={apiBaseUrl}
                 onChange={e => setApiBaseUrl(e.target.value)}
                 placeholder={t('setup:apiBaseUrlPlaceholder')}
-                className="w-full px-3.5 py-2.5 rounded-card bg-canvas border border-border text-textPrimary text-sm focus:border-primary-400 focus:outline-none"
+                className="field field-lg w-full"
               />
             </div>
             <div>
@@ -669,13 +661,15 @@ export default function SetupPage() {
               <p className="text-sm text-textSecondary mb-1">{t('setup:aiCreateHint')}</p>
               <p className="text-xs text-textMuted mb-5">{t('setup:aiCreateHintDesc')}</p>
               {/* 创建走平台那一页整页流程：向导只负责把人送过去，创建完按 returnTo 回这一步 */}
-              <button
+              <Button
+                variant="primary"
+                size="md"
+                className="shadow-lg shadow-primary-500/20"
+                icon={<Sparkles size={16} />}
                 onClick={() => navigate('/agents/create?returnTo=' + encodeURIComponent('/setup?step=createAI'))}
-                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-card bg-primary-500 hover:bg-primary-600 text-white text-sm font-semibold transition-all shadow-lg shadow-primary-500/20"
               >
-                <Sparkles size={16} />
                 {t('setup:aiCreateButton')}
-              </button>
+              </Button>
             </div>
           )}
         </div>
@@ -698,7 +692,7 @@ export default function SetupPage() {
                 <input
                   value={smtpHost}
                   onChange={e => setSmtpHost(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-card bg-canvas border border-border text-textPrimary text-sm focus:border-primary-400 focus:outline-none"
+                  className="field field-lg w-full"
                 />
               </div>
               <div className="w-24">
@@ -707,7 +701,7 @@ export default function SetupPage() {
                   type="number"
                   value={smtpPort}
                   onChange={e => setSmtpPort(parseInt(e.target.value) || 587)}
-                  className="w-full px-3.5 py-2.5 rounded-card bg-canvas border border-border text-textPrimary text-sm focus:border-primary-400 focus:outline-none"
+                  className="field field-lg w-full"
                 />
               </div>
             </div>
@@ -716,7 +710,7 @@ export default function SetupPage() {
               <input
                 value={smtpUsername}
                 onChange={e => setSmtpUsername(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-card bg-canvas border border-border text-textPrimary text-sm focus:border-primary-400 focus:outline-none"
+                className="field field-lg w-full"
               />
             </div>
             <div>
@@ -733,7 +727,7 @@ export default function SetupPage() {
                 <input
                   value={smtpFromEmail}
                   onChange={e => setSmtpFromEmail(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-card bg-canvas border border-border text-textPrimary text-sm focus:border-primary-400 focus:outline-none"
+                  className="field field-lg w-full"
                 />
               </div>
               <div className="flex-1">
@@ -741,7 +735,7 @@ export default function SetupPage() {
                 <input
                   value={smtpFromName}
                   onChange={e => setSmtpFromName(e.target.value)}
-                  className="w-full px-3.5 py-2.5 rounded-card bg-canvas border border-border text-textPrimary text-sm focus:border-primary-400 focus:outline-none"
+                  className="field field-lg w-full"
                 />
               </div>
             </div>
@@ -778,7 +772,7 @@ export default function SetupPage() {
                 value={poolKeyName}
                 onChange={e => setPoolKeyName(e.target.value)}
                 placeholder={t('setup:keyPoolName')}
-                className="w-full px-3.5 py-2.5 rounded-card bg-canvas border border-border text-textPrimary text-sm focus:border-primary-400 focus:outline-none"
+                className="field field-lg w-full"
               />
             </div>
             <div>
@@ -786,7 +780,7 @@ export default function SetupPage() {
               <input
                 value={poolKeyBaseUrl}
                 onChange={e => setPoolKeyBaseUrl(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-card bg-canvas border border-border text-textPrimary text-sm focus:border-primary-400 focus:outline-none"
+                className="field field-lg w-full"
               />
             </div>
             <div>
@@ -867,12 +861,13 @@ export default function SetupPage() {
               <div className="flex items-center gap-2">
                 {/* 跳过按钮 */}
                 {showSkipLabel && (
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="md"
                     onClick={handleNext}
-                    className="px-4 py-2 rounded-card text-sm text-textMuted hover:text-textSecondary hover:bg-canvas transition-colors"
                   >
                     {t('setup:skip')}
-                  </button>
+                  </Button>
                 )}
 
                 {/* 下一步按钮 */}
@@ -899,10 +894,12 @@ export default function SetupPage() {
 
           {/* 完成页按钮 */}
           {currentStep.key === 'complete' && (
-            <button
+            <Button
+              variant="success"
+              size="lg"
+              className="w-full mt-6 shadow-lg shadow-mint-400/20"
               onClick={handleNext}
               disabled={saving}
-              className="w-full mt-6 py-3 rounded-card bg-mint-400 hover:bg-mint-500 disabled:opacity-40 text-white font-semibold text-sm transition-all shadow-lg shadow-mint-400/20"
             >
               {saving ? (
                 <span className="inline-flex items-center gap-2">
@@ -912,7 +909,7 @@ export default function SetupPage() {
               ) : (
                 t('setup:complete')
               )}
-            </button>
+            </Button>
           )}
         </div>
       </div>

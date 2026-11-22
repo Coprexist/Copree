@@ -179,6 +179,7 @@ export default function BindGroupModal({ worldId, initialTypeSlug, initialTab = 
             ) : (
               <div className="space-y-1.5">
                 {types.map((ty) => (
+                  // ui-standard-ignore: 整块可点的类型卡片（名称+绑定数），不是按钮形态
                   <button
                     key={ty.slug}
                     onClick={() => setTypeSlug(ty.slug)}
@@ -235,7 +236,7 @@ export default function BindGroupModal({ worldId, initialTypeSlug, initialTab = 
 
         {/* 底部操作 */}
         <div className="p-4 pt-3 shrink-0 border-t border-border flex items-center gap-2">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-textMuted hover:text-textPrimary transition-colors rounded-control">{t('common:cancel')}</button>
+          <button onClick={onClose} className="btn btn-sm btn-ghost">{t('common:cancel')}</button>
           <div className="flex-1" />
           <button
             onClick={doBind}

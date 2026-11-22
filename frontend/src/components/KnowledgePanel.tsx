@@ -249,21 +249,21 @@ export default function KnowledgePanel({ agentId }: { agentId: number }) {
                 />
                 <button
                   onClick={() => openPreview(entry)}
-                  className="p-1.5 rounded-control text-textMuted hover:text-primary-400 hover:bg-primary-500/10"
+                  className="icon-btn icon-btn-xs"
                   aria-label={t('agentDetail:knowledgePreview')}
                 >
                   <Eye size={14} />
                 </button>
                 <button
                   onClick={() => { setError(''); setMovePath(entry.path); setMoveTarget(entry) }}
-                  className="p-1.5 rounded-control text-textMuted hover:text-primary-400 hover:bg-primary-500/10"
+                  className="icon-btn icon-btn-xs"
                   aria-label={t('agentDetail:knowledgeMove')}
                 >
                   <Move size={14} />
                 </button>
                 <button
                   onClick={() => setDeleteTarget(entry)}
-                  className="p-1.5 rounded-control text-textMuted hover:text-rose-400 hover:bg-rose-500/10"
+                  className="icon-btn icon-btn-xs"
                   aria-label={t('agentDetail:knowledgeDelete')}
                 >
                   <Trash2 size={14} />

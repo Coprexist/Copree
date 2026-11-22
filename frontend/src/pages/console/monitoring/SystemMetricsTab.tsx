@@ -7,6 +7,7 @@ import {
   ResponsiveContainer, PieChart, Pie, Cell,
 } from 'recharts'
 import { Activity, Clock, AlertTriangle, Layers, Loader2, Timer, Gauge, HardDrive } from 'lucide-react'
+import { UnderlineTabs } from '../../../components/ui'
 
 export default function SystemMetricsTab() {
   const t = useT()
@@ -50,18 +51,12 @@ export default function SystemMetricsTab() {
     <div className="space-y-5 pb-8">
       {/* 时间选择 + 保留天数 */}
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="flex gap-1.5">
-          {[1, 6, 24, 72, 168].map(h => (
-            <button key={h} onClick={() => setHours(h)}
-              className={`px-3.5 py-1.5 rounded-card text-xs font-medium transition-colors ${
-                hours === h
-                  ? 'bg-primary-500/15 text-primary-600 dark:text-primary-300 border border-primary-400/30'
-                  : 'bg-surface border border-border text-textSecondary hover:bg-elevated'
-              }`}>
-              {h >= 24 ? `${h / 24}d` : `${h}h`}
-            </button>
-          ))}
-        </div>
+        <UnderlineTabs
+          size="sm"
+          items={[1, 6, 24, 72, 168].map(h => ({ key: String(h), label: h >= 24 ? `${h / 24}d` : `${h}h` }))}
+          value={String(hours)}
+          onChange={k => setHours(Number(k))}
+        />
         <span className="text-2xs text-textMuted">
           {t('admin:metricsRetention').replace('{retentionDays}', String(retentionDays))}
         </span>

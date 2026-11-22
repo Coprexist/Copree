@@ -4,7 +4,7 @@ import { useT, useLang } from '../../../i18n/I18nContext'
 import { fmtDateTime } from '../../../utils/time'
 import { Settings, Bot, Eye, Loader2, Save, Sliders } from 'lucide-react'
 import Toggle from '../../../components/Toggle'
-import { Slider, UnderlineTabs } from '../../../components/ui'
+import { Button, Slider, UnderlineTabs } from '../../../components/ui'
 import LogBrowser from '../../../components/shared/LogBrowser'
 
 interface GlobalConfig {
@@ -167,7 +167,7 @@ export default function ConversationLogTab() {
                 type="number" min={1} max={500}
                 value={config.max_conversation_logs}
                 onChange={e => setConfig({ ...config, max_conversation_logs: parseInt(e.target.value) || 30 })}
-                className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                className="field"
               />
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -182,7 +182,7 @@ export default function ConversationLogTab() {
                       ...config,
                       [field]: e.target.value === '' ? null : parseInt(e.target.value),
                     } as GlobalConfig)}
-                    className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                    className="field"
                   />
                 </div>
               ))}
@@ -193,7 +193,7 @@ export default function ConversationLogTab() {
                 type="number" min={1} max={config.max_conversation_logs}
                 value={config.default_user_conversation_logs}
                 onChange={e => setConfig({ ...config, default_user_conversation_logs: parseInt(e.target.value) || 20 })}
-                className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                className="field"
               />
             </div>
             <div className="flex items-center justify-between">
@@ -271,7 +271,7 @@ export default function ConversationLogTab() {
                     loadAgents(e.target.value)
                   }}
                   placeholder={t('admin:searchAiPlaceholder')}
-                  className="flex-1 px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                  className="field flex-1 min-w-0"
                 />
                 <select
                   value={selectedAgentId || ''}
@@ -310,7 +310,7 @@ export default function ConversationLogTab() {
                   value={agentLimit}
                   onChange={e => setAgentLimit(e.target.value)}
                   placeholder={t('admin:retentionLimit').replace('{max}', String(agentSettings.system_max))}
-                  className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                  className="field"
                 />
               </div>
               <div className="flex items-center justify-between">
@@ -318,6 +318,7 @@ export default function ConversationLogTab() {
                   {t('admin:allowUserViewLogs')}
                   <span className="text-textMuted ml-1">（{agentSettings.system_default_access ? t('admin:defaultOn') : t('admin:defaultOff')}）</span>
                 </label>
+                // ui-standard-ignore: 三态开关（开/关/继承），Toggle 只有两态
                 <button
                   onClick={() => {
                     if (agentAccess === null) setAgentAccess(true)
@@ -337,13 +338,16 @@ export default function ConversationLogTab() {
                   }`} />
                 </button>
               </div>
-              <button
-                onClick={saveAgentSettings}
-                disabled={agentSaving}
-                className="btn btn-md btn-primary gap-2"
-              >
-                <Save size={14} /> {agentSaving ? t('common:saving') : t('admin:saveSettings')}
-              </button>
+              <div className="form-actions">
+                <Button
+                  icon={<Save size={14} />}
+                  disabled={agentSaving}
+                  loading={agentSaving}
+                  onClick={saveAgentSettings}
+                >
+                  {agentSaving ? t('common:saving') : t('admin:saveSettings')}
+                </Button>
+              </div>
             </>
           )}
         </div>
@@ -362,7 +366,7 @@ export default function ConversationLogTab() {
               loadAgents(e.target.value)
             }}
             placeholder={t('admin:searchAiPlaceholder')}
-            className="flex-1 px-3 py-2 rounded-control border border-border bg-elevated text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+            className="field flex-1 min-w-0"
           />
           <select
             value={viewAgentId || ''}

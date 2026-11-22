@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { SecretInput } from '../components/ui'
+import { Button, IconButton, SecretInput } from '../components/ui'
 import { Send, Key, Bot, User, Trash2, Github, Sun, Moon } from 'lucide-react'
 
 type Role = 'user' | 'assistant'
@@ -121,9 +121,12 @@ export default function DemoChat() {
           <a href="https://github.com/Coprexist/Copree" target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-textMuted hover:text-textSecondary">
             <Github size={14} /> GitHub
           </a>
-          <button onClick={() => setDark(!dark)} className="p-1.5 rounded-control hover:bg-canvas text-textMuted hover:text-textSecondary">
-            {dark ? <Sun size={14} /> : <Moon size={14} />}
-          </button>
+          <IconButton
+            icon={dark ? <Sun size={14} /> : <Moon size={14} />}
+            label="切换主题"
+            size="sm"
+            onClick={() => setDark(!dark)}
+          />
         </div>
       </header>
 
@@ -136,10 +139,9 @@ export default function DemoChat() {
             wrapperClassName="flex-1 min-w-0"
             onKeyDown={e => e.key === 'Enter' && saveKey()}
           />
-          <button onClick={saveKey} disabled={!keyInput.trim()}
-            className="px-3 py-1 text-xs rounded-control bg-accent-500 hover:bg-accent-600 text-white font-medium disabled:opacity-40 transition-colors">
+          <Button variant="accent" size="xs" onClick={saveKey} disabled={!keyInput.trim()}>
             确认
-          </button>
+          </Button>
         </div>
       ) : (
         <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-canvas/50">
@@ -186,7 +188,7 @@ export default function DemoChat() {
             value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKey}
             placeholder="输入消息..."
             rows={1}
-            className="flex-1 px-3.5 py-2.5 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted resize-none outline-none focus:ring-2 focus:ring-primary-500/50"
+            className="field flex-1 min-w-0"
           />
           <button onClick={send} disabled={!input.trim() || !apiKey || loading}
             className="icon-btn-lg icon-btn-primary">

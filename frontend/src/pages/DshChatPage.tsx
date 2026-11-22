@@ -15,7 +15,7 @@ import { ArrowLeft, ArrowDown, Bot, Brain, CheckCircle2, ChevronDown, Circle, Im
 import { api, fileDownloadUrl, getApiBaseUrl } from '../api/client'
 import { useT } from '../i18n/I18nContext'
 import { DropMask, AttachmentChips } from '../components/AttachmentChips'
-import { IconButton, MENU_CAPTION, MenuItem, MenuPanel, WidthHandles } from '../components/ui'
+import { Button, IconButton, MENU_CAPTION, MenuItem, MenuPanel, WidthHandles } from '../components/ui'
 import { ApprovalDialog, QuestionDialog, type AskPrompt, type ChatApproval } from '../components/shared/ChatDialogs'
 import MarkdownContent from '../components/shared/MarkdownContent'
 import { CONTENT_W_VAR, ToolBubble, toolIcon, useContentColumnWidth } from '../components/shared/ChatPanelAtoms'
@@ -829,6 +829,7 @@ export default function DshChatPage() {
             <p className="px-3 py-2 text-xs text-textMuted">{t('tool:dsh.noSessions')}</p>
           )}
           {sessions.map((item) => (
+            // ui-standard-ignore: 会话行整行可点（标题+目录+时间三行），不是按钮形态
             <button
               key={item.sessionId}
               onClick={() => pickSession(item.sessionId)}
@@ -849,12 +850,15 @@ export default function DshChatPage() {
             </button>
           ))}
         </div>
-        <button
+        <Button
+          variant="tinted"
+          size="sm"
+          className="shrink-0 m-2"
+          icon={<Plus size={12} />}
           onClick={() => { setSessionId(''); setLines([]); setError(''); attachments.clear() }}
-          className="shrink-0 m-2 inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded-control text-xs bg-primary-500/10 text-primary-400 hover:bg-primary-500/20 border border-primary-400/20 transition-colors"
         >
-          <Plus size={12} /> {t('tool:dsh.newSession')}
-        </button>
+          {t('tool:dsh.newSession')}
+        </Button>
       </aside>
 
       {/* 对话列自己铺白底：页根是 bg-canvas（#f8fafc），列不给底色就会露出那层灰，
@@ -983,6 +987,7 @@ export default function DshChatPage() {
             className="glass-float mx-auto w-full"
             style={{ maxWidth: `calc(var(${CONTENT_W_VAR}) + 32px)` }}
           >
+            {/* ui-standard-ignore: 对话输入区（浮层玻璃底内的透明 textarea），边框与底色由浮层承担 */}
             <textarea
               ref={inputRef}
               value={input}
@@ -1061,13 +1066,15 @@ export default function DshChatPage() {
                   ))}
                 </div>
               )}
-              <button
+              <Button
+                variant="primary"
+                size="sm"
+                className="shrink-0"
                 onClick={() => submit(modeFor('enter'))}
                 disabled={!input.trim() && attachments.ready.length === 0}
-                className="shrink-0 inline-flex items-center gap-1 h-7 px-2.5 rounded-control bg-primary-500 hover:bg-primary-600 text-white text-xs font-medium transition-colors disabled:opacity-40"
               >
                 {busy ? t(busySend === 'steer' ? 'tool:dsh.steer' : 'tool:dsh.send.queue') : t('tool:dsh.send')} <Send size={12} />
-              </button>
+              </Button>
             </div>
           </div>
         </div>

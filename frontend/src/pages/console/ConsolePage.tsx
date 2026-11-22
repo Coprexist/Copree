@@ -4,7 +4,7 @@ import { ArrowLeft, BookOpen, ChevronRight, PanelLeftClose, PanelLeftOpen } from
 import { MANUAL_URL, ADMIN_MANUAL_URL } from '../../constants'
 import { useT } from '../../i18n/I18nContext'
 import { useResizableSidebar } from '../../hooks/useResizableSidebar'
-import { ContentColumn } from '../../components/ui'
+import { ContentColumn, UnderlineTabs } from '../../components/ui'
 import { CONSOLE_WORKSPACES, findConsoleItem, workspaceOf } from './workspaces'
 import { rememberTab } from './recentTabs'
 
@@ -99,20 +99,17 @@ export default function ConsolePage() {
         )}
         <h1 className="text-sm font-semibold text-textPrimary shrink-0">{t('admin:title')}</h1>
 
-        <nav className="hidden md:flex items-center gap-0.5 ml-3 min-w-0 overflow-x-auto">
-          {CONSOLE_WORKSPACES.map(w => (
-            <button
-              key={w.key}
-              onClick={() => openWorkspace(w.key)}
-              className={'flex items-center gap-1.5 px-3 h-8 rounded-control text-sm transition-colors shrink-0 ' +
-                (w.key === workspace.key
-                  ? 'bg-primary-500/10 text-primary-600 dark:text-primary-300'
-                  : 'text-textSecondary hover:bg-elevated hover:text-textPrimary')}
-            >
-              <w.icon size={15} />
-              <span className="truncate">{t(w.labelKey)}</span>
-            </button>
-          ))}
+        <nav className="hidden md:block ml-3 min-w-0">
+          <UnderlineTabs
+            size="md"
+            items={CONSOLE_WORKSPACES.map(w => ({
+              key: w.key,
+              label: t(w.labelKey),
+              icon: <w.icon size={15} />,
+            }))}
+            value={workspace.key}
+            onChange={openWorkspace}
+          />
         </nav>
 
         <div className="ml-auto flex items-center gap-2 shrink-0">
@@ -138,6 +135,7 @@ export default function ConsolePage() {
             {/* 顶部一行：回应用的出口 + 折叠开关。两者都是"外壳"级动作，各占一行太空，
                 排在一起后列表能多显示一行，视觉上也正好一头一尾（左边离开、右边收放） */}
             <div className={'flex items-center border-b border-border shrink-0 mt-1 ' + (collapsed ? '' : 'pr-1.5')}>
+              {/* ui-standard-ignore: 侧栏整行可点（返回应用），不是按钮形态 */}
               <button
                 onClick={() => navigate('/chat')}
                 title={t('admin:backToApp')}
@@ -180,7 +178,7 @@ export default function ConsolePage() {
           {/* 拖拽手柄贴着侧栏右缘（在内部，不会被 overflow-hidden 裁掉，也不制造溢出） */}
           {!collapsed && (
             <div
-              className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize hover:bg-primary-400/30 active:bg-primary-400/50 transition-colors z-toast"
+              className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize hover:bg-primary-400/30 active:bg-primary-400/50 transition-colors z-overlay content-width-handles"
               onMouseDown={handleResizeStart}
             />
           )}
@@ -200,6 +198,7 @@ export default function ConsolePage() {
               <div className="text-xs font-semibold text-textMuted uppercase tracking-wider px-1 mb-1.5">{t(w.labelKey)}</div>
               <div className="space-y-1">
                 {w.items.map((item) => (
+                  // ui-standard-ignore: 移动端整行可点列表项，不是按钮形态
                   <button
                     key={item.key}
                     onClick={() => openItem(item.key)}

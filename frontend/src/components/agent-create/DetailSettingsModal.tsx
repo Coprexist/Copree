@@ -320,7 +320,7 @@ export default function DetailSettingsModal({
                       <NumberField label={t('agents:othersChatQuotaLabel')} value={othersChatQuota} setValue={setOthersChatQuota} min={1} max={9999} />
                       <div className="flex items-center gap-2 pt-5">
                         <span className="text-2xs text-textMuted">{t('agents:othersChatUsed')}: {othersChatUsed}</span>
-                        <button type="button" onClick={() => setOthersChatUsed(0)} className="text-3xs px-2 py-0.5 rounded border border-border text-textMuted hover:text-textSecondary transition-colors">{t('agents:othersChatUsedReset')}</button>
+                        <button type="button" onClick={() => setOthersChatUsed(0)} className="btn btn-xs btn-outline">{t('agents:othersChatUsedReset')}</button>
                       </div>
                       <p className="text-3xs text-textMuted leading-relaxed">{t('agents:othersChatQuotaDesc')}</p>
                     </div>

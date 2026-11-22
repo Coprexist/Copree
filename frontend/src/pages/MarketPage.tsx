@@ -15,7 +15,7 @@ import {
 } from 'lucide-react'
 import { api } from '../api/client'
 import { useT } from '../i18n/I18nContext'
-import { Dialog, PageHeader, UnderlineTabs } from '../components/ui'
+import { Button, Dialog, IconButton, PageHeader, UnderlineTabs } from '../components/ui'
 import MarketGithubTab from '../components/MarketGithubTab'
 import { formatFileSize } from '../utils/format'
 
@@ -326,7 +326,7 @@ export default function MarketPage() {
                 {!isLocal && it.slug && <span className="ml-2">worlds/{it.slug}</span>}
               </div>
             </div>
-            <button onClick={() => setDetail(null)} className="p-1.5 text-textMuted hover:text-textPrimary transition-colors shrink-0"><X size={16} /></button>
+            <IconButton icon={<X size={16} />} label={t('common:close')} size="sm" className="shrink-0" onClick={() => setDetail(null)} />
           </div>
 
           {/* 正文 */}
@@ -375,43 +375,57 @@ export default function MarketPage() {
           {/* 操作 */}
           <div className="p-4 pt-2 shrink-0 flex items-center gap-2">
             {isLocal && isMine && (
-              <button
+              <Button
+                variant="tinted"
+                size="sm"
+                className="flex-1"
+                icon={<ArrowUpCircle size={12} />}
                 onClick={() => { doSync(it); setDetail(null) }}
                 disabled={syncingId === it.id || it.sync_state === 'synced'}
-                className="flex-1 inline-flex items-center justify-center gap-1 text-xs px-3 py-2 rounded-control bg-primary-500/15 text-primary-400 hover:bg-primary-500/25 transition-colors disabled:opacity-40"
               >
-                <ArrowUpCircle size={12} /> {it.sync_state === 'synced' ? '已同步' : '同步到 GitHub'}
-              </button>
+                {it.sync_state === 'synced' ? '已同步' : '同步到 GitHub'}
+              </Button>
             )}
             {isLocal && isMine && (
-              <button
+              <Button
+                variant="secondary"
+                size="sm"
+                className="flex-1"
+                icon={<Edit3 size={12} />}
                 onClick={() => { setEditItem(it); setDetail(null) }}
-                className="flex-1 inline-flex items-center justify-center gap-1 text-xs px-3 py-2 rounded-control bg-elevated text-textSecondary hover:text-primary-400 transition-colors"
-              ><Edit3 size={12} /> 编辑介绍</button>
+              >编辑介绍</Button>
             )}
             {isLocal && isMine && (
-              <button
+              <Button
+                variant="outline-danger"
+                size="sm"
+                icon={<Trash2 size={12} />}
                 onClick={() => { doUnpublish(it); setDetail(null) }}
-                className="inline-flex items-center gap-1 text-xs px-3 py-2 rounded-control bg-elevated text-textMuted hover:text-rose-400 transition-colors"
-              ><Trash2 size={12} /> 下架</button>
+              >下架</Button>
             )}
             {(!isLocal && !it.is_local) && (
-              <button
+              <Button
+                variant="primary"
+                size="sm"
+                className="flex-1"
+                icon={<Download size={12} />}
                 onClick={() => { doImport(it); setDetail(null) }}
                 disabled={importingId === it.id}
-                className="flex-1 inline-flex items-center justify-center gap-1 text-xs px-3 py-2 rounded-control bg-primary-500 text-white hover:bg-primary-600 transition-colors disabled:opacity-40"
               >
-                <Download size={12} /> {importingId === it.id ? '导入中…' : '导入到我的世界'}
-              </button>
+                {importingId === it.id ? '导入中…' : '导入到我的世界'}
+              </Button>
             )}
             {isLocal && !isMine && (
-              <button
+              <Button
+                variant="primary"
+                size="sm"
+                className="flex-1"
+                icon={<Download size={12} />}
                 onClick={() => { doImport(it); setDetail(null) }}
                 disabled={importingId === it.id}
-                className="flex-1 inline-flex items-center justify-center gap-1 text-xs px-3 py-2 rounded-control bg-primary-500 text-white hover:bg-primary-600 transition-colors disabled:opacity-40"
               >
-                <Download size={12} /> {importingId === it.id ? '导入中…' : '一键导入'}
-              </button>
+                {importingId === it.id ? '导入中…' : '一键导入'}
+              </Button>
             )}
           </div>
         </div>
@@ -451,20 +465,17 @@ export default function MarketPage() {
           {bindState?.bound ? (
             <>
               <span className="text-textSecondary">GitHub：<span className="text-primary-400 font-semibold">@{bindState.username}</span>（同步以你的身份推送）</span>
-              <button onClick={() => navigate('/me?bind=github')} className="ml-auto text-3xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 transition-colors shrink-0">更换</button>
-              <button onClick={doUnbind} className="inline-flex items-center gap-1 text-3xs px-2 py-1 rounded bg-elevated text-textMuted hover:text-rose-400 transition-colors shrink-0">
-                <Unlink size={10} /> 解绑
-              </button>
+              <Button variant="link" size="xs" className="ml-auto shrink-0" onClick={() => navigate('/me?bind=github')}>更换</Button>
+              <Button variant="ghost" size="xs" className="shrink-0" icon={<Unlink size={10} />} onClick={doUnbind}>
+                解绑
+              </Button>
             </>
           ) : (
             <>
               <span className="text-textMuted">未绑定 GitHub（同步时用你的身份推送）</span>
-              <button
-                onClick={() => navigate('/me?bind=github')}
-                className="ml-auto inline-flex items-center gap-1 text-3xs px-2 py-1 rounded bg-primary-500/15 text-primary-400 hover:bg-primary-500/25 transition-colors shrink-0"
-              >
-                <Link2 size={10} /> 去绑定 GitHub →
-              </button>
+              <Button variant="tinted" size="xs" className="ml-auto shrink-0" icon={<Link2 size={10} />} onClick={() => navigate('/me?bind=github')}>
+                去绑定 GitHub →
+              </Button>
 
             </>
           )}
@@ -483,16 +494,18 @@ export default function MarketPage() {
                   onChange={(e) => setQ(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter') loadLocal() }}
                   placeholder="搜索世界标题 / 描述…"
-                  className="w-full bg-elevated text-sm pl-8 pr-3 py-1.5 rounded-control border border-border outline-none focus:border-primary-500/50 text-textPrimary"
+                  className="field field-with-icon w-full"
                 />
               </div>
-              <input
-                value={tag}
-                onChange={(e) => setTag(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') loadLocal() }}
-                placeholder="标签，如 2d冒险"
-                className="w-32 sm:w-36 bg-elevated text-sm px-3 py-1.5 rounded-control border border-border outline-none focus:border-primary-500/50 text-textPrimary shrink-0"
-              />
+              <div className="w-32 sm:w-36 shrink-0">
+                <input
+                  value={tag}
+                  onChange={(e) => setTag(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') loadLocal() }}
+                  placeholder="标签，如 2d冒险"
+                  className="field w-full"
+                />
+              </div>
               <button onClick={loadLocal} className="btn btn-sm btn-outline shrink-0">
                 搜索
               </button>
@@ -557,16 +570,19 @@ export default function MarketPage() {
                     </div>
                     {myId !== null && item.author_id === myId && (
                       <div className="flex items-center shrink-0">
-                        <button
+                        <IconButton
+                          icon={<Edit3 size={13} />}
+                          label="编辑介绍"
+                          size="sm"
                           onClick={(e) => { e.stopPropagation(); openEdit(item) }}
-                          className="p-1 text-textMuted hover:text-primary-400 transition-colors"
-                          title="编辑介绍"
-                        ><Edit3 size={13} /></button>
-                        <button
+                        />
+                        <IconButton
+                          icon={<Trash2 size={13} />}
+                          label="下架"
+                          size="sm"
+                          tone="danger"
                           onClick={(e) => { e.stopPropagation(); doUnpublish(item) }}
-                          className="p-1 text-textMuted hover:text-rose-400 transition-colors"
-                          title="下架"
-                        ><Trash2 size={13} /></button>
+                        />
                       </div>
                     )}
                   </div>
@@ -576,11 +592,13 @@ export default function MarketPage() {
                   {item.tags.length > 0 && (
                     <div className="flex flex-wrap gap-1">
                       {item.tags.map((tg) => (
-                        <button
+                        <Button
                           key={tg}
+                          variant="ghost"
+                          size="xs"
+                          icon={<Tag size={9} />}
                           onClick={(e) => { e.stopPropagation(); setTag(tg); loadLocal() }}
-                          className="inline-flex items-center gap-0.5 text-3xs px-1.5 py-0.5 rounded bg-elevated text-textMuted hover:text-primary-400 transition-colors"
-                        ><Tag size={9} /> {tg}</button>
+                        >{tg}</Button>
                       ))}
                     </div>
                   )}
@@ -591,25 +609,28 @@ export default function MarketPage() {
                       {item.sync_state === 'stale' && <span className="text-accent-400/80">云端 {fmtDate(item.github_updated_at)}</span>}
                     </span>
                     {myId !== null && item.author_id === myId && (
-                      <button
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        className="shrink-0"
+                        icon={<ArrowUpCircle size={11} />}
                         onClick={(e) => { e.stopPropagation(); doSync(item) }}
                         disabled={syncingId === item.id || item.sync_state === 'synced'}
                         title={item.sync_state === 'synced' ? '已是最新' : '同步到 GitHub'}
-                        className="inline-flex items-center gap-1 text-3xs px-2 py-1 rounded bg-elevated text-textMuted hover:text-primary-400 transition-colors disabled:opacity-40 shrink-0"
                       >
-                        <ArrowUpCircle size={11} />
                         {syncingId === item.id ? '同步中…' : item.sync_state === 'synced' ? '已同步' : '同步'}
-                      </button>
+                      </Button>
                     )}
                     {!(myId !== null && item.author_id === myId) && (
-                      <button
+                      <Button
+                        variant="tinted"
+                        size="xs"
+                        icon={<Download size={11} />}
                         onClick={(e) => { e.stopPropagation(); doImport(item) }}
                         disabled={importingId === item.id}
-                        className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-control bg-primary-500/15 text-primary-400 hover:bg-primary-500/25 transition-colors disabled:opacity-40"
                       >
-                        <Download size={11} />
                         {importingId === item.id ? '导入中…' : '一键导入'}
-                      </button>
+                      </Button>
                     )}
                   </div>
                 </div>
@@ -669,14 +690,15 @@ export default function MarketPage() {
                       {item.slug ? ` · ${item.slug}` : ''}
                     </span>
                     {!item.is_local && (
-                      <button
+                      <Button
+                        variant="tinted"
+                        size="xs"
+                        icon={<Download size={11} />}
                         onClick={(e) => { e.stopPropagation(); doImport(item) }}
                         disabled={importingId === item.id}
-                        className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-control bg-primary-500/15 text-primary-400 hover:bg-primary-500/25 transition-colors disabled:opacity-40"
                       >
-                        <Download size={11} />
                         {importingId === item.id ? '导入中…' : '导入到我的世界'}
-                      </button>
+                      </Button>
                     )}
                   </div>
                 </div>
@@ -706,14 +728,14 @@ export default function MarketPage() {
           <div className="w-full max-w-md rounded-dialog bg-surface border border-border p-4 space-y-3" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between">
               <span className="text-sm font-semibold text-textPrimary">编辑商品介绍</span>
-              <button onClick={() => setEditItem(null)} className="p-1 text-textMuted hover:text-textPrimary"><X size={15} /></button>
+              <IconButton icon={<X size={15} />} label={t('common:close')} size="sm" onClick={() => setEditItem(null)} />
             </div>
             <div>
               <div className="text-3xs text-textMuted mb-1">标题</div>
               <input
                 value={editTitle}
                 onChange={(e) => setEditTitle(e.target.value)}
-                className="w-full bg-elevated text-sm p-2 rounded-control border border-border outline-none focus:border-primary-500/50 text-textPrimary"
+                className="field w-full"
               />
             </div>
             <div>
@@ -722,7 +744,7 @@ export default function MarketPage() {
                 value={editDesc}
                 onChange={(e) => setEditDesc(e.target.value)}
                 rows={3}
-                className="w-full bg-elevated text-sm p-2 rounded-control border border-border outline-none resize-none focus:border-primary-500/50 text-textPrimary"
+                className="field field-noresize w-full"
               />
             </div>
             <div>
@@ -730,7 +752,7 @@ export default function MarketPage() {
               <input
                 value={editTags}
                 onChange={(e) => setEditTags(e.target.value)}
-                className="w-full bg-elevated text-sm p-2 rounded-control border border-border outline-none focus:border-primary-500/50 text-textPrimary"
+                className="field w-full"
               />
             </div>
             <button
@@ -751,7 +773,7 @@ export default function MarketPage() {
           <div className="w-full max-w-lg bg-surface border border-border rounded-dialog max-h-[85vh] overflow-y-auto shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="sticky top-0 bg-surface border-b border-border px-4 py-3 flex items-center justify-between">
               <span className="text-sm font-semibold text-textPrimary">实例 GitHub 配置</span>
-              <button onClick={() => setSettingsOpen(false)} className="p-1 text-textMuted hover:text-textPrimary transition-colors"><X size={16} /></button>
+              <IconButton icon={<X size={16} />} label={t('common:close')} size="sm" onClick={() => setSettingsOpen(false)} />
             </div>
             <div className="p-4">
               <MarketGithubTab />

@@ -91,7 +91,8 @@ export function PendingQueuePanel({ items, onRemove, style, hint }: {
           </span>
           <button
             onClick={() => onRemove(i)}
-            className="shrink-0 p-0.5 rounded text-textMuted hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+            className="icon-btn icon-btn-xs shrink-0"
+            aria-label={t('tool:world.queue.remove')}
             title={t('tool:world.queue.remove')}
           ><X size={12} /></button>
         </div>
@@ -152,6 +153,7 @@ export function QuestionDialog({ ask, onSubmit, busy }: {
                   {q.options.map((opt) => {
                     const on = (selected[q.id] || []).includes(opt.label)
                     return (
+                      // ui-standard-ignore: 答题选项行（整行可点 + 两行说明），不是按钮形态
                       <button
                         key={opt.label}
                         onClick={() => toggle(q, opt.label)}
@@ -170,7 +172,7 @@ export function QuestionDialog({ ask, onSubmit, busy }: {
                 value={custom[q.id] || ''}
                 onChange={(e) => setCustom((prev) => ({ ...prev, [q.id]: e.target.value }))}
                 placeholder={t('tool:dsh.ask.otherPlaceholder')}
-                className="w-full bg-elevated border border-border rounded-control px-3 py-2 text-xs text-textPrimary focus:outline-none focus:border-primary-400"
+                className="field w-full"
               />
               {q.multiSelect && <div className="text-3xs text-textMuted">{t('tool:dsh.ask.multi')}</div>}
             </div>

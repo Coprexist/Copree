@@ -1,7 +1,7 @@
 // 用户管理：列表 + 新建 / 重置密码 / CSV 批量导入
 
 import { useState, useEffect, useRef } from 'react'
-import { Modal } from '../../../components/ui'
+import { Button, Modal, PasswordInput } from '../../../components/ui'
 import { api } from '../../../api/client'
 import { useT } from '../../../i18n/I18nContext'
 
@@ -30,14 +30,12 @@ function ResetPasswordDialog({ target, onDone, onClose }: {
 
   return (
     <Modal open title={t('admin:resetPasswordTitle').replace('{username}', target.username)} onClose={onClose}>
-      {/* ui-standard-ignore: 账号密码，浏览器密码管理器本来就该管 */}
-      <input
+      <PasswordInput
         ref={inputRef}
-        type="password"
         value={password}
         onChange={e => setPassword(e.target.value)}
         placeholder={t('admin:resetPasswordPlaceholder')}
-        className="w-full px-3 py-2 text-sm border border-border bg-canvas rounded-control focus:outline-none focus:ring-1 focus:ring-primary-500 mb-3"
+        wrapperClassName="mb-3"
         onKeyDown={e => e.key === 'Enter' && reset()}
       />
       <div className="flex justify-end gap-2">
@@ -84,15 +82,14 @@ function CreateUserDialog({ onDone, onClose }: { onDone: () => void; onClose: ()
   return (
     <Modal open title={t('admin:createUserTitle')} onClose={onClose}>
       {error && <p className="text-xs text-rose-400 mb-2">{error}</p>}
-           {/* ui-standard-ignore: 账号密码，浏览器密码管理器本来就该管 */}
       <input value={username} onChange={e => setUsername(e.target.value)} placeholder={t('admin:createUserUsername')}
-        className="w-full px-3 py-2 text-sm border border-border bg-canvas rounded-control mb-2 focus:outline-none focus:ring-1 focus:ring-primary-500" />
+        className="field mb-2" />
       <p className="text-2xs text-textMuted -mt-1.5 mb-2">{username.length > 0 && !usernameOk ? t('admin:createUserUsernameHint') : '\u00a0'}</p>
-      <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder={t('admin:createUserPassword')}
-        className="w-full px-3 py-2 text-sm border border-border bg-canvas rounded-control mb-2 focus:outline-none focus:ring-1 focus:ring-primary-500" />
+      <PasswordInput value={password} onChange={e => setPassword(e.target.value)} placeholder={t('admin:createUserPassword')}
+        wrapperClassName="mb-2" />
       <p className="text-2xs text-textMuted -mt-1.5 mb-2">{password.length > 0 && !passwordOk ? t('admin:createUserPasswordHint') : '\u00a0'}</p>
       <input value={email} onChange={e => setEmail(e.target.value)} placeholder={t('admin:createUserEmail')}
-        className="w-full px-3 py-2 text-sm border border-border bg-canvas rounded-control mb-3 focus:outline-none focus:ring-1 focus:ring-primary-500" />
+        className="field mb-3" />
       <div className="flex justify-end gap-2">
         <button onClick={onClose} className="btn btn-xs btn-outline">{t('common:cancel')}</button>
         <button
@@ -151,6 +148,7 @@ function ImportCsvDialog({ onDone, onClose }: { onDone: (count: number) => void;
       ) : (
         <>
           <p className="text-xs text-textMuted mb-3">{t('admin:importCsvHint')}</p>
+          {/* ui-standard-ignore: CSV 文件选择框（file: 伪类画按钮），不是文本输入 */}
           <input ref={fileRef} type="file" accept=".csv"
             className="w-full text-sm file:mr-3 file:py-1.5 file:px-3 file:rounded-control file:border-0 file:text-xs file:font-medium file:bg-primary-500 file:text-white hover:file:bg-primary-400 mb-3" />
           <div className="flex justify-end gap-2">
@@ -201,14 +199,12 @@ export default function UsersTab() {
         />
       )}
       <div className="flex items-center gap-2 mb-3">
-        <button onClick={() => setShowCreate(true)}
-          className="text-xs px-3 py-1.5 bg-primary-500 text-white rounded-control hover:bg-primary-600 transition-colors">
+        <Button size="sm" onClick={() => setShowCreate(true)}>
           + {t('admin:createUser')}
-        </button>
-        <button onClick={() => setShowImport(true)}
-          className="text-xs px-3 py-1.5 border border-border rounded-control text-textSecondary hover:bg-elevated transition-colors">
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => setShowImport(true)}>
           {t('admin:importCsv')}
-        </button>
+        </Button>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm text-textPrimary">
@@ -288,20 +284,12 @@ export default function UsersTab() {
         </table>
       </div>
       <div className="flex gap-2 mt-4">
-        <button
-          onClick={() => setPage((p) => Math.max(1, p - 1))}
-          disabled={page <= 1}
-          className="text-sm px-3 py-1 border border-border bg-canvas rounded hover:bg-elevated disabled:opacity-40 text-textSecondary"
-        >
+        <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
           {t('common:prevPage')}
-        </button>
-        <button
-          onClick={() => setPage((p) => p + 1)}
-          disabled={data.items.length < data.page_size}
-          className="text-sm px-3 py-1 border border-border bg-canvas rounded hover:bg-elevated disabled:opacity-40 text-textSecondary"
-        >
+        </Button>
+        <Button variant="outline" size="sm" disabled={data.items.length < data.page_size} onClick={() => setPage((p) => p + 1)}>
           {t('common:nextPage')}
-        </button>
+        </Button>
       </div>
     </div>
   )

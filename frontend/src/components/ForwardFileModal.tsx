@@ -138,6 +138,7 @@ export default function ForwardFileModal({ file, onClose }: ForwardFileModalProp
             const key = targetKey(item)
             const checked = selected.has(key)
             return (
+              // ui-standard-ignore: 可勾选的目标列表行（头像/名称/选中底色），不是按钮形态
               <button
                 key={key}
                 onClick={() => toggle(key)}
@@ -239,7 +240,7 @@ export default function ForwardFileModal({ file, onClose }: ForwardFileModalProp
           </span>
           <button
             onClick={onClose}
-            className="px-3 py-1.5 rounded-control text-xs text-textSecondary hover:bg-elevated transition-colors"
+            className="btn btn-xs btn-ghost"
           >
             {result ? t('common:close') : t('common:cancel')}
           </button>

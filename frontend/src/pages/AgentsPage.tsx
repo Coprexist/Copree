@@ -4,7 +4,7 @@ import { api, ApiError } from '../api/client'
 import { Bot, Plus, Edit3, History, Power, Download, Upload, X, RotateCcw, Eye, EyeOff, ArrowLeft, Menu } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import Toggle from '../components/Toggle'
-import { Button, Dialog, IconButton, PageHeader, Slider, SecretInput } from '../components/ui'
+import { Button, Dialog, IconButton, PageHeader, Select, Slider, SecretInput } from '../components/ui'
 import { useT, useLang } from '../i18n/I18nContext'
 import { fmtDate, fmtDateTime } from '../utils/time'
 
@@ -208,30 +208,38 @@ export default function AgentsPage() {
                   </div>
 
                   <div className="flex items-center gap-2 mt-3 pt-3 border-t border-border flex-wrap">
-                    <button
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      icon={<Edit3 size={12} />}
                       onClick={(e) => { e.stopPropagation(); navigate(`/agents/${agent.id}`) }}
-                      className="flex items-center gap-1 px-2 py-1 text-xs text-textSecondary hover:text-primary-400 rounded-control hover:bg-elevated transition-colors"
                     >
-                      <Edit3 size={12} /> {t('agents:edit')}
-                    </button>
-                    <button
+                      {t('agents:edit')}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      icon={<History size={12} />}
                       onClick={(e) => { e.stopPropagation(); setHistoryAgent(agent) }}
-                      className="flex items-center gap-1 px-2 py-1 text-xs text-textSecondary hover:text-primary-400 rounded-control hover:bg-elevated transition-colors"
                     >
-                      <History size={12} /> {t('agents:history')}
-                    </button>
-                    <button
+                      {t('agents:history')}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      icon={<Power size={12} />}
                       onClick={(e) => { e.stopPropagation(); setStateAgent(agent) }}
-                      className="flex items-center gap-1 px-2 py-1 text-xs text-textSecondary hover:text-accent-400 rounded-control hover:bg-elevated transition-colors"
                     >
-                      <Power size={12} /> {t('agents:state')}
-                    </button>
-                    <button
+                      {t('agents:state')}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      icon={<Download size={12} />}
                       onClick={(e) => { e.stopPropagation(); handleExport(agent) }}
-                      className="flex items-center gap-1 px-2 py-1 text-xs text-textSecondary hover:text-mint-400 rounded-control hover:bg-elevated transition-colors"
                     >
-                      <Download size={12} /> {t('agents:export')}
-                    </button>
+                      {t('agents:export')}
+                    </Button>
                   </div>
                 </div>
               )
@@ -486,19 +494,17 @@ function EditAgentModal({ agent, onClose, onUpdated }: {
             {/* 三档快捷切换 */}
             <div className="flex gap-1.5 mb-3">
               {presets.map(p => (
-                <button
+                <Button
                   key={p.key}
+                  variant="outline"
+                  size="sm"
+                  className={`flex-1 ${configProfile === p.key ? 'is-active' : ''}`}
                   onClick={() => handleApplyPreset(p.key)}
                   disabled={applyingPreset || configProfile === p.key}
-                  className={`flex-1 py-1.5 text-xs rounded-control font-medium transition-all ${
-                    configProfile === p.key
-                      ? 'bg-primary-500 text-white shadow-sm'
-                      : 'bg-canvas border border-border text-textSecondary hover:border-primary-500/40 hover:text-primary-400'
-                  } disabled:opacity-50`}
                   title={p.desc}
                 >
                   {p.label}
-                </button>
+                </Button>
               ))}
             </div>
             <div className="space-y-2">
@@ -508,7 +514,7 @@ function EditAgentModal({ agent, onClose, onUpdated }: {
                   value={systemPrompt}
                   onChange={(e) => setSystemPrompt(e.target.value)}
                   rows={3}
-                  className="w-full px-3 py-1.5 rounded-control border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50 resize-none mt-0.5"
+                  className="field field-noresize w-full mt-0.5"
                 />
               </div>
               {/* 模型选择 */}
@@ -599,18 +605,20 @@ function EditAgentModal({ agent, onClose, onUpdated }: {
                   <span className="text-xs text-textSecondary">{t('agents:delayReplyLabel')}</span>
                   <p className="text-3xs text-textMuted mt-0.5">{t('agents:delayReplyDesc')}</p>
                 </div>
-                <select
+                <Select
+                  fieldSize="sm"
+                  className="field-inline"
                   value={delayReplyEnabled === null ? 'inherit' : delayReplyEnabled ? 'on' : 'off'}
                   onChange={(e) => {
                     const v = e.target.value
                     setDelayReplyEnabled(v === 'inherit' ? null : v === 'on')
                   }}
-                  className="field field-sm field-inline"
-                >
-                  <option value="inherit">{t('agents:inheritGlobal')}</option>
-                  <option value="on">{t('agents:enable')}</option>
-                  <option value="off">{t('agents:disable')}</option>
-                </select>
+                  options={[
+                    { value: 'inherit', label: t('agents:inheritGlobal') },
+                    { value: 'on', label: t('agents:enable') },
+                    { value: 'off', label: t('agents:disable') },
+                  ]}
+                />
               </div>
             </div>
           </div>
@@ -679,7 +687,7 @@ function EditAgentModal({ agent, onClose, onUpdated }: {
                 type="text"
                 value={agentApiBaseUrl}
                 onChange={(e) => setAgentApiBaseUrl(e.target.value)}
-                className="w-full mt-0.5 px-3 py-1.5 rounded-control border border-border bg-canvas text-xs text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                className="field w-full mt-0.5"
                 placeholder="https://api.deepseek.com"
               />
             </div>
@@ -730,10 +738,9 @@ function EditAgentModal({ agent, onClose, onUpdated }: {
               </p>
             )}
             <div className="flex gap-2">
-              <button onClick={() => { setPresetPreview(null); setApplyingPreset(false) }}
-                className="flex-1 py-1.5 text-xs border border-border rounded-control hover:bg-elevated text-textSecondary transition-colors">
+              <Button variant="outline" size="sm" className="flex-1" onClick={() => { setPresetPreview(null); setApplyingPreset(false) }}>
                 {t('agents:cancel')}
-              </button>
+              </Button>
               <button onClick={confirmApplyPreset} disabled={applyingPreset}
                 className="btn btn-md btn-primary flex-1">
                 {applyingPreset ? t('agents:applying') : t('agents:confirmSwitch')}
@@ -832,14 +839,15 @@ function HistoryModal({ agent, onClose, onRollback }: {
                       {isLatest && <span className="ml-1 text-primary-400 font-medium">{t('agents:currentLabel')}</span>}
                     </span>
                     {!isLatest && (
-                      <button
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        icon={<RotateCcw size={11} />}
                         onClick={() => handleRollback(h.id)}
                         disabled={rollingBack === h.id}
-                        className="flex items-center gap-1 px-2 py-0.5 text-xs text-accent-400 hover:bg-accent-400/10 rounded-control transition-colors disabled:opacity-30"
                       >
-                        <RotateCcw size={11} />
                         {rollingBack === h.id ? t('agents:rollingBack') : t('agents:rollbackTo')}
-                      </button>
+                      </Button>
                     )}
                   </div>
                   {h.system_prompt && (
@@ -931,7 +939,7 @@ function StateModal({ agent, onClose, onUpdated }: {
                 min={1} max={72}
                 value={durationHours}
                 onChange={(e) => setDurationHours(parseInt(e.target.value) || 1)}
-                className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                className="field w-full"
               />
             </div>
           )}
@@ -942,7 +950,7 @@ function StateModal({ agent, onClose, onUpdated }: {
               type="text"
               value={reason}
               onChange={(e) => setReason(e.target.value)}
-              className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+              className="field w-full"
               placeholder={t('agents:reasonPlaceholder')}
             />
           </div>
@@ -1036,6 +1044,7 @@ function ImportSoulModal({ onClose, onImported }: { onClose: () => void; onImpor
           </button>
         </div>
 
+        {/* ui-standard-ignore: 文件选择控件（file: 伪元素按钮），不是输入框形态 */}
         <input
           type="file"
           accept=".json"

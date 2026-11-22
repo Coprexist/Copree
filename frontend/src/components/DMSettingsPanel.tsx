@@ -159,7 +159,7 @@ export default function DMSettingsPanel({ sessionId, partner, myDndUntil, onClos
                 <button
                   onClick={handleCancelDnd}
                   disabled={loading}
-                  className="btn btn-md btn-primary w-full"
+                  className="btn btn-sm btn-primary w-full"
                 >
                   {t('dmSettings:cancelDnd')}
                 </button>
@@ -173,7 +173,7 @@ export default function DMSettingsPanel({ sessionId, partner, myDndUntil, onClos
                       key={d.key}
                       onClick={() => handleSetDnd(d.minutes)}
                       disabled={loading}
-                      className="btn btn-md btn-secondary w-full"
+                      className="btn btn-sm btn-secondary w-full"
                     >
                       <Clock size={12} />
                       {t(d.key)}
@@ -195,7 +195,7 @@ export default function DMSettingsPanel({ sessionId, partner, myDndUntil, onClos
                   <button
                     onClick={handleCustomDnd}
                     disabled={loading || !customMinutes.trim()}
-                    className="btn btn-md btn-primary shrink-0"
+                    className="btn btn-sm btn-primary shrink-0"
                   >
                     {t('common:set')}
                   </button>
@@ -282,7 +282,7 @@ export default function DMSettingsPanel({ sessionId, partner, myDndUntil, onClos
               <button
                 onClick={handleExportChat}
                 disabled={exporting}
-                className="btn btn-md btn-primary w-full gap-2"
+                className="btn btn-sm btn-primary w-full gap-2"
               >
                 <Download size={16} />
                 {exporting ? t('common:exporting') : t('dmSettings:downloadExport')}

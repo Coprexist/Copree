@@ -5,6 +5,7 @@ import remarkGfm from 'remark-gfm'
 import { ArrowLeft, Loader2, BookOpen } from 'lucide-react'
 import MermaidBlock from '../components/MermaidBlock'
 import OutlineNav from '../components/shared/OutlineNav'
+import { IconButton } from '../components/ui'
 
 /** 手册配置：路径 → { 文档路径, 标题 } */
 const MANUAL_CONFIG: Record<string, { docPath: string; title: string }> = {
@@ -116,13 +117,12 @@ export default function ManualPage() {
       <div ref={docRef} className="mx-auto w-full min-w-0 max-w-4xl">
         {/* 头部导航 */}
         <div className="flex items-center gap-3 mb-6">
-          <button
+          <IconButton
+            icon={<ArrowLeft size={20} />}
+            label="返回"
+            size="sm"
             onClick={() => navigate(-1)}
-            className="p-1.5 rounded-control hover:bg-elevated text-textSecondary hover:text-textPrimary transition-colors"
-            title="返回"
-          >
-            <ArrowLeft size={20} />
-          </button>
+          />
           <BookOpen size={20} className="text-primary-400" />
           <h1 className="text-lg font-bold text-textPrimary">{config.title}</h1>
         </div>

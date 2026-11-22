@@ -9,7 +9,7 @@ import {
   ResponsiveContainer, ComposedChart, Line
 } from 'recharts'
 import { ArrowLeft, Loader2, BarChart3, Activity, FileText, Cpu } from 'lucide-react'
-import { PageShell } from '../components/ui'
+import { Button, PageShell } from '../components/ui'
 
 interface DailyPoint {
   date: string
@@ -155,17 +155,15 @@ export default function UsagePage() {
       {/* 日期选择 */}
       <div className="flex gap-2">
         {[7, 30, 60, 90].map(d => (
-          <button
+          <Button
             key={d}
+            variant="outline"
+            size="sm"
+            className={days === d ? 'is-active' : ''}
             onClick={() => setDays(d)}
-            className={`px-4 py-2 rounded-card text-xs font-medium transition-colors ${
-              days === d
-                ? 'bg-primary-500/15 text-primary-600 dark:text-primary-300 border border-primary-400/30'
-                : 'bg-surface border border-border text-textSecondary hover:bg-elevated'
-            }`}
           >
             {d}{t('usage:daysSuffix')}
-          </button>
+          </Button>
         ))}
       </div>
 

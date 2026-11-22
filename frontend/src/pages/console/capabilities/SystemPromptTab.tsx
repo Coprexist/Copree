@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { api } from '../../../api/client'
 import { useT } from '../../../i18n/I18nContext'
 import { NOTICE_BOX_CLASS, useNotice } from '../../../hooks/useNotice'
+import { Button } from '../../../components/ui'
 import { Save, RotateCcw, Eye, Edit3, ChevronDown, ChevronUp, Loader2, Layers, ArrowRight, ArrowUp, ArrowDown } from 'lucide-react'
 
 interface Segment {
@@ -186,7 +187,8 @@ export default function SystemPromptTab() {
                     <textarea
                       value={editValue}
                       onChange={e => setEditValue(e.target.value)}
-                      className="w-full h-48 px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary font-mono resize-y focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                      rows={8}
+                      className="field font-mono w-full"
                     />
                     <div className="flex items-center gap-2">
                       <button
@@ -212,20 +214,24 @@ export default function SystemPromptTab() {
                     </pre>
                     {!seg.readonly && (
                       <div className="flex items-center gap-2">
-                        <button
+                        <Button
+                          variant="tinted"
+                          size="sm"
+                          icon={<Edit3 size={12} />}
                           onClick={() => startEdit(seg)}
-                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-control bg-primary-500/10 text-primary-400 hover:bg-primary-500/20 text-xs font-medium transition-colors"
                         >
-                          <Edit3 size={12} /> 编辑
-                        </button>
+                          编辑
+                        </Button>
                         {seg.is_overridden && (
-                          <button
-                            onClick={() => resetSegment(seg)}
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            icon={<RotateCcw size={12} />}
                             disabled={saving}
-                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-control bg-canvas border border-border text-xs text-textMuted hover:text-textPrimary transition-colors"
+                            onClick={() => resetSegment(seg)}
                           >
-                            <RotateCcw size={12} /> 恢复默认
-                          </button>
+                            恢复默认
+                          </Button>
                         )}
                       </div>
                     )}

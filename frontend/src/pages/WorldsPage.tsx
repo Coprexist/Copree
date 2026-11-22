@@ -105,14 +105,14 @@ export default function WorldsPage() {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder={t('tool:world.list.namePlaceholder')}
-                className="w-full bg-elevated text-textPrimary px-3 py-2 rounded text-sm outline-none border border-border focus:border-primary-500/50"
+                className="field w-full"
               />
               <textarea
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder={t('tool:world.list.descPlaceholder')}
                 rows={2}
-                className="w-full bg-elevated text-textPrimary px-3 py-2 rounded text-sm outline-none resize-none border border-border focus:border-primary-500/50"
+                className="field field-noresize w-full"
               />
               <button onClick={create} className="btn btn-sm btn-primary">{t('tool:world.list.createAndDesign')}</button>
             </div>

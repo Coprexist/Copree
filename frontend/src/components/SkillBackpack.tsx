@@ -102,14 +102,11 @@ export default function SkillBackpack({ agentId, className = '' }: Props) {
           const isExpanded = expandedSegment === seg.name
 
           return (
+            // ui-standard-ignore: 整块可点的段卡片（图标+标题+说明），padding 属卡片内距
             <button
               key={seg.name}
               onClick={() => setExpandedSegment(isExpanded ? null : seg.name)}
- className={` card text-left p-3.5 transition-all ${
-                isExpanded
-                  ? 'ring-2 ring-primary-500/30 shadow-lg border-primary-500/30'
-                  : 'hover:border-primary-500/20 hover:shadow-sm'
-              }`}
+              className={`card card-interactive text-left p-3.5 ${isExpanded ? 'is-active ring-2 ring-primary-500/30' : ''}`}
             >
               <div className="flex items-center gap-2.5 mb-2">
                 <div className="w-8 h-8 rounded-control bg-primary-500/10 flex items-center justify-center shrink-0">

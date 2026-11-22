@@ -3,6 +3,7 @@ import { CheckCircle, Circle, Play, Plus, RefreshCw, Settings2, Square, Trash2 }
 import { api } from '../../../api/client'
 import { useT } from '../../../i18n/I18nContext'
 import type { PluginServiceInstance, PluginView } from '../../../utils/skin'
+import { Button, SecretInput } from '../../../components/ui'
 
 /**
  * service 类插件的实例管理（一个插件多份配置：每个 QQ 机器人一份）
@@ -125,14 +126,15 @@ export default function PluginServiceInstances({ plugin, onChanged, onMessage, s
         </span>
         {dirty && <span className="text-2xs text-amber-600 dark:text-amber-400">{t('tool:pluginService.unsaved')}</span>}
         {dirty && (
-          <button
+          <Button
+            variant="tinted"
+            size="xs"
+            loading={saving}
+            icon={saving ? <RefreshCw size={12} className="animate-spin" /> : undefined}
             onClick={save}
-            disabled={saving}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-control text-xs font-medium bg-primary-500/10 text-primary-400 hover:bg-primary-500/20 border border-primary-400/20 transition-colors disabled:opacity-50"
           >
-            {saving && <RefreshCw size={12} className="animate-spin" />}
             {t('tool:pluginService.save')}
-          </button>
+          </Button>
         )}
       </div>
 
@@ -164,32 +166,34 @@ export default function PluginServiceInstances({ plugin, onChanged, onMessage, s
               {detailText(inst.detail) && (
                 <span className="text-2xs text-textMuted font-mono">{detailText(inst.detail)}</span>
               )}
-              <button
-                onClick={() => toggleRun(inst)}
+              <Button
+                size="xs"
+                variant={running ? 'tinted-danger' : 'success'}
                 disabled={busy === inst.instance || added.includes(inst.instance)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-control text-xs font-medium transition-colors disabled:opacity-50 ${
-                  running
-                    ? 'bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 hover:bg-rose-100 border border-rose-200 dark:border-rose-800'
-                    : 'bg-mint-500 text-white hover:bg-mint-600'
-                }`}
-              >
-                {busy === inst.instance
+                icon={busy === inst.instance
                   ? <RefreshCw size={12} className="animate-spin" />
                   : running ? <Square size={12} /> : <Play size={12} />}
+                onClick={() => toggleRun(inst)}
+              >
                 {running ? t('tool:pluginService.stop') : t('tool:pluginService.start')}
-              </button>
-              <button
+              </Button>
+              <Button
+                size="xs"
+                variant="secondary"
+                icon={<Settings2 size={12} />}
                 onClick={() => setOpen(open === inst.instance ? null : inst.instance)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-control text-xs font-medium bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
               >
-                <Settings2 size={12} /> {t('tool:pluginService.config')}
-              </button>
-              <button
+                {t('tool:pluginService.config')}
+              </Button>
+              <Button
+                size="xs"
+                variant="ghost"
+                className="!text-rose-500"
+                icon={<Trash2 size={12} />}
                 onClick={() => removeInstance(inst.instance)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-control text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/20 transition-colors"
               >
-                <Trash2 size={12} /> {t('tool:pluginService.remove')}
-              </button>
+                {t('tool:pluginService.remove')}
+              </Button>
             </div>
 
             {open === inst.instance && (
@@ -221,15 +225,25 @@ export default function PluginServiceInstances({ plugin, onChanged, onMessage, s
                           </button>
                         )}
                       </span>
-                      <input
-                        type={secret ? 'password' : 'text'}
-                        value={value}
-                        onChange={(e) => secret ? setSecret(inst.instance, key, e.target.value) : setValue(inst.instance, key, e.target.value)}
-                        placeholder={secret && hasSaved && !isCleared ? t('tool:pluginService.secretKeep') : (field.description || '')}
-                        autoComplete="off"
-                        disabled={isCleared}
-                        className="mt-1 w-full px-2.5 py-1.5 rounded-control border border-border bg-surface text-sm text-textPrimary focus:outline-none focus:border-primary-400 disabled:opacity-50"
-                      />
+                      {secret ? (
+                        <SecretInput
+                          value={value}
+                          onChange={(e) => setSecret(inst.instance, key, e.target.value)}
+                          placeholder={hasSaved && !isCleared ? t('tool:pluginService.secretKeep') : (field.description || '')}
+                          disabled={isCleared}
+                          wrapperClassName="mt-1 w-full"
+                        />
+                      ) : (
+                        <input
+                          type="text"
+                          value={value}
+                          onChange={(e) => setValue(inst.instance, key, e.target.value)}
+                          placeholder={field.description || ''}
+                          autoComplete="off"
+                          disabled={isCleared}
+                          className="field field-sm mt-1 w-full"
+                        />
+                      )}
                     </label>
                   )
                 })}
@@ -245,14 +259,16 @@ export default function PluginServiceInstances({ plugin, onChanged, onMessage, s
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
             placeholder={t('tool:pluginService.instanceNameHint')}
-            className="px-2.5 py-1.5 rounded-control border border-border bg-surface text-xs text-textPrimary focus:outline-none focus:border-primary-400"
+            className="field field-sm w-56"
           />
-          <button
+          <Button
+            size="xs"
+            variant="secondary"
+            icon={<Plus size={12} />}
             onClick={addInstance}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-control text-xs font-medium bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
           >
-            <Plus size={12} /> {t('tool:pluginService.addInstance')}
-          </button>
+            {t('tool:pluginService.addInstance')}
+          </Button>
         </div>
       ) : (
         <p className="text-2xs text-textMuted">{t('tool:pluginService.singleHint')}</p>

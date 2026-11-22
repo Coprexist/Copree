@@ -649,34 +649,25 @@ export default function WorldDesignPage() {
             {world.status === 'active' ? t('tool:world.top.status.active') : t('tool:world.top.status.hibernating')}
           </span>
           <div className="flex-1" />
-          <button
+          <IconButton
+            icon={<Settings size={14} />}
+            label={t('tool:world.top.configTitle')}
+            size="sm"
+            className={`shrink-0 ${showCreatorForm ? 'text-primary-400' : ''}`}
             onClick={() => setShowCreatorForm((v) => !v)}
-            className={`shrink-0 p-1.5 transition-colors ${showCreatorForm ? 'text-primary-400' : 'text-textMuted hover:text-textPrimary'}`}
-            title={t('tool:world.top.configTitle')}
-          >
-            <Settings size={14} />
-          </button>
-          <button onClick={openDocs} className="shrink-0 p-1.5 text-textMuted hover:text-textPrimary transition-colors" title={t('tool:world.top.docsHint')}>
-            <BookOpen size={14} />
-          </button>
-          <button onClick={() => setWorldZipOpen(true)} className="shrink-0 p-1.5 text-textMuted hover:text-textPrimary transition-colors" title={t('tool:world.top.exportHint')}>
-            <Download size={14} />
-          </button>
-          <button onClick={() => setWorldImportOpen(true)} className="shrink-0 p-1.5 text-textMuted hover:text-textPrimary transition-colors" title={t('tool:world.top.importHint')}>
-            <FolderInput size={14} />
-          </button>
-          <button onClick={publishToMarket} className="shrink-0 inline-flex items-center gap-1 text-xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 transition-colors px-2 py-1 whitespace-nowrap" title={t('tool:world.top.publish')}>
-            <Upload size={13} /> {t('tool:world.top.publishShort')}
-          </button>
-          <button onClick={() => setGroupManagerOpen(true)} className="shrink-0 p-1.5 text-textMuted hover:text-textPrimary transition-colors" title={t('tool:world.top.groups')}>
-            <MoreHorizontal size={16} />
-          </button>
+          />
+          <IconButton icon={<BookOpen size={14} />} label={t('tool:world.top.docsHint')} size="sm" className="shrink-0" onClick={openDocs} />
+          <IconButton icon={<Download size={14} />} label={t('tool:world.top.exportHint')} size="sm" className="shrink-0" onClick={() => setWorldZipOpen(true)} />
+          <IconButton icon={<FolderInput size={14} />} label={t('tool:world.top.importHint')} size="sm" className="shrink-0" onClick={() => setWorldImportOpen(true)} />
+          <Button variant="ghost" size="xs" className="shrink-0 whitespace-nowrap" icon={<Upload size={13} />} title={t('tool:world.top.publish')} onClick={publishToMarket}>
+            {t('tool:world.top.publishShort')}
+          </Button>
+          <IconButton icon={<MoreHorizontal size={16} />} label={t('tool:world.top.groups')} size="sm" className="shrink-0" onClick={() => setGroupManagerOpen(true)} />
           {mobileTab === 'files' && (
             <div className="relative shrink-0">
-              <button onClick={() => setUploadMenuOpen((v) => !v)} className="inline-flex items-center gap-1 text-xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 transition-colors px-2 py-1 whitespace-nowrap" title={t('tool:world.files.uploadFile')}>
-                <Upload size={14} />
+              <Button variant="ghost" size="xs" className="shrink-0 whitespace-nowrap" icon={<Upload size={14} />} title={t('tool:world.files.uploadFile')} onClick={() => setUploadMenuOpen((v) => !v)}>
                 {t('tool:world.files.upload')}
-              </button>
+              </Button>
               {uploadMenuOpen && (
                 <MenuPanel className="absolute right-0 top-full mt-1 w-56 p-1 z-modal">
                   <MenuItem onClick={mobileUploadHere} className="inline-flex items-center gap-1.5 text-xs">
@@ -774,6 +765,7 @@ export default function WorldDesignPage() {
                 </div>
               )}
               {mobileDirNode.children.map((n) => n.isDir ? (
+                // ui-standard-ignore: 目录行整行可点（图标+名称+箭头），不是按钮形态
                 <button
                   key={n.path}
                   onClick={() => setMobileDir(n.path)}
@@ -785,6 +777,7 @@ export default function WorldDesignPage() {
                 </button>
               ) : (
                 <div key={n.path} className="flex items-center">
+                  {/* ui-standard-ignore: 文件行整行可点（图标+名称），不是按钮形态 */}
                   <button
                     onClick={() => { selectFile(n.path); setMobileView('file') }}
                     className={`flex items-center gap-2 flex-1 min-w-0 text-left px-2 py-2.5 rounded-control text-sm transition-colors ${currentFile === n.path ? 'bg-primary-500/20 text-primary-300' : 'hover:bg-elevated text-textSecondary'}`}
@@ -811,7 +804,7 @@ export default function WorldDesignPage() {
             <div className="w-full bg-surface rounded-t-2xl border-t border-border flex flex-col max-h-[75%]">
               <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
                 <span className="text-sm font-semibold flex-1">{t('tool:world.editor.uploadDirTitle')}</span>
-                <button onClick={() => setUploadDirPickerOpen(false)} className="text-xs text-textMuted hover:text-textPrimary px-2 py-1">{t('common:cancel')}</button>
+                <Button variant="ghost" size="xs" onClick={() => setUploadDirPickerOpen(false)}>{t('common:cancel')}</Button>
               </div>
               <div className="flex items-center gap-0.5 px-4 py-2 overflow-x-auto text-xs border-b border-border/60">
                 <button onClick={() => setUploadNavDir('')} className="text-primary-400 hover:underline shrink-0">/</button>
@@ -836,6 +829,7 @@ export default function WorldDesignPage() {
                   <div className="text-xs text-textMuted text-center mt-8">{t('tool:world.editor.noSubdirs')}</div>
                 )}
                 {uploadDirNode.children.filter((n) => n.isDir).map((n) => (
+                  // ui-standard-ignore: 目录行整行可点（图标+名称+箭头），不是按钮形态
                   <button
                     key={n.path}
                     onClick={() => setUploadNavDir(n.path)}
@@ -1044,10 +1038,16 @@ export default function WorldDesignPage() {
           {!chatFocus && (
             <div className="flex-1 flex flex-col min-w-0" style={{ minWidth: MIN_EDITOR }}>
               <div className="flex items-center gap-2 h-9 px-2 bg-surface border-b border-border shrink-0">
-                <div className="flex items-center gap-0.5 p-0.5 rounded-control bg-elevated border border-border shrink-0">
-                  <button onClick={() => setMode('files')} className={`px-2 py-0.5 text-2xs rounded-control transition-colors ${mode === 'files' ? 'bg-surface text-textPrimary font-medium shadow-sm' : 'text-textMuted hover:text-textPrimary'}`}>{t('tool:world.pane.files')}</button>
-                  <button onClick={() => setMode('preview')} className={`px-2 py-0.5 text-2xs rounded-control transition-colors ${mode === 'preview' ? 'bg-surface text-textPrimary font-medium shadow-sm' : 'text-textMuted hover:text-textPrimary'}`}>{t('tool:world.pane.preview')}</button>
-                </div>
+                <UnderlineTabs
+                  size="sm"
+                  className="h-full shrink-0"
+                  items={[
+                    { key: 'files' as const, label: t('tool:world.pane.files') },
+                    { key: 'preview' as const, label: t('tool:world.pane.preview') },
+                  ]}
+                  value={mode}
+                  onChange={setMode}
+                />
                 <span className="min-w-0 truncate text-xs text-textSecondary">
                   {mode === 'preview' ? t('tool:world.pane.previewTitle', { url: `/world/${wid}/preview` }) : (currentFile || t('tool:world.pane.noSelection'))}
                 </span>
@@ -1120,12 +1120,13 @@ export default function WorldDesignPage() {
                 <span className="text-sm font-semibold text-textPrimary truncate">{t('tool:world.docs.title')}</span>
                 <span className="text-3xs text-textMuted hidden sm:inline">{t('tool:world.docs.subtitle')}</span>
               </div>
-              <button onClick={() => setDocsOpen(false)} className="p-1 text-textMuted hover:text-textPrimary transition-colors shrink-0" title={t('common:close')}><X size={16} /></button>
+              <IconButton icon={<X size={16} />} label={t('common:close')} size="sm" className="shrink-0" onClick={() => setDocsOpen(false)} />
             </div>
             <div className="flex flex-1 min-h-0 flex-col md:flex-row">
               {/* 分区列表：手机顶部横向滚动条，桌面左侧栏 */}
               <div className="shrink-0 md:w-52 md:border-r md:border-border overflow-x-auto md:overflow-y-auto p-2 space-y-1 flex md:flex-col gap-1">
                 {docsSections.map((sec) => (
+                  // ui-standard-ignore: 文档分区导航行（两行标题+简介，整行可点），不是按钮形态
                   <button
                     key={sec.id}
                     onClick={() => selectDoc(sec.id)}
@@ -1215,6 +1216,7 @@ export default function WorldDesignPage() {
             </div>
             <div className="text-xs text-textMuted mb-4">{t('tool:world.zip.hint')}</div>
             <div className="space-y-2">
+              {/* ui-standard-ignore: 选项卡片（整卡可点，标题+说明两行），不是按钮形态 */}
               <button
                 onClick={() => downloadWorldZip(true)}
                 className="w-full text-left px-3.5 py-3 rounded-card border border-border bg-elevated/40 hover:bg-elevated transition-colors"
@@ -1222,6 +1224,7 @@ export default function WorldDesignPage() {
                 <div className="flex items-center gap-2 text-sm text-textPrimary"><Download size={13} className="text-primary-400" /> {t('tool:world.zip.full')}</div>
                 <div className="text-3xs text-textMuted mt-1 pl-5">{t('tool:world.zip.fullDesc')}</div>
               </button>
+              {/* ui-standard-ignore: 选项卡片（整卡可点，标题+说明两行），不是按钮形态 */}
               <button
                 onClick={() => downloadWorldZip(false)}
                 className="w-full text-left px-3.5 py-3 rounded-card border border-border bg-elevated/40 hover:bg-elevated transition-colors"
@@ -1230,7 +1233,7 @@ export default function WorldDesignPage() {
                 <div className="text-3xs text-textMuted mt-1 pl-5">{t('tool:world.zip.codeOnlyDesc')}</div>
               </button>
             </div>
-            <button onClick={() => setWorldZipOpen(false)} className="w-full mt-3 py-1.5 text-xs text-textMuted hover:text-textPrimary transition-colors">{t('common:cancel')}</button>
+            <Button variant="ghost" size="sm" className="w-full mt-3" onClick={() => setWorldZipOpen(false)}>{t('common:cancel')}</Button>
           </div>
         </Dialog>
       )}
@@ -1245,6 +1248,7 @@ export default function WorldDesignPage() {
             </div>
             <div className="text-xs text-textMuted mb-4">{t('tool:world.import.hint')}</div>
             <div className="space-y-2">
+              {/* ui-standard-ignore: 选项卡片（整卡可点，标题+说明两行），不是按钮形态 */}
               <button
                 onClick={() => { setImportMode('safe'); importZipRef.current?.click() }}
                 className="w-full text-left px-3.5 py-3 rounded-card border border-primary-500/40 bg-primary-500/10 hover:bg-primary-500/15 transition-colors"
@@ -1252,6 +1256,7 @@ export default function WorldDesignPage() {
                 <div className="flex items-center gap-2 text-sm text-textPrimary"><FolderInput size={13} className="text-primary-400" /> {t('tool:world.import.keepData')}</div>
                 <div className="text-3xs text-textMuted mt-1 pl-5">{t('tool:world.import.keepDataDesc')}</div>
               </button>
+              {/* ui-standard-ignore: 选项卡片（整卡可点，标题+说明两行），不是按钮形态 */}
               <button
                 onClick={() => { setImportMode('full'); importZipRef.current?.click() }}
                 className="w-full text-left px-3.5 py-3 rounded-card border border-border bg-elevated/40 hover:bg-elevated transition-colors"
@@ -1260,7 +1265,7 @@ export default function WorldDesignPage() {
                 <div className="text-3xs text-textMuted mt-1 pl-5">{t('tool:world.import.withDataDesc')}</div>
               </button>
             </div>
-            <button onClick={() => setWorldImportOpen(false)} className="w-full mt-3 py-1.5 text-xs text-textMuted hover:text-textPrimary transition-colors">{t('common:cancel')}</button>
+            <Button variant="ghost" size="sm" className="w-full mt-3" onClick={() => setWorldImportOpen(false)}>{t('common:cancel')}</Button>
           </div>
         </Dialog>
       )}

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { api, getApiBaseUrl } from '../api/client'
 import { Save, Upload, Pencil, Check, Trash2, X, Image as ImageIcon, AlertTriangle, Lock, Megaphone, Info } from 'lucide-react'
 import { useT } from '../i18n/I18nContext'
+import { Select } from './ui'
 
 interface MsgData {
   hard_title: string; hard_body: string; hard_color: string; hard_text_color: string
@@ -148,14 +149,14 @@ export default function MaintenanceMsgEditor() {
       <button
         onClick={onSave}
         disabled={state === 'saving' || state === 'saved'}
-        className={`flex items-center gap-1 px-2.5 py-1 rounded-control text-2xs font-medium transition-colors ${
+        className={`btn btn-xs gap-1 ${
           state === 'dirty'
-            ? 'bg-primary-500 text-white hover:bg-primary-600'
+            ? 'btn-primary'
             : state === 'saved'
-              ? 'bg-mint-500/15 text-mint-400'
+              ? 'btn-tinted-success'
               : state === 'error'
-                ? 'bg-rose-500/15 text-rose-400'
-                : 'bg-canvas border border-border text-textSecondary hover:text-primary-400 hover:border-primary-500/40'
+                ? 'btn-tinted-danger'
+                : 'btn-outline'
         }`}
       >
         {state === 'saved' ? <Check size={12} /> : <Save size={12} />}{label}
@@ -297,16 +298,16 @@ export default function MaintenanceMsgEditor() {
               placeholder={selPreset ? '另存为新预设…' : '新预设名称'}
               onChange={e => setPresetInput(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter' && presetInput.trim()) { savePreset(presetInput); setPresetInput('') } }}
-              className="w-28 px-2 py-1.5 rounded-control border border-border bg-canvas text-2xs text-textPrimary focus:outline-none"
+              className="field field-sm"
             />
             <button onClick={() => { if (presetInput.trim()) savePreset(presetInput); setPresetInput('') }}
-              className="shrink-0 px-2.5 py-1.5 text-2xs rounded-control bg-primary-500/10 border border-primary-500/30 text-primary-400 hover:bg-primary-500/20 transition-colors">
+              className="btn btn-xs btn-tinted shrink-0">
               <Save size={13} className="inline mr-0.5" />存预设
             </button>
           </div>
           {selPreset && (
             <div className="flex items-center gap-1">
-              <button onClick={() => { setRenaming(selPreset); setRenameValue(selPreset) }} className="p-1.5 rounded-control text-rose-400/70 hover:text-rose-400 hover:bg-rose-500/10 transition-colors" title="重命名"><Pencil size={13} /></button>
+              <button onClick={() => { setRenaming(selPreset); setRenameValue(selPreset) }} className="icon-btn icon-btn-sm" aria-label="重命名" title="重命名"><Pencil size={13} /></button>
               <button onClick={() => deletePreset(selPreset)} className="icon-btn icon-btn-sm" title="删除"><Trash2 size={13} /></button>
             </div>
           )}
@@ -318,10 +319,10 @@ export default function MaintenanceMsgEditor() {
               value={renameValue}
               onChange={e => setRenameValue(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') renamePreset(renaming, renameValue); if (e.key === 'Escape') setRenaming(null) }}
-              className="flex-1 px-2 py-1.5 rounded-control border border-border bg-canvas text-2xs focus:outline-none focus:ring-1 focus:ring-primary-500/50"
+              className="field field-sm flex-1 min-w-0"
             />
             <button onClick={() => renamePreset(renaming, renameValue)}
-              className="p-1.5 text-textMuted hover:text-textPrimary"><Check size={12} /></button>
+              className="icon-btn icon-btn-sm" aria-label="确认重命名" title="确认重命名"><Check size={12} /></button>
             <button onClick={() => setRenaming(null)} className="icon-btn icon-btn-sm"><X size={13} /></button>
           </div>
         )}
@@ -349,9 +350,9 @@ export default function MaintenanceMsgEditor() {
               </div>
               <div className="flex-1 space-y-2">
                 <input value={msg.hard_title} onChange={e => updateMsg({ hard_title: e.target.value })} placeholder="标题"
-                  className="w-full px-3 py-1.5 rounded-control border border-border bg-canvas text-xs text-textPrimary focus:outline-none focus:border-primary-500/40" />
+                  className="field field-sm w-full" />
                 <input value={msg.hard_body} onChange={e => updateMsg({ hard_body: e.target.value })} placeholder="正文"
-                  className="w-full px-3 py-1.5 rounded-control border border-border bg-canvas text-xs text-textPrimary focus:outline-none focus:border-primary-500/40" />
+                  className="field field-sm w-full" />
               </div>
             </div>
             <div className="flex items-center gap-3">
@@ -363,18 +364,23 @@ export default function MaintenanceMsgEditor() {
                   <div className="w-6 h-6 rounded border border-border/50" style={{ backgroundColor: msg.hard_text_color }} />
                 </div>
               </div>
-              <select value={msg.hard_style} onChange={e => updateMsg({ hard_style: e.target.value })}
-                className="field field-sm field-inline">
-                <option value="popup">弹窗</option>
-                <option value="banner">顶栏</option>
-              </select>
+              <Select
+                fieldSize="sm"
+                className="field-inline"
+                value={msg.hard_style}
+                onChange={e => updateMsg({ hard_style: e.target.value })}
+                options={[
+                  { value: 'popup', label: '弹窗' },
+                  { value: 'banner', label: '顶栏' },
+                ]}
+              />
             </div>
             <div>
               <div className="flex gap-1.5">
                 <input value={msg.hard_image} onChange={e => updateMsg({ hard_image: e.target.value })} placeholder="图片 URL"
-                  className="flex-1 px-3 py-1.5 rounded-control border border-border bg-canvas text-xs text-textPrimary focus:outline-none focus:border-primary-500/40" />
+                  className="field field-sm flex-1 min-w-0" />
                 <button onClick={addImageUrl} className="btn btn-xs btn-outline shrink-0 bg-canvas text-2xs hover:text-primary-400" title="添加外链"><ImageIcon size={13} /></button>
-                <label className={`shrink-0 px-2.5 py-1.5 rounded-control border border-border bg-canvas text-2xs text-textSecondary hover:text-primary-400 cursor-pointer transition-colors ${uploading ? 'opacity-40 pointer-events-none' : ''}`}>
+                <label className={`btn btn-xs btn-outline shrink-0 cursor-pointer ${uploading ? 'opacity-40 pointer-events-none' : ''}`}>
                   {uploading ? '···' : <Upload size={13} />}
                   <input ref={fileRef} type="file" accept="image/*" className="hidden" disabled={uploading} onChange={e => { const f = e.target.files?.[0]; if (f) handleUpload(f); e.target.value = '' }} />
                 </label>
@@ -434,7 +440,7 @@ export default function MaintenanceMsgEditor() {
                 <div className="w-8 h-8 rounded-control border border-border/50" style={{ backgroundColor: msg.soft_color }} />
               </div>
               <input value={msg.soft_text} onChange={e => updateMsg({ soft_text: e.target.value })} placeholder="播报文字"
-                className="flex-1 px-3 py-1.5 rounded-control border border-border bg-canvas text-xs text-textPrimary focus:outline-none focus:border-primary-500/40" />
+                className="field field-sm flex-1 min-w-0" />
             </div>
             <div className="flex items-center gap-3">
               <div className="flex items-center gap-1.5">
@@ -445,11 +451,16 @@ export default function MaintenanceMsgEditor() {
                   <div className="w-6 h-6 rounded border border-border/50" style={{ backgroundColor: msg.soft_text_color }} />
                 </div>
               </div>
-              <select value={msg.soft_style} onChange={e => updateMsg({ soft_style: e.target.value })}
-                className="field field-sm field-inline">
-                <option value="banner">顶栏</option>
-                <option value="popup">弹窗</option>
-              </select>
+              <Select
+                fieldSize="sm"
+                className="field-inline"
+                value={msg.soft_style}
+                onChange={e => updateMsg({ soft_style: e.target.value })}
+                options={[
+                  { value: 'banner', label: '顶栏' },
+                  { value: 'popup', label: '弹窗' },
+                ]}
+              />
               <label className="flex items-center gap-1.5 text-2xs text-textSecondary cursor-pointer select-none ml-auto">
                 <input type="checkbox" checked={msg.soft_once} onChange={e => updateMsg({ soft_once: e.target.checked })} className="rounded" />
                 仅首次

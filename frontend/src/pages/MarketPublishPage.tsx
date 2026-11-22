@@ -85,7 +85,7 @@ export default function MarketPublishPage() {
               <input
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                className="w-full bg-elevated text-sm p-2 rounded-control border border-border outline-none focus:border-primary-500/50 text-textPrimary"
+                className="field w-full"
               />
             </div>
             <div>
@@ -94,7 +94,7 @@ export default function MarketPublishPage() {
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 rows={3}
-                className="w-full bg-elevated text-sm p-2 rounded-control border border-border outline-none resize-none focus:border-primary-500/50 text-textPrimary"
+                className="field field-noresize w-full"
               />
             </div>
             <div>
@@ -102,7 +102,7 @@ export default function MarketPublishPage() {
               <input
                 value={tags}
                 onChange={(e) => setTags(e.target.value)}
-                className="w-full bg-elevated text-sm p-2 rounded-control border border-border outline-none focus:border-primary-500/50 text-textPrimary"
+                className="field w-full"
               />
             </div>
 

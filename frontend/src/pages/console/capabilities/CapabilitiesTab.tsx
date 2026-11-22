@@ -3,7 +3,7 @@ import { api } from '../../../api/client'
 import { useT } from '../../../i18n/I18nContext'
 import { STATE_LABELS, STATE_TAG_COLORS } from '../../../constants'
 import { Wrench, Brain, Backpack, Plug } from 'lucide-react'
-import { UnderlineTabs } from '../../../components/ui'
+import { Button, UnderlineTabs } from '../../../components/ui'
 import SkillBackpack from '../../../components/SkillBackpack'
 import PluginManager from './PluginManager'
 
@@ -297,15 +297,13 @@ function SkillManagementTab() {
                     </pre>
                   </td>
                   <td className="px-3 py-2.5">
-                    <button
+                    <Button
+                      size="xs"
+                      variant={skill.is_enabled ? 'outline-danger' : 'success'}
                       onClick={() => handleToggle(skill.id, skill.is_enabled)}
-                      className={`text-xs px-2.5 py-1 rounded-control border transition-colors ${skill.is_enabled
-                        ? 'border-rose-200 text-rose-600 hover:bg-rose-50 dark:border-rose-800 dark:text-rose-400'
-                        : 'border-mint-200 text-mint-600 hover:bg-mint-50 dark:border-mint-800 dark:text-mint-400'
-                      }`}
                     >
                       {skill.is_enabled ? '禁用' : '启用'}
-                    </button>
+                    </Button>
                   </td>
                 </tr>
               ))}

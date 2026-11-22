@@ -239,7 +239,7 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
               key={key || 'none'}
               type="button"
               onClick={() => go({ state: key, log: null })}
-              className="text-left p-4 rounded-card border border-border bg-canvas hover:border-primary-500/50 hover:bg-elevated transition-colors"
+              className="card card-interactive card-pad text-left"
             >
               <StateChip frame={group.frame} />
               <div className="mt-2 flex items-baseline gap-1.5">
@@ -276,16 +276,14 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
         </button>
         <StateChip frame={active.frame} />
         <span className="text-3xs text-textMuted">{items.length} {t('logs:stateRequests')}</span>
-        <div className="ml-auto flex items-center rounded-control border border-border overflow-hidden">
+        <div className="ml-auto flex items-center gap-1">
           {([false, true] as const).map(deltaMode => (
             <button
               key={String(deltaMode)}
               type="button"
               disabled={deltaMode && !comparable}
               onClick={() => setShowDelta(deltaMode)}
-              className={`text-3xs px-2 py-1 transition-colors disabled:opacity-40 ${
-                showDelta === deltaMode ? 'bg-primary-500/10 text-primary-400' : 'text-textMuted hover:text-textSecondary'
-              }`}
+              className={`btn btn-xs btn-outline ${showDelta === deltaMode ? 'is-active' : ''}`}
             >
               {deltaMode ? t('logs:bodyDelta') : t('logs:bodyFull')}
             </button>
@@ -303,6 +301,7 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
           <div className="text-3xs text-textMuted px-2 pb-1">{t('logs:stateHistory')}</div>
           <div className="flex gap-1 overflow-x-auto pb-1 lg:flex-col lg:gap-0.5 lg:overflow-x-visible lg:pb-0">
             {items.map(log => (
+              /* ui-standard-ignore: 历史记录行（整行可点，含两行信息），不是按钮形态 */
               <button
                 key={log.id}
                 type="button"
@@ -363,7 +362,7 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
                   onClick={() => setRawBody(v => !v)}
                   data-switch={rawSwitchId}
                   data-value={rawBody ? 'raw' : 'segments'}
-                  className="ml-auto text-3xs px-1.5 py-0.5 rounded border border-border text-textMuted hover:text-textSecondary transition-colors"
+                  className={`btn btn-xs btn-outline ml-auto ${rawBody ? 'is-active' : ''}`}
                 >
                   <span data-when="segments">{t('logs:viewRaw')}</span>
                   <span data-when="raw">{t('logs:viewSegments')}</span>

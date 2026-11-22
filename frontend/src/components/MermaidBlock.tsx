@@ -239,7 +239,7 @@ function MermaidBlock({ code, compact = false }: MermaidBlockProps) {
       <div className={compact ? 'my-2' : 'my-4'}>
         <button
           onClick={() => setExpandLevel(1)}
-          className="flex items-center gap-1.5 px-3 py-2 rounded-control border w-full text-xs border-border/50 bg-elevated/30 hover:bg-elevated text-textMuted hover:text-textSecondary"
+          className="btn btn-sm btn-outline w-full"
         >
           <Maximize2 size={13} />
           <span>展开 Mermaid 图表</span>
@@ -302,7 +302,7 @@ function MermaidBlock({ code, compact = false }: MermaidBlockProps) {
           </div>
           <button
             onClick={() => dispatchErrorReport(error)}
-            className="text-3xs px-2 py-0.5 rounded-control bg-rose-400/15 hover:bg-rose-400/25 text-rose-400 transition-colors"
+            className="btn btn-xs btn-tinted-danger"
             title="将错误信息发送给AI，帮助其修正"
           >
             报告错误给AI
@@ -341,8 +341,9 @@ function MermaidBlock({ code, compact = false }: MermaidBlockProps) {
           {compact && (
             <button
               onClick={handleExpand}
-              className="p-0.5 rounded hover:bg-surface text-textMuted hover:text-textPrimary transition-colors"
+              className="icon-btn icon-btn-xs"
               title="全屏查看"
+              aria-label="全屏查看"
             >
               <Maximize2 size={13} />
             </button>

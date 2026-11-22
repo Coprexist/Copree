@@ -87,7 +87,7 @@ export default function ApiDocSectionsTab() {
                 <input
                   value={s.title}
                   onChange={(e) => update(s.id, 'title', e.target.value)}
-                  className="flex-1 bg-transparent text-sm text-textPrimary border border-border rounded-control px-2 py-1 focus:border-primary-500/50 focus:outline-none"
+                  className="field flex-1 min-w-0"
                   placeholder="标题"
                 />
                 {s.title_changed && <span className="shrink-0 text-3xs text-accent-400">已改（与文档不同）</span>}
@@ -96,7 +96,7 @@ export default function ApiDocSectionsTab() {
                 value={s.intro}
                 onChange={(e) => update(s.id, 'intro', e.target.value)}
                 rows={2}
-                className="w-full bg-transparent text-xs text-textSecondary border border-border rounded-control px-2 py-1.5 focus:border-primary-500/50 focus:outline-none resize-none"
+                className="field field-sm field-noresize w-full"
                 placeholder="区介绍"
               />
               {s.intro_changed && <div className="text-3xs text-accent-400 -mt-1">介绍与文档不同</div>}

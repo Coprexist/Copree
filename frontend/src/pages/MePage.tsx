@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useT, useLang } from '../i18n/I18nContext'
 import { api } from '../api/client'
-import { Dialog, PageShell, SecretInput } from '../components/ui'
+import { Button, Dialog, IconButton, PageShell, SecretInput } from '../components/ui'
 import ExternalLinkSafe from '../components/ExternalLinkSafe'
 import { AI_TYPE_LABEL } from '../constants'
 import { fmtTokenNum, cacheHitRatePct, formatFileSize } from '../utils/format'
@@ -61,6 +61,7 @@ function StatCard({ icon, value, label, onClick, bg }: {
   icon: React.ReactNode; value: string | number; label: string; onClick: () => void; bg: string;
 }) {
   return (
+    // ui-standard-ignore: 统计卡片（整卡可点，图标+数值+标签），不是按钮形态
     <button onClick={onClick} className={`rounded-card p-3.5 text-center hover:brightness-95 transition-all cursor-pointer w-full ${bg}`}>
       <div className="mx-auto mb-1 flex justify-center">{icon}</div>
       <div className="text-lg font-bold text-textPrimary tabular-nums">{value}</div>
@@ -636,7 +637,7 @@ export default function MePage() {
             value={redeemCode}
             onChange={e => setRedeemCode(e.target.value)}
             placeholder={t('me:redeemPlaceholder')}
-            className="flex-1 px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50 font-mono"
+            className="field flex-1 min-w-0 font-mono"
           />
           <button
             onClick={handleRedeem}
@@ -683,12 +684,15 @@ export default function MePage() {
       </Link>
 
       {/* ====== 退出登录 ====== */}
-      <button
+      <Button
+        variant="outline-danger"
+        size="md"
+        className="w-full"
+        icon={<LogOut size={14} />}
         onClick={logout}
-        className="w-full py-3 rounded-card border border-rose-500/20 text-rose-400 hover:bg-rose-500/5 text-sm font-medium transition-colors flex items-center justify-center gap-2"
       >
-        <LogOut size={14} /> {t('me:logout')}
-      </button>
+        {t('me:logout')}
+      </Button>
 
       {/* ====== 扫码登录弹窗（重新登录拉不回来时才有） ====== */}
       {qrAccount && (
@@ -727,9 +731,7 @@ export default function MePage() {
           >
             <div className="flex items-center justify-between px-5 py-4 border-b border-border">
               <h3 className="text-sm font-semibold text-textPrimary">{t('me:editProfileModalTitle')}</h3>
-              <button onClick={() => setShowEditProfile(false)} className="p-1 rounded-control hover:bg-elevated text-textMuted">
-                <X size={16} />
-              </button>
+              <IconButton icon={<X size={16} />} label={t('common:close')} size="sm" onClick={() => setShowEditProfile(false)} />
             </div>
             <div className="p-5 space-y-4">
               {/* 头像 */}
@@ -756,7 +758,7 @@ export default function MePage() {
                   value={editUsername}
                   onChange={e => setEditUsername(e.target.value)}
                   placeholder={user.username}
-                  className="w-full px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                  className="field w-full"
                 />
               </div>
               <div>
@@ -766,7 +768,7 @@ export default function MePage() {
                   onChange={e => setEditBio(e.target.value)}
                   placeholder={t('me:bioPlaceholder')}
                   rows={3}
-                  className="w-full px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50 resize-none"
+                  className="field field-noresize w-full"
                 />
               </div>
               <div>
@@ -776,7 +778,7 @@ export default function MePage() {
                   value={editStatusText}
                   onChange={e => setEditStatusText(e.target.value)}
                   placeholder={t('me:statusTextPlaceholder')}
-                  className="w-full px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                  className="field w-full"
                 />
                 <p className="text-3xs text-textMuted mt-1">{editStatusText.length} 字</p>
               </div>
@@ -830,21 +832,22 @@ export default function MePage() {
                   type="email"
                   value={bindEmail}
                   onChange={e => { setBindEmail(e.target.value); setBindCodeSent(false) }}
-                  className="w-full px-3 py-2 rounded-card border border-border bg-canvas text-textPrimary text-sm focus:outline-none focus:ring-2 focus:ring-primary-500/60"
+                  className="field w-full"
                   placeholder={t('auth:emailPlaceholder')}
                 />
               </div>
-              <button
-                type="button"
+              <Button
+                variant="outline"
+                size="md"
+                className="w-full"
                 onClick={handleSendBindCode}
                 disabled={!bindEmail || bindSendCooldown > 0}
-                className="w-full py-2 text-sm font-medium rounded-card border border-primary-500/30 text-primary-500 hover:bg-primary-500/10 disabled:opacity-40 transition-colors"
               >
                 {bindSendCooldown > 0
                   ? t('auth:codeResendIn').replace('{seconds}', String(bindSendCooldown))
                   : bindCodeSent ? t('auth:codeSent') : t('auth:sendCode')
                 }
-              </button>
+              </Button>
               {bindCodeSent && (
                 <div>
                   <label className="block text-xs text-textSecondary mb-2 text-center">{t('auth:codePlaceholder')}</label>
@@ -859,7 +862,7 @@ export default function MePage() {
                 <div className="text-sm text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-card px-3 py-2">{bindError}</div>
               )}
               <div className="flex gap-2 pt-2">
-                <button onClick={() => setShowBindEmail(false)} className="flex-1 py-2 text-sm rounded-card border border-border text-textSecondary hover:text-textPrimary transition-colors">{t('common:cancel')}</button>
+                <Button variant="outline" size="md" className="flex-1" onClick={() => setShowBindEmail(false)}>{t('common:cancel')}</Button>
                 <button
                   onClick={handleConfirmBind}
                   disabled={!bindEmail || !bindCode || bindLoading}
@@ -897,12 +900,14 @@ export default function MePage() {
                 <div className="text-sm text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded-card px-3 py-2">{ghError}</div>
               )}
               <div className="flex gap-2 pt-2">
-                <button
+                <Button
+                  variant="outline"
+                  size="md"
+                  className="flex-1"
                   onClick={() => setShowBindGithub(false)}
-                  className="flex-1 py-2 text-sm rounded-card border border-border text-textSecondary hover:bg-elevated transition-colors"
                 >
                   取消
-                </button>
+                </Button>
                 <button
                   onClick={doBindGithub}
                   disabled={!ghToken.trim() || ghBinding}

@@ -79,12 +79,14 @@ export default function ExternalLinkSafe({ href, children, className, skipConfir
             </div>
 
             <div className="flex border-t border-border">
+              {/* ui-standard-ignore: 弹窗底部通栏二选一操作条（左右半宽、直角贴弹窗圆角与分隔线），换 .btn 会变成分离胶囊 */}
               <button
                 onClick={() => setShowConfirm(false)}
                 className="flex-1 py-3 text-sm text-textSecondary hover:text-textPrimary font-medium transition-colors rounded-bl-2xl"
               >
                 {t('common:cancel')}
               </button>
+              {/* ui-standard-ignore: 弹窗底部通栏二选一操作条（左右半宽、直角贴弹窗圆角与分隔线），换 .btn 会变成分离胶囊 */}
               <button
                 onClick={handleConfirm}
                 className="flex-1 py-3 text-sm text-primary-400 hover:text-primary-500 font-semibold border-l border-border transition-colors rounded-br-2xl"

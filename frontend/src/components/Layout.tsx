@@ -13,6 +13,7 @@ import { loadFromStorage, apply } from '../utils/cssFilters'
 import { isEmbedded } from '../embed/bridge'
 import { useAuth } from '../context/AuthContext'
 import UpdateBanner from './UpdateBanner'
+import { APP_READY_EVENT, APP_DATA_READY_EVENT } from './EnterTransition'
 import { Dialog } from './ui'
 
 /** 嵌入模式（?embed=1）：隐藏本应用侧边栏/移动导航，只渲染对话内容，由宿主提供导航与外壳 */
@@ -31,6 +32,28 @@ export default function Layout() {
   const [imgError, setImgError] = useState(false)
   const location = useLocation()
   const { user } = useAuth()
+
+  // 告诉过场「主界面画好了」：紫幕上的「正在载入……」据此收尾（见 EnterTransition）。
+  // 等两帧：第一帧 React 提交完 DOM，第二帧浏览器真的画出来了。
+  // 过场那边不会一收到就切——它还要等自己那句文案读完，这里只负责报事实。
+  useEffect(() => {
+    let a = 0
+    let b = 0
+    a = requestAnimationFrame(() => {
+      b = requestAnimationFrame(() => {
+        window.dispatchEvent(new Event(APP_READY_EVENT))
+        // 不是聊天页就没有「首屏数据」可等（新用户会被送去 /setup、控制台也有自己的壳），
+        // 立刻放行——否则紫幕要白等到 4 秒的兜底
+        if (!/^\/chat(\/|$)/.test(location.pathname)) {
+          window.dispatchEvent(new Event(APP_DATA_READY_EVENT))
+        }
+      })
+    })
+    return () => {
+      cancelAnimationFrame(a)
+      cancelAnimationFrame(b)
+    }
+  }, [])
 
   // 魔视界：首屏渲染完成后恢复 CSS 滤镜
   useEffect(() => {
@@ -211,6 +234,7 @@ export default function Layout() {
             </div>
           </>
         ) : (
+          // ui-standard-ignore: 贴边竖条把手（侧边栏展开），不是按钮形态
           <button
             onClick={() => setSidebarOverlay(true)}
             className="fixed left-0 top-1/2 -translate-y-1/2 z-modal flex items-center px-1 py-6 rounded-r-xl bg-surface border border-l-0 border-border text-textMuted hover:text-textPrimary hover:bg-elevated shadow-lg transition-colors"
@@ -276,6 +300,7 @@ export default function Layout() {
       {softMaintenance && !(softOnce && sessionStorage.getItem('maint_soft_done')) && softStyle === 'banner' && (
         <div className="fixed top-0 left-0 right-0 z-toast text-xs text-center py-2 px-4 font-medium flex items-center justify-center gap-2" style={{ backgroundColor: softColor, color: softTextColor }}>
           <span>{softText}</span>
+          {/* ui-standard-ignore: 维护横幅的关闭钮（底色跟随横幅内联配色），不是独立按钮形态 */}
           <button onClick={() => { setSoftMaintenance(false); if (softOnce) sessionStorage.setItem('maint_soft_done', '1') }}
             className="shrink-0 px-2 py-0.5 rounded text-3xs opacity-80 hover:opacity-100 transition-opacity" style={{ backgroundColor: 'rgba(0,0,0,0.15)' }}><X size={12} /></button>
         </div>
@@ -286,7 +311,7 @@ export default function Layout() {
           <div className="bg-surface rounded-card p-5 max-w-xs w-full text-center shadow-xl border border-border/50" onClick={e => e.stopPropagation()}>
             <div className="text-sm mb-3">{softText}</div>
             <button onClick={() => { setSoftMaintenance(false); sessionStorage.setItem('maint_soft_dismissed', '1') }}
-              className="px-4 py-1.5 rounded-control text-xs font-medium transition-opacity hover:opacity-90" style={{ backgroundColor: softColor, color: softTextColor }}>知道了</button>
+              className="btn btn-sm font-medium" style={{ backgroundColor: softColor, color: softTextColor }}>知道了</button>
           </div>
         </Dialog>
       )}
@@ -295,6 +320,7 @@ export default function Layout() {
       {maintenance && hardText.style === 'banner' && (
         <div className="fixed top-0 left-0 right-0 z-toast text-xs text-center py-2 px-4 font-medium flex items-center justify-center gap-2" style={{ backgroundColor: hardText.color, color: hardText.textColor }}>
           <span>{hardText.title} · {hardText.body}</span>
+          {/* ui-standard-ignore: 维护横幅的关闭钮（底色跟随横幅内联配色），不是独立按钮形态 */}
           <button onClick={() => { setMaintenance(false); sessionStorage.setItem('maint_hard_dismissed', '1') }}
             className="shrink-0 px-2 py-0.5 rounded text-3xs opacity-80 hover:opacity-100 transition-opacity" style={{ backgroundColor: 'rgba(0,0,0,0.15)' }}><X size={12} /></button>
         </div>
@@ -310,7 +336,7 @@ export default function Layout() {
               <img src={hardText.image} alt="" className="w-24 h-24 object-contain mx-auto mb-4 rounded-control" onError={() => setImgError(true)} />
             )}
             <button onClick={() => { setMaintenance(false); sessionStorage.setItem('maint_hard_dismissed', '1') }}
-              className="px-5 py-2 text-sm rounded-control font-medium transition-opacity hover:opacity-90" style={{ backgroundColor: hardText.color, color: hardText.textColor }}>知道了</button>
+              className="btn btn-md font-medium" style={{ backgroundColor: hardText.color, color: hardText.textColor }}>知道了</button>
           </div>
         </div>
       )}

@@ -50,6 +50,7 @@ import { adminConfigZh, adminConfigEn, adminConfigJa } from './ns/adminConfig'
 import { logsZh, logsEn, logsJa } from './ns/logs'
 import { outlineZh, outlineEn, outlineJa } from './ns/outline'
 import { updateZh, updateEn, updateJa } from './ns/update'
+import { apiConfigZh, apiConfigEn, apiConfigJa } from './ns/apiConfig'
 
 export type { TranslationDict, NamespacedDict } from './types'
 
@@ -65,7 +66,7 @@ export const translations: Record<Lang, NamespacedDict> = {
     avatarCrop: avatarCropZh, modal: modalZh, preset: presetZh, aiType: aiTypeZh,
     error: errorZh, time: timeZh, opencli: opencliZh, backpack: backpackZh,
     desktop: desktopZh, tool: toolZh, adminConfig: adminConfigZh, logs: logsZh,
-    outline: outlineZh, update: updateZh,
+    outline: outlineZh, update: updateZh, apiConfig: apiConfigZh,
   },
   en: {
     common: commonEn, nav: navEn, sidebar: sidebarEn, notFound: notFoundEn,
@@ -78,7 +79,7 @@ export const translations: Record<Lang, NamespacedDict> = {
     avatarCrop: avatarCropEn, modal: modalEn, preset: presetEn, aiType: aiTypeEn,
     error: errorEn, time: timeEn, opencli: opencliEn, backpack: backpackEn,
     desktop: desktopEn, tool: toolEn, adminConfig: adminConfigEn, logs: logsEn,
-    outline: outlineEn, update: updateEn,
+    outline: outlineEn, update: updateEn, apiConfig: apiConfigEn,
   },
   ja: {
     common: commonJa, nav: navJa, sidebar: sidebarJa, notFound: notFoundJa,
@@ -91,14 +92,15 @@ export const translations: Record<Lang, NamespacedDict> = {
     avatarCrop: avatarCropJa, modal: modalJa, preset: presetJa, aiType: aiTypeJa,
     error: errorJa, time: timeJa, opencli: opencliJa, backpack: backpackJa,
     desktop: desktopJa, tool: toolJa, adminConfig: adminConfigJa, logs: logsJa,
-    outline: outlineJa, update: updateJa,
+    outline: outlineJa, update: updateJa, apiConfig: apiConfigJa,
   },
 }
 
 /** 插值：'正在{name}…' + { name: '读取文件' } → '正在读取文件…' */
 function interpolate(tpl: string, vars?: Record<string, string | number>): string {
   if (!vars) return tpl
-  return tpl.replace(/\{([a-zA-Z_]+)\}/g, (_, k) => (vars[k] != null ? String(vars[k]) : `{${k}}`))
+  // 占位符名允许带数字：{last4} / {n2} 这类原来匹配不到，会原样漏在界面上（2026-11-22 实测）
+  return tpl.replace(/\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g, (_, k) => (vars[k] != null ? String(vars[k]) : `{${k}}`))
 }
 
 /**

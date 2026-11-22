@@ -405,7 +405,7 @@ export default function ThemeCustomizer() {
                     onChange={(e) => pick(key, e.target.value)}
                     placeholder="#RRGGBB"
                     spellCheck={false}
-                    className="w-24 h-8 px-2 rounded-control border border-border bg-canvas text-2xs font-mono text-textPrimary outline-none focus:border-primary-400"
+                    className="field field-sm font-mono max-w-[6rem]"
                   />
                 </div>
               </div>
@@ -458,7 +458,7 @@ export default function ThemeCustomizer() {
                   placeholder={t('settings:themeDesignPresetName')}
                   maxLength={20}
                   autoFocus
-                  className="flex-1 min-w-0 h-8 px-2 rounded-control border border-border bg-surface text-2xs text-textPrimary outline-none focus:border-primary-400"
+                  className="field field-sm flex-1 min-w-0"
                 />
                 <button
                   onClick={savePreset}
@@ -471,7 +471,7 @@ export default function ThemeCustomizer() {
             ) : (
               <button
                 onClick={() => setPresetInput(true)}
-                className="flex items-center justify-center gap-1 text-2xs text-textSecondary hover:text-primary-400 py-1"
+                className="btn btn-xs btn-ghost w-full"
               >
                 <Plus size={12} /> {t('settings:themeDesignSaveAsPreset')}
               </button>

@@ -63,6 +63,7 @@ const SessionRow = memo(function SessionRow({
     <div
       className={`group flex items-center rounded-control transition-colors ${active ? 'bg-primary-500/15 text-primary-300' : 'text-textSecondary hover:bg-elevated'}`}
     >
+      {/* ui-standard-ignore: 会话列表整行可点条目（标签+时间+pin 角标），不是按钮形态 */}
       <button
         onClick={() => onSelect(id)}
         className="flex items-center gap-1.5 min-w-0 flex-1 px-2 py-1.5 text-xs text-left"
@@ -122,7 +123,7 @@ const WorldSessionList = memo(function WorldSessionList({
     <div className="p-2 space-y-0.5">
       <button
         onClick={onNew}
-        className="w-full inline-flex items-center gap-1.5 px-2 py-1.5 rounded-control text-xs text-primary-400 hover:bg-elevated transition-colors"
+        className="btn btn-xs btn-link w-full"
         title={t('tool:world.session.new')}
       >
         <Plus size={13} />

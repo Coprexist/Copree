@@ -1316,7 +1316,7 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
       {showJumpToUnread && firstUnreadId && (
         <button
           onClick={handleJumpToUnread}
-          className="absolute top-3 right-4 z-drawer flex items-center gap-1.5 px-3 py-1.5 bg-primary-500/90 hover:bg-primary-500 text-white text-xs font-medium rounded-full shadow-lg shadow-primary-500/30 backdrop-blur-sm transition-all duration-200"
+          className="btn btn-sm btn-primary absolute top-3 right-4 z-drawer shadow-lg shadow-primary-500/30 backdrop-blur-sm"
           style={{ top: 'calc(var(--header-inset, 0px) + 0.5rem)' }}
         >
           <ArrowUp size={14} />

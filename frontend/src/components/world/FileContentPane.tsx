@@ -59,6 +59,7 @@ function FileContentPane({ wid, currentFile, content, setContent, viewMode, canR
     )
   }
   return (
+    // ui-standard-ignore: 世界文件编辑器整块 textarea（占满面板、无边框透明、等宽），换 .field 会多出边框与圆角形成双框
     <textarea
       value={content}
       onChange={(e) => setContent(e.target.value)}

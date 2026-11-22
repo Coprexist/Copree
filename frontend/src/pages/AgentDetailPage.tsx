@@ -7,7 +7,8 @@ import Toggle from '../components/Toggle'
 import { useT, useLang } from '../i18n/I18nContext'
 import { fmtDate, fmtDateTime } from '../utils/time'
 import { formatFileSize } from '../utils/format'
-import { getStatusTextStyle } from '../utils/statusColor.tsx'
+import { getStatusTextStyle, BG_CANVAS_LIGHT, BG_CANVAS_DARK } from '../utils/statusColor.tsx'
+import { useIsDark } from '../hooks/useIsDark'
 import StatusColorPicker from '../components/shared/StatusColorPicker'
 import {
   ArrowLeft, Trash2, Download, Upload, Key, Edit3,
@@ -16,11 +17,12 @@ import {
 } from 'lucide-react'
 import AvatarPickerModal from '../components/AvatarPickerModal'
 import AgentSettingsModal from '../components/AgentSettingsModal'
-import { ContentColumn, Dialog, EmptyState, UnderlineTabs } from '../components/ui'
+import AgentApiPanel from '../components/AgentApiPanel'
+import { Button, ContentColumn, Dialog, EmptyState, IconButton, Select, UnderlineTabs } from '../components/ui'
 import FilePreviewModal from '../components/FilePreviewModal'
 import ChannelCard from '../components/channels/ChannelCard'
 import EmojiPacksPanel from '../components/EmojiPacksPanel'
-import AgentVoicePanel from '../components/AgentVoicePanel'
+
 import LogBrowser from '../components/shared/LogBrowser'
 import KnowledgePanel from '../components/KnowledgePanel'
 
@@ -216,6 +218,7 @@ function StructuredMemoryView({ agentId }: { agentId: number }) {
         const CatIcon = CAT_ICONS[cat.category] || Bookmark
         return (
           <div key={cat.category} className="rounded-control border border-border overflow-hidden">
+            {/* ui-standard-ignore: 折叠标题行（整行可点：图标+分类+条数），不是按钮形态 */}
             <button
               onClick={() => setExpandedCat(isCatOpen ? null : cat.category)}
               className="w-full flex items-center gap-2.5 px-3.5 py-2.5 hover:bg-elevated transition-colors text-left"
@@ -231,6 +234,7 @@ function StructuredMemoryView({ agentId }: { agentId: number }) {
                   const isSubOpen = expandedSub === `${cat.category}/${sub.sub_key}`
                   return (
                     <div key={sub.sub_key}>
+                      {/* ui-standard-ignore: 折叠标题行（整行可点），不是按钮形态 */}
                       <button
                         onClick={() => setExpandedSub(isSubOpen ? null : `${cat.category}/${sub.sub_key}`)}
                         className="w-full flex items-center gap-2 px-7 py-1.5 hover:bg-elevated transition-colors text-left"
@@ -264,12 +268,15 @@ function StructuredMemoryView({ agentId }: { agentId: number }) {
   )
 }
 
-const TABS = ['info', 'channels', 'emoji', 'voice', 'memories', 'knowledge', 'storage', 'workspace', 'logs', 'collaborators'] as const
+// 「api」= 这个 AI 用哪家 LLM + 哪家语音（凭据不属于"这 AI 是谁"，单开一页；
+// 原来的「语音」页签已并进这里，旧 ?tab=voice 会就地切过来）
+const TABS = ['info', 'channels', 'emoji', 'api', 'memories', 'knowledge', 'storage', 'workspace', 'logs', 'collaborators'] as const
 type Tab = (typeof TABS)[number]
 
 export default function AgentDetailPage() {
   const t = useT()
   const lang = useLang()
+  const isDark = useIsDark()
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { user, refreshUser } = useAuth()
@@ -281,6 +288,14 @@ export default function AgentDetailPage() {
   // 也才看得出这个链接指向的是通道还是对话日志
   const [searchParams, setSearchParams] = useSearchParams()
   const tabParam = searchParams.get('tab')
+  // 「语音」页签已并进 API：老收藏/老分享的 ?tab=voice 就地切到 API，
+  // 不掉到"基本信息"（那样用户会以为配置丢了），也不用改 URL 再多压一条历史
+  useEffect(() => {
+    if (tabParam !== 'voice') return
+    const next = new URLSearchParams(searchParams)
+    next.set('tab', 'api')
+    setSearchParams(next, { replace: true })
+  }, [tabParam, searchParams, setSearchParams])
   const activeTab = (TABS as readonly string[]).includes(tabParam ?? '') ? (tabParam as Tab) : 'info'
   const setActiveTab = (tab: Tab) => {
     const next = new URLSearchParams(searchParams)
@@ -296,7 +311,7 @@ export default function AgentDetailPage() {
     info: t('agentDetail:tabInfo'),
     channels: t('agentDetail:tabChannels'),
     emoji: t('agentDetail:tabEmoji'),
-    voice: t('agentDetail:tabVoice'),
+    api: t('agentDetail:tabApi'),
     memories: t('agentDetail:tabMemories'),
     knowledge: t('agentDetail:tabKnowledge'),
     storage: t('agentDetail:tabStorage'),
@@ -712,9 +727,14 @@ export default function AgentDetailPage() {
                   {agent.state}
                 </span>
                 {agent.status_text && (
-                  <span className="text-xs font-medium" style={agent.status_color
-                    ? getStatusTextStyle(agent.status_color, '#151223')
-                    : undefined}>
+                  // 没自选颜色时给品牌色：状态文字是「这个 AI 此刻在干嘛」，
+                  // 继承正文色会淡到看不出它是一条状态（背景色参数也要跟主题走，不能写死深色）
+                  <span
+                    className={'text-xs font-medium' + (agent.status_color ? '' : ' text-primary-400')}
+                    style={agent.status_color
+                      ? getStatusTextStyle(agent.status_color, isDark ? BG_CANVAS_DARK : BG_CANVAS_LIGHT)
+                      : undefined}
+                  >
                     · {agent.status_text}
                   </span>
                 )}
@@ -746,14 +766,16 @@ export default function AgentDetailPage() {
         {activeTab === 'info' && (
           <div className="space-y-4">
             {/* 完整设置入口 */}
-            <button
+            <Button
+              variant="tinted"
+              size="md"
+              className="w-full"
+              icon={<Settings size={16} />}
               onClick={() => setShowFullSettings(true)}
-              className="w-full flex items-center justify-center gap-2 py-2.5 rounded-card border-2 border-dashed border-primary-400/50 bg-primary-500/5 hover:bg-primary-500/10 text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 text-sm font-medium transition-colors"
             >
-              <Settings size={16} />
               {t('agentDetail:fullSettings')}
               <span className="text-textMuted text-xs font-normal">— {t('agentDetail:fullSettingsDesc')}</span>
-            </button>
+            </Button>
 
             {/* Quick Edit Prompt */}
  <div className="card p-4">
@@ -785,7 +807,7 @@ export default function AgentDetailPage() {
                   value={promptText}
                   onChange={(e) => setPromptText(e.target.value)}
                   rows={6}
-                  className="w-full px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50 resize-y"
+                  className="field w-full"
                 />
               ) : (
                 <p className="text-sm text-textSecondary leading-relaxed whitespace-pre-wrap">
@@ -812,7 +834,7 @@ export default function AgentDetailPage() {
                       }}
                       rows={3}
                       maxLength={500}
-                      className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50 resize-y"
+                      className="field w-full"
                       placeholder={t('agentDetail:bioPlaceholder')}
                     />
                   </div>
@@ -826,7 +848,7 @@ export default function AgentDetailPage() {
                       const val = e.target.value
                       if (val !== (agent?.status_text || '')) handleUpdateAgentField('status_text', val || null)
                     }}
-                    className="w-full mt-1 px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                    className="field w-full mt-1"
                     placeholder={t('agentDetail:statusTextPlaceholder')}
                   />
                   <p className="text-3xs text-textMuted mt-1">{t('agentDetail:statusTextHint')}</p>
@@ -889,18 +911,20 @@ export default function AgentDetailPage() {
                 </div>
                 <div>
                   <span className="text-textMuted">{t('agentDetail:delayReply')}</span>
-                  <select
+                  <Select
+                    fieldSize="sm"
+                    className="field-inline"
                     value={agent.delay_reply_enabled === null ? 'inherit' : agent.delay_reply_enabled ? 'on' : 'off'}
                     onChange={(e) => {
                       const v = e.target.value
                       handleToggleDelayReply(v === 'inherit' ? null : v === 'on')
                     }}
-                    className="field field-sm field-inline"
-                  >
-                    <option value="inherit">{t('agentDetail:inheritGlobal')}</option>
-                    <option value="on">{t('agentDetail:enabled')}</option>
-                    <option value="off">{t('agentDetail:disabled')}</option>
-                  </select>
+                    options={[
+                      { value: 'inherit', label: t('agentDetail:inheritGlobal') },
+                      { value: 'on', label: t('agentDetail:enabled') },
+                      { value: 'off', label: t('agentDetail:disabled') },
+                    ]}
+                  />
                 </div>
               </div>
               {/* 工具调用 & 闹钟 */}
@@ -1107,9 +1131,9 @@ export default function AgentDetailPage() {
           <EmojiPacksPanel agentId={agent.id} />
         )}
 
-        {/* 语音：配一套 TTS API，这只 AI 才有"开口说话"的能力 */}
-        {activeTab === 'voice' && (
-          <AgentVoicePanel agentId={agent.id} />
+        {/* API：这个 AI 用哪家 LLM、哪家语音（凭据不塞进「AI 本体设置」里） */}
+        {activeTab === 'api' && (
+          <AgentApiPanel agentId={agent.id} />
         )}
 
         {activeTab === 'knowledge' && (
@@ -1183,13 +1207,14 @@ export default function AgentDetailPage() {
                           {f.name}
                         </button>
                         <span className="text-textMuted shrink-0 mr-2">{formatFileSize(f.size)}</span>
-                        <button
+                        <IconButton
+                          icon={<Trash2 size={14} />}
+                          label={t('common:delete')}
+                          size="sm"
+                          tone="danger"
+                          className="opacity-0 group-hover:opacity-100"
                           onClick={() => handleOpenDeleteConfirm(f)}
-                          className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-rose-500/10 text-textMuted hover:text-rose-400 transition-all"
-                          title={t('common:delete')}
-                        >
-                          <Trash2 size={14} />
-                        </button>
+                        />
                       </div>
                     ))}
                   </div>
@@ -1232,7 +1257,7 @@ export default function AgentDetailPage() {
                     value={collabSearch}
                     onChange={e => { setCollabSearch(e.target.value); searchUsers(e.target.value) }}
                     placeholder={t('agentDetail:searchUserPlaceholder')}
-                    className="flex-1 px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                    className="field flex-1 min-w-0"
                   />
                 </div>
                 {/* 通道配置权限：默认关。打开后合作者能看到并修改机器人凭据（AppID/Secret 等） */}
@@ -1299,13 +1324,14 @@ export default function AgentDetailPage() {
                           )}
                           <span className="text-sm text-textPrimary">{u.username}</span>
                         </div>
-                        <button
+                        <Button
+                          variant="success"
+                          size="xs"
                           onClick={() => handleAddCollaborator(u.id)}
                           disabled={addingCollab}
-                          className="px-3 py-1 rounded-control bg-mint-400 text-white text-xs hover:bg-mint-500 disabled:opacity-40 transition-colors"
                         >
                           {addingCollab ? '...' : t('agentDetail:addCollaboratorBtn')}
-                        </button>
+                        </Button>
                       </div>
                     ))}
                   </div>
@@ -1351,13 +1377,14 @@ export default function AgentDetailPage() {
                             <span className="text-3xs text-textMuted">{t('agentDetail:permManageCollaborators')}</span>
                             <Toggle checked={c.can_manage_collaborators} onChange={v => handleUpdateCollaborator(c.user_id, { can_manage_collaborators: v })} />
                           </div>
-                          <button
+                          <IconButton
+                            icon={<X size={14} />}
+                            label={t('agentDetail:removeCollaborator')}
+                            size="sm"
+                            tone="danger"
+                            className="ml-1"
                             onClick={() => handleRemoveCollaborator(c.user_id)}
-                            className="ml-1 p-1 rounded text-textMuted hover:text-rose-400 transition-colors"
-                            title={t('agentDetail:removeCollaborator')}
-                          >
-                            <X size={14} />
-                          </button>
+                          />
                         </div>
                       )}
                     </div>
@@ -1380,19 +1407,16 @@ export default function AgentDetailPage() {
             <div className="flex items-center gap-2 mb-3">
               <Brain size={16} className="text-primary-400" />
               <h3 className="font-medium text-textPrimary text-sm">{t('agentDetail:memoryTitlePrefix')}{memTotal}{t('agentDetail:memoryTitleSuffix')}</h3>
-              <div className="flex gap-0.5 ml-auto bg-canvas rounded-control p-0.5 border border-border">
-                {(['structured', 'vector'] as const).map((st) => (
-                  <button
-                    key={st}
-                    onClick={() => { setMemSubTab(st); if (st === 'vector') loadMemories(1) }}
-                    className={`px-2.5 py-1 text-xs font-medium rounded-control transition-colors ${
-                      memSubTab === st ? 'bg-primary-500 text-white shadow-sm' : 'text-textMuted hover:text-textSecondary'
-                    }`}
-                  >
-                    {st === 'structured' ? t('agentDetail:structuredMemories') : t('agentDetail:vectorMemories')}
-                  </button>
-                ))}
-              </div>
+              <UnderlineTabs
+                size="sm"
+                className="ml-auto"
+                items={[
+                  { key: 'structured' as const, label: t('agentDetail:structuredMemories') },
+                  { key: 'vector' as const, label: t('agentDetail:vectorMemories') },
+                ]}
+                value={memSubTab}
+                onChange={(st) => { setMemSubTab(st); if (st === 'vector') loadMemories(1) }}
+              />
             </div>
 
             {memSubTab === 'structured' ? (
@@ -1410,21 +1434,23 @@ export default function AgentDetailPage() {
                 )}
                 {memTotal > 20 && (
                   <div className="flex justify-center gap-2 mt-4">
-                    <button
+                    <Button
+                      variant="outline"
+                      size="xs"
                       onClick={() => loadMemories(memPage - 1)}
                       disabled={memPage <= 1}
-                      className="px-3 py-1 text-xs rounded-control border border-border text-textSecondary hover:text-textPrimary disabled:opacity-30"
                     >
                       {t('agentDetail:prevPage')}
-                    </button>
+                    </Button>
                     <span className="text-xs text-textMuted py-1">{memPage} / {Math.ceil(memTotal / 20)}</span>
-                    <button
+                    <Button
+                      variant="outline"
+                      size="xs"
                       onClick={() => loadMemories(memPage + 1)}
                       disabled={memPage >= Math.ceil(memTotal / 20)}
-                      className="px-3 py-1 text-xs rounded-control border border-border text-textSecondary hover:text-textPrimary disabled:opacity-30"
                     >
                       {t('agentDetail:nextPage')}
-                    </button>
+                    </Button>
                   </div>
                 )}
               </>
@@ -1472,23 +1498,27 @@ export default function AgentDetailPage() {
               type="text"
               value={deleteConfirmName}
               onChange={(e) => setDeleteConfirmName(e.target.value)}
-              className="w-full px-3.5 py-2.5 rounded-card border border-border bg-canvas text-sm text-textPrimary focus:outline-none focus:ring-2 focus:ring-rose-500/50 mb-4"
+              className="field w-full mb-4"
               placeholder={agent.name}
             />
             <div className="flex gap-3">
-              <button
+              <Button
+                variant="outline"
+                size="md"
+                className="flex-1"
                 onClick={() => { setShowDelete(false); setDeleteConfirmName('') }}
-                className="flex-1 px-4 py-2 rounded-card border border-border text-sm text-textSecondary hover:text-textPrimary"
               >
                 {t('common:cancel')}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="danger"
+                size="md"
+                className="flex-1"
                 onClick={handleDelete}
                 disabled={deleteConfirmName !== agent.name || deleting}
-                className="flex-1 px-4 py-2 rounded-card bg-rose-500 text-white text-sm font-medium hover:bg-rose-400 disabled:opacity-30 transition-colors"
               >
                 {deleting ? t('agentDetail:deleting') : t('agentDetail:confirmDelete')}
-              </button>
+              </Button>
             </div>
           </div>
         </div>
@@ -1556,19 +1586,23 @@ export default function AgentDetailPage() {
             </div>
 
             <div className="flex gap-3">
-              <button
+              <Button
+                variant="outline"
+                size="md"
+                className="flex-1"
                 onClick={() => { setDeleteFileTarget(null); setDeleteFileRefs(null) }}
-                className="flex-1 py-2.5 text-sm border border-border text-textSecondary rounded-card hover:bg-elevated font-medium transition-colors"
               >
                 {t('common:cancel')}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="danger"
+                size="md"
+                className="flex-1"
                 onClick={handleDeleteFile}
                 disabled={deletingFile}
-                className="flex-1 py-2.5 text-sm bg-rose-500 text-white rounded-card hover:bg-rose-400 font-medium transition-all disabled:opacity-50"
               >
                 {deletingFile ? <Loader2 size={16} className="animate-spin mx-auto" /> : t('common:delete')}
-              </button>
+              </Button>
             </div>
           </div>
         </Dialog>

@@ -824,7 +824,8 @@
   transition: background-color .15s ease, color .15s ease, border-color .15s ease;
   white-space: nowrap;
   cursor: pointer;
-  user-select: none;
+  /* 2026-11 放开 user-select：按钮上的文字也是文字，要能选中复制（贴给客服、查文档）。
+     代价是按住拖动会选中文字——比"想复制却复制不到"划算。 */
 }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 .btn:focus-visible { outline: 2px solid rgb(var(--tw-primary-400) / .5); outline-offset: 1px; }
@@ -858,18 +859,41 @@
 /* 描边按钮的选中态 —— 开关/分段控件里同一颗按钮切状态，不再各写一套 active/inactive 配色 */
 .btn-outline.is-active { background: rgb(var(--tw-primary-500) / .12); border-color: rgb(var(--tw-primary-500) / .45); color: rgb(var(--tw-primary-400)); }
 .btn-outline.is-active:hover { background: rgb(var(--tw-primary-500) / .2); border-color: rgb(var(--tw-primary-500) / .6); }
+/* 无底按钮的选中态 —— 页签/分段控件里的当前项。ghost 平时没有底色，
+   选中时补一层浅主色底，与 .btn-outline.is-active 同一套配色（少一道描边） */
+.btn-ghost.is-active { background: rgb(var(--tw-primary-500) / .12); color: rgb(var(--tw-primary-400)); }
+.btn-ghost.is-active:hover { background: rgb(var(--tw-primary-500) / .18); color: rgb(var(--tw-primary-400)); }
+/* 次级按钮（白底描边）作切换用时的选中态 */
+.btn-secondary.is-active { background: rgb(var(--tw-primary-500) / .12); border-color: rgb(var(--tw-primary-500) / .45); color: rgb(var(--tw-primary-400)); }
 
 /* tinted 变体 —— 有语义但不要实心（"让 AI 重新生成"这类次级动作），
    与 .btn-outline 的区别是带主色/危险色的浅底，用来在一排按钮里分出主次 */
 .btn-tinted { background: rgb(var(--tw-primary-500) / .1); color: rgb(var(--tw-primary-400));
   border: 1px solid rgb(var(--tw-primary-400) / .2); }
 .btn-tinted:hover { background: rgb(var(--tw-primary-500) / .18); color: rgb(var(--tw-primary-400)); }
+/* 强调色浅底（琥珀）—— 与 .btn-tinted 同构换色相："暂停/恢复""待处理"这类强调而非主色的动作 */
+.btn-tinted-accent { background: rgb(var(--tw-accent-400) / .12); color: rgb(var(--tw-accent-500));
+  border: 1px solid rgb(var(--tw-accent-400) / .25); }
+.btn-tinted-accent:hover { background: rgb(var(--tw-accent-400) / .2); color: rgb(var(--tw-accent-400)); }
 .btn-tinted-danger { background: rgb(var(--tw-rose-500) / .1); color: rgb(var(--tw-rose-400));
   border: 1px solid rgb(var(--tw-rose-500) / .2); }
 .btn-tinted-danger:hover { background: rgb(var(--tw-rose-500) / .18); color: rgb(var(--tw-rose-400)); }
 
 /* 补档 xs=24px —— 工具条/列表行里的小按钮（此前的 px-2 py-0.5 一族） */
 .btn-xs { height: var(--ctl-xs); padding: 0 0.625rem; font-size: 0.6875rem; gap: 0.25rem; border-radius: var(--r-pill); }
+
+/* ── 卡片/面板内的按钮统一 32px（2026-11-22）──────────────────────────────
+   尺寸由「容器等级」决定，不由页面写 size：
+     48 lg  页面级最高主操作（登录、首屏 CTA），少而醒目
+     40 md  页面头的主按钮、弹窗底部确认、40px 主输入旁的按钮
+     32 sm  卡片 / 面板内部的一切（设置项、选项组、卡内主操作）
+     24 xs  行内工具（表格行里的小动作、图标文字按钮）
+   卡片里的字段都是 32px 的 .field，旁边立一颗 40px 按钮会"大一号"，
+   所以这里按容器一刀切；页面不需要再逐个写 size="sm"。 */
+.card .btn:not(.btn-xs):not(.btn-lg) { height: var(--ctl-sm); padding: 0 0.875rem; font-size: 0.75rem; }
+
+/* 表单 / 设置卡的操作区：统一右下角。页面只写容器名，对齐与间距不再各写一套 */
+.form-actions { display: flex; align-items: center; justify-content: flex-end; gap: 0.5rem; margin-top: 0.75rem; }
 
 /* 全圆角（胶囊）变体：仅作兼容保留 —— .btn 自己已经是胶囊了。
    写它不会再改变任何东西；新代码不需要它。
@@ -944,6 +968,15 @@
 /* 警示态 —— 静音/免打扰这种"已开启但不是好事"的开关，用玫红而不是主色 */
 .icon-btn.is-alert { background: rgb(var(--tw-rose-500) / .12); color: rgb(var(--tw-rose-400)); }
 .icon-btn.is-alert:hover { background: rgb(var(--tw-rose-500) / .18); color: rgb(var(--tw-rose-400)); }
+/* 静默图标钮 —— 输入框内那些小按钮（清除、密码显隐）。
+   底纹就是输入框自己的底：再叠一层 hover 浅底会显脏（浏览器 autofill 的浅蓝上尤其明显），
+   所以这里只改图标颜色，始终不给背景。写在上面的 hover 规则之后，靠顺序覆盖。 */
+.icon-btn-quiet,
+.icon-btn-quiet:hover,
+.icon-btn-quiet:focus-visible {
+  background: transparent;
+}
+.icon-btn-quiet:hover { color: rgb(var(--tw-text-primary)); }
 
 /* ────────────────────────────────────────────────
    顶部条（全站单一来源）
@@ -961,6 +994,12 @@
   position: relative;
   z-index: 10;
 }
+/* 弹窗/卡片里的头部条：卡片本身是圆角，但没裁切内容，头部这层背景会把上两个角
+   盖成直角（2026-11-22 弹窗截图实测）。只把上两角圆回来，档位跟着卡片走，不写死数值。 */
+.top-bar:first-child {
+  border-start-start-radius: inherit;
+  border-start-end-radius: inherit;
+}
 /* 吸顶变体：滚动容器内部用。必须写在 .top-bar 之后（同权重后写的生效），
    否则会被上面那句 position: relative 盖掉 */
 .top-bar-sticky { position: sticky; top: 0; }
@@ -974,6 +1013,17 @@
    - 大号单行（少数表单主输入）：.field-lg（40 胶囊），配 .btn-md
    - 多行 textarea：不是「一行」，圆角给大一号的 12px（与卡片同档），见下方 textarea.field
    ──────────────────────────────────────────────── */
+/* 表单控件在部分浏览器/系统上没有继承到页面字体（会落回系统默认，甚至是衬线体），
+   结果输入框里的字和标签的字长得不一样。显式继承，别依赖 preflight。 */
+input, select, textarea, button {
+  font-family: inherit;
+  font-feature-settings: inherit;
+}
+
+/* 弹窗打开时收起内容列宽度拖条：它是页面级浮层，跑到弹窗上面既挡视线又抢鼠标。
+   层级（portal + z-modal）已经能盖住它，这一条是兜底——不依赖任何层叠上下文的偶然性。 */
+body[data-modal-open] .content-width-handles { display: none; }
+
 .field {
   width: 100%;
   height: var(--ctl-sm);
@@ -1003,7 +1053,192 @@
 /* 左侧带图标的单行输入：给图标留出空位。.field 的 padding 是无层级规则，utilities 的 pl-* 盖不过它，
    所以只能在这一层写；图标定位由调用方的绝对定位负责 */
 .field-with-icon { padding-left: 2.25rem; }
-select.field { padding-right: 0.5rem; cursor: pointer; }
+/* 右侧带图标的单行输入（密钥框的眼睛按钮）：同 .field-with-icon 的理由——
+   .field 的 padding 在无层级规则里，utilities 的 pr-* 盖不过它，
+   只在工具类里写 pr-9 的话文字会顶到图标下面（占位提示一长就重叠） */
+.field-with-icon-right { padding-right: 2.25rem; }
+/* 下拉的箭头由 ui/Select 用绝对定位画（right-2.5），这里负责把那段位置让出来。
+   必须写在这一层：.field / .field-sm 是无层级规则，utilities 的 pr-* 盖不过它们，
+   在组件 className 里写 pr-8 是无效的（箭头会直接压在文字上）。 */
+/* ────────────────────────────────────────────────
+   进入平台的过场（登录 → 主界面）
+   从提交按钮处拉出一枚同色紫圆铺满屏幕，文字锚在按钮原位念完三句，整层淡出。
+   只动 transform / opacity：纯色层放大不会有伪影，也不碰 filter / blur。
+   系统开「减少动态效果」时不做缩放，直接满屏，只留淡入淡出。
+   ──────────────────────────────────────────────── */
+/* 过场的两套配色：日间淡紫底 + 深紫字，夜间深紫底 + 白字。
+   大面积高饱和亮紫（primary-500）在浅色页面上很刺眼，按主题取一档才不吵。 */
+.enter-wipe {
+  --wipe-bg: 221 214 254;       /* primary-200 —— 日间：更亮的淡紫 */
+  --wipe-fg: 46 16 101;         /* primary-900 —— 日间：深紫字 */
+  --wipe-vignette: 109 40 217;  /* primary-600 —— 日间：边缘压深 */
+}
+.dark .enter-wipe {
+  --wipe-bg: 76 29 149;         /* primary-800 —— 夜间：深紫 */
+  --wipe-fg: 255 255 255;       /* 夜间：白字 */
+  --wipe-vignette: 0 0 0;       /* 夜间：边缘压黑 */
+}
+.enter-wipe-veil,
+.enter-wipe-disc,
+.enter-wipe-tint,
+.enter-wipe-brand,
+.enter-wipe-label { transition: opacity 320ms ease; }
+/* 底幕：一出现就不透明，把登录页和下面正在渲染的主界面一起挡住 */
+.enter-wipe-veil { background: rgb(var(--tw-canvas)); }
+/* 紫圆：与 .btn-primary 同色；--wipe-k 是盖住四角所需的放大倍数，由组件按按钮位置算 */
+.enter-wipe-disc {
+  border-radius: 50%;
+  background: rgb(var(--wipe-bg));
+  will-change: transform;
+  animation: enter-wipe-scale 420ms cubic-bezier(.22, .9, .05, 1) forwards;
+}
+@keyframes enter-wipe-scale {
+  from { transform: translate(-50%, -50%) scale(1); }
+  to   { transform: translate(-50%, -50%) scale(var(--wipe-k, 40)); }
+}
+/* 品牌区与三句文案都浮在紫圆之上：不被挡住，跟着整层一起淡出 */
+.enter-wipe-brand { pointer-events: none; }
+.enter-wipe-label { pointer-events: none; }
+/* 暗角：只在紫圆铺满后淡入。静态渐变、只动透明度，给这整片紫一个中心与纵深，
+   免得一大块纯亮紫铺满屏幕像报错页。 */
+.enter-wipe-tint {
+  opacity: 0;
+  background: radial-gradient(ellipse at 50% 38%,
+    rgb(var(--wipe-vignette) / 0) 24%,
+    rgb(var(--wipe-vignette) / .30) 64%,
+    rgb(var(--wipe-vignette) / .56) 100%);
+  transition: opacity 300ms ease;
+}
+/* 透视楔形（左右六块）：生长的做法是「clip-path 四点插值」——
+   起手是边缘上一条零宽的线，随后两个远端点沿「过灭点」的直线走到终态。
+   因为两点连线插值仍在连线上，所以生长全程透视都是准的，观感是从边缘长出来。
+   代价：clip-path 是 CPU 属性，780ms 里每帧重绘这几块（手机上有轻微开销）。 */
+.enter-wipe-shard {
+  position: absolute;
+  background: rgb(var(--wipe-vignette) / var(--shard-alpha, .13));
+  pointer-events: none;
+  clip-path: polygon(
+    var(--x0) var(--y1),
+    calc(var(--x0) + 0.5px) var(--y1),
+    calc(var(--x0) + 0.5px) var(--y2),
+    var(--x0) var(--y2)
+  );
+  transition: clip-path 780ms cubic-bezier(.25, .8, .35, 1);
+}
+.enter-wipe.is-on-purple .enter-wipe-shard {
+  clip-path: polygon(
+    var(--x0) var(--y1),
+    var(--x1) var(--y3),
+    var(--x1) var(--y4),
+    var(--x0) var(--y2)
+  );
+}
+/* 底部三块：同一套梯形，只是平行边水平；从底边往上长，两侧边始终落在过灭点的射线上。 */
+.enter-wipe-shard--floor {
+  clip-path: polygon(
+    var(--bx1) 100%,
+    var(--bx2) 100%,
+    var(--bx2) 100%,
+    var(--bx1) 100%
+  );
+}
+.enter-wipe.is-on-purple .enter-wipe-shard--floor {
+  clip-path: polygon(
+    var(--fx1) 0,
+    var(--fx2) 0,
+    var(--bx2) 100%,
+    var(--bx1) 100%
+  );
+}
+
+/* 极淡噪点：大面积纯色容易显得「塑料」，一层颗粒把它压成有纸感的材质。
+   铺满后才出现，不参与任何缩放。 */
+.enter-wipe-grain {
+  opacity: 0;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='2' stitchTiles='stitch'/></filter><rect width='160' height='160' filter='url(%23n)'/></svg>");
+  background-size: 160px 160px;
+  mix-blend-mode: overlay;
+  transition: opacity 320ms ease;
+}
+.enter-wipe.is-on-purple .enter-wipe-grain { opacity: .085; }
+.enter-wipe-line {
+  position: absolute; left: 0; top: 0;
+  display: inline-flex; align-items: center; gap: .5rem;
+  transform: translate(-50%, -50%);
+  white-space: nowrap;
+  font-size: 1.125rem; font-weight: 500; line-height: 1; letter-spacing: .015em;
+  /* 起手是「和登录页一样的浅底深字」，紫圆铺满之后才点亮成白字 */
+  color: rgb(var(--tw-text-primary));
+  opacity: 0;
+  transform: translate(-50%, calc(-50% + 6px));
+  transition: opacity 200ms ease, color 160ms ease,
+              transform 240ms cubic-bezier(.25, .8, .3, 1);
+}
+.enter-wipe-line.is-on { opacity: 1; transform: translate(-50%, -50%); }
+/* 上一句：继续往上浮 6px 淡出，和新句的「从下方浮起」交叠成一次交替 */
+.enter-wipe-line.is-past { opacity: 0; transform: translate(-50%, calc(-50% - 6px)); }
+/* 第一句是按钮文案的延续——本来就在场，不该从下面浮进来：直接出现，只留颜色过渡；
+   等它退场时（is-past）再恢复位移与淡出，交棒给下一句 */
+.enter-wipe-line.is-first:not(.is-past) {
+  transform: translate(-50%, -50%);
+  transition: color 160ms ease;
+}
+/* 加载引导：通栏一条，从左拉到右。走满用时就等于「正在载入」那句的时长，
+   所以「条到底」和「该换欢迎语了」是同一件事。只用 scaleX，不动布局。 */
+.enter-wipe-bar {
+  position: absolute; left: 0; right: 0;
+  height: 4px;
+  overflow: hidden;
+  pointer-events: none;
+  background: rgb(var(--wipe-fg) / .12);
+  opacity: 0;
+  transition: opacity 220ms ease;
+}
+.enter-wipe-bar.is-on { opacity: 1; }
+.enter-wipe-bar > span {
+  display: block; width: 100%; height: 100%;
+  transform: scaleX(0);
+  transform-origin: left center;
+  background: linear-gradient(90deg,
+    rgb(var(--wipe-fg) / .35) 0%,
+    rgb(var(--wipe-fg) / .88) 55%,
+    rgb(var(--wipe-fg) / .95) 100%);
+}
+.enter-wipe-bar.is-on > span {
+  animation: enter-wipe-bar-fill 780ms cubic-bezier(.25, .8, .35, 1) forwards;
+}
+@keyframes enter-wipe-bar-fill {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+/* 品牌区同理：紫圆铺满前保持登录页原配色，交接那一帧颜色必须一模一样 */
+.enter-wipe-brand .brand-title { color: rgb(var(--tw-text-primary)); transition: color 200ms ease; }
+.enter-wipe-brand .brand-sub { color: rgb(var(--tw-text-secondary)); transition: color 200ms ease; }
+.enter-wipe.is-on-purple .enter-wipe-tint { opacity: 1; }
+.enter-wipe.is-on-purple .enter-wipe-brand .brand-title { color: rgb(var(--wipe-fg)); }
+.enter-wipe.is-on-purple .enter-wipe-brand .brand-sub { color: rgb(var(--wipe-fg) / .68); }
+.enter-wipe.is-on-purple .enter-wipe-line { color: rgb(var(--wipe-fg)); }
+/* 揭示：整层淡出 + 极轻微放大（镜头后撤）。整层一次合成，
+   比逐层淡出干净——不然紫圆和暗角同降透明度时会互相透出。 */
+.enter-wipe { transition: opacity 320ms ease, transform 320ms cubic-bezier(.3, .7, .4, 1); }
+.enter-wipe.is-out { opacity: 0; transform: scale(1.02); }
+@media (prefers-reduced-motion: reduce) {
+  .enter-wipe-disc {
+    animation: none;
+    transform: translate(-50%, -50%) scale(var(--wipe-k, 40));
+  }
+  .enter-wipe-veil,
+  .enter-wipe-disc,
+  .enter-wipe-tint,
+  .enter-wipe-brand,
+  .enter-wipe-label,
+  .enter-wipe-line,
+  .enter-wipe-grain { transition-duration: 150ms; }
+  .enter-wipe-shard { transition-duration: 150ms; }
+}
+
+select.field { padding-right: 2rem; cursor: pointer; }
+select.field.field-sm { padding-right: 1.75rem; }
 /* 多行不是「一行」：高度按行数走，所以不用胶囊（会鼓成药丸）。
    圆角取大档 16：行数再多也只是四个角，看着是「一块输入区」而不是「一根管子」 */
 textarea.field { height: auto; min-height: 2.5rem; padding: 0.5rem 0.75rem; border-radius: var(--r-lg); resize: vertical; }

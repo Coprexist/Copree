@@ -54,7 +54,7 @@ export default function UpdateBanner({ enabled }: { enabled: boolean }) {
         onClick={dismiss}
         aria-label={t('update:dismiss')}
         title={t('update:dismiss')}
-        className="ml-auto shrink-0 p-0.5 text-textMuted transition-colors hover:text-textPrimary"
+        className="icon-btn icon-btn-xs ml-auto shrink-0"
       >
         <X size={14} />
       </button>

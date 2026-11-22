@@ -15,6 +15,7 @@ import { useNavigate } from 'react-router-dom'
 import { CheckCircle2, Circle, ExternalLink, Plug, RefreshCw, Unplug, XCircle } from 'lucide-react'
 import { api } from '../../../api/client'
 import { useT } from '../../../i18n/I18nContext'
+import { Button } from '../../../components/ui'
 
 interface Status {
   detected: boolean
@@ -88,12 +89,14 @@ export default function DshBridgeTab() {
               <Unplug size={13} />
             </button>
           )}
-          <button
+          <Button
+            variant="tinted"
+            size="xs"
+            icon={<ExternalLink size={12} />}
             onClick={() => navigate('/dsh')}
-            className="flex items-center gap-1 px-2.5 py-1 rounded-control text-xs font-medium bg-primary-500/10 text-primary-400 hover:bg-primary-500/20 border border-primary-400/20 transition-colors"
           >
-            <ExternalLink size={12} /> {t('tool:dsh.open')}
-          </button>
+            {t('tool:dsh.open')}
+          </Button>
         </div>
       </div>
       <p className="text-xs text-textMuted">{t('tool:dsh.desc')}</p>

@@ -152,7 +152,7 @@ export default function WorldCreatorConfig({ wid, creator, usageStats, aiMode, o
   }
 
   const fieldLabel = 'text-3xs text-textMuted mb-1'
-  const fieldInput = 'w-full bg-elevated text-sm p-2 rounded-control border border-border outline-none focus:border-primary-500/50 transition-colors'
+  const fieldInput = 'field field-noresize w-full text-sm'
 
   return (
     <Dialog onClose={onClose} className="flex items-center justify-center p-4">
@@ -168,7 +168,7 @@ export default function WorldCreatorConfig({ wid, creator, usageStats, aiMode, o
             <span className="text-sm font-semibold text-textPrimary truncate">{t('tool:world.creatorConfig.title')}</span>
             <span className="text-3xs text-textMuted shrink-0">{t('tool:world.creatorConfig.subtitle')}</span>
           </div>
-          <button onClick={onClose} className="p-1 text-textMuted hover:text-textPrimary transition-colors shrink-0" title={t('tool:world.creatorConfig.close')}>
+          <button onClick={onClose} className="icon-btn shrink-0" title={t('tool:world.creatorConfig.close')} aria-label={t('tool:world.creatorConfig.close')}>
             <X size={16} />
           </button>
         </div>
@@ -221,8 +221,9 @@ export default function WorldCreatorConfig({ wid, creator, usageStats, aiMode, o
                 </div>
                 <button
                   onClick={() => setEditingName((v) => !v)}
-                  className="p-1.5 text-textMuted hover:text-textPrimary hover:bg-border rounded-control transition-colors shrink-0"
+                  className="icon-btn icon-btn-xs shrink-0"
                   title={editingName ? t('tool:world.creatorConfig.collapse') : t('tool:world.creatorConfig.identity.editName')}
+                  aria-label={editingName ? t('tool:world.creatorConfig.collapse') : t('tool:world.creatorConfig.identity.editName')}
                 >
                   {editingName ? <ChevronUp size={15} /> : <Pencil size={15} />}
                 </button>
@@ -250,11 +251,7 @@ export default function WorldCreatorConfig({ wid, creator, usageStats, aiMode, o
                   key={m.key}
                   onClick={() => saveMode(m.key)}
                   disabled={modeSaving || aiMode === m.key}
-                  className={`px-2 py-1.5 text-xs rounded-control border transition-colors disabled:opacity-100 ${
-                    aiMode === m.key
-                      ? 'bg-primary-500/15 border-primary-500/50 text-primary-300'
-                      : 'border-border text-textSecondary hover:text-textPrimary hover:border-primary-500/30'
-                  }`}
+                  className={`btn btn-sm btn-outline disabled:!opacity-100 ${aiMode === m.key ? 'is-active' : ''}`}
                 >{t(m.labelKey)}</button>
               ))}
             </div>
@@ -280,8 +277,9 @@ export default function WorldCreatorConfig({ wid, creator, usageStats, aiMode, o
                 </div>
                 <button
                   onClick={() => setEditingPrompt((v) => !v)}
-                  className="p-1.5 text-textMuted hover:text-textPrimary hover:bg-border rounded-control transition-colors shrink-0"
+                  className="icon-btn icon-btn-xs shrink-0"
                   title={editingPrompt ? t('tool:world.creatorConfig.collapse') : t('tool:world.creatorConfig.persona.editSystemPrompt')}
+                  aria-label={editingPrompt ? t('tool:world.creatorConfig.collapse') : t('tool:world.creatorConfig.persona.editSystemPrompt')}
                 >
                   {editingPrompt ? <ChevronUp size={15} /> : <Pencil size={15} />}
                 </button>
@@ -310,8 +308,9 @@ export default function WorldCreatorConfig({ wid, creator, usageStats, aiMode, o
                 </div>
                 <button
                   onClick={() => setShowForced((v) => !v)}
-                  className="p-1.5 text-textMuted hover:text-textPrimary hover:bg-border rounded-control transition-colors shrink-0"
+                  className="icon-btn icon-btn-xs shrink-0"
                   title={showForced ? t('tool:world.creatorConfig.collapse') : t('tool:world.creatorConfig.persona.expand')}
+                  aria-label={showForced ? t('tool:world.creatorConfig.collapse') : t('tool:world.creatorConfig.persona.expand')}
                 >
                   {showForced ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
                 </button>
@@ -340,7 +339,7 @@ export default function WorldCreatorConfig({ wid, creator, usageStats, aiMode, o
                     type="time"
                     value={settings.auto_new_time}
                     onChange={(e) => setSettings((s) => (s ? { ...s, auto_new_time: e.target.value } : s))}
-                    className="bg-elevated text-xs p-1 rounded-control border border-border outline-none focus:border-primary-500/50"
+                    className="field field-sm max-w-[6.5rem]"
                   />
                   <input
                     type="checkbox"
@@ -361,7 +360,7 @@ export default function WorldCreatorConfig({ wid, creator, usageStats, aiMode, o
                   max={720}
                   value={settings.compact_idle_hours}
                   onChange={(e) => setSettings((s) => (s ? { ...s, compact_idle_hours: Number(e.target.value) || 0 } : s))}
-                  className="w-20 bg-elevated text-sm p-1.5 rounded-control border border-border outline-none text-right focus:border-primary-500/50"
+                  className="field field-sm max-w-[5rem] text-right"
                   title={t('tool:world.creatorConfig.lifecycle.hours')}
                 />
               </div>
@@ -376,7 +375,7 @@ export default function WorldCreatorConfig({ wid, creator, usageStats, aiMode, o
                   max={3650}
                   value={settings.retention_days}
                   onChange={(e) => setSettings((s) => (s ? { ...s, retention_days: Number(e.target.value) || 0 } : s))}
-                  className="w-20 bg-elevated text-sm p-1.5 rounded-control border border-border outline-none text-right focus:border-primary-500/50"
+                  className="field field-sm max-w-[5rem] text-right"
                   title={t('tool:world.creatorConfig.lifecycle.days')}
                 />
               </div>
@@ -441,7 +440,7 @@ export default function WorldCreatorConfig({ wid, creator, usageStats, aiMode, o
                 max={200}
                 value={form.max_tool_rounds}
                 onChange={(e) => setForm((f) => ({ ...f, max_tool_rounds: Number(e.target.value) || 50 }))}
-                className="w-20 bg-elevated text-sm p-1.5 rounded-control border border-border outline-none text-right focus:border-primary-500/50"
+                className="field field-sm max-w-[5rem] text-right"
               />
             </div>
           </div>

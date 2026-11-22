@@ -13,7 +13,7 @@ import { Loader2 } from 'lucide-react'
  */
 type Variant =
   | 'primary' | 'accent' | 'secondary' | 'outline' | 'ghost' | 'danger' | 'success' | 'link'
-  | 'tinted' | 'tinted-danger' | 'tinted-success'
+  | 'outline-danger' | 'tinted' | 'tinted-accent' | 'tinted-danger' | 'tinted-success'
 type Size = 'xs' | 'sm' | 'md' | 'lg'
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -29,11 +29,13 @@ const VARIANT_CLASS: Record<Variant, string> = {
   accent: 'btn-accent',
   secondary: 'btn-secondary',
   outline: 'btn-outline',
+  'outline-danger': 'btn-outline-danger',
   ghost: 'btn-ghost',
   danger: 'btn-danger',
   success: 'btn-success',
   link: 'btn-link',
   tinted: 'btn-tinted',
+  'tinted-accent': 'btn-tinted-accent',
   'tinted-danger': 'btn-tinted-danger',
   'tinted-success': 'btn-tinted-success',
 }

@@ -5,8 +5,8 @@ import { useTheme } from '../context/ThemeContext'
 import { useT, useLang } from '../i18n/I18nContext'
 import { fmtDateTime } from '../utils/time'
 import Toggle from '../components/Toggle'
-import { Slider, SecretInput } from '../components/ui'
-import ComboBox from '../components/ui/ComboBox'
+import { Slider } from '../components/ui'
+import ApiConfigSection from '../components/api-config/ApiConfigSection'
 import { IN_APP_NOTIFICATION_KEY } from '../hooks/useNotificationSocket'
 import MagicVisionFilter from '../components/MagicVisionFilter.tsx'
 import ThemeCustomizer from '../components/ThemeCustomizer'
@@ -19,8 +19,6 @@ import { LANGUAGES } from '../i18n/languages'
 import { NOTICE_BOX_CLASS, NOTICE_TEXT_CLASS, useNotice } from '../hooks/useNotice'
 import { isDesktop } from '../utils/platform'
 import { invoke } from '../utils/tauri'
-import { getApiKeyUrl } from '../utils/providers.tsx'
-import { looksLocalBaseUrl } from '../utils/apiBaseUrl'
 import { Key, Zap, Save, Clock, Palette, Bell, Eye, EyeOff, CheckCircle, XCircle, Loader2, Globe, Layout, Bot, Pencil, X, Ticket, Plus, ChevronDown, ChevronRight, Shield, AlertTriangle, ArrowLeft, Mail, Monitor, HardDrive, Trash2, Cpu, Wrench, Box, ExternalLink, BarChart3, Star } from 'lucide-react'
 import { useNavigate, useBlocker, useLocation, useSearchParams } from 'react-router-dom'
 
@@ -89,13 +87,6 @@ export default function SettingsPage() {
     }
   }
   const navigate = useNavigate()
-  const [apiBaseUrl, setApiBaseUrl] = useState('https://api.deepseek.com')
-  const [apiKey, setApiKey] = useState('')
-  const [showApiKey, setShowApiKey] = useState(false)
-  const [testing, setTesting] = useState(false)
-  const [testResult, setTestResult] = useState<'success' | 'fail' | null>(null)
-  // 测试结果的原因也要给人看：只给一个红叉，新手不知道是地址错、Key 错还是连不上
-  const [testMessage, setTestMessage] = useState('')
   const [preferOwnKey, setPreferOwnKey] = useState(false)
   const [autoTimeout, setAutoTimeout] = useState(60)
   const [autoDefault, setAutoDefault] = useState(false)
@@ -107,9 +98,6 @@ export default function SettingsPage() {
     try { return parseFloat(localStorage.getItem('ui_scale') || '1') } catch { return 1 }
   })
 
-  // 新增：全局默认模型（用户覆盖）
-  const [globalChatModel, setGlobalChatModel] = useState('')
-  const [globalWorkModel, setGlobalWorkModel] = useState('')
 
   // 应用 UI 缩放
   useEffect(() => {
@@ -126,36 +114,9 @@ export default function SettingsPage() {
   })
   const [saving, setSaving] = useState(false)
   const { notice: saveNotice, ok: noticeOk, fail: noticeFail, clear: clearNotice } = useNotice()
-  const [agents, setAgents] = useState<any[]>([])
-  const [editingAgentId, setEditingAgentId] = useState<number | null>(null)
-  const [agentApiBaseUrl, setAgentApiBaseUrl] = useState('')
-  const [agentApiKey, setAgentApiKey] = useState('')
-  const [agentApiSaving, setAgentApiSaving] = useState(false)
   const [redeemCode, setRedeemCode] = useState('')
   const [redeeming, setRedeeming] = useState(false)
   const { notice: redeemNotice, ok: redeemOk, fail: redeemFail, clear: clearRedeemNotice } = useNotice()
-  const [showAgentApi, setShowAgentApi] = useState(false)
-
-  // ── 预设供应商列表 ──
-  interface ProviderPreset { name: string; provider: string; base_url: string; api_key_url: string; chat_model: string; work_model: string; is_default: boolean; models: { value: string; label: string }[] }
-  const [providerPresets, setProviderPresets] = useState<ProviderPreset[]>([])
-  // 当前 base_url 对应的预设 + 模型下拉候选（预设模型列表 ∪ 当前值，去重）
-  const curPreset = providerPresets.find(p => p.base_url === apiBaseUrl)
-  const presetModelValues = (curPreset?.models || []).map(m => m.value)
-  const isName = (v: string | undefined): v is string => Boolean(v)
-  // 候选只列"清单里有的模型"：把当前值也塞进去的话，输入到一半的串会自己变成一条候选
-  const allChatOptions = [...new Set([curPreset?.chat_model, ...presetModelValues].filter(isName))]
-  const allWorkOptions = [...new Set([curPreset?.work_model, ...presetModelValues].filter(isName))]
-  // 选预设：填 base_url + 自动填模型。仅当当前值为空、或值本身来自某个预设时才覆盖，
-  // 用户手写的自定义模型不被冲掉。判定无状态 → 刷新页面后依然成立
-  // （此前用 chatModelManual 记忆"是否手动改过"，刷新即丢失，自定义模型会被预设冲掉）
-  const isPresetModel = (v: string, kind: 'chat' | 'work') =>
-    !v || providerPresets.some(p => (kind === 'chat' ? p.chat_model : p.work_model) === v)
-  const applyPreset = (p: ProviderPreset) => {
-    setApiBaseUrl(p.base_url)
-    if (p.chat_model && isPresetModel(globalChatModel, 'chat')) setGlobalChatModel(p.chat_model)
-    if (p.work_model && isPresetModel(globalWorkModel, 'work')) setGlobalWorkModel(p.work_model)
-  }
 
   // ── 桌面端设置 ──
   const [autoStart, setAutoStart] = useState(false)
@@ -283,22 +244,19 @@ export default function SettingsPage() {
 
   // ── 未保存修改检测 ──
   const [savedValues, setSavedValues] = useState<{
-    apiBaseUrl: string; autoTimeout: number; autoDefault: boolean
+    autoTimeout: number; autoDefault: boolean
     timezone: string; language: string; chatStyle: string; uiScale: number
-    globalChatModel?: string; globalWorkModel?: string; preferOwnKey?: boolean
+    preferOwnKey: boolean
   } | null>(null)
 
   const hasUnsavedChanges = savedValues !== null && (
-    apiBaseUrl !== savedValues.apiBaseUrl ||
     autoTimeout !== savedValues.autoTimeout ||
     autoDefault !== savedValues.autoDefault ||
     timezone !== savedValues.timezone ||
     language !== savedValues.language ||
     chatStyle !== savedValues.chatStyle ||
     uiScale !== savedValues.uiScale ||
-    globalChatModel !== (savedValues.globalChatModel || '') ||
-    globalWorkModel !== (savedValues.globalWorkModel || '') ||
-    apiKey.trim() !== ''
+    preferOwnKey !== savedValues.preferOwnKey
   )
 
   const blocker = useBlocker(
@@ -329,13 +287,11 @@ export default function SettingsPage() {
   useEffect(() => {
     if (user) {
       api.get('/auth/me').then((data) => {
-        const apiUrl = data.api_base_url || 'https://api.deepseek.com'
         const tz = data.timezone || 'Asia/Shanghai'
         const lang = data.language || 'zh'
         const style = data.ui_prefs?.chat_style || 'cozy'
         const to = data.auto_approve_vector_timeout ?? 60
         const ad = data.auto_approve_vector_default ?? false
-        setApiBaseUrl(apiUrl)
         setAutoTimeout(to)
         setAutoDefault(ad)
         setPreferOwnKey(data.prefer_own_key ?? false)
@@ -346,28 +302,16 @@ export default function SettingsPage() {
           const s = parseFloat(data.ui_prefs.ui_scale)
           if (s >= 0.7 && s <= 1.5) { setUiScale(s); try { localStorage.setItem('ui_scale', String(s)) } catch {} }
         }
-        // 加载全局默认模型覆盖
-        setGlobalChatModel(data.global_chat_model || '')
-        setGlobalWorkModel(data.global_work_model || '')
         setSavedValues({
           preferOwnKey: data.prefer_own_key ?? false,
-          apiBaseUrl: apiUrl,
           autoTimeout: to,
           autoDefault: ad,
           timezone: tz,
           language: lang,
           chatStyle: style,
           uiScale: data.ui_prefs?.ui_scale || 1,
-          globalChatModel: data.global_chat_model || '',
-          globalWorkModel: data.global_work_model || '',
         })
       }).catch(console.error)
-      api.get<any[]>('/agents').then(list => {
-        setAgents(list || [])
-      }).catch(() => {})
-      api.get<{providers: ProviderPreset[]}>('/agents/models').then(d => {
-        setProviderPresets(d.providers || [])
-      }).catch(() => {})
     }
   }, [user])
 
@@ -383,92 +327,37 @@ export default function SettingsPage() {
     }
   }, [location.hash])
 
-  const handleTestConnection = async () => {
-    setTesting(true)
-    setTestResult(null)
-    setTestMessage('')
-    try {
-      const data = await api.post<{ ok: boolean; message: string }>('/user/test-api-connection', {
-        api_base_url: apiBaseUrl || null,
-        api_key: apiKey || null,
-      })
-      setTestResult(data.ok ? 'success' : 'fail')
-      setTestMessage(data.message || '')
-    } catch (err: any) {
-      setTestResult('fail')
-      setTestMessage(err?.message || '')
-    } finally {
-      setTesting(false)
-      setTimeout(() => {
-        setTestResult(null)
-        setTestMessage('')
-      }, 8000)
-    }
-  }
-
   const handleSave = async () => {
     setSaving(true)
     clearNotice()
     try {
       await api.put('/user/settings', {
         prefer_own_key: preferOwnKey,
-        api_base_url: apiBaseUrl || null,
-        api_key: apiKey || null,
         auto_approve_vector_timeout: autoTimeout,
         auto_approve_vector_default: autoDefault,
         timezone,
         language,
         ui_prefs: { chat_style: chatStyle, ui_scale: uiScale },
-        global_chat_model: globalChatModel || null,
-        global_work_model: globalWorkModel || null,
       })
       try { localStorage.setItem('chat_style', chatStyle); localStorage.setItem('ui_scale', String(uiScale)) } catch {}
-      setApiKey('')
       noticeOk(t('settings:saveSuccess'))
       setSavedValues({
-        apiBaseUrl: apiBaseUrl || '',
         autoTimeout,
         autoDefault,
         timezone,
         language,
         chatStyle,
         uiScale,
-        globalChatModel,
-        globalWorkModel,
+        preferOwnKey,
       })
       saveToStorage(magicVision)
       refreshUser()
       apply(magicVision)
-      api.get<any[]>('/agents').then(list => setAgents(list || [])).catch(() => {})
     } catch (err: any) {
       noticeFail(err.message || t('error:saveFailed'))
     } finally {
       setSaving(false)
     }
-  }
-
-  const handleSaveAgentApi = async (agentId: number) => {
-    setAgentApiSaving(true)
-    try {
-      await api.put(`/agents/${agentId}/config`, {
-        api_base_url: agentApiBaseUrl || null,
-        api_key: agentApiKey || null,
-      })
-      setEditingAgentId(null)
-      setAgentApiKey('')
-      api.get<any[]>('/agents').then(list => setAgents(list || [])).catch(() => {})
-    } catch (err: any) {
-      alert(err.message || t('error:saveFailed'))
-    } finally {
-      setAgentApiSaving(false)
-    }
-  }
-
-  const startEditAgentApi = (agent: any) => {
-    setEditingAgentId(agent.id)
-    const saved = agent.api_base_url || ''
-    setAgentApiBaseUrl(saved || (providerPresets.find(p => p.is_default)?.base_url || ''))
-    setAgentApiKey('')
   }
 
   const handleRedeem = async () => {
@@ -599,7 +488,7 @@ export default function SettingsPage() {
         )}
       </div>
 
-      {/* API 提供商配置 */}
+      {/* API 配置：厂商与配置档（LLM / 语音共用同一套结构） */}
  <div id="settings-api" className={(activeTab === 'api' ? '' : 'hidden') + ' card p-3 md:p-6 scroll-mt-16'}>
         <div className="flex items-center gap-2 mb-4 flex-wrap">
           <Key size={18} className="text-primary-400 shrink-0" />
@@ -608,121 +497,9 @@ export default function SettingsPage() {
         </div>
 
         <div className="space-y-4">
-          {providerPresets.length > 0 && (
-            <div>
-              <label className="block text-xs font-medium mb-1.5 text-textSecondary">{t('settings:presetProvider')}</label>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 mb-2">
-                {providerPresets.map(p => (
-                  // ui-standard-ignore: 预设供应商标签（选中态是自绘的），不是按钮形态
-                  <button
-                    key={p.name}
-                    onClick={() => applyPreset(p)}
-                    className={`px-3 py-1.5 text-xs rounded-control font-medium transition-colors border truncate ${
-                      apiBaseUrl === p.base_url
-                        ? 'bg-primary-500/15 border-primary-500/40 text-primary-500'
-                        : 'bg-canvas border-border text-textSecondary hover:text-textPrimary hover:border-primary-500/30'
-                    }`}
-                  >
-                    {p.name}
-                    {/* 行内 SVG 默认按基线对齐，会明显低于文字：显式居中，再补一点左间距 */}
-                    {p.is_default && <Star size={10} className="relative -top-px ml-1 inline fill-current text-accent-400" />}
-                  </button>
-                ))}
-              </div>
-              {curPreset && (
-                <p className="text-3xs text-mint-400">{t('settings:currentPreset')}：{curPreset.name} · {curPreset.base_url}</p>
-              )}
-            </div>
-          )}
-          <div>
-            <label className="block text-xs font-medium mb-1.5 text-textSecondary">{t('settings:baseUrl')}</label>
-            <input
-              type="text"
-              value={apiBaseUrl}
-              onChange={(e) => setApiBaseUrl(e.target.value)}
-              className="field w-full"
-              placeholder={t('settings:baseUrlPlaceholder')}
-            />
-            <p className="text-3xs text-textMuted mt-1">{t('settings:baseUrlDesc')}</p>
-            {looksLocalBaseUrl(apiBaseUrl) && (
-              <p className="text-3xs text-rose-400 mt-1">{t('settings:baseUrlWarnLocal')}</p>
-            )}
-          </div>
-          <div>
-            <label className="block text-xs font-medium mb-1.5 text-textSecondary flex items-center gap-2">
-              {t('settings:apiKey')}
-              {apiBaseUrl && getApiKeyUrl(apiBaseUrl) && (
-                <a
-                  href={getApiKeyUrl(apiBaseUrl)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-3xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 underline underline-offset-2 font-normal"
-                >
-                  {t('settings:apiKeyGet')}
-                </a>
-              )}
-            </label>
-            <SecretInput
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              wrapperClassName="w-full"
-              placeholder={user?.has_api_key ? t('settings:apiKeyPlaceholderSet') : t('settings:apiKeyPlaceholder')}
-            />
-            <div className="flex items-center justify-between mt-1.5">
-              <p className="text-xs text-textMuted">
-                {user?.has_api_key
-                  ? <><CheckCircle size={12} className="inline text-mint-400 mr-1" />{t('settings:apiKeySet')}</>
-                  : <><AlertTriangle size={12} className="inline text-accent-400 mr-1" />{t('settings:apiKeyNotSet')}</>}
-              </p>
-              <button
-                onClick={handleTestConnection}
-                disabled={testing}
-                className="flex items-center gap-1 text-xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 disabled:opacity-50 transition-colors"
-              >
-                {testing ? (
-                  <Loader2 size={12} className="animate-spin" />
-                ) : testResult === 'success' ? (
-                  <CheckCircle size={12} className="text-mint-400" />
-                ) : testResult === 'fail' ? (
-                  <XCircle size={12} className="text-rose-400" />
-                ) : null}
-                {testing ? t('settings:testing') : testResult === 'success' ? t('settings:testSuccess') : testResult === 'fail' ? t('settings:testFailed') : t('settings:testConnection')}
-              </button>
-            </div>
-            {testMessage && (
-              <p className={`text-3xs mt-1 ${testResult === 'success' ? 'text-mint-400' : 'text-rose-400'}`}>
-                {testMessage}
-              </p>
-            )}
-          </div>
-
-          {/* 全局默认模型覆盖 */}
-          <div className="grid grid-cols-2 gap-3 pt-3 border-t border-border">
-            <div>
-              <label className="block text-xs font-medium mb-1.5 text-textSecondary">
-                {t('settings:globalChatModelOverride')}
-              </label>
-              <ComboBox
-                value={globalChatModel}
-                onValueChange={setGlobalChatModel}
-                options={allChatOptions}
-                placeholder={t('settings:modelPlaceholderChat')}
-              />
-              <p className="text-3xs text-textMuted mt-1">{t('settings:emptyUsesGlobalDefault')}</p>
-            </div>
-            <div>
-              <label className="block text-xs font-medium mb-1.5 text-textSecondary">
-                {t('settings:globalWorkModelOverride')}
-              </label>
-              <ComboBox
-                value={globalWorkModel}
-                onValueChange={setGlobalWorkModel}
-                options={allWorkOptions}
-                placeholder={t('settings:modelPlaceholderWork')}
-              />
-              <p className="text-3xs text-textMuted mt-1">{t('settings:emptyUsesGlobalDefault')}</p>
-            </div>
-          </div>
+          {/* LLM / 语音两块同构：厂商 + 配置档，每个 AI 在「API」页签里各挑一条 */}
+          <ApiConfigSection kind="llm" />
+          <ApiConfigSection kind="voice" />
 
           {/* 优先使用本人 API Key 开关 */}
           <div className="flex items-center justify-between py-3 border-t border-border mt-3">
@@ -737,109 +514,6 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        {/* 单 AI API 配置 */}
-        <div className="mt-4 pt-4 border-t border-border">
-          {/* ui-standard-ignore: 折叠标题行（整行可点），不是按钮形态 */}
-          <button
-            onClick={() => setShowAgentApi(!showAgentApi)}
-            className="flex items-center gap-2 w-full text-left hover:bg-canvas/50 rounded-control px-2 py-1.5 -mx-2 transition-colors"
-          >
-            {showAgentApi ? <ChevronDown size={16} className="text-textMuted" /> : <ChevronRight size={16} className="text-textMuted" />}
-            <Bot size={16} className="text-primary-400" />
-            <span className="text-sm font-medium text-textPrimary">{t('settings:perAgentTitle')}</span>
-            <span className="text-3xs text-textMuted">{t('settings:perAgentHint')}</span>
-          </button>
-
-          {showAgentApi && (
-            <div className="mt-3">
-              {agents.length === 0 ? (
-                <p className="text-xs text-textMuted py-4 text-center">{t('settings:noAgentsForApi')}</p>
-              ) : (
-                <div className="space-y-2">
-                  {agents.map((agent: any) => (
-                    <div key={agent.id} className="bg-canvas rounded-card border border-border p-3">
-                      {editingAgentId === agent.id ? (
-                        <div className="space-y-2">
-                          <div className="flex items-center justify-between">
-                            <span className="text-sm font-medium text-textPrimary">{agent.name}</span>
-                            <button onClick={() => setEditingAgentId(null)} className="text-textMuted hover:text-textSecondary">
-                              <X size={14} />
-                            </button>
-                          </div>
-                          {providerPresets.length > 0 && (
-                            <>
-                              <label className="block text-xs text-textSecondary mb-1">{t('settings:providerPreset')}</label>
-                              <div className="flex flex-wrap gap-1.5 mb-1">
-                                {providerPresets.map(p => (
-                                  // ui-standard-ignore: 单 AI 的供应商标签（选中态是自绘的），不是按钮形态
-                                  <button
-                                    key={p.name}
-                                    onClick={() => setAgentApiBaseUrl(p.base_url)}
-                                    className={`px-2 py-1 text-2xs rounded-control font-medium transition-colors border ${
-                                      agentApiBaseUrl === p.base_url
-                                        ? 'bg-primary-500/15 border-primary-500/40 text-primary-500'
-                                        : 'bg-surface border-border text-textMuted hover:text-textSecondary hover:border-primary-500/30'
-                                    }`}
-                                  >
-                                    {p.name}
-                                  </button>
-                                ))}
-                              </div>
-                              {(() => { const cur = providerPresets.find(p => p.base_url === agentApiBaseUrl); return cur ? (
-                                <p className="text-3xs text-mint-400">{t('settings:currentPreset')}：{cur.name}</p>
-                              ) : null })()}
-                            </>
-                          )}
-                          <input
-                            type="text"
-                            value={agentApiBaseUrl}
-                            onChange={(e) => setAgentApiBaseUrl(e.target.value)}
-                            className="field w-full"
-                            placeholder={t('settings:agentBaseUrlPlaceholder')}
-                          />
-                          <SecretInput
-                            value={agentApiKey}
-                            onChange={(e) => setAgentApiKey(e.target.value)}
-                            wrapperClassName="w-full"
-                            placeholder={t('settings:agentApiKeyPlaceholder')}
-                          />
-                          <button
-                            onClick={() => handleSaveAgentApi(agent.id)}
-                            disabled={agentApiSaving}
-                            className="btn btn-sm btn-primary w-full"
-                          >
-                            {agentApiSaving ? t('settings:agentApiSaving') : t('common:save')}
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            <span className="text-sm text-textPrimary">{agent.name}</span>
-                            {agent.api_base_url ? (
-                              <span className="text-3xs px-1.5 py-0.5 rounded bg-primary-500/10 text-primary-400">
-                                {t('settings:independentApiBadge')}
-                              </span>
-                            ) : (
-                              <span className="text-3xs px-1.5 py-0.5 rounded bg-border/30 text-textMuted">
-                                {t('settings:inheritGlobalBadge')}
-                              </span>
-                            )}
-                          </div>
-                          <button
-                            onClick={() => startEditAgentApi(agent)}
-                            className="text-textMuted hover:text-textSecondary transition-colors"
-                          >
-                            <Pencil size={13} />
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
       </div>
 
       {/* 时区设置 */}
@@ -1403,7 +1077,7 @@ export default function SettingsPage() {
 
           {/* 拖拽手柄 */}
           <div
-            className="absolute top-0 -right-1.5 w-1.5 h-full cursor-col-resize hover:bg-primary-400/30 active:bg-primary-400/50 transition-colors z-toast"
+            className="absolute top-0 -right-1.5 w-1.5 h-full cursor-col-resize hover:bg-primary-400/30 active:bg-primary-400/50 transition-colors z-overlay content-width-handles"
             onMouseDown={handleResizeStart}
           />
         </div>

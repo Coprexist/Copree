@@ -1,5 +1,6 @@
 import { InputHTMLAttributes, ReactNode, useId, useMemo, useState } from 'react'
 import { Eye, EyeOff } from 'lucide-react'
+import { useT } from '../../i18n/I18nContext'
 
 /**
  * 密钥 / API Key / Token 输入框（全站唯一实现）
@@ -34,6 +35,7 @@ export default function SecretInput({
   id,
   ...rest
 }: SecretInputProps) {
+  const t = useT()
   const autoId = useId()
   const inputId = id || (label ? 'secret-' + autoId : undefined)
   const [visible, setVisible] = useState(false)
@@ -58,15 +60,17 @@ export default function SecretInput({
         data-1p-ignore="true"
         data-lpignore="true"
         data-bwignore="true"
-        className={'field ' + size + ' pr-9 ' + className}
+        className={'field ' + size + ' field-with-icon-right ' + className}
         style={masked && canMask ? ({ WebkitTextSecurity: 'disc' } as React.CSSProperties) : undefined}
       />
       <button
         type="button"
         onClick={() => setVisible((v) => !v)}
-        aria-label={visible ? '隐藏' : '显示'}
-        title={visible ? '隐藏' : '显示'}
-        className="icon-btn icon-btn-xs icon-btn-pill absolute right-1 top-1/2 -translate-y-1/2"
+        aria-label={visible ? t('common:hide') : t('common:show')}
+        title={visible ? t('common:hide') : t('common:show')}
+        aria-pressed={visible}
+        className={'icon-btn icon-btn-quiet icon-btn-xs icon-btn-pill absolute right-1 top-1/2 -translate-y-1/2'
+          + (visible ? ' text-textPrimary' : '')}
       >
         {visible ? <EyeOff size={14} /> : <Eye size={14} />}
       </button>

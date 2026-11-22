@@ -214,7 +214,7 @@ export default function SearchOverlay() {
           <button
             onClick={() => handleSendDM(item)}
             disabled={sendingDM === key}
-            className="flex items-center gap-1 px-2 py-1 text-xs rounded-control bg-primary-500/10 text-primary-400 hover:bg-primary-500/20 shrink-0 transition-colors disabled:opacity-50"
+            className="btn btn-xs btn-tinted shrink-0"
           >
             <MessageSquare size={12} />
             {sendingDM === key ? '...' : t('search:sendDM')}
@@ -230,19 +230,23 @@ export default function SearchOverlay() {
               onKeyDown={(e) => { if (e.key === 'Enter') handleAddFriend(item) }}
               placeholder={t('profileCard:friendMessagePlaceholder')}
               maxLength={200}
-              className="w-24 md:w-32 px-2 py-1 rounded-control border border-border bg-canvas text-xs text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-1 focus:ring-primary-500/50"
+              className="field field-sm max-w-[8rem]"
               autoFocus
             />
             <button
               onClick={() => handleAddFriend(item)}
               disabled={addingFriend}
-              className="p-1 rounded text-mint-400 hover:bg-mint-400/10 disabled:opacity-40"
+              aria-label={t('search:addFriend')}
+              title={t('search:addFriend')}
+              className="icon-btn icon-btn-xs"
             >
               <UserPlus size={14} />
             </button>
             <button
               onClick={() => { setAddFriendTarget(null); setFriendMessage('') }}
-              className="p-1 rounded text-textMuted hover:text-textSecondary"
+              aria-label={t('common:cancel')}
+              title={t('common:cancel')}
+              className="icon-btn icon-btn-xs"
             >
               <X size={14} />
             </button>
@@ -250,7 +254,7 @@ export default function SearchOverlay() {
         ) : (
           <button
             onClick={() => openProfile(item)}
-            className="flex items-center gap-1 px-2 py-1 text-xs rounded-control bg-mint-400/10 text-mint-400 hover:bg-mint-400/20 shrink-0 transition-colors"
+            className="btn btn-xs btn-tinted-success shrink-0"
           >
             <UserPlus size={12} />
             {t('search:addFriend')}
@@ -283,7 +287,7 @@ export default function SearchOverlay() {
       {group.is_member ? (
         <button
           onClick={() => openGroup(group.id)}
-          className="px-2 py-1 text-xs rounded-control bg-primary-500/10 text-primary-400 hover:bg-primary-500/20 shrink-0 transition-colors"
+          className="btn btn-xs btn-tinted shrink-0"
         >
           {t('search:enterGroup')}
         </button>
@@ -293,7 +297,7 @@ export default function SearchOverlay() {
         <button
           onClick={() => handleJoinGroup(group)}
           disabled={joiningGroup === group.id}
-          className="flex items-center gap-1 px-2 py-1 text-xs rounded-control bg-mint-400/10 text-mint-400 hover:bg-mint-400/20 shrink-0 transition-colors disabled:opacity-50"
+          className="btn btn-xs btn-tinted-success shrink-0"
         >
           <UserPlus size={12} />
           {joiningGroup === group.id ? '...' : group.auto_approve_join ? t('search:joinGroup') : t('search:requestJoin')}

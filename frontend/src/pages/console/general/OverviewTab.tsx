@@ -204,6 +204,7 @@ export default function OverviewTab() {
             // 没事时这句话就是整条灯带的主语：比标题大一档，扫一眼就知道"这里不用管"
             <p className="pb-5 -mt-1 text-base font-medium text-white">{t('admin:homeAllClear')}</p>
           ) : tasks.map(({ icon: Icon, ...task }) => (
+            // ui-standard-ignore: 灯带内整行可点（图标 + 两行说明 + 箭头），不是按钮形态
             <button
               key={task.key}
               onClick={() => goto(task.to)}
@@ -230,6 +231,7 @@ export default function OverviewTab() {
         <SectionTitle icon={Gauge} hue="primary" title={t('admin:homeNumbers')} hint={t('admin:homeNumbersHint')} />
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
           {numbers.map(({ icon: Icon, ...n }) => (
+            // ui-standard-ignore: 整块可点指标卡，底色/描边由 HUE 色系动态给
             <button
               key={n.key}
               onClick={() => goto(n.to)}
@@ -257,6 +259,7 @@ export default function OverviewTab() {
           <SectionTitle icon={History} hue="primary" title={t('admin:homeRecent')} />
           <div className="flex flex-wrap gap-2">
             {recent.map(({ icon: Icon, ...item }) => (
+              // ui-standard-ignore: 虚线条目（与实线入口块区分"最近访问"语义）
               <button
                 key={item.key}
                 onClick={() => goto(`tab=${item.key}`)}
@@ -320,15 +323,12 @@ export default function OverviewTab() {
                 {workspace.items.map(({ icon: Icon, ...item }) => {
                   const active = item.key === 'overview'
                   return (
+                    // ui-standard-ignore: 整块可点入口卡（tile 规范：.card .card-interactive + is-active）
                     <button
                       key={item.key}
                       title={t(item.descKey)}
                       onClick={() => goto(`tab=${item.key}`)}
-                      className={`group flex items-center gap-2 rounded-card border bg-surface px-3 py-2 text-left text-xs transition-colors ${
-                        active
-                          ? 'border-primary-400/50 bg-primary-500/[0.06] text-textPrimary'
-                          : 'border-border text-textSecondary hover:text-textPrimary hover:border-primary-400'
-                      }`}
+                      className={`card card-interactive p-2.5 group flex items-center gap-2 text-xs ${active ? 'is-active' : ''}`}
                     >
                       <Icon size={14} className={`shrink-0 ${active ? HUE.primary.icon : 'text-textMuted group-hover:text-primary-400'}`} />
                       <span className="truncate">{t(item.labelKey)}</span>

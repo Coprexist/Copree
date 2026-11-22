@@ -4,7 +4,7 @@ import { useT } from '../i18n/I18nContext'
 import { isDesktop } from '../utils/platform'
 import { invoke } from '../utils/tauri'
 import { Cpu, RefreshCw, Play, Square, Star, Loader2, ArrowLeft, Circle } from 'lucide-react'
-import { PageHeader } from '../components/ui'
+import { Button, PageHeader } from '../components/ui'
 import { formatFileSize } from '../utils/format'
 
 interface OllamaModel {
@@ -162,23 +162,25 @@ export default function LocalModelPage() {
                   <RefreshCw size={15} className={detecting ? 'animate-spin' : ''} />
                 </button>
                 {ollamaRunning ? (
-                  <button
+                  <Button
+                    variant="outline-danger"
+                    size="sm"
                     onClick={handleStop}
                     disabled={stopping}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-control border border-rose-500/20 text-rose-400 hover:bg-rose-500/10 text-xs font-medium transition-colors disabled:opacity-30"
                   >
                     {stopping ? <Loader2 size={13} className="animate-spin" /> : <Square size={13} />}
                     {t('desktop:stopService')}
-                  </button>
+                  </Button>
                 ) : (
-                  <button
+                  <Button
+                    variant="tinted-success"
+                    size="sm"
                     onClick={handleStart}
                     disabled={starting}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-control bg-mint-400/10 border border-mint-400/20 text-mint-400 hover:bg-mint-400/20 text-xs font-medium transition-colors disabled:opacity-30"
                   >
                     {starting ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}
                     {t('desktop:startService')}
-                  </button>
+                  </Button>
                 )}
               </div>
             </div>
@@ -227,13 +229,14 @@ export default function LocalModelPage() {
                       </p>
                     </div>
                     {model.name !== defaultModel && (
-                      <button
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        icon={<Star size={13} />}
                         onClick={() => handleSetDefault(model.name)}
-                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-control hover:bg-elevated text-textMuted hover:text-primary-400 transition-colors text-xs"
                       >
-                        <Star size={13} />
                         {t('desktop:defaultModel')}
-                      </button>
+                      </Button>
                     )}
                   </div>
                 ))}

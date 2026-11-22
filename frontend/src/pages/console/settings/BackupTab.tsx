@@ -5,6 +5,7 @@ import { api } from '../../../api/client'
 import { Database, AlertTriangle } from 'lucide-react'
 import { useT } from '../../../i18n/I18nContext'
 import { formatFileSize } from '../../../utils/format'
+import { Button } from '../../../components/ui'
 
 export default function BackupTab() {
   const t = useT()
@@ -203,13 +204,15 @@ export default function BackupTab() {
               <h4 className="text-sm font-semibold text-mint-400">{t('admin:fullBackup')}</h4>
               <p className="text-xs text-textSecondary mt-1" dangerouslySetInnerHTML={{ __html: t('admin:fullBackupDesc') }} />
             </div>
-            <button
-              onClick={handleFullBackup}
+            <Button
+              variant="success"
+              size="sm"
+              className="shrink-0"
               disabled={downloadingFull}
-              className="shrink-0 px-4 py-2 bg-mint-400 text-white rounded-card hover:bg-mint-500 disabled:opacity-40 text-sm font-medium transition-colors"
+              onClick={handleFullBackup}
             >
               {downloadingFull ? t('admin:packing') : t('admin:downloadFullBackup')}
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -252,13 +255,15 @@ export default function BackupTab() {
                   <div className="text-sm text-textPrimary truncate">{b.name}</div>
                   <div className="text-xs text-textMuted">{formatFileSize(b.size_bytes)} · {new Date(b.mtime).toLocaleString()}</div>
                 </div>
-                <button
-                  onClick={() => handleRestoreLocal(b.name)}
+                <Button
+                  variant="danger"
+                  size="sm"
+                  className="shrink-0"
                   disabled={restoringLocal === b.name}
-                  className="shrink-0 px-3 py-1.5 text-sm bg-rose-500/80 text-white rounded-control hover:bg-rose-500 disabled:opacity-40 transition-colors"
+                  onClick={() => handleRestoreLocal(b.name)}
                 >
                   {restoringLocal === b.name ? '回档中...' : '回档'}
-                </button>
+                </Button>
               </div>
             ))}
           </div>
@@ -277,6 +282,7 @@ export default function BackupTab() {
             <div className="flex-1 min-w-0">
               <h4 className="text-sm font-semibold text-rose-400">{t('admin:fullRestore')}</h4>
               <p className="text-xs text-textSecondary mt-1" dangerouslySetInnerHTML={{ __html: t('admin:fullRestoreDesc') }} />
+              {/* ui-standard-ignore: 文件选择框（file: 伪类画按钮），不是文本输入 */}
               <input
                 ref={fullFileInputRef}
                 type="file"
@@ -297,6 +303,7 @@ export default function BackupTab() {
             <div className="flex-1 min-w-0">
               <h4 className="text-sm font-semibold text-textPrimary">{t('admin:dbRestore')}</h4>
               <p className="text-xs text-textSecondary mt-1" dangerouslySetInnerHTML={{ __html: t('admin:dbRestoreDesc') }} />
+              {/* ui-standard-ignore: 文件选择框（file: 伪类画按钮），不是文本输入 */}
               <input
                 ref={fileInputRef}
                 type="file"

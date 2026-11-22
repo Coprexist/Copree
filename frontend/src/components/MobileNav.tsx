@@ -80,6 +80,7 @@ export default function MobileNav({ closeDrawer }: MobileNavProps) {
             const tone = item.tone ?? 'primary'
             const iconSize = isCompact ? 19 : 22
             return (
+              // ui-standard-ignore: 移动端底部导航项（图标+文字竖排，选中态由图标承担），不是按钮形态
               <button
                 key={item.path}
                 onClick={() => { closeDrawer?.(); navigate(item.path) }}

@@ -21,7 +21,7 @@ export default function ChannelModal({ agentId, onClose }: { agentId: number; on
         <div className="top-bar top-bar-sticky px-4 py-3 flex items-center gap-2 shrink-0">
           <MessageSquare size={15} className="text-primary-400 shrink-0" />
           <span className="text-sm font-semibold text-textPrimary truncate">{t('tool:channel.modalTitle')}</span>
-          <button onClick={onClose} className="ml-auto p-1 text-textMuted hover:text-textPrimary transition-colors shrink-0">
+          <button onClick={onClose} className="icon-btn ml-auto shrink-0" aria-label={t('common:close')} title={t('common:close')}>
             <X size={16} />
           </button>
         </div>

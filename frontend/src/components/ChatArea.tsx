@@ -12,6 +12,7 @@ import ProfileCard from './ProfileCard'
 import SearchOverlay from './SearchOverlay'
 import { Bell, BellOff, UserPlus, Settings, Bot, User, Globe, X, Check, Users, AlertTriangle } from 'lucide-react'
 import { useT } from '../i18n/I18nContext'
+import { APP_DATA_READY_EVENT } from './EnterTransition'
 import { useResizableSidebar } from '../hooks/useResizableSidebar'
 import { refreshChatLists } from '../hooks/useChatLists'
 import { isEmbedded } from '../embed/bridge'
@@ -79,7 +80,12 @@ export default function ChatArea({ groupId, dmSessionId }: ChatAreaProps) {
 
   // 加载群聊列表
   useEffect(() => {
-    api.get('/groups').then(setGroups).catch(console.error)
+    // 首屏数据到位 = 进入平台的过场可以撤幕了。网慢时这个请求慢，紫幕就多挡一会儿，
+    // 总比提前撤幕露出一片空列表好（成功失败都算「这一轮结束了」，所以放 finally）。
+    api.get('/groups')
+      .then(setGroups)
+      .catch(console.error)
+      .finally(() => window.dispatchEvent(new Event(APP_DATA_READY_EVENT)))
   }, [])
 
   // 监听群设置面板发出的邀请事件
@@ -162,7 +168,7 @@ export default function ChatArea({ groupId, dmSessionId }: ChatAreaProps) {
             {groups.length === 0 ? (
               <button
                 onClick={(e) => { e.stopPropagation(); setShowCreateGroup(true) }}
-                className="mt-5 px-5 py-2.5 bg-primary-500 text-white rounded-card hover:bg-primary-600 text-sm font-medium transition-all shadow-lg shadow-primary-500/20"
+                className="btn btn-md btn-primary mt-5 shadow-lg shadow-primary-500/20"
               >
                 {t('chat:createFirstGroup')}
               </button>
@@ -245,7 +251,7 @@ export default function ChatArea({ groupId, dmSessionId }: ChatAreaProps) {
           >
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-textPrimary">{t('list:add')}</h2>
-              <button onClick={() => setShowAddFriend(false)} className="p-1 hover:bg-canvas rounded-control text-textMuted hover:text-textSecondary">
+              <button onClick={() => setShowAddFriend(false)} className="icon-btn icon-btn-sm" aria-label={t('common:close')} title={t('common:close')}>
                 <X size={18} />
               </button>
             </div>
@@ -404,7 +410,7 @@ function CreateGroupModal({
             value={name}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
-            className="w-full px-3.5 py-2.5 rounded-card border border-border bg-canvas text-textPrimary placeholder:text-textMuted text-sm focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+            className="field field-lg w-full"
             placeholder={t('chat:groupNamePlaceholder')}
             autoFocus
           />
@@ -418,7 +424,7 @@ function CreateGroupModal({
           <input
             type="text" value={memberQuery}
             onChange={(e) => setMemberQuery(e.target.value)}
-            className="w-full px-3.5 py-2 rounded-card border border-border bg-canvas text-textPrimary placeholder:text-textMuted text-sm focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+            className="field w-full"
             placeholder={t('chat:searchMembers')}
           />
           {memberResults.length > 0 && (
@@ -427,6 +433,7 @@ function CreateGroupModal({
                 const key = `${r.type}:${r.id}`
                 const sel = selectedMembers.has(key)
                 return (
+                  // ui-standard-ignore: 成员搜索结果行（整行可点，含勾选框），不是按钮形态
                   <button key={key} onClick={() => toggleMember(r)}
                     className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-elevated transition-colors ${sel ? 'bg-primary-500/10' : ''}`}>
                     <span className={`w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 ${sel ? 'bg-primary-500 border-primary-500' : 'border-border'}`}>
@@ -696,7 +703,7 @@ function InviteMemberModal({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={t('chat:searchNamePlaceholder')}
-            className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+            className="field w-full"
           />
         </div>
 
@@ -767,11 +774,7 @@ function InviteMemberModal({
                 <button
                   key={type}
                   onClick={() => setManualType(type)}
-                  className={`flex-1 py-1.5 text-xs rounded-control border transition-colors ${
-                    manualType === type
-                      ? 'bg-primary-500/15 border-primary-500/40 text-primary-600 dark:text-primary-300'
-                      : 'border-border text-textSecondary hover:bg-elevated'
-                  }`}
+                  className={`btn btn-sm btn-outline flex-1 ${manualType === type ? 'is-active' : ''}`}
                 >
                   {type === 'ai' ? <><Bot size={12} className="inline" /> AI</> : <><User size={12} className="inline" /> {t('list:human')}</>}
                 </button>
@@ -783,7 +786,7 @@ function InviteMemberModal({
                 value={manualId}
                 onChange={(e) => setManualId(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleManualInvite()}
-                className="flex-1 px-3 py-1.5 rounded-control border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+                className="field flex-1 min-w-0"
                 placeholder={t('chat:manualIdPlaceholder')}
                 min={1}
               />

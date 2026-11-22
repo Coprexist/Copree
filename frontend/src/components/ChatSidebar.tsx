@@ -316,6 +316,7 @@ const ChatSidebar = memo(function ChatSidebar({
 
   // ── 渲染单个群聊条目 ──
   const renderGroupItem = (g: Group, isActive: boolean) => (
+    // ui-standard-ignore: 会话列表整行条目（头像+预览+角标），行高由内容决定，不是按钮形态
     <button
       key={`group-${g.id}`}
       onClick={() => {
@@ -374,6 +375,7 @@ const ChatSidebar = memo(function ChatSidebar({
 
   // ── 渲染单个私信条目 ──
   const renderDMItem = (s: DMSession, isActive: boolean) => (
+    // ui-standard-ignore: 会话列表整行条目（头像+预览+角标），行高由内容决定，不是按钮形态
     <button
       key={`dm-${s.session_id}`}
       onClick={() => {
@@ -449,8 +451,9 @@ const ChatSidebar = memo(function ChatSidebar({
         <div className="relative">
           <button
             onClick={() => setShowPlusMenu(!showPlusMenu)}
-            className="p-1 rounded-control hover:bg-elevated text-textMuted hover:text-primary-400 transition-colors"
+            className="icon-btn"
             title={t('chatlist:createNewGroup')}
+            aria-label={t('chatlist:createNewGroup')}
           >
             <Plus size={16} />
           </button>

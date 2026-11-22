@@ -282,11 +282,7 @@ export default function ProfileCard({ entityType, entityId, entityName, state, a
             <button
               onClick={handleTogglePriority}
               disabled={togglingPriority}
-              className={`w-full flex items-center justify-center gap-2 py-2 rounded-card border text-sm font-medium transition-colors ${
-                isPriority
-                  ? 'bg-accent-400/10 border-accent-400/30 text-accent-400 hover:bg-accent-400/20'
-                  : 'bg-canvas border-border text-textSecondary hover:bg-elevated'
-              }`}
+              className={`btn btn-md w-full gap-2 ${isPriority ? 'btn-tinted' : 'btn-outline'}`}
             >
               <Star size={16} fill={isPriority ? 'currentColor' : 'none'} />
               {isPriority ? t('profileCard:priorityOn') : t('profileCard:priorityOff')}
@@ -303,20 +299,20 @@ export default function ProfileCard({ entityType, entityId, entityName, state, a
                   placeholder={t('profileCard:friendMessagePlaceholder')}
                   rows={2}
                   maxLength={200}
-                  className="w-full px-3 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50 resize-none"
+                  className="field field-noresize w-full"
                   autoFocus
                 />
                 <div className="flex gap-2">
                   <button
                     onClick={() => { setShowAddFriend(false); setFriendMessage('') }}
-                    className="flex-1 py-2 text-xs border border-border rounded-control hover:bg-canvas text-textSecondary transition-colors"
+                    className="btn btn-sm btn-outline flex-1"
                   >
                     {t('common:cancel')}
                   </button>
                   <button
                     onClick={handleAddFriend}
                     disabled={addingFriend}
-                    className="flex-1 flex items-center justify-center gap-1.5 py-2 text-xs rounded-control bg-mint-400 text-white hover:bg-mint-500 disabled:opacity-40 transition-colors"
+                    className="btn btn-sm btn-success flex-1"
                   >
                     <UserPlus size={12} />
                     {addingFriend ? '...' : t('profileCard:sendRequest')}
@@ -326,7 +322,7 @@ export default function ProfileCard({ entityType, entityId, entityName, state, a
             ) : (
               <button
                 onClick={() => setShowAddFriend(true)}
-                className="w-full flex items-center justify-center gap-2 py-2.5 rounded-card bg-mint-400/10 border border-mint-400/20 text-mint-400 hover:bg-mint-400/20 transition-colors text-sm font-medium"
+                className="btn btn-sm btn-tinted-success w-full gap-2"
               >
                 <UserPlus size={16} />
                 {t('profileCard:addFriend')}
@@ -358,7 +354,7 @@ export default function ProfileCard({ entityType, entityId, entityName, state, a
       {fullImg && (
         <div className="fixed inset-0 bg-black/90 z-toast flex items-center justify-center" onClick={() => setFullImg(null)}>
           <img src={fullImg} alt="" className="max-w-[90vw] max-h-[90vh] object-contain" />
-          <button onClick={() => setFullImg(null)} className="absolute top-4 right-4 p-2 rounded-full bg-black/50 text-white hover:bg-black/70">
+          <button onClick={() => setFullImg(null)} className="icon-btn icon-btn-lg icon-btn-overlay icon-btn-pill absolute top-4 right-4" aria-label={t('common:close')} title={t('common:close')}>
             <X size={24} />
           </button>
         </div>

@@ -117,11 +117,7 @@ export default function MagicVisionFilter({ value, onChange }: Props) {
                 const Icon = o.icon
                 return (
                   <button key={o.value} onClick={() => setScope(o.value)}
-                    className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-control border transition-colors flex-1 ${
-                      scope === o.value
-                        ? 'border-accent-500/40 bg-accent-500/10 text-accent-500'
-                        : 'border-border text-textSecondary hover:text-textPrimary hover:border-accent-500/20'
-                    }`}>
+                    className={`btn btn-sm btn-outline flex-1 ${scope === o.value ? 'is-active' : ''}`}>
                     <Icon size={12} />{o.label}
                   </button>
                 )
@@ -173,7 +169,7 @@ export default function MagicVisionFilter({ value, onChange }: Props) {
             </button>
             <div className="flex-1" />
             <button onClick={handleApply} disabled={!anyActive || saving}
-              className="flex items-center gap-1 px-4 py-1.5 text-xs rounded-control bg-accent-500 hover:bg-accent-600 text-white font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+              className="btn btn-sm btn-accent">
               {saving ? '保存中…' : '应用'}
             </button>
           </div>

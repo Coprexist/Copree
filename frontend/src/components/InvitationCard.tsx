@@ -81,6 +81,7 @@ export default function InvitationCard({
             <Check size={14} />
             {t('invitation:accept')}
           </button>
+          {/* ui-standard-ignore: 邀请卡片内拒绝按钮，底色随卡片明暗切换（isMine），无对应 .btn 变体 */}
           <button
             onClick={(e) => { e.stopPropagation(); onReject(invitationId) }}
             className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5

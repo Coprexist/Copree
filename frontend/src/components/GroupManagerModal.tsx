@@ -11,7 +11,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { X, Plus, Trash2, Link2, Key, Globe, RefreshCw, Users, BookOpen, CheckCircle2 } from 'lucide-react'
 import { api } from '../api/client'
 import BindGroupModal from './world/BindGroupModal'
-import { Dialog, UnderlineTabs, SecretInput } from './ui'
+import { Dialog, UnderlineTabs, SecretInput, Select } from './ui'
 
 interface GroupType {
   slug: string
@@ -143,7 +143,7 @@ export default function GroupManagerModal({ worldId, isOwner, onClose }: Props) 
             <span className="text-sm font-semibold text-textPrimary">入口类型与群助手</span>
             <span className="text-3xs text-textMuted">群按类型接入，AI 按角色入驻，规则挂在类型上</span>
           </div>
-          <button onClick={onClose} className="p-1 text-textMuted hover:text-textPrimary"><X size={16} /></button>
+          <button onClick={onClose} className="icon-btn icon-btn-sm" aria-label="关闭" title="关闭"><X size={16} /></button>
         </div>
         {/* Tab */}
         <div className="px-4 shrink-0">
@@ -178,14 +178,14 @@ export default function GroupManagerModal({ worldId, isOwner, onClose }: Props) 
                     )}
                     <div className="flex-1" />
                     {isOwner && (
-                      <button onClick={() => deleteType(t)} className="p-1 text-textMuted hover:text-rose-400" title="删除类型"><Trash2 size={13} /></button>
+                      <button onClick={() => deleteType(t)} className="icon-btn icon-btn-sm" aria-label="删除类型" title="删除类型"><Trash2 size={13} /></button>
                     )}
                   </div>
                   {t.rules && <div className="text-xs text-textSecondary whitespace-pre-wrap line-clamp-3">{t.rules}</div>}
                   <div className="flex items-center gap-2 pt-1">
                     <button
                       onClick={() => setBindOpen({ typeSlug: t.slug })}
-                      className="inline-flex items-center gap-1 text-3xs px-2 py-1 rounded bg-primary-500/15 text-primary-400 hover:bg-primary-500/25"
+                      className="btn btn-xs btn-tinted"
                     >
                       <Link2 size={10} /> 绑定群
                     </button>
@@ -208,18 +208,23 @@ export default function GroupManagerModal({ worldId, isOwner, onClose }: Props) 
                 <div className="rounded-card border border-border p-3 space-y-2">
                   <div className="text-xs font-semibold text-textPrimary flex items-center gap-1"><Plus size={12} /> 新建入口类型</div>
                   <div className="grid grid-cols-2 gap-2">
-                    <select value={newType.applies_to} onChange={e => setNewType({ ...newType, applies_to: e.target.value })} className="field field-sm field-inline">
-                      <option value="group">群聊类型（群以什么场景进入）</option>
-                      <option value="ai">AI 角色（AI 以什么身份入驻）</option>
-                      <option value="both">两者</option>
-                    </select>
-                    <input value={newType.bind_limit} onChange={e => setNewType({ ...newType, bind_limit: Number(e.target.value) })} type="number" min={-1} placeholder="绑定上限（-1=无限）" className="bg-elevated text-xs px-2 py-1.5 rounded border border-border text-textPrimary" />
+                    <Select
+                      fieldSize="sm"
+                      value={newType.applies_to}
+                      onChange={e => setNewType({ ...newType, applies_to: e.target.value })}
+                      options={[
+                        { value: 'group', label: '群聊类型（群以什么场景进入）' },
+                        { value: 'ai', label: 'AI 角色（AI 以什么身份入驻）' },
+                        { value: 'both', label: '两者' },
+                      ]}
+                    />
+                    <input value={newType.bind_limit} onChange={e => setNewType({ ...newType, bind_limit: Number(e.target.value) })} type="number" min={-1} placeholder="绑定上限（-1=无限）" className="field field-sm" />
                   </div>
-                  <input value={newType.name} onChange={e => setNewType({ ...newType, name: e.target.value })} placeholder={newType.applies_to === 'ai' ? '角色名（如 玩家/NPC/裁判/店员）' : '类型名（如 冒险团/商会/决斗公会）'} className="w-full bg-elevated text-xs px-2 py-1.5 rounded border border-border resize-none text-textPrimary" />
+                  <input value={newType.name} onChange={e => setNewType({ ...newType, name: e.target.value })} placeholder={newType.applies_to === 'ai' ? '角色名（如 玩家/NPC/裁判/店员）' : '类型名（如 冒险团/商会/决斗公会）'} className="field field-sm w-full" />
                   <textarea value={newType.rules} onChange={e => setNewType({ ...newType, rules: e.target.value })} rows={2} placeholder={newType.applies_to === 'ai' ? '角色规则（这个身份的行为与权限边界）' : '世界规则（群主可见；群助手行为继承）'} className="field field-sm w-full resize-none" />
                   {newType.applies_to !== 'ai' && (
                     <div className="grid grid-cols-3 gap-2">
-                      <input value={newType.count} onChange={e => setNewType({ ...newType, count: Number(e.target.value) })} type="number" min={1} placeholder="助手数量" className="bg-elevated text-xs px-2 py-1.5 rounded border border-border text-textPrimary" />
+                      <input value={newType.count} onChange={e => setNewType({ ...newType, count: Number(e.target.value) })} type="number" min={1} placeholder="助手数量" className="field field-sm" />
                       <input value={newType.default_name} onChange={e => setNewType({ ...newType, default_name: e.target.value })} placeholder="助手默认名" className="field field-sm" />
                       <label className="flex items-center gap-1.5 text-3xs text-textSecondary">
                         <input type="checkbox" checked={newType.need_api} onChange={e => setNewType({ ...newType, need_api: e.target.checked })} className="accent-primary-500" />
@@ -247,16 +252,16 @@ export default function GroupManagerModal({ worldId, isOwner, onClose }: Props) 
                       {a.configured ? '已配置 API' : '未配置 API'}
                     </span>
                     <div className="flex-1" />
-                    <button onClick={() => setApiInput({ agentId: a.id, key: '', base: '' })} className="text-3xs px-2 py-1 rounded bg-primary-500/15 text-primary-400 hover:bg-primary-500/25">
+                    <button onClick={() => setApiInput({ agentId: a.id, key: '', base: '' })} className="btn btn-xs btn-tinted">
                       <Key size={10} className="inline mr-0.5" /> 填 API
                     </button>
                     {a.has_global && (
-                      <button onClick={() => applyGlobal(a.id)} className="text-3xs px-2 py-1 rounded bg-elevated text-textSecondary hover:text-primary-400">
+                      <button onClick={() => applyGlobal(a.id)} className="btn btn-xs btn-outline">
                         <Globe size={10} className="inline mr-0.5" /> 一键全局
                       </button>
                     )}
                     {a.configured && (
-                      <button onClick={() => clearApi(a.id)} className="text-3xs px-2 py-1 rounded bg-elevated text-textMuted hover:text-rose-400">清除</button>
+                      <button onClick={() => clearApi(a.id)} className="btn btn-xs btn-outline-danger">清除</button>
                     )}
                   </div>
                   {apiInput?.agentId === a.id && (
@@ -270,9 +275,9 @@ export default function GroupManagerModal({ worldId, isOwner, onClose }: Props) 
                         value={apiInput.base}
                         onChange={e => setApiInput({ ...apiInput, base: e.target.value })}
                         placeholder="Base URL（可选）"
-                        className="w-40 bg-elevated text-xs px-2 py-1.5 rounded border border-border text-textPrimary"
+                        className="field field-sm field-inline"
                       />
-                      <button onClick={() => saveApi(a.id)} disabled={!apiInput.key || applying} className="text-3xs px-2 py-1.5 rounded bg-primary-500 text-white disabled:opacity-40">
+                      <button onClick={() => saveApi(a.id)} disabled={!apiInput.key || applying} className="btn btn-sm btn-primary shrink-0">
                         {applying ? '保存中…' : '保存'}
                       </button>
                     </div>
@@ -286,7 +291,7 @@ export default function GroupManagerModal({ worldId, isOwner, onClose }: Props) 
 
         <div className="p-3 pt-0 shrink-0 flex items-center justify-between text-3xs text-textMuted">
           <span>群助手归属群，不占个人额度；API 加密存储，世界打包不含 key</span>
-          <button onClick={() => { load() }} className="inline-flex items-center gap-1 text-primary-400 hover:text-primary-500 dark:hover:text-primary-300">
+          <button onClick={() => { load() }} className="btn btn-xs btn-link">
             <RefreshCw size={10} /> 刷新
           </button>
         </div>

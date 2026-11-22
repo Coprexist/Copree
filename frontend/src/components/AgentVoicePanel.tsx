@@ -51,7 +51,11 @@ function errorOf(e: unknown): string {
   return any?.detail || any?.message || String(e)
 }
 
-export default function AgentVoicePanel({ agentId }: { agentId: number }) {
+/**
+ * @param embedded 嵌进「设置 → API 厂商 → 语音 API」时用：外层已经有卡片和标题，
+ *   这里不再自己套一层 card（两层卡会看出"框里还有框"），标题也由外层给。
+ */
+export default function AgentVoicePanel({ agentId, embedded = false }: { agentId: number; embedded?: boolean }) {
   const t = useT()
   const [presets, setPresets] = useState<VoicePreset[]>([])
   const [cfg, setCfg] = useState<VoiceConfig | null>(null)
@@ -201,9 +205,9 @@ export default function AgentVoicePanel({ agentId }: { agentId: number }) {
     : <span className="chip chip-muted">{t('agentDetail:voiceNeverProbed')}</span>
 
   return (
-    <div className="card space-y-4 p-4">
+    <div className={embedded ? 'space-y-4' : 'card space-y-4 p-4'}>
       <div className="flex items-center gap-2">
-        <h3 className="text-base font-semibold text-textPrimary">{t('agentDetail:voiceSection')}</h3>
+        {!embedded && <h3 className="text-base font-semibold text-textPrimary">{t('agentDetail:voiceSection')}</h3>}
         <HelpTip content={t('agentDetail:voiceDesc')} />
         {probeState}
       </div>

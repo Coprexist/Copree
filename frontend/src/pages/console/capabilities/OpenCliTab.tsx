@@ -1,7 +1,7 @@
 // OpenCLI：配置 / 授权 AI / 命令 / 日志
 
 import { useState, useEffect } from 'react'
-import { ListPanel, UnderlineTabs } from '../../../components/ui'
+import { Button, ListPanel, UnderlineTabs } from '../../../components/ui'
 import { api } from '../../../api/client'
 import Toggle from '../../../components/Toggle'
 import { useT, useLang } from '../../../i18n/I18nContext'
@@ -72,12 +72,12 @@ function OpenCLIConfigSection() {
         <div>
           <label className="block text-sm font-medium mb-1 text-textSecondary">{t('admin:rateLimit')}</label>
           <input type="number" value={rate} onChange={(e) => setRate(parseInt(e.target.value))}
-            className="w-24 px-2 py-1.5 border border-border bg-canvas rounded-card text-sm text-textPrimary" />
+            className="field field-sm w-24" />
         </div>
         <div>
           <label className="block text-sm font-medium mb-1 text-textSecondary">{t('admin:timeoutSeconds')}</label>
           <input type="number" value={timeout} onChange={(e) => setTimeout_(parseInt(e.target.value))}
-            className="w-24 px-2 py-1.5 border border-border bg-canvas rounded-card text-sm text-textPrimary" />
+            className="field field-sm w-24" />
         </div>
         <button onClick={handleSave} disabled={saving}
           className="btn btn-md btn-primary">
@@ -255,13 +255,14 @@ function OpenCLICommandsSection() {
               {t('admin:presetCommandsDesc')}
             </p>
           </div>
-          <button
+          <Button
+            variant="success"
+            size="sm"
+            loading={addingPresets}
             onClick={handleAddAllPresets}
-            disabled={addingPresets}
-            className="px-4 py-2 bg-mint-500 text-white rounded-card hover:bg-mint-400 disabled:opacity-50 text-sm font-medium transition-colors"
           >
             {addingPresets ? t('common:saving') : t('admin:addAllPresets')}
-          </button>
+          </Button>
         </div>
 
         {presetCategories.map(cat => {
@@ -294,17 +295,15 @@ function OpenCLICommandsSection() {
                           <span className="text-xs text-textMuted ml-1.5">{p.is_regex ? `(${t('admin:regex')})` : `(${t('admin:exact')})`}</span>
                           <p className="text-xs text-textSecondary mt-1 leading-relaxed">{p.description}</p>
                         </div>
-                        <button
-                          onClick={() => !added && handleAddPreset(p.pattern, p.is_regex, p.description)}
+                        <Button
+                          size="xs"
+                          className="shrink-0"
+                          variant={added ? 'tinted-success' : 'primary'}
                           disabled={added}
-                          className={`shrink-0 px-2.5 py-1 rounded-control text-xs font-medium transition-colors ${
-                            added
-                              ? 'bg-mint-400/10 text-mint-400 cursor-default'
-                              : 'bg-primary-500 text-white hover:bg-primary-600'
-                          }`}
+                          onClick={() => !added && handleAddPreset(p.pattern, p.is_regex, p.description)}
                         >
                           {added ? status : '+ ' + t('admin:addCmd')}
-                        </button>
+                        </Button>
                       </div>
                     </div>
                   )
@@ -323,7 +322,7 @@ function OpenCLICommandsSection() {
           <div>
             <label className="block text-xs mb-1 text-textSecondary">{t('admin:commandPattern')}</label>
             <input value={pattern} onChange={(e) => setPattern(e.target.value)}
-              className="w-40 px-2 py-1.5 border border-border bg-canvas rounded-card text-sm text-textPrimary"
+              className="field field-sm w-40"
               placeholder={t('admin:commandPatternPlaceholder')} />
           </div>
           <div className="flex items-center gap-1.5 mb-1">
@@ -334,13 +333,12 @@ function OpenCLICommandsSection() {
           <div>
             <label className="block text-xs mb-1 text-textSecondary">{t('admin:description')}</label>
             <input value={desc} onChange={(e) => setDesc(e.target.value)}
-              className="w-32 px-2 py-1.5 border border-border bg-canvas rounded-card text-sm text-textPrimary"
+              className="field field-sm w-32"
               placeholder={t('common:optional')} />
           </div>
-          <button onClick={handleAdd}
-            className="btn btn-md btn-primary">
+          <Button size="sm" onClick={handleAdd}>
             {t('admin:addCmd')}
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -363,12 +361,16 @@ function OpenCLICommandsSection() {
                   <td className="py-2 px-3 text-xs text-textSecondary">{c.is_regex ? t('admin:regex') : t('admin:exact')}</td>
                   <td className="py-2 px-3 text-xs text-textSecondary">{c.description || '-'}</td>
                   <td className="py-2 px-3">
-                    <button onClick={async () => {
-                      await api.put(`/admin/opencli/commands/${c.id}/default?default_enabled=${!c.default_enabled}`)
-                      load()
-                    }} className={`text-xs px-2 py-0.5 rounded-full font-medium ${c.default_enabled ? 'bg-mint-400/10 text-mint-400' : 'bg-gray-100 text-gray-400'}`}>
+                    <Button
+                      size="xs"
+                      variant={c.default_enabled ? 'tinted-success' : 'outline'}
+                      onClick={async () => {
+                        await api.put(`/admin/opencli/commands/${c.id}/default?default_enabled=${!c.default_enabled}`)
+                        load()
+                      }}
+                    >
                       {c.default_enabled ? '全部AI' : '白名单'}
-                    </button>
+                    </Button>
                   </td>
                   <td className="py-2 px-3">
                     <span className={c.enabled ? 'text-mint-400 text-xs' : 'text-textMuted text-xs'}>
@@ -475,14 +477,12 @@ function OpenCLILogsSection() {
         </table>
       </div>
       <div className="flex gap-2 mt-3">
-        <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1}
-          className="text-sm px-3 py-1 border border-border bg-canvas rounded hover:bg-elevated disabled:opacity-40 text-textSecondary">
+        <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}>
           {t('common:prevPage')}
-        </button>
-        <button onClick={() => setPage(p => p + 1)} disabled={data.items.length < data.page_size}
-          className="text-sm px-3 py-1 border border-border bg-canvas rounded hover:bg-elevated disabled:opacity-40 text-textSecondary">
+        </Button>
+        <Button variant="outline" size="sm" disabled={data.items.length < data.page_size} onClick={() => setPage(p => p + 1)}>
           {t('common:nextPage')}
-        </button>
+        </Button>
       </div>
     </div>
   )

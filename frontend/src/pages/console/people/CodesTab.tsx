@@ -128,7 +128,7 @@ export default function CodesTab() {
             <label className="block text-xs mb-1 text-textSecondary">{t('admin:expiresDays')}</label>
             <input type="number" value={days} onChange={(e) => setDays(parseInt(e.target.value) || 1)}
               min={1} max={365}
-              className="w-20 px-2 py-1.5 border border-border bg-canvas rounded-card text-sm text-textPrimary" />
+              className="field field-sm w-20" />
           </div>
           <div>
             <label className="block text-xs mb-1 text-textSecondary">{t('admin:codeUsageLimit')}</label>
@@ -155,13 +155,13 @@ export default function CodesTab() {
             <label className="block text-xs mb-1 text-textSecondary">{t('admin:codeNote')}</label>
             <input type="text" value={note} onChange={(e) => setNote(e.target.value)}
               placeholder={t('admin:codeNotePlaceholder')}
-              className="w-48 px-2 py-1.5 border border-border bg-canvas rounded-card text-sm text-textPrimary placeholder:text-textMuted" />
+              className="field field-sm w-48" />
           </div>
           <div>
             <label className="block text-xs mb-1 text-textSecondary">{t('admin:maxUsageLabel')}</label>
             <input type="number" value={maxUsage ?? ''} onChange={(e) => setMaxUsage(e.target.value ? parseInt(e.target.value) : null)}
               min={1}
-              className="w-28 px-2 py-1.5 border border-border bg-canvas rounded-card text-sm text-textPrimary" />
+              className="field field-sm w-28" />
           </div>
           <span className="text-2xs text-textMuted pb-1.5">{t('admin:codeUsageHintWithLabel')}</span>
           <span className="text-2xs text-textMuted pb-1.5">{t('admin:balanceHint')}</span>

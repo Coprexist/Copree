@@ -12,7 +12,7 @@ import {
 import { getStateDotColor } from '../constants'
 import { avatarGradient, avatarShadowColor } from '../utils/avatar'
 import { getStatusTextStyle, BG_CANVAS_LIGHT, BG_CANVAS_DARK } from '../utils/statusColor.tsx'
-import { UnderlineTabs } from '../components/ui'
+import { IconButton, Select, UnderlineTabs } from '../components/ui'
 import { useTheme } from '../context/ThemeContext'
 
 interface Friend {
@@ -105,7 +105,7 @@ function RequestRow({
           {onAccept && (
             <button
               onClick={onAccept}
-              className="p-1.5 rounded-control bg-mint-400/15 text-mint-400 hover:bg-mint-400/25 transition-colors"
+              className="btn btn-xs btn-tinted-success"
               title={acceptTitle}
             >
               <Check size={16} />
@@ -113,7 +113,7 @@ function RequestRow({
           )}
           <button
             onClick={onReject}
-            className="p-1.5 rounded-control bg-rose-400/15 text-rose-400 hover:bg-rose-400/25 transition-colors"
+            className="btn btn-xs btn-tinted-danger"
             title={rejectTitle}
           >
             <X size={16} />
@@ -346,16 +346,17 @@ export default function ListPage() {
         value={searchQuery}
         onChange={(e) => setSearchQuery(e.target.value)}
         placeholder={t('list:searchPlaceholder')}
-        className="w-full pl-9 pr-8 py-2 rounded-card border border-border bg-canvas text-sm text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/50"
+        className="field field-with-icon field-with-icon-right w-full"
         autoFocus={showSearch}
       />
       {searchQuery && (
-        <button
+        <IconButton
+          icon={<X size={14} />}
+          label="清除"
+          size="sm"
+          className="absolute right-1 top-1/2 -translate-y-1/2"
           onClick={() => setSearchQuery('')}
-          className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded text-textMuted hover:text-textSecondary"
-        >
-          <X size={14} />
-        </button>
+        />
       )}
     </div>
   ), [searchQuery, showSearch])
@@ -379,26 +380,20 @@ export default function ListPage() {
         {/* 排序 + 搜索按钮（仅「列表」Tab） */}
         {tab === 'list' && friends.length > 0 && (
           <div className="ml-auto flex items-center gap-1">
-            {/* 排序下拉 */}
-            <div className="relative">
-              <select
-                value={sortMode}
-                onChange={(e) => setSortMode(e.target.value as SortMode)}
-                className="field field-sm field-inline"
-              >
-                {SORT_OPTIONS.map(o => (
-                  <option key={o.value} value={o.value}>{t(o.key)}</option>
-                ))}
-              </select>
-            </div>
-            {/* 搜索按钮 */}
-            <button
+            {/* 排序下拉：走平台 Select（原生箭头各家长得都不一样，右边距也和全站对不上） */}
+            <Select
+              fieldSize="sm"
+              className="field-inline"
+              value={sortMode}
+              onChange={(e) => setSortMode(e.target.value as SortMode)}
+              options={SORT_OPTIONS.map(o => ({ value: o.value, label: t(o.key) }))}
+            />
+            {/* 搜索按钮：和左边的下拉同档（同一行里的控件必须同高，否则一眼看出参差） */}
+            <IconButton
+              icon={<Search size={16} />}
+              label={t('list:searchButton')}
               onClick={() => setShowSearch(true)}
-              className="p-1.5 rounded-control hover:bg-elevated text-textMuted hover:text-textSecondary transition-colors"
-              title={t('list:searchButton')}
-            >
-              <Search size={16} />
-            </button>
+            />
           </div>
         )}
       </div>
@@ -447,6 +442,7 @@ export default function ListPage() {
           ) : (
             <div className="divide-y divide-border/50">
               {sortedFriends.map((f) => (
+                // ui-standard-ignore: 好友行整行可点（头像+名字+备注），不是按钮形态
                 <button
                   key={`${f.friend_type}:${f.friend_id}`}
                   onClick={() => handleStartDM(f.friend_type, f.friend_id, f.friend_user_id)}
@@ -572,12 +568,13 @@ export default function ListPage() {
           {/* 移动端：全屏 */}
           <div className="md:hidden fixed inset-0 z-modal bg-surface flex flex-col">
             <div className="top-bar px-4 h-14 flex items-center gap-3 shrink-0">
-              <button
+              <IconButton
+                icon={<ArrowLeft size={20} />}
+                label={t('common:back')}
+                size="sm"
+                className="-ml-1"
                 onClick={() => { setShowSearch(false); setSearchQuery('') }}
-                className="p-1.5 -ml-1 rounded-control hover:bg-elevated text-textSecondary transition-colors"
-              >
-                <ArrowLeft size={20} />
-              </button>
+              />
               <div className="flex-1">
                 {searchBox}
               </div>
@@ -590,6 +587,7 @@ export default function ListPage() {
                 </div>
               ) : (
                 sortedFriends.map((f) => (
+                  // ui-standard-ignore: 好友行整行可点（头像+名字+备注），不是按钮形态
                   <button
                     key={`${f.friend_type}:${f.friend_id}`}
                     onClick={() => {
@@ -631,6 +629,7 @@ export default function ListPage() {
                       <div className="py-6 text-center text-xs text-textMuted">{t('list:searchEmptyDesktop')}</div>
                     ) : (
                       sortedFriends.slice(0, 8).map((f) => (
+                        // ui-standard-ignore: 好友行整行可点（头像+名字+状态），不是按钮形态
                         <button
                           key={`${f.friend_type}:${f.friend_id}`}
                           onClick={() => {

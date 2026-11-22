@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { api } from '../api/client'
 import { useT } from '../i18n/I18nContext'
-import { Plus, Trash2, Check, Loader2, Settings, Server, Star, Globe, Download } from 'lucide-react'
+import { Plus, Trash2, Check, Loader2, Settings, Server, Star, Globe, Download, RefreshCw } from 'lucide-react'
+import { Badge, Button, Card, EmptyState, IconButton, Select } from './ui'
 
 interface ModelOption { value: string; label: string }
 
@@ -14,6 +15,7 @@ interface Preset {
   embedding_model: string
   thinking_supported: boolean
   models: ModelOption[]
+  system_layout?: string
   global_default_chat_model?: string
   global_default_work_model?: string
 
@@ -29,6 +31,8 @@ interface ProviderItem {
   model_options: ModelOption[]
   thinking_supported: boolean
   is_default: boolean
+  system_layout?: string
+  system_layout_source?: string
   global_default_chat_model?: string
   global_default_work_model?: string
 
@@ -57,6 +61,12 @@ export default function ProviderPresetSelector() {
   const [editIndex, setEditIndex] = useState<number | null>(null)
   const [editGlobalChatModel, setEditGlobalChatModel] = useState('')
   const [editGlobalWorkModel, setEditGlobalWorkModel] = useState('')
+  // 系统消息格式：值 + 来源（user | detected | preset）+ 一次「重新识别」的临时提示
+  const [editLayout, setEditLayout] = useState('anywhere')
+  const [editLayoutSource, setEditLayoutSource] = useState('preset')
+  const [editLayoutTouched, setEditLayoutTouched] = useState(false)
+  const [layoutNote, setLayoutNote] = useState('')
+  const [reprobing, setReprobing] = useState(false)
 
   // 新增模式
   const [adding, setAdding] = useState(false)
@@ -87,6 +97,10 @@ export default function ProviderPresetSelector() {
     setEditIsDefault(p.is_default)
     setEditGlobalChatModel(p.global_default_chat_model || '')
     setEditGlobalWorkModel(p.global_default_work_model || '')
+    setEditLayout(p.system_layout || 'anywhere')
+    setEditLayoutSource(p.system_layout_source || 'preset')
+    setEditLayoutTouched(false)
+    setLayoutNote('')
     setEditIndex(idx)
     setAdding(false)
     setNewPreset('')
@@ -112,6 +126,10 @@ export default function ProviderPresetSelector() {
       setEditIndex(null)
       setEditGlobalChatModel('')
       setEditGlobalWorkModel('')
+      setEditLayout('anywhere')
+      setEditLayoutSource('preset')
+      setEditLayoutTouched(false)
+      setLayoutNote('')
     } else {
       const p = presets.find(pr => pr.key === presetKey)
       if (p) {
@@ -127,6 +145,10 @@ export default function ProviderPresetSelector() {
         setEditIndex(null)
         setEditGlobalChatModel(p.global_default_chat_model || '')
         setEditGlobalWorkModel(p.global_default_work_model || '')
+        setEditLayout(p.system_layout || 'anywhere')
+        setEditLayoutSource('preset')
+        setEditLayoutTouched(false)
+        setLayoutNote('')
       }
     }
   }
@@ -148,6 +170,8 @@ export default function ProviderPresetSelector() {
         embedding_model: editEmbed || undefined,
         model_options: modelOptions.length > 0 ? modelOptions : undefined,
         thinking_supported: editThinking,
+        // 只传"用户真的动过"的值：没动过就交给后端保存时探测，避免把预设值误标成手动
+        system_layout: editLayoutTouched ? editLayout : undefined,
         is_default: editIsDefault,
         index: editIndex,
         global_default_chat_model: editGlobalChatModel || undefined,
@@ -160,6 +184,31 @@ export default function ProviderPresetSelector() {
       setTimeout(() => setSaved(false), 3000)
     } catch { /* */ }
     setSaving(false)
+  }
+
+  /** 「重新识别」：只探测不保存 —— 用户改完模型或换了服务，点一下就知道新结论。 */
+  const handleReprobe = async () => {
+    if (!editBaseUrl.trim()) return
+    setReprobing(true)
+    setLayoutNote('')
+    try {
+      const r = await api.post<{
+        ok: boolean; layout: string; provider_label: string; message: string
+      }>('/admin/provider-presets/probe-template', {
+        base_url: editBaseUrl.trim(),
+        chat_model: editChat.trim() || undefined,
+      })
+      if (r.ok) {
+        setEditLayout(r.layout)
+        setEditLayoutSource('detected')
+        setLayoutNote(r.message || t('admin:layoutSourceDetected'))
+      } else {
+        setLayoutNote(r.message || t('admin:reprobeLayout'))
+      }
+    } catch (e: any) {
+      setLayoutNote(e?.detail || e?.message || '')
+    }
+    setReprobing(false)
   }
 
   const handleDelete = async (name: string) => {
@@ -180,11 +229,7 @@ export default function ProviderPresetSelector() {
   }
 
   return (
-    <section className="card p-5 space-y-4">
-      <h3 className="text-sm font-semibold text-textPrimary flex items-center gap-2">
-        <Server size={16} className="text-accent-400" />
-        {t('admin:llmProvider')}
-      </h3>
+    <Card title={t('admin:llmProvider')} icon={<Server size={16} className="text-accent-400" />}>
 
       {/* 已配置的供应商列表 */}
       {providers.length > 0 && (
@@ -192,7 +237,7 @@ export default function ProviderPresetSelector() {
           {providers.map((p, idx) => {
             const isOpen = expanded === p.name
             return (
-              <div key={p.name} className={`border rounded-control p-3 ${p.is_default ? 'border-primary-500/40 bg-primary-500/5' : 'border-border bg-canvas'}`}>
+              <div key={p.name} className={`card card-pad card-interactive ${p.is_default ? 'is-active' : ''}`}>
                 <div className="flex items-center justify-between">
                   <button
                     onClick={() => isOpen ? setExpanded(null) : startEdit(p, idx)}
@@ -204,6 +249,9 @@ export default function ProviderPresetSelector() {
                     {p.thinking_supported && (
                       <span className="chip chip-primary shrink-0">{t('admin:thinkingSupported')}</span>
                     )}
+                    {p.system_layout && p.system_layout !== 'anywhere' && (
+                      <Badge tone="muted" className="shrink-0">system: {p.system_layout}</Badge>
+                    )}
                   </button>
                   <div className="flex items-center gap-2">
                     {p.is_default && (
@@ -211,13 +259,13 @@ export default function ProviderPresetSelector() {
                         {t('admin:defaultProvider')}
                       </span>
                     )}
-                    <button
+                    <IconButton
+                      icon={<Trash2 size={14} />}
+                      label={t('common:delete')}
+                      tone="danger"
+                      size="sm"
                       onClick={() => handleDelete(p.name)}
-                      className="p-1 text-textMuted hover:text-rose-400 transition-colors"
-                      title={t('common:delete')}
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                    />
                   </div>
                 </div>
                 {!isOpen && (
@@ -240,6 +288,9 @@ export default function ProviderPresetSelector() {
                     editIsDefault={editIsDefault} setEditIsDefault={setEditIsDefault}
                     editGlobalChatModel={editGlobalChatModel} setEditGlobalChatModel={setEditGlobalChatModel}
                     editGlobalWorkModel={editGlobalWorkModel} setEditGlobalWorkModel={setEditGlobalWorkModel}
+                    editLayout={editLayout} setEditLayout={setEditLayout} setEditLayoutTouched={setEditLayoutTouched}
+                    editLayoutSource={editLayoutSource} layoutNote={layoutNote}
+                    reprobeing={reprobing} onReprobe={handleReprobe}
                     saving={saving} saved={saved}
                     onSave={handleSave}
                     t={t}
@@ -252,19 +303,19 @@ export default function ProviderPresetSelector() {
       )}
 
       {providers.length === 0 && (
-        <div className="text-xs text-textMuted py-4 text-center">{t('admin:noProvidersYet')}</div>
+        <EmptyState icon={Server} title={t('admin:noProvidersYet')} />
       )}
 
       {/* 添加新供应商 */}
       {adding ? (
-        <div className="border border-primary-500/40 rounded-control p-4 bg-primary-500/5 space-y-3">
+        <div className="card card-pad card-interactive is-active space-y-3">
           <div className="flex items-center justify-between">
             <h4 className="text-sm font-medium text-textPrimary">
               {t('admin:addProvider')}
             </h4>
             <button
               onClick={() => setAdding(false)}
-              className="text-xs text-textMuted hover:text-textPrimary"
+              className="btn btn-xs btn-ghost"
             >
               {t('common:cancel')}
             </button>
@@ -273,18 +324,16 @@ export default function ProviderPresetSelector() {
           {/* 预设选择 */}
           <div className="flex flex-wrap gap-2">
             {presets.map(p => (
-              <button
+              <Button
                 key={p.key}
+                variant="outline"
+                size="sm"
                 disabled={newPreset === p.key}
                 onClick={() => startAdd(p.key)}
-                className={`px-3 py-1.5 text-xs rounded-control font-medium transition-colors border ${
-                  newPreset === p.key
-                    ? 'bg-primary-500/15 border-primary-500/40 text-primary-500'
-                    : 'bg-canvas border-border text-textSecondary hover:text-textPrimary hover:border-primary-500/30'
-                }`}
+                className={newPreset === p.key ? 'is-active disabled:opacity-100' : ''}
               >
                 {p.label}
-              </button>
+              </Button>
             ))}
             <button
               disabled={newPreset === 'manual'}
@@ -308,6 +357,9 @@ export default function ProviderPresetSelector() {
               editIsDefault={editIsDefault} setEditIsDefault={setEditIsDefault}
               editGlobalChatModel={editGlobalChatModel} setEditGlobalChatModel={setEditGlobalChatModel}
               editGlobalWorkModel={editGlobalWorkModel} setEditGlobalWorkModel={setEditGlobalWorkModel}
+              editLayout={editLayout} setEditLayout={setEditLayout} setEditLayoutTouched={setEditLayoutTouched}
+              editLayoutSource={editLayoutSource} layoutNote={layoutNote}
+              reprobeing={reprobing} onReprobe={handleReprobe}
               saving={saving} saved={saved}
               onSave={handleSave}
               t={t}
@@ -316,15 +368,17 @@ export default function ProviderPresetSelector() {
           )}
         </div>
       ) : (
-        <button
+        <Button
+          variant="outline"
+          size="sm"
+          icon={<Plus size={14} />}
+          className="border-dashed"
           onClick={() => setAdding(true)}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-control border border-dashed border-border text-textMuted hover:text-primary-500 hover:border-primary-500/40 transition-colors"
         >
-          <Plus size={14} />
           {t('admin:addProvider')}
-        </button>
+        </Button>
       )}
-    </section>
+    </Card>
   )
 }
 
@@ -340,6 +394,8 @@ function ProviderEditForm({
   editIsDefault, setEditIsDefault,
   editGlobalChatModel, setEditGlobalChatModel,
   editGlobalWorkModel, setEditGlobalWorkModel,
+  editLayout, setEditLayout, setEditLayoutTouched,
+  editLayoutSource, layoutNote, reprobeing, onReprobe,
   saving, saved, onSave, t, isNew,
 }: {
   editName: string; setEditName: (v: string) => void
@@ -352,6 +408,10 @@ function ProviderEditForm({
   editIsDefault: boolean; setEditIsDefault: (v: boolean) => void
   editGlobalChatModel: string; setEditGlobalChatModel: (v: string) => void
   editGlobalWorkModel: string; setEditGlobalWorkModel: (v: string) => void
+  editLayout: string; setEditLayout: (v: string) => void
+  setEditLayoutTouched: (v: boolean) => void
+  editLayoutSource: string; layoutNote: string
+  reprobeing: boolean; onReprobe: () => void
   saving: boolean; saved: boolean; onSave: () => void
   t: (key: string) => string
   isNew?: boolean
@@ -384,6 +444,10 @@ function ProviderEditForm({
     setFetching(false)
   }
 
+  const sourceLabel = editLayoutSource === 'detected' ? t('admin:layoutSourceDetected')
+    : editLayoutSource === 'user' ? t('admin:layoutSourceUser')
+    : t('admin:layoutSourcePreset')
+
   return (
     <div className="space-y-3 mt-3">
       {isNew && (
@@ -392,7 +456,7 @@ function ProviderEditForm({
           <input
             type="text" value={editName}
             onChange={e => setEditName(e.target.value)}
-            className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-textPrimary text-xs focus:outline-none focus:ring-2 focus:ring-primary-500/60"
+            className="field field-sm"
             placeholder="deepseek-主号"
           />
         </div>
@@ -403,7 +467,7 @@ function ProviderEditForm({
           <input
             type="text" value={editBaseUrl}
             onChange={e => setEditBaseUrl(e.target.value)}
-            className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-textPrimary text-xs font-mono focus:outline-none focus:ring-2 focus:ring-primary-500/60"
+            className="field field-sm font-mono"
           />
         </div>
         <div>
@@ -411,7 +475,7 @@ function ProviderEditForm({
           <input
             type="text" value={editChat}
             onChange={e => setEditChat(e.target.value)}
-            className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-textPrimary text-xs focus:outline-none focus:ring-2 focus:ring-primary-500/60"
+            className="field field-sm"
           />
         </div>
         <div>
@@ -419,7 +483,7 @@ function ProviderEditForm({
           <input
             type="text" value={editWork}
             onChange={e => setEditWork(e.target.value)}
-            className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-textPrimary text-xs focus:outline-none focus:ring-2 focus:ring-primary-500/60"
+            className="field field-sm"
           />
         </div>
         <div>
@@ -427,7 +491,7 @@ function ProviderEditForm({
           <input
             type="text" value={editEmbed}
             onChange={e => setEditEmbed(e.target.value)}
-            className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-textPrimary text-xs focus:outline-none focus:ring-2 focus:ring-primary-500/60"
+            className="field field-sm"
           />
         </div>
       </div>
@@ -439,7 +503,7 @@ function ProviderEditForm({
             <input
               type="text" value={editGlobalChatModel}
               onChange={e => setEditGlobalChatModel(e.target.value)}
-              className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-textPrimary text-xs focus:outline-none focus:ring-2 focus:ring-primary-500/60"
+              className="field field-sm"
               placeholder="例如：glm-5.2"
             />
           </div>
@@ -448,10 +512,42 @@ function ProviderEditForm({
             <input
               type="text" value={editGlobalWorkModel}
               onChange={e => setEditGlobalWorkModel(e.target.value)}
-              className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-textPrimary text-xs focus:outline-none focus:ring-2 focus:ring-primary-500/60"
+              className="field field-sm"
               placeholder="例如：glm-5.3-flash"
             />
           </div>
+        </div>
+      </div>
+      <div className="border-t border-border/60 pt-3 mt-3 space-y-1.5">
+        <div className="flex items-end justify-between gap-2 flex-wrap">
+          <div className="flex-1 min-w-[240px]">
+            <Select
+              label={t('admin:systemLayout')}
+              fieldSize="sm"
+              value={editLayout}
+              onChange={e => { setEditLayout(e.target.value); setEditLayoutTouched(true) }}
+              options={[
+                { value: 'anywhere', label: t('admin:systemLayoutAnywhere') },
+                { value: 'leading', label: t('admin:systemLayoutLeading') },
+                { value: 'none', label: t('admin:systemLayoutNone') },
+              ]}
+            />
+          </div>
+          <button
+            onClick={onReprobe}
+            disabled={reprobeing || !editBaseUrl.trim()}
+            title={!editBaseUrl.trim() ? '请先填 API Base URL' : undefined}
+            className="btn btn-md btn-outline gap-1 shrink-0"
+          >
+            {reprobeing ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+            {t('admin:reprobeLayout')}
+          </button>
+        </div>
+        <div className="flex items-start gap-1.5 flex-wrap">
+          <Badge tone="muted">{sourceLabel}</Badge>
+          <span className="text-2xs text-textMuted break-all flex-1">
+            {layoutNote || t('admin:systemLayoutHint')}
+          </span>
         </div>
       </div>
       <div className="flex items-center gap-4">
@@ -480,13 +576,13 @@ function ProviderEditForm({
               type="text" value={fetchKey}
               onChange={e => setFetchKey(e.target.value)}
               placeholder={t('admin:fetchModelsHint')}
-              className="w-56 px-2 py-1 rounded-control border border-border bg-canvas text-textPrimary text-2xs font-mono focus:outline-none focus:ring-2 focus:ring-primary-500/60"
+              className="field field-sm field-inline w-56 font-mono"
             />
             <button
               onClick={handleFetchModels}
               disabled={fetching || !editBaseUrl.trim()}
               title={!editBaseUrl.trim() ? '请先填 API Base URL' : undefined}
-              className="btn btn-md btn-outline gap-1 bg-canvas hover:text-primary-500 hover:border-primary-500/40 disabled:hover:text-textSecondary shrink-0"
+              className="btn btn-md btn-outline gap-1 shrink-0"
             >
               {fetching ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
               {t('admin:fetchModels')}
@@ -497,7 +593,7 @@ function ProviderEditForm({
           rows={3}
           value={editModels}
           onChange={e => setEditModels(e.target.value)}
-          className="w-full px-3 py-2 rounded-control border border-border bg-canvas text-textPrimary text-xs font-mono focus:outline-none focus:ring-2 focus:ring-primary-500/60 resize-y"
+          className="field field-sm font-mono resize-y"
         />
         {fetchMsg && (
           <p className={'text-2xs mt-1 break-all ' + (fetchMsg.ok ? 'text-mint-400' : 'text-rose-400')}>{fetchMsg.text}</p>

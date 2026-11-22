@@ -316,11 +316,7 @@ const Block = memo(function Block({ index, msgIndex, blockId, kind, title, sourc
               data-switch={viewId}
               data-value={showSource ? 'source' : 'rendered'}
               title={t('logs:blockSourceHint')}
-              className={`shrink-0 text-3xs px-1.5 py-0.5 rounded border transition-colors ${
-                showSource
-                  ? 'border-primary-500/50 bg-primary-500/10 text-primary-400'
-                  : 'border-border text-textMuted hover:text-textSecondary'
-              }`}
+              className={`btn btn-xs btn-outline shrink-0 ${showSource ? 'is-active' : ''}`}
             >
               <span data-when="rendered">{t('logs:blockRaw')}</span>
               <span data-when="source">{t('logs:blockRender')}</span>
@@ -662,7 +658,7 @@ export default function RequestBodyViewer({ messages, className = '', legend = t
             onClick={() => setInnerRaw(v => !v)}
             data-switch={viewId}
             data-value={showRaw ? 'raw' : 'segments'}
-            className="ml-auto text-3xs px-1.5 py-0.5 rounded border border-border text-textMuted hover:text-textSecondary transition-colors"
+            className="btn btn-xs btn-outline ml-auto"
           >
             <span data-when="segments">{t('logs:viewRaw')}</span>
             <span data-when="raw">{t('logs:viewSegments')}</span>

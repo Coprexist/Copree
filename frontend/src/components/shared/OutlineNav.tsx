@@ -226,13 +226,14 @@ export default function OutlineNav({
           onChange={e => setQuery(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter' && shown[0]) pick(shown[0].id) }}
           placeholder={searchLabel ?? t('outline:search')}
-          className="w-full pl-7 pr-6 py-1.5 rounded-control border border-border bg-canvas text-xs text-textPrimary placeholder:text-textMuted focus:outline-none focus:ring-2 focus:ring-primary-500/30"
+          className="field field-sm field-with-icon field-with-icon-right"
         />
         {query !== '' && (
           <button
             type="button"
             onClick={() => setQuery('')}
-            className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-textMuted hover:text-textPrimary transition-colors"
+            aria-label={t('outline:search')}
+            className="icon-btn icon-btn-xs absolute right-1.5 top-1/2 -translate-y-1/2"
           >
             <X size={11} />
           </button>
@@ -251,6 +252,7 @@ export default function OutlineNav({
                 on ? 'border-primary-500 bg-primary-500/5' : 'border-transparent'
               }`}
             >
+              {/* ui-standard-ignore: 栏目录项（整行可点），不是按钮形态 */}
               <button
                 type="button"
                 data-outline-entry={entry.id}
@@ -272,7 +274,8 @@ export default function OutlineNav({
                   type="button"
                   onClick={() => copy(entry.id)}
                   title={copied === entry.id ? t('outline:copied') : t('outline:copyLink')}
-                  className="shrink-0 p-1 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 text-textMuted hover:text-primary-400 transition-opacity"
+                  aria-label={t('outline:copyLink')}
+                  className="icon-btn icon-btn-xs shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
                 >
                   {copied === entry.id ? <Check size={11} /> : <Link2 size={11} />}
                 </button>
@@ -286,14 +289,14 @@ export default function OutlineNav({
         <button
           type="button"
           onClick={() => toEdge('top')}
-          className="flex-1 flex items-center justify-center gap-1 py-1 rounded-control text-3xs text-textMuted hover:text-textPrimary hover:bg-elevated transition-colors"
+          className="btn btn-xs btn-ghost flex-1"
         >
           <ChevronUp size={12} />{t('outline:top')}
         </button>
         <button
           type="button"
           onClick={() => toEdge('bottom')}
-          className="flex-1 flex items-center justify-center gap-1 py-1 rounded-control text-3xs text-textMuted hover:text-textPrimary hover:bg-elevated transition-colors"
+          className="btn btn-xs btn-ghost flex-1"
         >
           <ChevronDown size={12} />{t('outline:bottom')}
         </button>
@@ -319,7 +322,7 @@ export default function OutlineNav({
       <button
         type="button"
         onClick={() => setSheetOpen(true)}
-        className="xl:hidden fixed right-4 bottom-[calc(var(--safe-bottom)+0.75rem)] md:bottom-6 z-overlay flex items-center gap-1.5 pl-2.5 pr-3 py-2 rounded-full border border-border bg-surface text-3xs text-textSecondary shadow-lg"
+        className="btn btn-sm btn-secondary xl:hidden fixed right-4 bottom-[calc(var(--safe-bottom)+0.75rem)] md:bottom-6 z-overlay shadow-lg"
       >
         <ListTree size={14} className="text-primary-400" />
         {t('outline:open')}
@@ -333,7 +336,8 @@ export default function OutlineNav({
               <button
                 type="button"
                 onClick={() => setSheetOpen(false)}
-                className="p-1 rounded-control text-textMuted hover:text-textPrimary hover:bg-elevated transition-colors"
+                aria-label={t('common:close')}
+                className="icon-btn icon-btn-sm"
               >
                 <X size={14} />
               </button>

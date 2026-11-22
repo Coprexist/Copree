@@ -33,6 +33,9 @@ interface ModalProps {
   /** 自定义最大宽度类名，保留给历史调用 */
   width?: string
   closeOnOverlay?: boolean
+  /** 遮罩样式。默认纯半透明：全屏 backdrop-blur 在长内容滚动时每帧重算，弱机直接卡死，
+      而它并不提供信息价值（背景本来就被压暗了） */
+  backdropClassName?: string
   /** 是否显示右上角关闭按钮（无标题时默认显示） */
   showClose?: boolean
   bodyClassName?: string
@@ -49,6 +52,7 @@ export default function Modal({
   size = 'md',
   width,
   closeOnOverlay = true,
+  backdropClassName = 'bg-black/65',
   showClose,
   bodyClassName = '',
   mobileFullscreen = false,
@@ -63,7 +67,7 @@ export default function Modal({
     <Dialog
       onClose={onClose}
       closeOnOverlay={closeOnOverlay}
-      backdrop="bg-black/60 backdrop-blur-sm"
+      backdrop={backdropClassName}
       className={`flex items-center justify-center ${mobileFullscreen ? 'p-0 md:p-4' : 'p-4'}`}
     >
       {/* 卡片 */}

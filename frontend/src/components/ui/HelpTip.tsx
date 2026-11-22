@@ -1,4 +1,5 @@
 import { ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import type { MouseEvent as ReactMouseEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { HelpCircle } from 'lucide-react'
 import IconButton from './IconButton'
@@ -23,6 +24,13 @@ interface HelpTipProps {
   /** 相对触发点左对齐或右对齐（窄屏会自动收进视口） */
   align?: 'left' | 'right'
   className?: string
+  /** 自定义触发点（不传就用默认的「?」图标）。图标类的角标想自己当触发点时用 */
+  children?: ReactNode
+  /**
+   * 怎么打开：click（默认）/ hover / both。
+   * 角标类的说明两边都要有——鼠标停上去的人不会先点一下。
+   */
+  openOn?: 'click' | 'hover' | 'both'
 }
 
 const GAP = 6
@@ -35,6 +43,8 @@ export default function HelpTip({
   size = 'sm',
   align = 'right',
   className = '',
+  children,
+  openOn = 'click',
 }: HelpTipProps) {
   const [open, setOpen] = useState(false)
   const [pos, setPos] = useState({ left: 0, top: 0, ready: false })
@@ -89,22 +99,67 @@ export default function HelpTip({
     }
   }, [open])
 
+  const hoverable = openOn === 'hover' || openOn === 'both'
+  const hoverTimer = useRef<number | null>(null)
+
+  const clearHoverTimer = useCallback(() => {
+    if (hoverTimer.current !== null) {
+      window.clearTimeout(hoverTimer.current)
+      hoverTimer.current = null
+    }
+  }, [])
+
+  // 悬停：稍等一下再开，避免鼠标扫过去时闪一片浮窗；移开后留时间给鼠标移进浮窗
+  const onEnter = () => {
+    if (!hoverable) return
+    clearHoverTimer()
+    hoverTimer.current = window.setTimeout(() => setOpen(true), 150)
+  }
+  const onLeave = () => {
+    if (!hoverable) return
+    clearHoverTimer()
+    hoverTimer.current = window.setTimeout(() => setOpen(false), 300)
+  }
+  useEffect(() => clearHoverTimer, [clearHoverTimer])
+
+  // 触发点统一走这里：自定义内容要自己带 role/tabIndex（它可能是个纯图标）
+  const toggle = (e: ReactMouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    clearHoverTimer()
+    setOpen((v) => !v)
+  }
+
   return (
-    <span ref={rootRef} className={`inline-flex align-middle ${className}`}>
-      <IconButton
-        size={size}
-        icon={<HelpCircle size={12} />}
-        label={label}
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        className={open ? 'text-primary-400' : ''}
-        // 常被放在 <label> 里（勾选行）：别让点击顺带把复选框切了
-        onClick={(e) => {
-          e.preventDefault()
-          e.stopPropagation()
-          setOpen((v) => !v)
-        }}
-      />
+    <span ref={rootRef} className={`inline-flex align-middle ${className}`}
+      onMouseEnter={onEnter} onMouseLeave={onLeave}>
+      {children ? (
+        <span
+          role="button"
+          tabIndex={0}
+          aria-label={label}
+          aria-expanded={open}
+          aria-haspopup="dialog"
+          className="inline-flex cursor-help items-center"
+          onClick={toggle}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') toggle(e as unknown as ReactMouseEvent)
+          }}
+        >
+          {children}
+        </span>
+      ) : (
+        <IconButton
+          size={size}
+          icon={<HelpCircle size={12} />}
+          label={label}
+          aria-expanded={open}
+          aria-haspopup="dialog"
+          className={open ? 'text-primary-400' : ''}
+          // 常被放在 <label> 里（勾选行）：别让点击顺带把复选框切了
+          onClick={toggle}
+        />
+      )}
       {open && createPortal(
         /* 外层只负责定位与测量（MenuPanel 不接 ref），浮窗本身仍是统一配方 */
         <div
@@ -118,6 +173,8 @@ export default function HelpTip({
             visibility: pos.ready ? 'visible' : 'hidden',
           }}
           className="z-modal"
+          onMouseEnter={clearHoverTimer}
+          onMouseLeave={onLeave}
         >
           <MenuPanel role="dialog" aria-label={label} className="whitespace-normal p-2.5 text-3xs leading-relaxed text-textSecondary">
             {content}

@@ -759,14 +759,13 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
       return (
         <Row key={key} label={t('tool:channel.landingLabel')} hint={t('tool:channel.groupHint')}>
           <div className="flex items-center gap-2 flex-wrap">
-            <div className="flex gap-1 bg-elevated rounded-control p-0.5 w-fit shrink-0">
+            <div className="flex gap-1 w-fit shrink-0">
               {(['existing', 'new'] as const).map(m => (
                 <button
                   key={m}
                   onClick={() => setGroupMode(prev => ({ ...prev, [activeId]: m }))}
                   disabled={!view.enabled}
-                  className={'text-2xs px-3 py-1.5 rounded-control transition-colors ' +
-                    (mode === m ? 'bg-surface text-textPrimary shadow-sm' : 'text-textSecondary hover:text-textPrimary')}
+                  className={`btn btn-xs btn-outline ${mode === m ? 'is-active' : ''}`}
                 >
                   {t(m === 'existing' ? 'tool:channel.groupModeExisting' : 'tool:channel.groupModeNew')}
                 </button>
@@ -957,7 +956,7 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
                       readOnly
                       value={qrShot.url}
                       onFocus={e => e.currentTarget.select()}
-                      className="text-3xs font-mono bg-canvas border border-border rounded-control px-2 py-1.5 w-full max-w-[24rem] text-textSecondary"
+                      className="field field-sm font-mono w-full max-w-[24rem] text-textSecondary"
                     />
                   </>
                 )}

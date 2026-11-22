@@ -90,15 +90,12 @@ export function AiTypeSelector({ value, onChange }: { value: AiTypeValue; onChan
   return (
     <div className="grid grid-cols-3 gap-2">
       {AI_TYPES.map((type) => (
+        // ui-standard-ignore: 整块可点的 AI 类型选项卡片（图标/名称/说明三行），不是胶囊按钮形态
         <button
           key={type.value}
           type="button"
           onClick={() => onChange(type.value)}
-          className={`flex flex-col items-center gap-1 p-2.5 rounded-card border text-center transition-all ${
-            value === type.value
-              ? 'border-primary-400 bg-primary-500/10 text-primary-600 dark:text-primary-300'
-              : 'border-border bg-canvas text-textSecondary hover:bg-elevated'
-          }`}
+          className={`card card-interactive flex flex-col items-center gap-1 p-2.5 text-center ${value === type.value ? 'is-active' : ''}`}
         >
           <span className="text-lg"><SubIcon name={type.icon} /></span>
           <span className="text-xs font-semibold">{t(type.labelKey)}</span>

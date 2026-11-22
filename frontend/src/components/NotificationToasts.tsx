@@ -162,8 +162,9 @@ function Toast({ item, onDismiss, onOpen }: {
 
       <button
         onClick={(e) => { e.stopPropagation(); onDismiss(item.id) }}
-        className="p-0.5 rounded text-textMuted hover:text-textSecondary shrink-0"
+        className="icon-btn icon-btn-xs shrink-0"
         title={t('notify:close')}
+        aria-label={t('notify:close')}
       >
         <X size={12} />
       </button>

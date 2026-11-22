@@ -244,6 +244,7 @@ const ChatInputFunc = ({ conversationType, conversationId, t, onSend, onSendFile
 
       {/* 悬浮玻璃胶囊：与手机端底部菜单同一份 .glass-float（圆角/半透明/模糊/投影都在那儿） */}
       <div className="glass-float px-1.5 py-1.5 focus-within:border-primary-500/40 focus-within:ring-2 focus-within:ring-primary-500/20">
+        {/* ui-standard-ignore: glass-float 内的透明输入（无边框/底色、随内容增高），换 .field 会破坏玻璃输入区 */}
         <textarea
           ref={textareaRef}
           value={value}

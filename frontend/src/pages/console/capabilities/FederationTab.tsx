@@ -3,7 +3,7 @@ import { api } from '../../../api/client'
 import { useT } from '../../../i18n/I18nContext'
 import { Globe, Link, Plus, Trash2, RefreshCw, Power, Shield, X } from 'lucide-react'
 import ExternalLinkSafe from '../../../components/ExternalLinkSafe'
-import { Dialog, SecretInput } from '../../../components/ui'
+import { Button, Dialog, IconButton, SecretInput } from '../../../components/ui'
 
 interface InstanceInfo {
   instance_id: string
@@ -416,19 +416,21 @@ export default function FederationTab() {
               )}
             </div>
             <div className="flex gap-2 justify-end">
-              <button
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={() => { setRegisterState('idle'); setDialogToken('') }}
-                className="px-4 py-1.5 text-xs bg-canvas border border-border text-textSecondary rounded-control hover:bg-border/20 transition-colors"
               >
                 {t('common:cancel')}
-              </button>
-              <button
-                onClick={handleRegister}
+              </Button>
+              <Button
+                variant="success"
+                size="sm"
                 disabled={!instance?.github_token_configured && !dialogToken.trim()}
-                className="btn btn-md btn-success"
+                onClick={handleRegister}
               >
                 {!instance?.github_token_configured ? t('admin:saveTokenAndRegister') : t('admin:knownAndContinue')}
-              </button>
+              </Button>
             </div>
           </div>
         </Dialog>
@@ -439,12 +441,9 @@ export default function FederationTab() {
           <h2 className="text-sm font-semibold text-textPrimary flex items-center gap-2">
             <Shield size={16} /> {t('admin:instanceIdentity')}
           </h2>
-          <button
-            onClick={() => setEditInstance(!editInstance)}
-            className="text-xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 transition-colors"
-          >
+          <Button variant="link" size="sm" onClick={() => setEditInstance(!editInstance)}>
             {editInstance ? t('common:cancel') : t('common:edit')}
-          </button>
+          </Button>
         </div>
 
         {editInstance ? (
@@ -454,7 +453,7 @@ export default function FederationTab() {
               <input
                 value={instanceForm.display_name}
                 onChange={e => setInstanceForm({ ...instanceForm, display_name: e.target.value })}
-                className="w-full mt-1 px-3 py-1.5 text-sm bg-canvas border border-border rounded-control text-textPrimary"
+                className="field mt-1"
                 placeholder={t('admin:instanceNamePlaceholder')}
               />
             </div>
@@ -474,6 +473,7 @@ export default function FederationTab() {
                   <option value="wss">wss://</option>
                   <option value="ws">ws://</option>
                 </select>
+                // ui-standard-ignore: 三段拼接的地址输入框（协议下拉 + 主机名 + 固定后缀连成一体），单挂 .field 会断开拼接
                 <input
                   value={(() => {
                     const m = instanceForm.public_url.match(/^(wss?):\/\/(.+?)\/federation\/ws$/)
@@ -498,7 +498,7 @@ export default function FederationTab() {
                 <input
                   value={instanceForm.public_id}
                   readOnly
-                  className="flex-1 px-3 py-1.5 text-sm bg-canvas border border-border rounded-control text-textPrimary font-mono cursor-default"
+                  className="field flex-1 min-w-0 font-mono cursor-default"
                 />
                 <button
                   onClick={handleRegenerateId}
@@ -574,13 +574,16 @@ export default function FederationTab() {
                   wrapperClassName="flex-1 min-w-0"
                   placeholder="ghp_xxxxxxxxxxxxxxxx"
                 />
-                <button
-                  onClick={handleQuickSaveToken}
+                <Button
+                  variant="accent"
+                  size="sm"
+                  className="shrink-0"
                   disabled={registerState === 'loading' || !quickToken.trim()}
-                  className="shrink-0 px-3 py-1.5 text-xs bg-accent-600 hover:bg-accent-500 text-white rounded-control transition-colors disabled:opacity-50"
+                  loading={registerState === 'loading'}
+                  onClick={handleQuickSaveToken}
                 >
                   {registerState === 'loading' ? t('common:saving') : t('admin:saveAndRetry')}
-                </button>
+                </Button>
               </div>
             )}
           </div>
@@ -615,12 +618,13 @@ export default function FederationTab() {
                       <span className="text-textMuted italic">{t('admin:notConfigured')}</span>
                     )}
                   </p>
-                  <button
+                  <Button
+                    variant="outline"
+                    size="xs"
                     onClick={() => setShowTokenInput(!showTokenInput)}
-                    className="text-3xs text-textMuted hover:text-textPrimary border border-border rounded px-1.5 py-0.5 transition-colors"
                   >
                     {showTokenInput ? t('common:cancel') : instance?.github_token_configured ? t('admin:change') : t('admin:configure')}
-                  </button>
+                  </Button>
                 </div>
                 {showTokenInput && (
                   <div className="flex gap-2 mt-1.5">
@@ -630,26 +634,31 @@ export default function FederationTab() {
                       wrapperClassName="flex-1 min-w-0"
                       placeholder={instance?.github_token_configured ? t('admin:pasteNewToken') : t('admin:tokenPlaceholder')}
                     />
-                    <button
-                      onClick={handleManageToken}
+                    <Button
+                      variant="accent"
+                      size="sm"
+                      className="shrink-0"
                       disabled={tokenSaving || !manageToken.trim()}
-                      className="shrink-0 px-2 py-1 text-xs bg-accent-600 hover:bg-accent-500 text-white rounded transition-colors disabled:opacity-50"
+                      loading={tokenSaving}
+                      onClick={handleManageToken}
                     >
                       {tokenSaving ? t('common:saving') : t('common:save')}
-                    </button>
+                    </Button>
                   </div>
                 )}
               </div>
             </div>
             {instance?.public_id && (
               <div className="flex gap-2 mt-3">
-                <button
-                  onClick={handleRegister}
+                <Button
+                  variant="success"
+                  size="sm"
                   disabled={isRegistering}
-                  className="btn btn-md btn-success"
+                  loading={isRegistering}
+                  onClick={handleRegister}
                 >
                   {isRegistering ? t('admin:registering') : registerState === 'success' ? t('admin:registered') : t('admin:registerToGithub')}
-                </button>
+                </Button>
                 {registerResult && (
                   <span className={`text-xs self-center ${
                     registerState === 'success' ? 'text-mint-400' :
@@ -669,13 +678,16 @@ export default function FederationTab() {
                       wrapperClassName="flex-1 min-w-0"
                       placeholder={t('admin:tokenPlaceholder')}
                     />
-                    <button
-                      onClick={handleQuickSaveToken}
+                    <Button
+                      variant="accent"
+                      size="sm"
+                      className="shrink-0"
                       disabled={registerState === 'loading' || !quickToken.trim()}
-                      className="shrink-0 px-3 py-1.5 text-xs bg-accent-600 hover:bg-accent-500 text-white rounded-control transition-colors disabled:opacity-50"
+                      loading={registerState === 'loading'}
+                      onClick={handleQuickSaveToken}
                     >
                       {registerState === 'loading' ? t('common:saving') : t('admin:saveAndRetry')}
-                    </button>
+                    </Button>
                   </div>
                 )}
               </div>
@@ -690,12 +702,14 @@ export default function FederationTab() {
           <h2 className="text-sm font-semibold text-textPrimary flex items-center gap-2">
             <Link size={16} /> {t('admin:peers').replace('{count}', String(peers.length))}
           </h2>
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
+            icon={<Plus size={14} />}
             onClick={() => setShowAddPeer(!showAddPeer)}
-            className="flex items-center gap-1 text-xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 transition-colors"
           >
-            <Plus size={14} /> {t('admin:addPeer')}
-          </button>
+            {t('admin:addPeer')}
+          </Button>
         </div>
 
         {/* 添加对等端表单 */}
@@ -707,7 +721,7 @@ export default function FederationTab() {
                 <input
                   value={newPeer.peer_public_id}
                   onChange={e => setNewPeer({ ...newPeer, peer_public_id: e.target.value })}
-                  className="w-full mt-1 px-3 py-1.5 text-sm bg-surface border border-border rounded-control text-textPrimary font-mono"
+                  className="field mt-1 font-mono"
                   placeholder={t('admin:peerIdPlaceholder')}
                 />
               </div>
@@ -716,7 +730,7 @@ export default function FederationTab() {
                 <input
                   value={newPeer.display_name}
                   onChange={e => setNewPeer({ ...newPeer, display_name: e.target.value })}
-                  className="w-full mt-1 px-3 py-1.5 text-sm bg-surface border border-border rounded-control text-textPrimary"
+                  className="field mt-1"
                   placeholder={t('admin:peerNamePlaceholder')}
                 />
               </div>
@@ -736,6 +750,7 @@ export default function FederationTab() {
                     <option value="wss">wss://</option>
                     <option value="ws">ws://</option>
                   </select>
+                  // ui-standard-ignore: 三段拼接的地址输入框（协议下拉 + 主机名 + 固定后缀连成一体），单挂 .field 会断开拼接
                   <input
                     value={(() => {
                       const m = newPeer.remote_url.match(/^(wss?):\/\/(.+?)\/federation\/ws$/)
@@ -765,19 +780,13 @@ export default function FederationTab() {
                 />
               </div>
             </div>
-            <div className="flex gap-2">
-              <button
-                onClick={handleAddPeer}
-                className="btn btn-md btn-primary"
-              >
-                {t('admin:addAndConnect')}
-              </button>
-              <button
-                onClick={() => setShowAddPeer(false)}
-                className="px-4 py-1.5 text-xs bg-canvas border border-border text-textSecondary rounded-control hover:bg-border/20 transition-colors"
-              >
+            <div className="form-actions">
+              <Button variant="outline" size="sm" onClick={() => setShowAddPeer(false)}>
                 {t('common:cancel')}
-              </button>
+              </Button>
+              <Button size="sm" onClick={handleAddPeer}>
+                {t('admin:addAndConnect')}
+              </Button>
             </div>
           </div>
         )}
@@ -808,46 +817,43 @@ export default function FederationTab() {
                   {stateBadge(rotatingPeerId === peer.id ? 'rotating' : peer.connection_state)}
                   {peer.connection_state === 'connected' ? (
                     <>
-                      <button
+                      <IconButton
+                        icon={<RefreshCw size={14} />}
+                        label={t('admin:rotateUrl')}
+                        size="sm"
                         onClick={() => handleRotateUrl(peer.id)}
-                        className="p-1.5 text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 hover:bg-primary-500/10 rounded-control transition-colors"
-                        title={t('admin:rotateUrl')}
-                      >
-                        <RefreshCw size={14} />
-                      </button>
-                      <button
+                      />
+                      <IconButton
+                        icon={<Power size={14} />}
+                        label={t('admin:disconnect')}
+                        size="sm"
+                        tone="danger"
                         onClick={() => handleDisconnect(peer.id)}
-                        className="p-1.5 text-rose-400 hover:text-rose-500 dark:hover:text-rose-300 dark:hover:text-rose-300 hover:bg-rose-500/10 rounded-control transition-colors"
-                        title={t('admin:disconnect')}
-                      >
-                        <Power size={14} />
-                      </button>
+                      />
                     </>
                   ) : (
                     <>
-                      <button
+                      <IconButton
+                        icon={<RefreshCw size={14} />}
+                        label={t('admin:connect')}
+                        size="sm"
                         onClick={() => handleConnect(peer.id)}
-                        className="p-1.5 text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 hover:bg-primary-500/10 rounded-control transition-colors"
-                        title={t('admin:connect')}
-                      >
-                        <RefreshCw size={14} />
-                      </button>
-                      <button
+                      />
+                      <IconButton
+                        icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>}
+                        label={t('common:edit')}
+                        size="sm"
                         onClick={() => handleEditPeer(peer)}
-                        className="p-1.5 text-textMuted hover:text-accent-400 hover:bg-accent-500/10 rounded-control transition-colors"
-                        title={t('common:edit')}
-                      >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                      </button>
+                      />
                     </>
                   )}
-                  <button
+                  <IconButton
+                    icon={<Trash2 size={14} />}
+                    label={t('common:delete')}
+                    size="sm"
+                    tone="danger"
                     onClick={() => handleDeletePeer(peer.id)}
-                    className="p-1.5 text-textMuted hover:text-rose-400 hover:bg-rose-500/10 rounded-control transition-colors"
-                    title={t('common:delete')}
-                  >
-                    <Trash2 size={14} />
-                  </button>
+                  />
                 </div>
               </div>
               {/* 编辑对等端表单 */}
@@ -859,7 +865,7 @@ export default function FederationTab() {
                       <input
                         value={editPeerForm.display_name}
                         onChange={e => setEditPeerForm({ ...editPeerForm, display_name: e.target.value })}
-                        className="w-full mt-0.5 px-2 py-1 text-xs bg-surface border border-border rounded text-textPrimary"
+                        className="field field-sm mt-0.5"
                       />
                     </div>
                     <div>
@@ -876,6 +882,7 @@ export default function FederationTab() {
                           <option value="wss">wss://</option>
                           <option value="ws">ws://</option>
                         </select>
+                        // ui-standard-ignore: 三段拼接的地址输入框，单挂 .field 会断开拼接
                         <input
                           value={(() => {
                             const m = editPeerForm.remote_url.match(/^(wss?):\/\/(.+?)\/federation\/ws$/)
@@ -904,19 +911,13 @@ export default function FederationTab() {
                       />
                     </div>
                   </div>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={handleSavePeer}
-                      className="btn btn-md btn-primary"
-                    >
-                      {t('common:save')}
-                    </button>
-                    <button
-                      onClick={() => setEditingPeerId(null)}
-                      className="px-3 py-1 text-xs bg-canvas border border-border text-textSecondary rounded hover:bg-border/20 transition-colors"
-                    >
+                  <div className="form-actions">
+                    <Button variant="outline" size="sm" onClick={() => setEditingPeerId(null)}>
                       {t('common:cancel')}
-                    </button>
+                    </Button>
+                    <Button size="sm" onClick={handleSavePeer}>
+                      {t('common:save')}
+                    </Button>
                   </div>
                 </div>
               )}
@@ -936,6 +937,7 @@ export default function FederationTab() {
                       <option value="wss://">wss://</option>
                       <option value="ws://">ws://</option>
                     </select>
+                    // ui-standard-ignore: 拼接地址输入框（与前后 select/后缀连成一体）
                     <input
                       value={rotateUrl.replace(/^(wss?):\/\//, '').replace(/\/federation\/ws$/, '')}
                       onChange={e => setRotateUrl((rotateUrl.startsWith('wss://') ? 'wss://' : 'ws://') + e.target.value + '/federation/ws')}
@@ -947,20 +949,13 @@ export default function FederationTab() {
                   {rotateError && (
                     <p className="text-xs text-rose-400">{rotateError}</p>
                   )}
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => handleRotateUrl(peer.id)}
-                      disabled={rotateLoading}
-                      className="px-3 py-1 text-xs bg-primary-600 hover:bg-primary-500 disabled:opacity-50 text-white rounded transition-colors"
-                    >
-                      {rotateLoading ? t('admin:rotating') : t('admin:initiateRotate')}
-                    </button>
-                    <button
-                      onClick={() => { setRotatingPeerId(null); setRotateError('') }}
-                      className="px-3 py-1 text-xs bg-canvas border border-border text-textSecondary rounded hover:bg-border/20 transition-colors"
-                    >
+                  <div className="form-actions">
+                    <Button variant="outline" size="sm" onClick={() => { setRotatingPeerId(null); setRotateError('') }}>
                       {t('common:cancel')}
-                    </button>
+                    </Button>
+                    <Button size="sm" disabled={rotateLoading} loading={rotateLoading} onClick={() => handleRotateUrl(peer.id)}>
+                      {rotateLoading ? t('admin:rotating') : t('admin:initiateRotate')}
+                    </Button>
                   </div>
                 </div>
               )}
@@ -1085,24 +1080,21 @@ function FederatedEntitiesSection() {
                 </div>
               </div>
               <div className="flex items-center gap-2 shrink-0">
-                <button
-                  onClick={() => toggleEntity(entity)}
-                  className={`text-xs px-2 py-1 rounded transition-colors ${
-                    entity.is_enabled
-                      ? 'bg-mint-500/10 text-mint-400 hover:bg-rose-500/10 hover:text-rose-400'
-                      : 'bg-rose-500/10 text-rose-400 hover:bg-mint-500/10 hover:text-mint-400'
-                  }`}
+                <Button
+                  size="xs"
+                  variant={entity.is_enabled ? 'tinted-success' : 'tinted-danger'}
                   title={entity.is_enabled ? t('admin:disable') : t('admin:enable')}
+                  onClick={() => toggleEntity(entity)}
                 >
                   {entity.is_enabled ? t('admin:enabled') : t('admin:disabled')}
-                </button>
-                <button
+                </Button>
+                <IconButton
+                  icon={<Trash2 size={14} />}
+                  label={t('common:delete')}
+                  size="sm"
+                  tone="danger"
                   onClick={() => deleteEntity(entity)}
-                  className="p-1.5 text-textMuted hover:text-rose-400 hover:bg-rose-500/10 rounded-control transition-colors"
-                  title={t('common:delete')}
-                >
-                  <Trash2 size={14} />
-                </button>
+                />
               </div>
             </div>
           ))}

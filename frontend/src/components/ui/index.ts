@@ -9,6 +9,8 @@
  *   Button / IconButton  按钮与图标按钮
  *   Input / Select       表单控件
  *   SecretInput          密钥 / Token 输入（不用 type=password，避免被当成账号密码自动填充）
+ *   PasswordInput        真·账号密码（原生 password + 眼睛按钮）
+ *   AutoHeight           内容变高变矮的平滑过渡（量高度 + transition；有使用前必读的三条约束）
  *   Card                 卡片区块
  *   Modal / Dialog       弹窗（带卡片 / 只有遮罩）
  *   ListPanel            紧凑列表外壳（表格 + 标题 + 工具条 + 空态）
@@ -28,6 +30,8 @@ export { default as Button } from './Button'
 export { default as IconButton } from './IconButton'
 export { default as Input } from './Input'
 export { default as SecretInput } from './SecretInput'
+export { default as PasswordInput } from './PasswordInput'
+export { default as AutoHeight } from './AutoHeight'
 export { default as Modal } from './Modal'
 export { default as Select } from './Select'
 export { default as ComboBox, sortByPrefix } from './ComboBox'
