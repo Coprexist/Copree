@@ -855,7 +855,7 @@ async def _tool_call_loop(
         # 体积是「该不该压」的必要条件，空闲只决定「什么时候压最划算」（§6）：
         # 冷路径用 T_idle——没超就不压，小上下文白跑一次摘要不值
         thresholds = await get_compression_thresholds(db)
-        window = context_window_for(model)  # 窗口按模型取，别拿全局常量套所有模型
+        window = context_window_for(model, api_base_url)  # 窗口按模型与部署取，别拿全局常量套所有模型
         stale = (
             _is_conversation_idle(messages, hours=12)
             and should_compress(messages, context_window=window, threshold=thresholds.idle)
@@ -1109,7 +1109,7 @@ async def _tool_call_loop(
                     from app.services.memory.context_compression_service import should_compress, inline_compress, compress_messages, get_compression_thresholds
                     from app.utils.pure.model_window import context_window_for
                     thresholds = await get_compression_thresholds(db)
-                    window = context_window_for(model)
+                    window = context_window_for(model, api_base_url)
                     # 两条路各自的体积门槛（§6）：冷（久未活跃）用更低的 T_idle，
                     # 热（本轮已发过消息）用 T_hot；都不满足就不压——体积是必要条件，空闲只决定时机
                     stale = _is_conversation_idle(messages, hours=12) and should_compress(
@@ -1398,7 +1398,10 @@ async def _tool_call_loop(
             # 工具根本不在它的可选范围里，"改用工具说"是自相矛盾的指令；而且每提醒一次
             # 都要把整段上下文重跑一遍——本地 CPU 推理一轮三分钟，白烧两轮还不一定出声。
             # 文字如实收进账本（_seal 统一认领），与"提醒后仍只说话"同一个出口。
-            if response.get("tools_unsupported") and content and not tool_calls and not _pending_results:
+            # 文本协议通道里工具是**可用**的，只是承载换成了正文标记（tool_text_protocol）——
+            # 这种轮次照常走下面的提醒，别按"没工具"直接收账本。
+            if (response.get("tools_unsupported") and not response.get("tool_text_protocol")
+                    and content and not tool_calls and not _pending_results):
                 _unsent_text = content.strip()
                 logger.info(
                     f"AI {agent.name}({agent.id}) 通道不带工具（模型不支持 function calling），"

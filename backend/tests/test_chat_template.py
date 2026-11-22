@@ -195,6 +195,24 @@ def test_none_folds_stable_into_first_user_and_demotes_dynamic():
     assert not any(m["role"] == "system" for m in result)
 
 
+def test_none_puts_stable_block_first_when_history_starts_with_assistant():
+    """历史窗口从 assistant 开头时，稳定块新建一条放最前，且不打乱原有时序。
+
+    就地塞进第一条 user 会让位置随窗口每轮漂移（缓存前缀跟着断），模型读到的也会是
+    "已经说过话了，怎么又来一段设定"——实测 r1 由此开始复述系统文字。
+    """
+    messages = [
+        HEAD,
+        {"role": "assistant", "content": "上一轮的话"},
+        {"role": "user", "content": "你好"},
+    ]
+    result = fit_system_layout(messages, NONE)
+
+    assert result[0] == {"role": "user", "content": "你是助手"}
+    assert result[1] == {"role": "assistant", "content": "上一轮的话"}
+    assert result[2] == {"role": "user", "content": "你好"}, "原有时序必须逐字节保留"
+
+
 def test_none_without_user_creates_one():
     """边界：一条 user 都没有时新建一条，不能把稳定块弄丢。"""
     result = fit_system_layout([HEAD, {"role": "assistant", "content": "在"}], NONE)

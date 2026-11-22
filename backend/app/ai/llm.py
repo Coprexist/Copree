@@ -22,6 +22,9 @@ from app.utils.pure.llm_endpoint import chat_completions_url, is_local_endpoint
 from app.utils.pure.llm_capability import (
     is_tools_unsupported_error, remember_no_tools, supports_tools,
 )
+from app.utils.pure.tool_text_protocol import (
+    parse_tool_calls, project_for_text_tools, render_tool_protocol,
+)
 from app.utils.pure.llm_usage import normalize_usage
 from app.utils.pure.prompting import (
     resolve_model, build_personality_segment, format_time_shanghai,
@@ -147,9 +150,13 @@ async def chat_completion(
     from app.services.infrastructure.metrics_collector import metrics
     t0 = _time.monotonic()
 
-    async def _dispatch(msgs: list[dict], tools_now: list[dict] | None):
-        """一次实际请求（流式/非流式由调用方决定）。"""
-        if stream:
+    async def _dispatch(msgs: list[dict], tools_now: list[dict] | None, use_stream: bool):
+        """一次实际请求（流式/非流式由调用方决定）。
+
+        走文本协议时强制非流式：调用标记要等整段输出完才解析得出来，流式回调与
+        增量 tool_calls 检测都拿不到完整的 `</tool_call>`。
+        """
+        if use_stream:
             return await _chat_completion_streaming(
                 msgs, model, api_base_url, api_key, tools_now,
                 temperature, top_p, presence_penalty, frequency_penalty,
@@ -170,16 +177,22 @@ async def chat_completion(
     # 已记过结论的通道（10 分钟内）直接按结论发，省掉那次必然失败的往返。
     msgs = messages
     tools_now = tools
+    # 文本协议：对端没有原生 function calling（tools 参数会被调度前直接拒），改把工具
+    # 定义写成正文稳定块，调用与结果也用标记承载。协议文本只随工具清单变，插在 messages[0]
+    # 归入稳定块，前缀缓存位置不受影响（见 pure/tool_text_protocol.py）。
+    text_tools = False
     if tools_now and not supports_tools(api_base_url, model):
-        logger.info(f"🔧 该通道已记为不接受工具调用，本轮不带 tools: {api_base_url} / {model}")
+        logger.info(f"🔧 该通道已记为不接受原生工具调用，本轮改用文本协议: {api_base_url} / {model}")
+        text_tools = True
+        msgs = project_for_text_tools(msgs, render_tool_protocol(tools_now))
         tools_now = None
     marks: list[str] = []
 
     async def _dispatch_with_degrade() -> dict:
-        nonlocal msgs, tools_now
+        nonlocal msgs, tools_now, text_tools
         while True:
             try:
-                return await _dispatch(msgs, tools_now)
+                return await _dispatch(msgs, tools_now, stream and not text_tools)
             except Exception as e:
                 text = str(e)
                 # 1) 模型不吃图片（纯文本模型收到 image_url 多半 400）→ 剥掉图片重试，
@@ -189,13 +202,15 @@ async def chat_completion(
                     logger.warning(f"🖼️ 当前模型似乎不支持图片，降级为纯文本重试（剥掉 {removed} 张）: {e}")
                     marks.append("vision")
                     continue
-                # 2) 模型不吃 tools（本地小模型常见，如 ollama 的 deepseek-r1）→
-                #    去掉工具清单重试。这不是"配置错误"，是本轮请求形状要适配模型能力。
+                # 2) 模型不吃 tools（本地小模型常见，如 ollama 的 deepseek-r1）→ 记下结论，
+                #    本轮改走文本协议。这不是"配置错误"，是本轮请求形状要适配模型能力。
                 if tools_now and is_tools_unsupported_error(text):
-                    tools_now = None
                     remember_no_tools(api_base_url, model)
+                    text_tools = True
+                    msgs = project_for_text_tools(msgs, render_tool_protocol(tools_now))
+                    tools_now = None
                     logger.warning(
-                        f"🔧 当前模型不接受工具调用，降级为无工具重试"
+                        f"🔧 当前模型不接受原生工具调用，改走文本协议"
                         f"（{api_base_url} / {model}）: {e}"
                     )
                     marks.append("tools")
@@ -208,6 +223,24 @@ async def chat_completion(
         await metrics.record_llm_call(_time.monotonic() - t0, success=False)
         raise
     await metrics.record_llm_call(_time.monotonic() - t0, success=True)
+
+    # 文本协议：把正文里的 <tool_call> 还原成 tool_calls。上层只认这一种形状——executor
+    # 不用分辨通道有没有原生能力，工具执行、结果回填、收尾判定全部复用同一条链路。
+    if text_tools:
+        calls, rest = parse_tool_calls(result.get("content"))
+        # 名字必须在这次真的给了它的工具表里：弱模型会自己起名（实测 r1 把 send_dm
+        # 写成 message），照单执行只会得到"未知工具"。丢掉的调用不剥正文，让它按
+        # "只说了话"走账本，比误发一条消息安全。
+        known = {
+            str((t.get("function") or {}).get("name") or "")
+            for t in (tools or ()) if isinstance(t, dict)
+        }
+        calls = [c for c in calls if c["function"]["name"] in known]
+        if calls:
+            result["tool_calls"] = calls
+            result["content"] = rest or None
+        result["tool_text_protocol"] = True
+
     if "vision" in marks:
         result["vision_unsupported"] = True
     if "tools" in marks:

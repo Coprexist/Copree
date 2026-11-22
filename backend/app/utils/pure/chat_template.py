@@ -232,13 +232,28 @@ def _as_injection(message: dict) -> dict:
 
 
 def _fold_into_first_user(prefix: str, body: list[dict]) -> list[dict]:
-    """把合并后的稳定块塞进第一条 user 的开头；一条 user 都没有就新建一条放最前。"""
-    for index, message in enumerate(body):
-        if isinstance(message, dict) and message.get("role") == "user":
-            head = dict(message)
-            head["content"] = _prepend_text(prefix, head.get("content"), separator="\n\n")
-            return [*body[:index], head, *body[index + 1:]]
-    return [{"role": "user", "content": prefix}, *body]
+    """把合并后的稳定块放到最前面，优先与第一条 user 共用一条消息。
+
+    **第一条 user 前面还有消息时必须新建一条放在最前**，不能就地塞进它。历史窗口
+    裁剪常从 assistant 的开头切（见本轮 69 条消息里 [4] 就是 assistant），就地塞会把
+    稳定块——人格、状态、技能目录——丢到对话**中段**：位置随窗口每轮漂移（缓存前缀
+    跟着断），模型读到的也是"我早就说过话了，怎么又来一段设定"，于是开始复述系统文字。
+    稳定块的用意正是"整段前缀只重算一次"，那就必须真的在第一个字节。
+    """
+    index = next(
+        (i for i, m in enumerate(body)
+         if isinstance(m, dict) and m.get("role") == "user"),
+        None,
+    )
+    if index is None:
+        return [{"role": "user", "content": prefix}, *body]
+    if index > 0:
+        # 第一条 user 前面还有消息：新建一条放最前，**不动原有顺序**。把那条 user 提上来
+        # 会颠倒"assistant 先说、user 后回"的时序，模型读到的就是错的对话顺序。
+        return [{"role": "user", "content": prefix}, *body]
+    head = dict(body[0])
+    head["content"] = _prepend_text(prefix, head.get("content"), separator="\n\n")
+    return [head, *body[1:]]
 
 
 def _prepend_text(prefix: str, content: object, *, separator: str = "") -> object:
