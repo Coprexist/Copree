@@ -1,4 +1,4 @@
-import { memo, useState, useEffect, useRef, useMemo, useCallback, type ReactNode } from 'react'
+import { memo, useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Plus, BellOff, Menu, UserPlus, Users, Bot, Globe, ShieldAlert, MessageCircle, Inbox, Pin, ChevronDown, ChevronRight, ChevronLeft } from 'lucide-react'
 import { EmptyState, MenuPanel, MenuItem } from './ui'
@@ -174,6 +174,8 @@ interface ChatSidebarProps {
   mobileFullscreen?: boolean
   /** 桌面端「收起聊天列表」：由外层给，不传就不显示那枚按钮 */
   onCollapse?: () => void
+  /** 桌面端收起态：整栏收成头像列（宽 52，由外层给宽度） */
+  railCollapsed?: boolean
 }
 
 /** 从 localStorage 读取折叠状态，默认展开 */
@@ -201,6 +203,7 @@ const ChatSidebar = memo(function ChatSidebar({
   onMobileBack,
   mobileFullscreen,
   onCollapse,
+  railCollapsed,
 }: ChatSidebarProps) {
   // 会话列表来自唯一来源（hooks/useChatLists）：一条新消息就地改那一份，不重拉；
   // 这里只负责在「列表本身可能变了」时喊它重拉（建群、进新私信、自己发过消息）
@@ -303,6 +306,55 @@ const ChatSidebar = memo(function ChatSidebar({
   // 非置顶的私信
   const unpinnedDMs = useMemo(() => sortedDMSessions.filter(s => !s.is_pinned), [sortedDMSessions])
 
+  // ── 收起态：整栏收成一列头像 ──
+  // 数据与展开时同源、同顺序（置顶 → 群聊 → 私信），不另建一份列表
+  const railItems = useMemo(() => [
+    ...pinnedItems,
+    ...unpinnedGroups.map(g => ({ kind: 'group' as const, data: g, lastMessageAt: g.last_message_at })),
+    ...unpinnedDMs.map(s => ({ kind: 'dm' as const, data: s, lastMessageAt: s.last_message_at })),
+  ], [pinnedItems, unpinnedGroups, unpinnedDMs])
+
+  const rootRef = useRef<HTMLDivElement>(null)
+  // 收起动画的起点：点收起之前把每个头像此刻的位置量下来，收起后按差值补一段 FLIP。
+  // 只动 transform（合成器属性），不触发布局，也不逐帧重排列表，所以再长的列表也不掉帧。
+  const railFromRef = useRef<Map<string, DOMRect>>(new Map())
+  const captureRailOrigin = useCallback(() => {
+    const from = new Map<string, DOMRect>()
+    rootRef.current?.querySelectorAll('[data-avatar-key]').forEach((el) => {
+      const key = el.getAttribute('data-avatar-key')
+      if (key) from.set(key, el.getBoundingClientRect())
+    })
+    railFromRef.current = from
+  }, [])
+
+  useLayoutEffect(() => {
+    if (!railCollapsed) return
+    // 系统开了「减少动态效果」就不飞：直接落位
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
+    const from = railFromRef.current
+    railFromRef.current = new Map()
+    rootRef.current?.querySelectorAll('[data-avatar-key]').forEach((el) => {
+      const key = el.getAttribute('data-avatar-key')
+      const start = key ? from.get(key) : undefined
+      // 起点在视口外的（长列表里滚下去那一截）不飞：它们本来就没被人看见，
+      // 飞过来只是白算一遍，还可能在屏幕边缘留下杂乱轨迹
+      if (start && (start.bottom < 0 || start.top > window.innerHeight)) return
+      const end = el.getBoundingClientRect()
+      if (!start) {
+        // 展开时它被收在折叠分组里，没有起点：就地淡入，不做位移
+        el.animate?.([{ opacity: 0 }, { opacity: 1 }], { duration: 160, easing: 'ease-out' })
+        return
+      }
+      const dx = start.left - end.left
+      const dy = start.top - end.top
+      if (!dx && !dy) return
+      el.animate?.(
+        [{ transform: 'translate(' + dx + 'px, ' + dy + 'px)' }, { transform: 'translate(0, 0)' }],
+        { duration: 220, easing: 'cubic-bezier(.25,.8,.3,1)' },
+      )
+    })
+  }, [railCollapsed])
+
   // 未读总数
   const groupsUnreadTotal = useMemo(() =>
     unpinnedGroups.reduce((acc, g) => acc + g.unread_count, 0)
@@ -322,6 +374,7 @@ const ChatSidebar = memo(function ChatSidebar({
     // ui-standard-ignore: 会话列表整行条目（头像+预览+角标），行高由内容决定，不是按钮形态
     <button
       key={`group-${g.id}`}
+      data-avatar-key={`g-${g.id}`}
       onClick={() => {
         if (g.id === activeGroupId && mobileFullscreen) {
           onMobileBack?.()
@@ -381,6 +434,7 @@ const ChatSidebar = memo(function ChatSidebar({
     // ui-standard-ignore: 会话列表整行条目（头像+预览+角标），行高由内容决定，不是按钮形态
     <button
       key={`dm-${s.session_id}`}
+      data-avatar-key={`dm-${s.session_id}`}
       onClick={() => {
         if (s.session_id === activeSessionId && mobileFullscreen) {
           onMobileBack?.()
@@ -436,9 +490,59 @@ const ChatSidebar = memo(function ChatSidebar({
   )
 
   return (
-    <div className={`w-full bg-surface border-r border-border shrink-0 flex-col flex h-full ${
+    <div ref={rootRef} className={`w-full bg-surface border-r border-border shrink-0 flex-col flex h-full ${
       hideOnMobile && !nothingSelected ? 'hidden' : 'flex'
     } md:flex`}>
+      {railCollapsed ? (
+        <>
+          {/* 收起态：只剩一列头像。样式全部沿用展开时的语义色（surface / border / 主色高亮），
+              不另造一套配色；头像组件本身也不变，群头像三种模式与私信头像都原样缩到 36px。 */}
+          <div className="h-14 flex items-center justify-center shrink-0">
+            <button
+              onClick={onCollapse}
+              className="icon-btn-sm text-textMuted hover:text-textPrimary"
+              title={t('common:expand')}
+              aria-label={t('common:expand')}
+            >
+              <ChevronRight size={16} />
+            </button>
+          </div>
+          <div className="flex-1 min-h-0 w-full overflow-y-auto overflow-x-hidden scroll-floor flex flex-col items-center gap-1 py-1">
+            {railItems.map((item) => {
+              const key = item.kind === 'group' ? `g-${item.data.id}` : `dm-${item.data.session_id}`
+              const active = item.kind === 'group'
+                ? item.data.id === activeGroupId
+                : item.data.session_id === activeSessionId
+              const unread = item.data.unread_count || 0
+              const mention = item.kind === 'group' ? item.data.has_mention : false
+              const name = item.kind === 'group' ? item.data.name : item.data.partner?.name || ''
+              return (
+                // ui-standard-ignore: 收起态的头像按钮（方图，无文字）
+                <button
+                  key={key}
+                  data-avatar-key={key}
+                  onClick={() => navigate(item.kind === 'group'
+                    ? `/chat/gm/${item.data.id}`
+                    : `/chat/dm/${item.data.session_id}`)}
+                  title={name}
+                  aria-label={name}
+                  className={'relative shrink-0 rounded-control transition-colors ' + (
+                    active ? 'ring-2 ring-primary-400' : 'hover:bg-elevated'
+                  )}
+                >
+                  {item.kind === 'group'
+                    ? <GroupAvatarGroup g={item.data} />
+                    : <DmAvatar session={item.data} />}
+                  {unread > 0 && (
+                    <span className={'absolute top-0 right-0 w-2 h-2 rounded-full ' + (mention ? 'bg-rose-500' : 'bg-primary-500')} />
+                  )}
+                </button>
+              )
+            })}
+          </div>
+        </>
+      ) : (
+      <>
       {/* 标题 */}
       <div className="top-bar px-3 h-14 font-medium text-sm flex items-center justify-between text-textPrimary shrink-0">
         <div className="flex items-center gap-2">
@@ -454,7 +558,7 @@ const ChatSidebar = memo(function ChatSidebar({
         <div className="flex items-center gap-0.5">
         {onCollapse && (
           <button
-            onClick={onCollapse}
+            onClick={() => { captureRailOrigin(); onCollapse?.() }}
             className="icon-btn-sm hidden md:inline-flex text-textMuted hover:text-textPrimary"
             title={t('common:collapse')}
             aria-label={t('common:collapse')}
@@ -556,6 +660,8 @@ const ChatSidebar = memo(function ChatSidebar({
           )
         )}
       </div>
+      </>
+      )}
     </div>
   )
 })

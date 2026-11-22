@@ -10,7 +10,7 @@ import ChatHeader from './shared/ChatHeader'
 import { CHAT_HEADER_INSET } from './shared/chatHeaderInset'
 import ProfileCard from './ProfileCard'
 import SearchOverlay from './SearchOverlay'
-import { Bell, BellOff, UserPlus, Settings, Bot, User, Globe, X, Check, Users, AlertTriangle, ChevronLeft, Menu } from 'lucide-react'
+import { Bell, BellOff, UserPlus, Settings, Bot, User, Globe, X, Check, Users, AlertTriangle } from 'lucide-react'
 import { useT } from '../i18n/I18nContext'
 import { APP_DATA_READY_EVENT } from './EnterTransition'
 import { useResizableSidebar } from '../hooks/useResizableSidebar'
@@ -144,20 +144,6 @@ export default function ChatArea({ groupId, dmSessionId }: ChatAreaProps) {
         className={`shrink-0 ${mobileSidebarOpen ? 'absolute inset-0 z-overlay' : 'hidden md:block'} md:relative md:z-auto`}
         style={!mobileSidebarOpen ? { width: railCollapsed ? RAIL_W : sidebarWidth } : undefined}
       >
-        {railCollapsed ? (
-          /* 收起态：只留一条窄栏（展开按钮在顶部），宽度全部让给对话区 */
-          <div className="h-full flex flex-col items-center border-r border-border bg-surface pt-1">
-            <button
-              onClick={toggleRail}
-              className="icon-btn-sm text-textMuted hover:text-textPrimary"
-              title={t('common:expand')}
-              aria-label={t('common:expand')}
-            >
-              <Menu size={16} />
-            </button>
-          </div>
-        ) : (
-        <>
         <ChatSidebar
           activeGroupId={groupId}
           activeSessionId={dmSessionId}
@@ -168,13 +154,14 @@ export default function ChatArea({ groupId, dmSessionId }: ChatAreaProps) {
           onMobileBack={mobileSidebarOpen ? () => setMobileSidebarOpen(false) : undefined}
           mobileFullscreen={mobileSidebarOpen}
           onCollapse={toggleRail}
+          railCollapsed={railCollapsed}
         />
-        {/* 拖拽手柄（仅桌面端） */}
-        <div
-          className="hidden md:block absolute top-0 -right-1.5 w-1.5 h-full cursor-col-resize hover:bg-primary-400/30 active:bg-primary-400/50 transition-colors z-overlay"
-          onMouseDown={handleResizeStart}
-        />
-        </>
+        {/* 拖拽手柄（仅桌面端；收起后没有宽度可拖） */}
+        {!railCollapsed && (
+          <div
+            className="hidden md:block absolute top-0 -right-1.5 w-1.5 h-full cursor-col-resize hover:bg-primary-400/30 active:bg-primary-400/50 transition-colors z-overlay"
+            onMouseDown={handleResizeStart}
+          />
         )}
       </div>
       )}

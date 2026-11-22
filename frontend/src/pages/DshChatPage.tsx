@@ -14,7 +14,7 @@ import { useNavigate } from 'react-router-dom'
 import { ArrowLeft, ArrowDown, Bot, Brain, CheckCircle2, ChevronDown, Circle, ImagePlus, Info, MessageSquare, Plus, RefreshCw, Send, Square, Terminal, XCircle, ChevronLeft, Menu } from 'lucide-react'
 import { api, fileDownloadUrl, getApiBaseUrl } from '../api/client'
 import { useT } from '../i18n/I18nContext'
-import { useRailCollapsed, RAIL_COLLAPSED_WIDTH as RAIL_W } from '../hooks/useRailCollapsed'
+import { useRailCollapsed } from '../hooks/useRailCollapsed'
 import { DropMask, AttachmentChips } from '../components/AttachmentChips'
 import { Button, IconButton, MENU_CAPTION, MenuItem, MenuPanel, WidthHandles } from '../components/ui'
 import { ApprovalDialog, QuestionDialog, type AskPrompt, type ChatApproval } from '../components/shared/ChatDialogs'
@@ -28,9 +28,6 @@ import {
   imageMarker, imageRefsIn,
   stripImageMarkers, supportsImageAttachments, type DshAttachmentRef, type DshImageRef,
 } from '../utils/dshAttachments'
-
-/** 左栏展开时的宽度（原来是 w-60）；收起宽度走 useRailCollapsed 的统一定义 */
-const DSH_RAIL_W = 240
 
 interface Status {
   detected: boolean
@@ -824,20 +821,8 @@ export default function DshChatPage() {
       <DropMask {...attachments.dropState('page')} label={t('tool:dsh.attach.drop')} />
 
       {/* ═══ 左栏：DSH 会话（放大后的群视界对话同构——会话在左，对话占满其余） ═══ */}
-      <aside className="hidden md:flex shrink-0 flex-col border-r border-border bg-surface" style={{ width: railCollapsed ? RAIL_W : DSH_RAIL_W }}>
-        {railCollapsed ? (
-          <div className="h-full flex flex-col items-center pt-1">
-            <button
-              onClick={toggleRail}
-              className="icon-btn-sm text-textMuted hover:text-textPrimary"
-              title={t('common:expand')}
-              aria-label={t('common:expand')}
-            >
-              <Menu size={16} />
-            </button>
-          </div>
-        ) : (
-        <>
+      {!railCollapsed && (
+      <aside className="hidden md:flex w-60 shrink-0 flex-col border-r border-border bg-surface">
         <div className="top-bar flex items-center gap-1.5 px-3 h-14 shrink-0">
           <MessageSquare size={13} className="text-textMuted shrink-0" />
           <span className="text-xs font-medium text-textSecondary flex-1 truncate">{t('tool:dsh.sessions')}</span>
@@ -886,15 +871,24 @@ export default function DshChatPage() {
         >
           {t('tool:dsh.newSession')}
         </Button>
-        </>
-        )}
       </aside>
+      )}
 
       {/* 对话列自己铺白底：页根是 bg-canvas（#f8fafc），列不给底色就会露出那层灰，
           而群视界放大版里这一列就是 bg-surface —— 两处必须同一层白 */}
       <section className="flex-1 min-w-0 flex flex-col bg-surface">
         {/* 顶栏：全站同一个顶部条（.top-bar），与聊天头部等高同阴影 */}
         <div className="top-bar flex items-center gap-2 px-3 h-14 shrink-0">
+          {railCollapsed && (
+            <button
+              onClick={toggleRail}
+              className="icon-btn-sm shrink-0"
+              title={t('common:expand')}
+              aria-label={t('common:expand')}
+            >
+              <Menu size={15} />
+            </button>
+          )}
           <button onClick={() => navigate('/admin')} className="icon-btn-sm shrink-0" title={t('tool:dsh.page.back')} aria-label={t('tool:dsh.page.back')}>
             <ArrowLeft size={14} />
           </button>

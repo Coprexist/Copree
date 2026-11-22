@@ -20,7 +20,7 @@ import { LANGUAGES } from '../i18n/languages'
 import { NOTICE_BOX_CLASS, NOTICE_TEXT_CLASS, useNotice } from '../hooks/useNotice'
 import { isDesktop } from '../utils/platform'
 import { invoke } from '../utils/tauri'
-import { Key, Zap, Save, Clock, Palette, Bell, Eye, EyeOff, CheckCircle, XCircle, Loader2, Globe, Layout, Bot, Pencil, X, Ticket, Plus, ChevronDown, ChevronRight, Shield, AlertTriangle, ArrowLeft, Mail, Monitor, HardDrive, Trash2, Cpu, Wrench, Box, ExternalLink, BarChart3, Star, ChevronLeft, Menu } from 'lucide-react'
+import { Key, Zap, Save, Clock, Palette, Bell, Eye, EyeOff, CheckCircle, XCircle, Loader2, Globe, Layout, Bot, Pencil, X, Ticket, Plus, ChevronDown, ChevronRight, Shield, AlertTriangle, ArrowLeft, Mail, Monitor, HardDrive, Trash2, Cpu, Wrench, Box, ExternalLink, BarChart3, Star, ChevronLeft } from 'lucide-react'
 import { useNavigate, useBlocker, useLocation, useSearchParams } from 'react-router-dom'
 
 // 常用时区列表
@@ -1043,7 +1043,7 @@ export default function SettingsPage() {
                 title={collapsed ? t('common:expand') : t('common:collapse')}
                 aria-label={collapsed ? t('common:expand') : t('common:collapse')}
               >
-                {collapsed ? <Menu size={16} /> : <ChevronLeft size={16} />}
+                {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
               </button>
             </div>
           <div className="overflow-y-auto py-1 w-full flex-1 min-h-0">

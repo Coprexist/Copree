@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, BookOpen, ChevronLeft, ChevronRight, Menu } from 'lucide-react'
+import { ArrowLeft, BookOpen, ChevronLeft, ChevronRight } from 'lucide-react'
 import { MANUAL_URL, ADMIN_MANUAL_URL } from '../../constants'
 import { useT } from '../../i18n/I18nContext'
 import { useResizableSidebar } from '../../hooks/useResizableSidebar'
@@ -145,7 +145,7 @@ export default function ConsolePage() {
                 className="icon-btn-sm text-textMuted hover:text-textPrimary"
                 title={collapsed ? t('admin:expandRail') : t('admin:collapseRail')}
               >
-                {collapsed ? <Menu size={16} /> : <ChevronLeft size={16} />}
+                {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
               </button>
             </div>
 
