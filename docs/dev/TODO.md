@@ -149,6 +149,10 @@
   `file_service.set_transcript()`——ASR 将来也走它。用例
   `test_with_transcripts_fills_attachment_text` / `test_attachment_marks_show_voice_transcript`。
   人的语音仍需要下面的 ASR。
+- [x] **语音配置走「厂商 + 配置档」**（2026-11-22 已落地）：与 LLM 同构，迁移 `0125`
+  把 `agent_voice_configs` 的老数据转成语音厂商 + 配置档并绑定 `voice_profile_id`；
+  解析收口到 `voice_config.voice_of()`，`send_voice` / 能力门控 / 检测 / 试听共用同一个入口；
+  行上 provider / base_url / key / voice_id / model 暂留作"没选档"的兼容来源。
 - [ ] **语音转文字（ASR）——第二步**：口径已定，待实现。
   - **配置**：`provider_presets` 增 `kind="asr"`，与 `llm` / `voice` 同一份清单、同一套
     Fernet Key、「检测通过才启用」的门控（照 `voice_probe` 的模式）。**默认关**，开关文案要写明

@@ -67,6 +67,18 @@ src/components/ui/     React 壳：PageShell PageHeader Button IconButton
 ```
 
 - 尺寸：`btn-xs`=24px · `btn-sm`=32px · `btn-md`=40px · `btn-lg`=48px（**固定高度，同行严格等高**）
+- **尺寸按「容器等级」定，不按“重不重要”随手挑**（2026-11-22 定）：
+
+  | 档位 | 出现在哪 |
+  |------|----------|
+  | `lg` 48 | 页面级最高主操作：登录/注册主按钮、首屏 CTA。少而醒目 |
+  | `md` 40 | 页面头的主按钮、**弹窗底部**确认、40px 主输入（`field-lg`）旁的按钮 |
+  | `sm` 32 | **卡片 / 面板内部的一切**：设置项、选项组、卡内主操作 |
+  | `xs` 24 | 行内工具：表格行里的小动作、图标文字按钮 |
+
+  卡片内的 `sm` 由 CSS 自动兜底（`.card .btn` 一刀切到 32px），页面**不用**写 `size="sm"`；
+  判据是"它待在哪个容器里"，同一张卡里不允许出现两种高度。
+  表单/设置卡的操作区统一用 `.form-actions`（右下角 + 间距），页面只写容器名。
 - 变体：`btn-primary` / `btn-accent` / `btn-secondary` / `btn-outline` / `btn-ghost` / `btn-danger` / `btn-outline-danger` / `btn-tinted`（主色浅底）/ `btn-tinted-danger`（危险色浅底）——语义上要区分但不想实心时用它，别自己拼 `bg-primary-500/10 text-primary-400 border …`
 - 选中态：`.btn-outline.is-active`（紫底淡化 + 紫描边 + 紫字）。开关、分段控件、勾选行都用它切状态，
   **不要**再写 `cond ? 'bg-primary-500/10 …' : 'bg-elevated …'` 这种两套配色——配色一改就得全站找一遍
@@ -83,6 +95,10 @@ src/components/ui/     React 壳：PageShell PageHeader Button IconButton
 
 尺寸：`icon-btn-sm`=28px · `icon-btn`=32px · `icon-btn-lg`=40px。
 **图标按钮必须有 `aria-label`**（同时作为悬浮提示）。React 里用 `<IconButton label="…" icon={…} />`。
+
+**同行等高**：同一 flex 行里的控件必须落在同一档。用 `ui/Select`（32px）配搜索/更多这类图标按钮时，
+按钮**不要**写 `size="sm"`（28px）——差 4px 肉眼就能看出参差；默认档 `icon-btn` 才是 32px。
+（2026-11-22 修 /list 排序行时踩过：下拉 32、按钮 28，一眼不齐。）
 
 ### 表单控件
 
@@ -237,6 +253,7 @@ if (await confirmAsync({ title: '删除？', message: '不可恢复', danger: tr
 | 列表里的启停 | **开关**（`<Toggle size="sm">`），不要用会变字的文字链接：位置固定、状态靠形态表达 |
 | 列表里的详情 | **只读内容**用 `<ExpandPanel>` 就地展开（技能背包）；**带表单/凭据的配置**用右侧抽屉（`<Dialog layer="drawer" className="flex justify-end">` + `h-full w-full max-w-xl bg-surface border-l shadow-2xl overflow-y-auto`，见 `PluginDetailPanel`）——**先列表给状态与动作，详情按需展开** |
 | 为什么不用弹窗/悬窗放配置 | 悬窗（popover）鼠标一移开就没了，装不下表单；弹窗遮全屏，看不清"我在改列表里的哪一个"。抽屉两头都避开：列表留在原地当上下文 |
+| 设置卡的保存按钮 | **操作区统一在卡片右下角**（`flex justify-end mt-3`），按钮统一 `size="sm"`（32px）主色；不要跟输入框挤在同一行、不要用 md/40px。理由：一行里的输入框已经是 32px，旁边立一颗 40px 的按钮会把整行撑高、也让人分不清"保存的是这一格还是整张卡" |
 | 确认框 | `confirmAsync()`，不要用 `window.confirm` |
 | 危险色 | `rose`；成功/在线 `mint`；强调/通知 `accent`；品牌主色 `primary`（紫） |
 | 主题色 | 一律走 `rgb(var(--tw-*))` 对应的 Tailwind 名（`bg-surface` / `text-textSecondary`…），
