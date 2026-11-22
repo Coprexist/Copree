@@ -209,6 +209,35 @@ async def _open_agent_dm(db: AsyncSession, owner_id: int, agent_user_id: int) ->
         logger.warning(f"为新 AI 建私聊失败（agent_user_id={agent_user_id}）: {e}")
 
 
+async def _persist_knowledge_docs(db, agent_id: int, docs) -> int:
+    """建号时随表单交上来的知识库文档 → 真正的文件 + 索引行。
+
+    创建表单里的知识库是**虚拟的**（AI 还没有文件空间），落地只发生在这一刻：
+    之后它就与用户在 AI 详情页里手动加的资料完全同构，没有第二种来源。
+    失败不拖垮建号——AI 已经建出来了，资料可以再传；返回值是真正写进去的份数。
+    """
+    if not docs:
+        return 0
+    from app.services.agent import knowledge_service as kb
+
+    written = 0
+    for doc in docs:
+        content = (doc.content or "").strip()
+        if not content:
+            continue
+        try:
+            await kb.add_entry(
+                db, agent_id,
+                title=(doc.title or "").strip() or "资料",
+                summary=(doc.summary or "").strip(),
+                content=content,
+            )
+            written += 1
+        except Exception as e:  # noqa: BLE001 —— 一份资料写不进去不该让建号失败
+            logger.warning("建号时写入知识库失败（%s）: %s", doc.title, e)
+    return written
+
+
 @router.post("", response_model=AgentResponse, status_code=status.HTTP_201_CREATED)
 async def create_new_agent(
     req: AgentCreateRequest,
@@ -276,6 +305,8 @@ async def create_new_agent(
         if draft is not None:
             draft.agent_id = agent.id
             draft.status = "created"
+        # 建号这一刻它才有文件空间：表单上的虚拟知识库到这里才落地
+        await _persist_knowledge_docs(db, agent.id, req.knowledge)
         # 让新 AI 出现在聊天列表里：与它的私聊先建好、落一条开场
         if agent.user_id:
             await _open_agent_dm(db, current_user["user_id"], agent.user_id)

@@ -33,3 +33,12 @@ AI 已经有 `file_write` / `file_edit` / `file_delete`，它们本来就伸得�
 ## 6. 索引注入有上限
 
 `knowledge_index_text()` 最多列 `INDEX_MAX_ENTRIES` 条（按创建时间），多的只报「还有 N 份，用 `file_list knowledge/` 看」——109 份文档全量铺进系统提示，每轮都要为它付 token。
+## 7. 创建阶段：表单上的虚拟知识库
+
+AI 还没建号时没有文件空间，所以「知识库」在创建表单里是**虚拟的**——它就是 `form.knowledge` 里的一串 `{title, summary, content}`，跟着草稿快照（`agent_creation_drafts.form`）走。
+
+- 前端：`KnowledgeDocsSection`（创建页系统提示词下方），只做增删改，不碰文件。
+- 创建助手：多了 `set_knowledge_docs` 工具，写的就是这份表单清单（事件复用 `form`，前端零改动）。
+  人设里只留「每次说话都要用到」的部分，世界观/私史/成批示例对话放知识库。
+- 落地只在建号那一刻：`POST /agents` 的 `knowledge` 字段由 `_persist_knowledge_docs()` 逐条 `add_entry`，之后与用户在详情页手动加的资料完全同构。
+- 空正文的篇目直接跳过；一份写失败不拖垮建号（AI 已经建出来了）。

@@ -132,6 +132,8 @@ def build_system_prompt(form: dict, preset: str | None = None, sub: str | None =
         "配 2-3 组示例对话和几条错例；不写动作描写，不写「要有温度」「保持人设不崩」这类空话。"
         "要查细节就用 read_manual(doc='ai-guide', keyword=...)，别自己发明写法。\n"
         "4. 拿定主意后用 set_agent_form 写表单。可以先给 preset（档位）和 sub（子档）定基调，再用 fields 微调。\n"
+        "   人设里只留「每次说话都要用到」的部分；世界观、详细私史、成批示例对话、参考资料用 "
+        "set_knowledge_docs 放进知识库，建号后它自己按需读，不占系统提示词。\n"
         "   采样参数（temperature / topP / presencePenalty / frequencyPenalty）**别拉满**："
         "在档位默认值附近微调即可，字段说明里写了安全区间和拉到上限的后果——拉满会让它说胡话。\n"
         "5. 每写一批就回一句人话说明填了什么、为什么这么填；不要把 JSON 或字段名堆给用户。\n"
@@ -172,6 +174,67 @@ def fill_tool() -> dict:
     }
 
 
+MAX_KNOWLEDGE_DOCS = 20
+KNOWLEDGE_DOC_MAX_CHARS = 200_000
+
+
+def knowledge_tool() -> dict:
+    """把人物资料写进表单的「知识库」（草稿里是虚拟的，建号时才落成文件）。
+
+    为什么值得单独一个工具：人设里只该留「每次说话都要用到」的那部分，
+    世界观、私史、成批的示例对话放这里，建号后由它自己 file_read 按需取——
+    这不会和主 AI 的 file_* 抢语义：那个是建号后的文件空间，这里是创建表单。
+    """
+    return {
+        "type": "function",
+        "function": {
+            "name": "set_knowledge_docs",
+            "description": (
+                "把人物资料写进创建表单的「知识库」（立即生效，用户看得见）。"
+                "人设里放不下的东西——世界观、详细私史、成批的示例对话、参考资料——放这里，"
+                "建号后会写进它的知识库，它需要时自己 file_read，不占系统提示词。"
+                "docs 是**完整清单**：要保留的先原样抄回来，只传新加的那几篇会把旧的删掉。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "docs": {
+                        "type": "array",
+                        "description": f"完整文档清单（最多 {MAX_KNOWLEDGE_DOCS} 篇，整体替换）",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title": {"type": "string", "description": "标题（进知识库索引）"},
+                                "summary": {"type": "string", "description": "一句话摘要（进索引，别写正文）"},
+                                "content": {"type": "string", "description": "正文（Markdown）"},
+                            },
+                            "required": ["title", "content"],
+                        },
+                    },
+                },
+                "required": ["docs"],
+            },
+        },
+    }
+
+
+def clean_knowledge_docs(docs) -> list[dict]:
+    """收敛模型给的知识库清单：整份替换语义，空正文的篇目直接丢"""
+    out: list[dict] = []
+    for doc in (docs if isinstance(docs, list) else [])[:MAX_KNOWLEDGE_DOCS]:
+        if not isinstance(doc, dict):
+            continue
+        content = str(doc.get("content") or "").strip()[:KNOWLEDGE_DOC_MAX_CHARS]
+        if not content:
+            continue
+        out.append({
+            "title": str(doc.get("title") or "").strip()[:120] or "资料",
+            "summary": str(doc.get("summary") or "").strip()[:1000],
+            "content": content,
+        })
+    return out
+
+
 def creator_tools() -> list[dict]:
     """助手可用的工具：主站 web_search（唯一来源）+ 填表。
 
@@ -186,7 +249,7 @@ def creator_tools() -> list[dict]:
     search.pop("segment", None)
     manual = ReadManual.to_definition()
     manual.pop("segment", None)
-    return [search, manual, fill_tool()]
+    return [search, manual, fill_tool(), knowledge_tool()]
 
 
 # ── 表单一侧 ──
@@ -524,6 +587,16 @@ async def _run_tool(db: AsyncSession, draft: AgentCreationDraft, name: str, args
         applied = sorted(set(fields) | ({k for k in ("preset", "sub") if (preset or sub)}))
         event = {"type": "form", "patch": fields, "form": form, "preset": preset, "sub": sub}
         return ("已写入：" + ("、".join(applied) if applied else "无有效字段")), event
+
+    if name == "set_knowledge_docs":
+        docs = clean_knowledge_docs(args.get("docs"))
+        form = {**(draft.form or {}), "knowledge": docs}
+        await update_draft(db, draft, form=form)
+        # 复用 form 事件：前端只认「patch 里的字段」，knowledge 本来就是表单字段之一
+        return (
+            f"知识库已更新：{len(docs)} 篇（用户看得见，建号时写入）",
+            {"type": "form", "patch": {"knowledge": docs}, "form": form, "preset": None, "sub": None},
+        )
 
     if name == "web_search":
         from app.tools.file_operations.web_search import WebSearch

@@ -7,6 +7,7 @@ import { Button, confirmAsync, UnderlineTabs } from './ui'
 import { CARD_ICONS, PRESETS, SUB_OPTIONS } from './agent-create/presets'
 import SubOptionModal from './agent-create/SubOptionModal'
 import DetailSettingsModal from './agent-create/DetailSettingsModal'
+import KnowledgeDocsSection from './KnowledgeDocsSection'
 import CreationAssistantPanel from './agent-create/CreationAssistantPanel'
 import { createDraft, patchDraft, type CreationDraft } from './agent-create/creationApi'
 import type { AgentForm, AgentFormApi, ModelOption, ProviderInfo } from './agent-create/types'
@@ -57,6 +58,7 @@ const INITIAL_FORM: AgentForm = {
   groupOwnerPays: true,
   conversationLogsLimit: null,
   userCanViewLogs: null,
+  knowledge: [],
 }
 
 /**
@@ -441,6 +443,9 @@ export default function CreateAgentPanel({
             placeholder={t('modal:createAgentSystemPromptPlaceholder')}
           />
         </div>
+
+        {/* ── 知识库（虚拟：只是表单内容，建号时才落地） ── */}
+        <KnowledgeDocsSection docs={form.knowledge} onChange={(docs) => patch({ knowledge: docs })} />
 
         {/* ── 三档卡片（横排，放大） ── */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4 mb-5">

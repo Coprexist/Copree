@@ -48,6 +48,13 @@ export interface SubOption {
   ai_type?: AiTypeValue
 }
 
+/** 表单里的一篇知识库文档（虚拟）：建号前只是内容，建号时才由后端落成文件 + 索引行 */
+export interface KnowledgeDoc {
+  title: string
+  summary: string
+  content: string
+}
+
 /** 创建表单的全部字段。新增字段只改这里和 INITIAL_FORM，不必再逐层传参 */
 export interface AgentForm {
   name: string
@@ -92,6 +99,8 @@ export interface AgentForm {
   groupOwnerPays: boolean
   conversationLogsLimit: number | null
   userCanViewLogs: boolean | null
+  /** 建号后写进它知识库的文档（表单上是虚拟的，见 KnowledgeDocsSection） */
+  knowledge: KnowledgeDoc[]
 }
 
 /** 值 + setter 一体的表单 API：setter 名从字段名推导，子组件只收这一个对象 */

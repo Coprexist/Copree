@@ -5,6 +5,17 @@ from pydantic import BaseModel, Field, field_validator
 from app.utils.text import validate_status_text
 
 
+class KnowledgeDocIn(BaseModel):
+    """创建表单里的一篇知识库文档（虚拟：建号前只存在于表单快照里）
+
+    AI 还没有文件空间，所以这时它不能是「knowledge/xxx.md」；它只是表单上的一段内容，
+    建号成功那一刻才由 knowledge_service.add_entry 落成文件 + 索引行。
+    """
+    title: str = Field(default="", max_length=120)
+    summary: str = Field(default="", max_length=1000)
+    content: str = Field(default="", max_length=200_000)
+
+
 class AgentCreateRequest(BaseModel):
     """创建 AI 请求"""
     name: str = Field(..., min_length=1, max_length=50)
@@ -53,6 +64,10 @@ class AgentCreateRequest(BaseModel):
     draft_id: int | None = Field(
         default=None,
         description="创建助手草稿 id：同一个草稿只落一个 AI，重提返回已建成的那条（幂等键）",
+    )
+    knowledge: list[KnowledgeDocIn] | None = Field(
+        default=None,
+        description="创建时随表单交上来的知识库文档：建号后逐条落进它的知识库（空正文跳过）",
     )
 
     @field_validator("status_text")
