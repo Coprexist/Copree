@@ -136,6 +136,7 @@
 | [LLM 端点入口](./dev/llm_endpoint.md) | 开发者 | base_url 版本段拼接规则、供应商连接探针、内网地址策略 |
 | [按模板适配消息结构](./dev/chat_template_compat.md) | 开发者 | system 消息怎么摆（anywhere / leading / none）：探测对端 chat 模板、预设与手选、payload 一处归一化 |
 | [API 配置：厂商与配置档](./dev/api_profiles.md) | 开发者 | 两层模型（厂商 / 配置档）、解析回退链与「Key 不跨厂商」、绑定校验、前端组件分工、三条迁移与可重放 |
+| [AI 知识库：文件是真源](./dev/agent_knowledge.md) | 开发者 | 一份文档 = 一行索引 + `knowledge/` 正文；写文件即同步索引、创建者手改的标题不被覆盖、创建阶段的知识库是虚拟表单、索引注入上限 |
 | [进入平台的过场](./dev/enter_transition.md) | 开发者 | **单一来源**：时序、一点透视的几何（灭点 / 左右六块 / 底部三块）、生长方式与被否掉的两版、主题配色、事件与状态机、性能取舍 |
 | [能力懒加载](./dev/capability_lazy_loading.md) | 开发者 | skills/tools 版本化与增量变更注入（锁定/解锁 + 前缀缓存不变式） |
 | [帧、锁与重建点](./dev/frame_lifecycle.md) | 开发者 | **单一来源**：compact/clear 动什么、帧的状态机、容量闸与同会话归并 |

@@ -552,6 +552,8 @@
 
 - LLM 与语音的「把 AI 绑到一条配置档」合并成 `agent_service._bind_profile(kind=...)`：存在性、厂商种类匹配、归属三件事只判一次；语音换档顺带作废旧的检测结论（`_invalidate_voice_probe`）。
 
+- `file_service` 里知识库索引进出的三个 try/except 收敛成唯一入口 `_kb_sync(db, agent_id, action, stored, …)`：写/移/删三条路径都只调它一次，动作名对应 `knowledge_service.sync_on_write/move/delete`，失败只警告（正文已经写成功了，索引没跟上不该让文件操作失败）。
+
 ### 🗑 移除
 
 - **协议端控制台不再由平台代管**：撤掉整条控制台反代链路（`/channels/<plugin>/panel/<instance>/…`）
@@ -709,6 +711,8 @@
 - 新增 `docs/dev/api_profiles.md`（两层模型、解析回退链、接口、前端结构、迁移与约束）；用户手册 §1.3 按新结构重写，排障章节里过时的「测试连接」指引同步更新。
 
 - API 配置两处文档补齐与代码之间的落差：`docs/dev/api_profiles.md` 补「已绑的配置档再点一次即取消（PUT null，不删档）」、0125 可重复执行与迁移指纹改内容哈希、两张表 Key 列名不同（`default_api_key_encrypted` / `api_key_encrypted`）、ORM 漏 `Column()` 会让 `options` 未映射导致 AI 全线不回，并新增 §7「本地推理服务」——选了配置档时空 Key 照常请求、本地超时单独放宽、无原生工具调用走文本协议、模型以配置档为准；`docs/guides/用户手册.md` §1.3 同步这两条用户可见行为。
+
+- 知识库这套改动的文档补齐：新增 `docs/dev/agent_knowledge.md`（文件是真源 / 同步规则 / 前端以磁盘 stat 为准 / 权限走 `is_ai_editable` / 索引上限 / 创建阶段是虚拟表单 / 摘要派生规则），`docs/SUMMARY.md` 开发参考加一行索引，`docs/guides/用户手册.md` §1.4 补「知识库（可选）」——含「不看着它就没法开口的写进性格描述，想起来再去翻的放知识库」这条判据，并说明创建阶段只是表单内容、建号后才落地。
 
 ## [v0.4.16] - 2026-10-30
 
