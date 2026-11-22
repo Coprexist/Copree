@@ -10,7 +10,7 @@
  *   什么都没有       → 空白表单（自建厂商）
  */
 import { memo, useCallback, useEffect, useState } from 'react'
-import { Plus, Trash2 } from 'lucide-react'
+import { Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { api, errorText } from '../../api/client'
 import { useT } from '../../i18n/I18nContext'
 import { Button, IconButton, Input, Modal, SecretInput, Select } from '../ui'
@@ -81,11 +81,14 @@ export default function ProviderEditor({
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [refreshing, setRefreshing] = useState(false)
+  const [refreshNote, setRefreshNote] = useState<{ ok: boolean; text: string } | null>(null)
 
   useEffect(() => {
     if (!open) return
     let alive = true
     setError('')
+    setRefreshNote(null)
     setLoading(true)
     const load = async () => {
       let row: ApiProvider | undefined
@@ -137,6 +140,54 @@ export default function ProviderEditor({
   const removeOption = useCallback((index: number) => {
     setOptions((prev) => prev.filter((_, j) => j !== index))
   }, [])
+
+  /**
+   * 从端点拉一次真实模型清单。
+   *
+   * 不是自动的：模型是用户自己机器的状态，什么时候变了只有他知道（`ollama pull` 之后
+   * 点一下即可）。也不覆盖已有的行——手动改过的显示名、手动删掉的条目都留着，
+   * 因为这个清单正在支撑已经在跑的 AI，一次刷新不该把它们弄断。
+   */
+  const refreshModels = async () => {
+    if (!baseUrl.trim()) {
+      setRefreshNote({ ok: false, text: t('apiConfig:refreshNoBaseUrl') })
+      return
+    }
+    setRefreshing(true)
+    setRefreshNote(null)
+    try {
+      const data = await api.post<{ ok: boolean; message: string; kind?: string; models?: string[] }>(
+        '/user/test-api-connection',
+        { api_base_url: baseUrl.trim(), api_key: apiKey || null },
+      )
+      if (!data.ok) {
+        // 内网地址要先"登记"（保存过才允许探）——这是探针的安全策略，不是配置写错了，
+        // 所以给一句能照着做的，而不是把后端的拒绝原文摊给用户
+        const text = data.kind === 'blocked_private'
+          ? t('apiConfig:refreshNeedSaveFirst')
+          : (data.message || t('apiConfig:refreshFailed'))
+        setRefreshNote({ ok: false, text })
+        return
+      }
+      const found = data.models || []
+      if (found.length === 0) {
+        setRefreshNote({ ok: false, text: t('apiConfig:refreshEmpty') })
+        return
+      }
+      const known = new Set(options.map((o) => o.value))
+      const added = found.filter((id) => !known.has(id)).map((id) => ({ value: id, label: id }))
+      if (added.length === 0) {
+        setRefreshNote({ ok: true, text: t('apiConfig:refreshUpToDate', { count: found.length }) })
+        return
+      }
+      setOptions((prev) => [...prev, ...added])
+      setRefreshNote({ ok: true, text: t('apiConfig:refreshAdded', { count: added.length }) })
+    } catch (e) {
+      setRefreshNote({ ok: false, text: errorText(e, t('apiConfig:refreshFailed')) })
+    } finally {
+      setRefreshing(false)
+    }
+  }
 
   const save = async () => {
     if (!name.trim()) {
@@ -206,6 +257,23 @@ export default function ProviderEditor({
             hint={provider?.has_key ? t('apiConfig:keyEndsWith', { last4: provider.key_last4 }) : t('apiConfig:providerKeyHint')}
             autoFocus={!!autoFocusKey}
             value={apiKey} onChange={(e) => setApiKey(e.target.value)} />
+
+          {!isVoice && (
+            <div className="space-y-1.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button variant="secondary" size="sm" loading={refreshing} icon={<RefreshCw size={14} />}
+                  onClick={refreshModels}>
+                  {t('apiConfig:refreshModels')}
+                </Button>
+                <span className="text-3xs text-textMuted">{t('apiConfig:refreshHint')}</span>
+              </div>
+              {refreshNote && (
+                <p className={'text-3xs ' + (refreshNote.ok ? 'text-emerald-400' : 'text-rose-400')}>
+                  {refreshNote.text}
+                </p>
+              )}
+            </div>
+          )}
 
           <div className="grid gap-3 sm:grid-cols-2">
             <Select

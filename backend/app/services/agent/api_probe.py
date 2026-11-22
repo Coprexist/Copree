@@ -6,10 +6,13 @@
 - 各家 base_url 的版本段写法又不统一（/v1、/v4、兼容模式自带 /v1），
   光看状态码分不清“路径不对”还是“key 不对”。
 
-所以走两段（业界 one-api / new-api 的做法是直接真发一次 chat）：
+所以走三段（业界 one-api / new-api 的做法是直接真发一次 chat）：
 
 1. 先 GET {root}/models —— 免费、不需要模型名，多数供应商这条就够；
-2. 只有该端点**不存在**（404/405）时，才退化成一次 max_tokens=1 的极小 chat 请求。
+2. 该端点**不存在**（404/405）时，试一次 Ollama 原生 GET {裸根}/api/tags ——
+   本地跑 ollama 的人多半填的是裸根（或带了 /v1），各家 /models 的可用性参差，
+   而 /api/tags 是 ollama 一定有、且能直接给出模型 id 的接口（本地引擎的第一顺位）；
+3. 还是不行，才退化成一次 max_tokens=1 的极小 chat 请求。
 
 认证类错误（401/403）**不退化** —— 路径是通的，退化只会掩盖真正的原因。
 
@@ -31,7 +34,7 @@ from app.utils.outbound_http import (
     BlockedFetch,
     request_pinned,
 )
-from app.utils.pure.llm_endpoint import chat_completions_url, models_url
+from app.utils.pure.llm_endpoint import api_root, chat_completions_url, models_url, server_root
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +166,41 @@ async def _probe_by_chat(
     return _failure(resp, api_key)
 
 
+async def _probe_native_tags(
+    client: httpx.AsyncClient, base_url: str, api_key: str | None, allow_internal=None,
+) -> ProbeResult | None:
+    """第二级：Ollama 原生 `GET {裸根}/api/tags`。
+
+    只在 `/models` 明确不存在（404/405）后调用，返回 None 表示"这家不是 ollama"，
+    让调用方继续往下退化。为什么不先问它：云端厂商的裸根常常挂着网页，
+    /api/tags 只会回首页 HTML，浪费一次超时；本地引擎反过来，/v1/models 未必有。
+    """
+    root = server_root(base_url)
+    if root == api_root(base_url):
+        # 地址本来就在裸根（没有 /vN 可剥），再拼一次只会重复
+        return None
+    try:
+        resp = await request_pinned(
+            client, "GET", f"{root}/api/tags", headers=_headers(api_key), allow_internal=allow_internal,
+        )
+    except BlockedFetch as e:
+        return await _blocked_result(e, base_url, api_key)
+    if resp.status_code != 200:
+        return None
+    try:
+        payload = resp.json()
+    except ValueError:
+        return None
+    # 只认 ollama 的原生形状 {"models": [...]}：200 但没这个键的（SPA 首页、网关兜底页、
+    # 别家的 chat 响应）都说明"这不是 ollama"，交给下一级，别把它们判成"连上了但没有模型"
+    if not isinstance(payload, dict) or not isinstance(payload.get("models"), list):
+        return None
+    models = extract_model_ids(payload)
+    if not models:
+        return ProbeResult(True, "ok", "连接成功，但这台上还没有模型（先在 ollama 里 pull 一个）")
+    return ProbeResult(True, "ok", f"连接成功，{len(models)} 个模型可用", models=models)
+
+
 async def _private_hint(base_url: str) -> str:
     """连不上又恰好是本机/内网地址时，把「为什么」直接说出来。
 
@@ -246,7 +284,10 @@ async def probe_provider(
                 models = ()
             return ProbeResult(True, "ok", f"连接成功，{len(models)} 个模型可用", models=models)
         if resp.status_code in (404, 405):
-            # 这家没实现 /models（MiMo 就是），退化成真发一次
+            # 这家没实现 /models（MiMo 就是）——先问一次 Ollama 原生接口，再退化成真发一次
+            native = await _probe_native_tags(client, base_url, api_key, allow_internal)
+            if native is not None:
+                return native
             try:
                 return await _probe_by_chat(client, base_url, api_key, model, allow_internal)
             except BlockedFetch as e:

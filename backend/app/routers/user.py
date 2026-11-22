@@ -175,7 +175,13 @@ async def test_api_connection(
         base_url, key,
         allow_private_hosts=await saved_private_hosts(db, current_user["user_id"]),
     )
-    return {"ok": probe.ok, "message": probe.message, "kind": probe.kind}
+    return {
+        "ok": probe.ok,
+        "message": probe.message,
+        "kind": probe.kind,
+        # 模型清单：前端「刷新模型」拿它填下拉。拿不到就是空列表，不影响"通没通"的判断
+        "models": list(probe.models),
+    }
 
 
 @router.post("/avatar")

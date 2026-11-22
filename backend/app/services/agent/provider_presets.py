@@ -90,25 +90,20 @@ PRESETS: dict[str, ProviderPreset] = {
     },
 
     # ── Ollama 本地 ──
+    # 模型清单**不写死**：本机装了什么只有端点自己知道，写死几个名字既漏也不准，
+    # 还诱导用户手打一个不存在的 id。这里只给"连哪、怎么连"，清单由编辑器里的
+    # 「刷新模型」现取（POST /user/test-api-connection → /v1/models，退 /api/tags）。
     "ollama": {
         "key": "ollama",
         "label": "Ollama（本地）",
         "base_url": "http://localhost:11434",
         "api_key_url": "",
-        "chat_model": "qwen3",
-        "work_model": "qwen3:14b",
         "embedding_model": "nomic-embed-text",
         "thinking_supported": False,
         # ollama 的 Go 模板只有开头一个 .System；多条 system 会被它合并到开头，
         # 每轮变的内容跑到最前面 → 前缀每轮失效（本地实测 0.21s vs 39.45s）
         "system_layout": "leading",
-        "models": [
-            {"value": "qwen3", "label": "Qwen3"},
-            {"value": "qwen3:14b", "label": "Qwen3 14B"},
-            {"value": "llama4", "label": "Llama 4"},
-            {"value": "mistral", "label": "Mistral"},
-            {"value": "deepseek-r1:8b", "label": "DeepSeek R1 8B"},
-        ],
+        "models": [],
     },
 
     # ── llama.cpp（llama-server --jinja）──

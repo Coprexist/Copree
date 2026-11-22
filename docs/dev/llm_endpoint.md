@@ -60,12 +60,17 @@ docker exec ai_group_backend curl -s -o /dev/null -w '%{http_code}\n' \
 判定逻辑全在 `app/services/agent/api_probe.py` 的 `probe_provider()`——
 "这个 key + base_url 到底能不能用"的**唯一入口**。
 
-**两段式**：
+**三段式**：
 
 | 步骤 | 请求 | 说明 |
 |---|---|---|
 | 1 | `GET {root}/models` | 免费、不需要模型名，多数供应商这条就够 |
-| 2 | 仅当第 1 步返回 404/405 | `POST {root}/chat/completions`，`max_tokens=1` 的极小请求（业界 one-api / new-api 就是这么测渠道的）|
+| 2 | 仅当第 1 步返回 404/405 | `GET {裸根}/api/tags`（`server_root()` 剥掉版本段再拼）——只认 `{"models":[...]}` 形状，直接给模型 id |
+| 3 | 仅当前两步都没拿到 | `POST {root}/chat/completions`，`max_tokens=1` 的极小请求（业界 one-api / new-api 就是这么测渠道的）|
+
+第 2 步放在中间的原因：本地引擎（ollama）反过来——`/v1/models` 未必有，`/api/tags` 一定有。
+但云端厂商的裸根常挂着网页，先问它只会白等一次超时，所以**只在 404/405 之后**才试。
+200 但不是 ollama 形状（SPA 首页、网关兜底页）不算命中，继续走第 3 步。
 
 **401/403 不退化**：路径是通的，退化只会掩盖真因（把"key 不对"伪装成别的问题）。
 
@@ -85,6 +90,10 @@ docker exec ai_group_backend curl -s -o /dev/null -w '%{http_code}\n' \
 **谁在用**：`POST /user/test-api-connection`（用户绑定 key 时测）与
 `POST /admin/provider-presets/fetch-models`（管理页「获取模型」按钮）。
 后者靠 `ProbeResult.models` 把模型 id 带回前端填列表——两个入口共用同一套探测与文案，别再写第二份。
+
+用户侧的「刷新模型」按钮（`ProviderEditor`）也走 `/user/test-api-connection`：它把回来的
+`models` **只追加**进厂商的模型清单，不覆盖已有行（手动改过的显示名、手动删掉的条目都留着），
+因为这份清单正在支撑已经在跑的 AI。刷新是手动的——模型是本机状态，`ollama pull` 之后用户自己点。
 
 ## 内网地址策略：私网目标必须"已登记"（2026-09-13）
 
