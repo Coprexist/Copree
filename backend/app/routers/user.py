@@ -58,7 +58,7 @@ async def list_provider_presets(
     不含任何密钥：provider 配置本身不存 key（池 Key 在 api_key_pool，
     本人的 key 由用户自己填）。
     """
-    from app.services.agent.provider_presets import get_all_presets
+    from app.utils.pure.provider_presets import get_all_presets
     from app.services.infrastructure.system_settings_service import get_providers
 
     return {

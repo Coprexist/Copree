@@ -165,6 +165,23 @@ async def _load_profile(db, profile_id: int | None, kind: str):
     return profile, provider
 
 
+def provider_system_layout(provider, base_url: str | None) -> str:
+    """这条厂商这一轮该用哪一档 system 摆放（anywhere | leading | none）。
+
+    有判定来源（user / detected / preset / host）就信存下来的结论；来源为空表示
+    「从未判定」（历史行、或刚加列时还没回填），此时按地址保守猜：字面私网给 leading。
+
+    以前这里只有 `provider.system_layout or "anywhere"`——而历史行里存着的正是默认的
+    anywhere，于是自建的本机 llama-server 每轮都把 system 塞进对话中段，Qwen 的 Jinja
+    直接 500（System message must be at the beginning）。
+    """
+    from app.utils.pure.chat_template import guess_layout_from_host, normalize_layout
+
+    if getattr(provider, "system_layout_source", None):
+        return normalize_layout(provider.system_layout)
+    return guess_layout_from_host(base_url or getattr(provider, "base_url", None))
+
+
 def provider_info_of(provider, resolved: ResolvedLlm) -> dict:
     """把「用户的厂商行」转成与 channel_provider_info 同形的通道信息。
 
@@ -176,7 +193,7 @@ def provider_info_of(provider, resolved: ResolvedLlm) -> dict:
         "base_url": resolved.base_url,
         "provider_name": provider.name,
         "thinking_supported": bool(provider.thinking_supported),
-        "system_layout": provider.system_layout or "anywhere",
+        "system_layout": provider_system_layout(provider, resolved.base_url),
         "models": [o["value"] for o in (provider.options or []) if o.get("value")],
         "default_model": resolved.chat_model,
         "work_model": resolved.work_model,

@@ -10,15 +10,12 @@
  *   什么都没有       → 空白表单（自建厂商）
  */
 import { memo, useCallback, useEffect, useState } from 'react'
-import { Plus, RefreshCw, Trash2 } from 'lucide-react'
+import { Loader2, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { api, errorText } from '../../api/client'
 import { useT } from '../../i18n/I18nContext'
 import { Button, IconButton, Input, Modal, SecretInput, Select } from '../ui'
 import type { ApiKind, ApiProvider, BuiltinPreset, ModelOption } from './types'
 
-const LAYOUTS = ['anywhere', 'leading', 'none']
-
-const ROW_VALUE_PLACEHOLDER = 'model-id'
 const ROW_LABEL_PLACEHOLDER = 'display name'
 
 /**
@@ -77,12 +74,15 @@ export default function ProviderEditor({
   const [secondary, setSecondary] = useState('')
   const [options, setOptions] = useState<ModelOption[]>([])
   const [thinking, setThinking] = useState(false)
-  const [layout, setLayout] = useState('anywhere')
+  // 空串 = 「自动识别」：交给后端按 手选 > 探测 > 预设 > 地址 判一次
+  const [layout, setLayout] = useState('')
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [refreshing, setRefreshing] = useState(false)
   const [refreshNote, setRefreshNote] = useState<{ ok: boolean; text: string } | null>(null)
+  const [reprobing, setReprobing] = useState(false)
+  const [layoutNote, setLayoutNote] = useState('')
 
   useEffect(() => {
     if (!open) return
@@ -106,7 +106,9 @@ export default function ProviderEditor({
         setSecondary(row.default_secondary || '')
         setOptions(row.options || [])
         setThinking(!!row.thinking_supported)
-        setLayout(row.system_layout || 'anywhere')
+        // 只有用户自己选过的才回填；探测/预设/猜出来的都显示「自动识别」——
+        // 否则一保存就把自动结论固化成手选，之后再也不会重新判定
+        setLayout(row.system_layout_source === 'user' ? row.system_layout : '')
         return
       }
       if (presetKey) {
@@ -124,7 +126,7 @@ export default function ProviderEditor({
         setSecondary(preset.work_model || '')
         setOptions((preset.models || preset.voices || []) as ModelOption[])
         setThinking(!!preset.thinking_supported)
-        setLayout(preset.system_layout || 'anywhere')
+        setLayout('')   // 从清单点进来：布局交给判定，预设本身就是它的依据之一
       }
     }
     load()
@@ -189,6 +191,29 @@ export default function ProviderEditor({
     }
   }
 
+  /**
+   * 「重新识别」：让后端读一次对端 chat 模板，并把结论存下来。
+   *
+   * 只在已保存的厂商上可用——地址没进库时后端不允许探私网（防扫描），所以新建的那一刻
+   * 只能靠「按地址猜」；保存之后点这里才是精确结论。改了地址要先保存，按钮会跟着变灰。
+   */
+  const reprobeLayout = async () => {
+    if (!provider?.id || !baseUrl.trim()) return
+    setReprobing(true)
+    setLayoutNote('')
+    try {
+      const r = await api.post<{ layout: string; source: string; message: string }>(
+        `/user/api-config/providers/${provider.id}/probe-layout`,
+      )
+      setLayout(r.layout)
+      setLayoutNote(r.message || t('apiConfig:reprobeLayout'))
+    } catch (e) {
+      setLayoutNote(errorText(e, t('apiConfig:reprobeLayout')))
+    } finally {
+      setReprobing(false)
+    }
+  }
+
   const save = async () => {
     if (!name.trim()) {
       setError(t('apiConfig:nameRequired'))
@@ -203,7 +228,7 @@ export default function ProviderEditor({
       default_secondary: secondary.trim() || null,
       options: options.filter((o) => o.value.trim()),
       thinking_supported: thinking,
-      system_layout: layout,
+      system_layout: layout || null,
     }
     if (apiKey !== '') body.api_key = apiKey
     try {
@@ -338,16 +363,27 @@ export default function ProviderEditor({
                 </Button>
               </div>
               <div>
-                <span className="block text-xs font-medium text-textSecondary">
-                  {t('apiConfig:providerSystemLayout')}
-                </span>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="block text-xs font-medium text-textSecondary">
+                    {t('apiConfig:providerSystemLayout')}
+                  </span>
+                  <Button variant="ghost" size="sm"
+                    icon={reprobing ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                    disabled={reprobing || !provider?.id || !baseUrl.trim()
+                      || baseUrl.trim() !== provider.base_url}
+                    onClick={reprobeLayout}>
+                    {t('apiConfig:reprobeLayout')}
+                  </Button>
+                </div>
                 <Select fieldSize="sm" className="mt-1.5"
                   options={[
+                    { value: '', label: t('apiConfig:layoutAuto') },
                     { value: 'anywhere', label: t('apiConfig:layoutAnywhere') },
                     { value: 'leading', label: t('apiConfig:layoutLeading') },
                     { value: 'none', label: t('apiConfig:layoutNone') },
                   ]}
                   value={layout} onChange={(e) => setLayout(e.target.value)} />
+                {layoutNote && <p className="mt-1 text-3xs text-textMuted">{layoutNote}</p>}
               </div>
             </div>
           )}

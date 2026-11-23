@@ -141,3 +141,87 @@ async def test_provider_key_is_saved_and_cleared(migrated_db):
         # 空串 = 清空
         await update_provider(pid, ProviderIn(api_key=""), _me(), db)
         assert (await list_providers("llm", _me(), db))["providers"][0]["has_key"] is False
+
+
+async def test_preset_fields_are_filled_once_and_restorable(migrated_db):
+    """预设 → 厂商行的映射只有一处：接入时按预设填，改乱后"恢复默认"能回到预设值。
+
+    create / connect / restore 三个端点历史上有三份各写各的映射表：副模型、语音主模型、
+    系统消息布局都只在其中一份里出现过，漏掉的那份就悄悄少一个字段。现在共用
+    _preset_values，这里同时守"接入时填全"和"恢复时填回"。
+    """
+    from app.database import async_session
+    from app.routers.user_api_config import (
+        create_provider, list_providers, restore_provider, update_provider, ProviderIn,
+    )
+    from app.utils.pure.provider_presets import get_preset
+
+    preset = get_preset("deepseek")
+    async with async_session() as db:
+        await _seed(db)
+
+        # 接入：只给 key，其余字段从预设带出
+        created = await create_provider(
+            ProviderIn(kind="llm", preset_key="deepseek", api_key="sk-abc-9999"), _me(), db)
+        assert created["name"] == preset["label"], "没填名字就沿用厂商名"
+        assert created["base_url"] == preset["base_url"]
+        assert created["default_primary"] == preset["chat_model"]
+        assert created["default_secondary"] == preset["work_model"]
+        assert created["system_layout"] == preset["system_layout"]
+        assert created["thinking_supported"] is preset["thinking_supported"]
+        assert [o["value"] for o in created["options"]] == [m["value"] for m in preset["models"]]
+
+        # 用户改乱
+        pid = created["id"]
+        await update_provider(pid, ProviderIn(
+            name="我的 DeepSeek", base_url="http://192.168.1.9:8080",
+            default_primary="我自己填的", default_secondary="我自己填的副",
+            system_layout="tail", thinking_supported=False,
+        ), _me(), db)
+
+        # 恢复默认：内容回预设，Key 与名字是用户的东西，不动
+        restored = await restore_provider(pid, _me(), db)
+        assert restored["base_url"] == preset["base_url"]
+        assert restored["default_primary"] == preset["chat_model"]
+        assert restored["default_secondary"] == preset["work_model"]
+        assert restored["system_layout"] == preset["system_layout"]
+        assert restored["thinking_supported"] is preset["thinking_supported"]
+        assert restored["name"] == "我的 DeepSeek", "恢复默认不改厂商名"
+        assert restored["has_key"] is True, "恢复默认不动 Key"
+
+        # 本地 llama-server 的系统消息布局是 leading（它只认开头的 system）：
+        # 这条曾因为 provider_bootstrap 自己拼字段而丢掉，接入路径必须带出来。
+        local = await create_provider(ProviderIn(kind="llm", preset_key="llama.cpp"), _me(), db)
+        assert local["system_layout"] == "leading"
+        assert local["base_url"] == get_preset("llama.cpp")["base_url"]
+
+
+async def test_voice_preset_primary_is_its_default_voice(migrated_db):
+    """语音预设的主"模型"是默认音色：LLM 用 chat_model、语音用 voice_id，同一个位置"""
+    from app.database import async_session
+    from app.routers.user_api_config import connect_presets, list_providers, ConnectIn
+    from app.utils.pure.provider_presets import get_preset
+
+    preset = get_preset("breeze")
+    async with async_session() as db:
+        await _seed(db)
+        await connect_presets(ConnectIn(kind="voice", preset_keys=["breeze"]), _me(), db)
+        provider = (await list_providers("voice", _me(), db))["providers"][0]
+
+        assert provider["kind"] == "voice"
+        assert provider["default_primary"] == preset["voice_id"]
+        assert provider["default_secondary"] is None, "语音没有副模型"
+        assert [o["value"] for o in provider["options"]] == [v["value"] for v in preset["voices"]]
+
+
+async def test_connect_rejects_preset_of_another_kind(migrated_db):
+    """LLM 与语音不能互相接错：同一个 key 只能进自己那一类"""
+    from app.database import async_session
+    from app.routers.user_api_config import connect_presets, list_providers, ConnectIn
+
+    async with async_session() as db:
+        await _seed(db)
+        with pytest.raises(HTTPException) as err:
+            await connect_presets(ConnectIn(kind="llm", preset_keys=["breeze"]), _me(), db)
+        assert err.value.status_code == 404
+        assert (await list_providers("llm", _me(), db))["providers"] == []

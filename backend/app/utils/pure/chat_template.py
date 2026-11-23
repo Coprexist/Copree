@@ -80,6 +80,50 @@ def normalize_layout(value: object) -> str:
     return ANYWHERE
 
 
+# 跑在本机的推理服务几乎都落在这些地址上（llama.cpp / Ollama / vLLM / LM Studio）。
+# 只做字面判断：解析 DNS 或探端口都要 IO，而这个函数每轮对话都会调。
+#
+# host.docker.internal / gateway.docker.internal 是 Docker 固定提供的「本机」别名
+# （Copree 跑在容器里、模型跑在宿主上是最常见的自托管形态）。它们是字面量，不是
+# 任意内网主机名，所以不受下面那条「不认域名」的约定限制。
+_PRIVATE_LITERAL_RE = re.compile(
+    r"^(?:(?:localhost|0\.0\.0\.0"
+    r"|host\.docker\.internal"
+    r"|gateway\.docker\.internal)"
+    r"|127\.\d{1,3}\.\d{1,3}\.\d{1,3}"
+    r"|10\.\d{1,3}\.\d{1,3}\.\d{1,3}"
+    r"|192\.168\.\d{1,3}\.\d{1,3}"
+    r"|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}"
+    r"|\[?::1\]?)$",
+    re.IGNORECASE,
+)
+
+
+def guess_layout_from_host(base_url: str | None) -> str:
+    """**没有任何判定证据时**按地址保守猜一档（纯函数，零 IO）。
+
+    为什么需要它：用户配置档里的地址可能是自己填的（自建中转站、本机 llama-server），
+    那条路径不一定跑过探测。此时库里的 anywhere 只是一个默认值，不是结论——
+    照它拼出「中间 system」，llama.cpp 执行 Qwen 的 Jinja 就直接 500。
+
+    - 字面私网 / 本机 → leading：system 合并到开头、动态块就地降为 user。
+      三种本地服务的模板都接受这个形状，而「中间 system」它们未必容忍。
+    - 其它（公网大厂 API）→ anywhere：保持今天的逐字节布局，前缀缓存不受影响。
+
+    只认字面量，不解析域名：`http://gpu-box:8080` 这种内网主机名仍按公网处理，
+    交给保存时的探测去拿真结论（猜错一边的代价是缓存，不是 500）。
+    """
+    if not isinstance(base_url, str) or not base_url.strip():
+        return ANYWHERE
+    authority = base_url.split("://", 1)[-1].split("/", 1)[0]
+    # IPv6 的方括号里也有冒号：先整段取出 [::1]，再按冒号切端口
+    if authority.startswith("["):
+        host = authority.split("]", 1)[0] + "]"
+    else:
+        host = authority.split(":", 1)[0]
+    return LEADING if _PRIVATE_LITERAL_RE.match(host) else ANYWHERE
+
+
 def layout_from_template(template: str | None, dialect: str = JINJA) -> str:
     """从 chat 模板文本判定 system 该怎么摆。
 

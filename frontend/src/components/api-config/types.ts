@@ -31,6 +31,8 @@ export interface ApiProvider {
   default_secondary: string | null
   thinking_supported: boolean
   system_layout: string
+  /** 这一档是怎么来的：user|detected|preset|host；空 = 从未判定（界面显示「自动识别」） */
+  system_layout_source?: string
   profiles: ApiProfile[]
 }
 

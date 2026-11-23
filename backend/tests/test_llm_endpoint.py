@@ -8,7 +8,7 @@
 
 除固定该规则外，本文件遍历真实 PRESETS 校验全部预设：新增预设若写错 base_url，会立即失败。
 """
-from app.services.agent.provider_presets import PRESETS
+from app.utils.pure.provider_presets import PRESETS
 from app.utils.pure.llm_endpoint import (
     api_root,
     chat_completions_url,

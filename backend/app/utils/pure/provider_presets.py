@@ -39,6 +39,9 @@ class ProviderPreset(TypedDict):
     # 标了它的预设会在启动时直接变成一条"配置项"（见 services/agent/provider_bootstrap）：
     # 主流厂商升级后本该就位，不该等使用者一个个去点。管理员删过的配置项不会再补。
     auto_config: NotRequired[bool]
+    # 这个厂商自己的"默认聊天/工作模型"（与平台全局默认区分）：托管模型网关才会写。
+    global_default_chat_model: NotRequired[str | None]
+    global_default_work_model: NotRequired[str | None]
 
 
 PRESETS: dict[str, ProviderPreset] = {
@@ -549,44 +552,58 @@ PRESETS: dict[str, ProviderPreset] = {
 }
 
 
+def _normalized(p: ProviderPreset) -> ProviderPreset:
+    """预设 → 完整形状：缺的键一律补空。
+
+    **两个访问器必须共用这一份**，否则"拿到的预设能不能直索引"就取决于你调了哪个函数。
+    2026-11-23 插件商城保存 llama.cpp / lmstudio / vllm 预设必 500（KeyError: work_model）
+    就是这么来的：admin.py 走 get_preset 拿到原始 dict，而原始 dict 里本地预设只写了 chat_model。
+    归一化放在访问器这一层，"消费方直索引"才重新成为一条可以依赖的约定。
+    """
+    return {
+        "key": p["key"],
+        "label": p["label"],
+        "base_url": p["base_url"],
+        "api_key_url": p.get("api_key_url", ""),
+        "kind": p.get("kind") or "llm",
+        "chat_model": p.get("chat_model", ""),
+        "work_model": p.get("work_model", ""),
+        "embedding_model": p.get("embedding_model", ""),
+        "thinking_supported": bool(p.get("thinking_supported")),
+        # 接入用户自己的厂商时要把它一起带过去：中转站经常要改成 leading/none
+        "system_layout": p.get("system_layout", "anywhere"),
+        "models": p.get("models") or [],
+        "global_default_chat_model": p.get("global_default_chat_model"),
+        "global_default_work_model": p.get("global_default_work_model"),
+        "auto_config": p.get("auto_config", False),
+        # 语音侧字段：LLM 预设没有就留空，前端按 kind 决定显示哪一半
+        "voice_id": p.get("voice_id", ""),
+        "voices": p.get("voices") or [],
+        "style_hint": bool(p.get("style_hint")),
+    }
+
+
 def get_preset(key: str) -> ProviderPreset | None:
-    """获取指定厂商预设"""
-    return PRESETS.get(key)
+    """获取指定厂商预设（与 get_all_presets 同形：字段齐全，可直接下标）"""
+    p = PRESETS.get(key)
+    return _normalized(p) if p else None
 
 
 def get_all_presets(kind: str = "llm") -> list[ProviderPreset]:
-    """按类别取预设（简要，不含 models 详情）：默认只给 LLM，语音传 kind="voice"。
+    """按类别取预设（与 get_preset 同形：字段齐全，可直接下标）：默认只给 LLM，语音传 kind="voice"。
 
     **默认必须是 llm**：老调用方（预设下拉、模型标签、api_probe、base_url 登记）都按
     "一个预设 = 一家模型厂商"写的，顺着遍历去取 chat_model；语音混进去就会 KeyError。
     想一次拿全部（比如做管理总览）就显式传 kind="*"。
+
+    遍历预设一律走这里，不要直接迭代 PRESETS.values()——绕过去就拿不到归一化。
     """
     out: list[ProviderPreset] = []
     for p in PRESETS.values():
-        p_kind = p.get("kind") or "llm"
-        if kind != "*" and p_kind != kind:
+        n = _normalized(p)
+        if kind != "*" and n["kind"] != kind:
             continue
-        out.append({
-            "key": p["key"],
-            "label": p["label"],
-            "base_url": p["base_url"],
-            "api_key_url": p["api_key_url"],
-            "kind": p_kind,
-            "chat_model": p.get("chat_model", ""),
-            "work_model": p.get("work_model", ""),
-            "embedding_model": p.get("embedding_model", ""),
-            "thinking_supported": bool(p.get("thinking_supported")),
-            # 接入用户自己的厂商时要把它一起带过去：中转站经常要改成 leading/none
-            "system_layout": p.get("system_layout", "anywhere"),
-            "models": p.get("models") or [],
-            "global_default_chat_model": p.get("global_default_chat_model"),
-            "global_default_work_model": p.get("global_default_work_model"),
-            "auto_config": p.get("auto_config", False),
-            # 语音侧字段：LLM 预设没有就留空，前端按 kind 决定显示哪一半
-            "voice_id": p.get("voice_id", ""),
-            "voices": p.get("voices") or [],
-            "style_hint": bool(p.get("style_hint")),
-        })
+        out.append(n)
     return out
 
 

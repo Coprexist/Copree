@@ -6,7 +6,7 @@
 
 
 def test_voice_presets_are_a_separate_group():
-    from app.services.agent.provider_presets import get_all_presets, get_voice_presets
+    from app.utils.pure.provider_presets import get_all_presets, get_voice_presets
 
     llm = get_all_presets()
     voice = get_voice_presets()
@@ -22,7 +22,7 @@ def test_voice_presets_are_a_separate_group():
 
 
 def test_breeze_ships_a_default_voice_and_accepts_style_hint():
-    from app.services.agent.provider_presets import get_voice_presets
+    from app.utils.pure.provider_presets import get_voice_presets
 
     breeze = next(p for p in get_voice_presets() if p["key"] == "breeze")
     assert breeze["voice_id"].startswith("voc_"), "默认音色是大肥鱼那两套之一"
@@ -33,7 +33,7 @@ def test_breeze_ships_a_default_voice_and_accepts_style_hint():
 
 def test_minimax_has_one_preset_per_region():
     """国内站与国际站互不相通：两条预设各自钉住一个 base_url，不自动猜站在哪边"""
-    from app.services.agent.provider_presets import get_voice_presets
+    from app.utils.pure.provider_presets import get_voice_presets
 
     by_key = {p["key"]: p for p in get_voice_presets()}
     assert by_key["minimax-cn"]["base_url"] == "https://api.minimaxi.com/v1"
@@ -43,7 +43,7 @@ def test_minimax_has_one_preset_per_region():
 
 def test_preset_list_defaults_to_llm_for_old_callers():
     """老调用方（模型下拉、api_probe、base_url 登记）不传 kind，拿到的必须只有 LLM"""
-    from app.services.agent.provider_presets import get_all_presets
+    from app.utils.pure.provider_presets import get_all_presets
 
     assert all(p["kind"] == "llm" for p in get_all_presets())
     both = get_all_presets("*")

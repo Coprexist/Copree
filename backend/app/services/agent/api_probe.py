@@ -112,7 +112,7 @@ def resolve_probe_model(base_url: str) -> str:
     """
     target = (base_url or "").rstrip("/")
     try:
-        from app.services.agent.provider_presets import get_all_presets
+        from app.utils.pure.provider_presets import get_all_presets
         for p in get_all_presets():
             if (p.get("base_url") or "").rstrip("/") == target and p.get("chat_model"):
                 return str(p["chat_model"])

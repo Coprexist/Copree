@@ -1,0 +1,873 @@
+{
+  "_doc": "历史迁移（0123/0124/0125）用的内置预设快照。冻结于 2026-11-23，不要在改动 app/utils/pure/provider_presets.py 时同步这里：迁移必须对同一版本永远给出同一个结果，它问的是当时的内置清单，不是今天的。",
+  "presets": [
+    {
+      "key": "deepseek",
+      "kind": "llm",
+      "label": "DeepSeek",
+      "base_url": "https://api.deepseek.com",
+      "chat_model": "deepseek-flash",
+      "work_model": "deepseek-v4-pro",
+      "thinking_supported": true,
+      "system_layout": "anywhere",
+      "models": [
+        {
+          "value": "deepseek-flash",
+          "label": "DeepSeek V4.1 Flash（快速）"
+        },
+        {
+          "value": "deepseek-v4-pro",
+          "label": "DeepSeek V4 Pro（高质量）"
+        }
+      ],
+      "voices": [],
+      "voice_id": ""
+    },
+    {
+      "key": "openai",
+      "kind": "llm",
+      "label": "OpenAI / ChatGPT",
+      "base_url": "https://api.openai.com",
+      "chat_model": "gpt-5.5",
+      "work_model": "gpt-5.5-pro",
+      "thinking_supported": false,
+      "system_layout": "anywhere",
+      "models": [
+        {
+          "value": "gpt-5.6-sol",
+          "label": "GPT-5.6 Sol（最新旗舰）"
+        },
+        {
+          "value": "gpt-5.6-sol-pro",
+          "label": "GPT-5.6 Sol Pro（最强）"
+        },
+        {
+          "value": "gpt-5.6-luna",
+          "label": "GPT-5.6 Luna（均衡）"
+        },
+        {
+          "value": "gpt-5.6-terra",
+          "label": "GPT-5.6 Terra"
+        },
+        {
+          "value": "gpt-5.5",
+          "label": "GPT-5.5"
+        },
+        {
+          "value": "gpt-5.5-pro",
+          "label": "GPT-5.5 Pro"
+        },
+        {
+          "value": "gpt-5.4",
+          "label": "GPT-5.4"
+        },
+        {
+          "value": "gpt-5.4-mini",
+          "label": "GPT-5.4 Mini（快速）"
+        },
+        {
+          "value": "gpt-5",
+          "label": "GPT-5（上一代旗舰）"
+        },
+        {
+          "value": "gpt-5-mini",
+          "label": "GPT-5 Mini"
+        },
+        {
+          "value": "gpt-5-nano",
+          "label": "GPT-5 Nano（最省）"
+        },
+        {
+          "value": "gpt-4.1",
+          "label": "GPT-4.1"
+        },
+        {
+          "value": "gpt-4o",
+          "label": "GPT-4o"
+        },
+        {
+          "value": "o4-mini",
+          "label": "o4 Mini（推理）"
+        }
+      ],
+      "voices": [],
+      "voice_id": ""
+    },
+    {
+      "key": "ollama",
+      "kind": "llm",
+      "label": "Ollama（本地）",
+      "base_url": "http://localhost:11434",
+      "chat_model": "",
+      "work_model": "",
+      "thinking_supported": false,
+      "system_layout": "leading",
+      "models": [],
+      "voices": [],
+      "voice_id": ""
+    },
+    {
+      "key": "llama.cpp",
+      "kind": "llm",
+      "label": "llama.cpp（本地 llama-server）",
+      "base_url": "http://localhost:8080",
+      "chat_model": "",
+      "work_model": "",
+      "thinking_supported": false,
+      "system_layout": "leading",
+      "models": [],
+      "voices": [],
+      "voice_id": ""
+    },
+    {
+      "key": "lmstudio",
+      "kind": "llm",
+      "label": "LM Studio（本地）",
+      "base_url": "http://localhost:1234",
+      "chat_model": "",
+      "work_model": "",
+      "thinking_supported": false,
+      "system_layout": "anywhere",
+      "models": [],
+      "voices": [],
+      "voice_id": ""
+    },
+    {
+      "key": "vllm",
+      "kind": "llm",
+      "label": "vLLM（自托管）",
+      "base_url": "http://localhost:8000",
+      "chat_model": "",
+      "work_model": "",
+      "thinking_supported": false,
+      "system_layout": "anywhere",
+      "models": [],
+      "voices": [],
+      "voice_id": ""
+    },
+    {
+      "key": "qwen",
+      "kind": "llm",
+      "label": "通义千问（阿里云 DashScope）",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "chat_model": "qwen-plus",
+      "work_model": "qwen-max",
+      "thinking_supported": true,
+      "system_layout": "anywhere",
+      "models": [
+        {
+          "value": "qwen-plus",
+          "label": "Qwen Plus（均衡）"
+        },
+        {
+          "value": "qwen-max",
+          "label": "Qwen Max（最强）"
+        },
+        {
+          "value": "qwen-turbo",
+          "label": "Qwen Turbo（快速）"
+        },
+        {
+          "value": "qwq-plus",
+          "label": "QwQ Plus（深度推理）"
+        },
+        {
+          "value": "qwen3.6-plus",
+          "label": "Qwen3.6 Plus（新一代均衡）"
+        },
+        {
+          "value": "qwen3.6-flash",
+          "label": "Qwen3.6 Flash（新一代快速）"
+        }
+      ],
+      "voices": [],
+      "voice_id": ""
+    },
+    {
+      "key": "kimi",
+      "kind": "llm",
+      "label": "Kimi（月之暗面 Moonshot）",
+      "base_url": "https://api.moonshot.cn",
+      "chat_model": "kimi-k2.5",
+      "work_model": "kimi-k3",
+      "thinking_supported": false,
+      "system_layout": "anywhere",
+      "models": [
+        {
+          "value": "kimi-k3",
+          "label": "Kimi K3（旗舰）"
+        },
+        {
+          "value": "kimi-k2.7-code",
+          "label": "Kimi K2.7 Code（代码）"
+        },
+        {
+          "value": "kimi-k2.7-code-highspeed",
+          "label": "Kimi K2.7 Code HighSpeed（极速）"
+        },
+        {
+          "value": "kimi-k2.6",
+          "label": "Kimi K2.6（均衡）"
+        },
+        {
+          "value": "kimi-k2.5",
+          "label": "Kimi K2.5（快速）"
+        },
+        {
+          "value": "kimi-k2-thinking",
+          "label": "Kimi K2 Thinking（深度推理）"
+        },
+        {
+          "value": "kimi-k2-thinking-turbo",
+          "label": "Kimi K2 Thinking Turbo（推理加速）"
+        }
+      ],
+      "voices": [],
+      "voice_id": ""
+    },
+    {
+      "key": "zhipu",
+      "kind": "llm",
+      "label": "智谱 AI（GLM）",
+      "base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "chat_model": "glm-5.3-flash",
+      "work_model": "glm-5.3",
+      "thinking_supported": false,
+      "system_layout": "anywhere",
+      "models": [
+        {
+          "value": "glm-5.3",
+          "label": "GLM-5.3（旗舰）"
+        },
+        {
+          "value": "glm-5.3-highspeed",
+          "label": "GLM-5.3-Highspeed（极速）"
+        },
+        {
+          "value": "glm-5.3-flash",
+          "label": "GLM-5.3-Flash（轻量免费档）"
+        },
+        {
+          "value": "glm-5.2",
+          "label": "GLM-5.2（1M 上下文）"
+        },
+        {
+          "value": "glm-5.2-highspeed",
+          "label": "GLM-5.2-Highspeed（极速）"
+        },
+        {
+          "value": "glm-5.1",
+          "label": "GLM-5.1（长程任务优化）"
+        },
+        {
+          "value": "glm-5",
+          "label": "GLM-5（基座模型）"
+        },
+        {
+          "value": "glm-5-turbo",
+          "label": "GLM-5-Turbo（轻量任务优化）"
+        },
+        {
+          "value": "glm-4.7",
+          "label": "GLM-4.7（上一代旗舰）"
+        },
+        {
+          "value": "glm-4.7-flashx",
+          "label": "GLM-4.7-FlashX（轻量高速）"
+        },
+        {
+          "value": "glm-4.7-flash",
+          "label": "GLM-4.7-Flash（免费模型）"
+        },
+        {
+          "value": "glm-4.6",
+          "label": "GLM-4.6（200K 上下文）"
+        },
+        {
+          "value": "glm-4.5-air",
+          "label": "GLM-4.5-Air（高性价比）"
+        },
+        {
+          "value": "glm-4.5-airx",
+          "label": "GLM-4.5-AirX（极速版本）"
+        },
+        {
+          "value": "glm-4-long",
+          "label": "GLM-4-Long（1M 上下文）"
+        },
+        {
+          "value": "glm-4-flashx-250414",
+          "label": "GLM-4-FlashX-250414（免费增强版）"
+        },
+        {
+          "value": "glm-4-flash-250414",
+          "label": "GLM-4-Flash-250414（免费版）"
+        },
+        {
+          "value": "glm-4-plus",
+          "label": "GLM-4-Plus（高性能）"
+        },
+        {
+          "value": "glm-4-air-250414",
+          "label": "GLM-4-Air-250414（基座模型）"
+        },
+        {
+          "value": "glm-4-airx",
+          "label": "GLM-4-AirX（极速推理）"
+        }
+      ],
+      "voices": [],
+      "voice_id": ""
+    },
+    {
+      "key": "siliconflow",
+      "kind": "llm",
+      "label": "硅基流动 SiliconFlow",
+      "base_url": "https://api.siliconflow.cn",
+      "chat_model": "Qwen/Qwen3-8B",
+      "work_model": "deepseek-ai/DeepSeek-V3",
+      "thinking_supported": false,
+      "system_layout": "anywhere",
+      "models": [
+        {
+          "value": "Qwen/Qwen3-8B",
+          "label": "Qwen3 8B"
+        },
+        {
+          "value": "deepseek-ai/DeepSeek-V3",
+          "label": "DeepSeek V3"
+        },
+        {
+          "value": "deepseek-ai/DeepSeek-R1",
+          "label": "DeepSeek R1"
+        },
+        {
+          "value": "meta-llama/Llama-4-Maverick-17B-128E-Instruct",
+          "label": "Llama 4 Maverick"
+        }
+      ],
+      "voices": [],
+      "voice_id": ""
+    },
+    {
+      "key": "xiaomi-mimo",
+      "kind": "llm",
+      "label": "Xiaomi MiMo",
+      "base_url": "https://api.xiaomimimo.com",
+      "chat_model": "mimo-v2.6-flash",
+      "work_model": "mimo-v2.6-pro",
+      "thinking_supported": true,
+      "system_layout": "anywhere",
+      "models": [
+        {
+          "value": "mimo-v2.6-pro",
+          "label": "MiMo V2.6 Pro（旗舰）"
+        },
+        {
+          "value": "mimo-v2.6-pro-ultraspeed",
+          "label": "MiMo V2.6 Pro UltraSpeed（极速）"
+        },
+        {
+          "value": "mimo-v2.6-flash",
+          "label": "MiMo V2.6 Flash（快速）"
+        },
+        {
+          "value": "mimo-v2.5-pro",
+          "label": "MiMo V2.5 Pro（多模态，高质量）"
+        },
+        {
+          "value": "mimo-v2.5",
+          "label": "MiMo V2.5（多模态）"
+        }
+      ],
+      "voices": [],
+      "voice_id": ""
+    },
+    {
+      "key": "xiaomi-mimo-tp",
+      "kind": "llm",
+      "label": "Xiaomi MiMo（Token Plan 订阅）",
+      "base_url": "https://token-plan-cn.xiaomimimo.com",
+      "chat_model": "mimo-v2.6-flash",
+      "work_model": "mimo-v2.6-pro",
+      "thinking_supported": true,
+      "system_layout": "anywhere",
+      "models": [
+        {
+          "value": "mimo-v2.6-pro",
+          "label": "MiMo V2.6 Pro（旗舰）"
+        },
+        {
+          "value": "mimo-v2.6-pro-ultraspeed",
+          "label": "MiMo V2.6 Pro UltraSpeed（极速）"
+        },
+        {
+          "value": "mimo-v2.6-flash",
+          "label": "MiMo V2.6 Flash（快速）"
+        },
+        {
+          "value": "mimo-v2.5-pro",
+          "label": "MiMo V2.5 Pro（多模态，高质量）"
+        },
+        {
+          "value": "mimo-v2.5",
+          "label": "MiMo V2.5（多模态）"
+        }
+      ],
+      "voices": [],
+      "voice_id": ""
+    },
+    {
+      "key": "google",
+      "kind": "llm",
+      "label": "Google Gemini",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "chat_model": "gemini-3.5-flash",
+      "work_model": "gemini-3.1-pro-preview",
+      "thinking_supported": false,
+      "system_layout": "anywhere",
+      "models": [
+        {
+          "value": "gemini-3.8-flash",
+          "label": "Gemini 3.8 Flash（最新）"
+        },
+        {
+          "value": "gemini-3.7-flash",
+          "label": "Gemini 3.7 Flash"
+        },
+        {
+          "value": "gemini-3.5-flash",
+          "label": "Gemini 3.5 Flash（均衡）"
+        },
+        {
+          "value": "gemini-3.5-flash-lite",
+          "label": "Gemini 3.5 Flash-Lite（轻量）"
+        },
+        {
+          "value": "gemini-3.1-pro-preview",
+          "label": "Gemini 3.1 Pro（旗舰预览）"
+        },
+        {
+          "value": "gemini-2.5-pro",
+          "label": "Gemini 2.5 Pro"
+        },
+        {
+          "value": "gemini-2.5-flash",
+          "label": "Gemini 2.5 Flash"
+        }
+      ],
+      "voices": [],
+      "voice_id": ""
+    },
+    {
+      "key": "xai",
+      "kind": "llm",
+      "label": "xAI Grok",
+      "base_url": "https://api.x.ai/v1",
+      "chat_model": "grok-4.5",
+      "work_model": "grok-4.6",
+      "thinking_supported": false,
+      "system_layout": "anywhere",
+      "models": [
+        {
+          "value": "grok-4.6",
+          "label": "Grok 4.6（旗舰）"
+        },
+        {
+          "value": "grok-4.5",
+          "label": "Grok 4.5"
+        },
+        {
+          "value": "grok-4.3",
+          "label": "Grok 4.3"
+        }
+      ],
+      "voices": [],
+      "voice_id": ""
+    },
+    {
+      "key": "groq",
+      "kind": "llm",
+      "label": "Groq",
+      "base_url": "https://api.groq.com/openai/v1",
+      "chat_model": "openai/gpt-oss-120b",
+      "work_model": "qwen/qwen3.8-27b",
+      "thinking_supported": false,
+      "system_layout": "anywhere",
+      "models": [
+        {
+          "value": "openai/gpt-oss-120b",
+          "label": "GPT-OSS 120B（推荐）"
+        },
+        {
+          "value": "openai/gpt-oss-20b",
+          "label": "GPT-OSS 20B（轻量）"
+        },
+        {
+          "value": "qwen/qwen3.8-27b",
+          "label": "Qwen3.8 27B"
+        },
+        {
+          "value": "qwen/qwen3.6-27b",
+          "label": "Qwen3.6 27B"
+        },
+        {
+          "value": "llama-3.3-70b-versatile",
+          "label": "Llama 3.3 70B"
+        },
+        {
+          "value": "llama-3.1-8b-instant",
+          "label": "Llama 3.1 8B（极速）"
+        }
+      ],
+      "voices": [],
+      "voice_id": ""
+    },
+    {
+      "key": "openrouter",
+      "kind": "llm",
+      "label": "OpenRouter（聚合）",
+      "base_url": "https://openrouter.ai/api/v1",
+      "chat_model": "openai/gpt-5.6-luna",
+      "work_model": "anthropic/claude-opus-5",
+      "thinking_supported": false,
+      "system_layout": "anywhere",
+      "models": [
+        {
+          "value": "anthropic/claude-opus-5",
+          "label": "Claude Opus 5"
+        },
+        {
+          "value": "openai/gpt-6-astra",
+          "label": "GPT-6 Astra（经网关）"
+        },
+        {
+          "value": "openai/gpt-5.6-sol",
+          "label": "GPT-5.6 Sol"
+        },
+        {
+          "value": "openai/gpt-5.6-luna",
+          "label": "GPT-5.6 Luna"
+        },
+        {
+          "value": "google/gemini-3.8-flash",
+          "label": "Gemini 3.8 Flash"
+        },
+        {
+          "value": "deepseek/deepseek-v4-pro",
+          "label": "DeepSeek V4 Pro"
+        },
+        {
+          "value": "moonshotai/kimi-k3",
+          "label": "Kimi K3"
+        }
+      ],
+      "voices": [],
+      "voice_id": ""
+    },
+    {
+      "key": "mistral",
+      "kind": "llm",
+      "label": "Mistral",
+      "base_url": "https://api.mistral.ai/v1",
+      "chat_model": "mistral-medium-latest",
+      "work_model": "mistral-large-latest",
+      "thinking_supported": false,
+      "system_layout": "anywhere",
+      "models": [
+        {
+          "value": "mistral-large-latest",
+          "label": "Mistral Large（旗舰）"
+        },
+        {
+          "value": "mistral-medium-latest",
+          "label": "Mistral Medium（均衡）"
+        },
+        {
+          "value": "mistral-small-latest",
+          "label": "Mistral Small（快速）"
+        },
+        {
+          "value": "codestral-latest",
+          "label": "Codestral（代码）"
+        },
+        {
+          "value": "devstral-latest",
+          "label": "Devstral（编码 agent）"
+        }
+      ],
+      "voices": [],
+      "voice_id": ""
+    },
+    {
+      "key": "together",
+      "kind": "llm",
+      "label": "Together AI",
+      "base_url": "https://api.together.ai/v1",
+      "chat_model": "deepseek-ai/DeepSeek-V4-Pro",
+      "work_model": "Qwen/Qwen3.7-Max",
+      "thinking_supported": false,
+      "system_layout": "anywhere",
+      "models": [
+        {
+          "value": "deepseek-ai/DeepSeek-V4-Pro",
+          "label": "DeepSeek V4 Pro"
+        },
+        {
+          "value": "deepseek-ai/DeepSeek-V4-Flash-0731",
+          "label": "DeepSeek V4 Flash 0731"
+        },
+        {
+          "value": "Qwen/Qwen3.7-Max",
+          "label": "Qwen3.7 Max"
+        },
+        {
+          "value": "Qwen/Qwen3.6-Plus",
+          "label": "Qwen3.6 Plus"
+        },
+        {
+          "value": "MiniMaxAI/MiniMax-M3",
+          "label": "MiniMax M3"
+        },
+        {
+          "value": "google/gemma-4-31B-it",
+          "label": "Gemma 4 31B"
+        }
+      ],
+      "voices": [],
+      "voice_id": ""
+    },
+    {
+      "key": "fireworks",
+      "kind": "llm",
+      "label": "Fireworks AI",
+      "base_url": "https://api.fireworks.ai/inference/v1",
+      "chat_model": "accounts/fireworks/models/kimi-k3",
+      "work_model": "accounts/fireworks/models/glm-5p3",
+      "thinking_supported": false,
+      "system_layout": "anywhere",
+      "models": [
+        {
+          "value": "accounts/fireworks/models/kimi-k3",
+          "label": "Kimi K3"
+        },
+        {
+          "value": "accounts/fireworks/routers/kimi-k3-fast",
+          "label": "Kimi K3 Fast"
+        },
+        {
+          "value": "accounts/fireworks/models/glm-5p3",
+          "label": "GLM 5.3"
+        },
+        {
+          "value": "accounts/fireworks/models/glm-5p3-flash",
+          "label": "GLM 5.3 Flash"
+        },
+        {
+          "value": "accounts/fireworks/models/glm-5p2",
+          "label": "GLM 5.2"
+        }
+      ],
+      "voices": [],
+      "voice_id": ""
+    },
+    {
+      "key": "cerebras",
+      "kind": "llm",
+      "label": "Cerebras",
+      "base_url": "https://api.cerebras.ai/v1",
+      "chat_model": "gpt-oss-120b",
+      "work_model": "gemma-4-31b",
+      "thinking_supported": false,
+      "system_layout": "anywhere",
+      "models": [
+        {
+          "value": "gpt-oss-120b",
+          "label": "GPT-OSS 120B"
+        },
+        {
+          "value": "gemma-4-31b",
+          "label": "Gemma 4 31B"
+        }
+      ],
+      "voices": [],
+      "voice_id": ""
+    },
+    {
+      "key": "nvidia",
+      "kind": "llm",
+      "label": "NVIDIA NIM",
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "chat_model": "deepseek-ai/deepseek-v4-pro-0813",
+      "work_model": "minimaxai/minimax-m3",
+      "thinking_supported": false,
+      "system_layout": "anywhere",
+      "models": [
+        {
+          "value": "deepseek-ai/deepseek-v4-pro-0813",
+          "label": "DeepSeek V4 Pro 0813"
+        },
+        {
+          "value": "deepseek-ai/deepseek-v4-flash-0731",
+          "label": "DeepSeek V4 Flash 0731"
+        },
+        {
+          "value": "minimaxai/minimax-m3",
+          "label": "MiniMax M3"
+        },
+        {
+          "value": "moonshotai/kimi-k2.6",
+          "label": "Kimi K2.6"
+        },
+        {
+          "value": "meta/muse-glimmer-30b",
+          "label": "Muse Glimmer 30B"
+        }
+      ],
+      "voices": [],
+      "voice_id": ""
+    },
+    {
+      "key": "huggingface",
+      "kind": "llm",
+      "label": "HuggingFace Router",
+      "base_url": "https://router.huggingface.co/v1",
+      "chat_model": "Qwen/Qwen3-235B-A22B-Instruct-2507",
+      "work_model": "MiniMaxAI/MiniMax-M3",
+      "thinking_supported": false,
+      "system_layout": "anywhere",
+      "models": [
+        {
+          "value": "MiniMaxAI/MiniMax-M3",
+          "label": "MiniMax M3"
+        },
+        {
+          "value": "Qwen/Qwen3-235B-A22B-Instruct-2507",
+          "label": "Qwen3 235B A22B"
+        },
+        {
+          "value": "Qwen/Qwen3-235B-A22B-Thinking-2507",
+          "label": "Qwen3 235B Thinking"
+        },
+        {
+          "value": "Qwen/Qwen3-30B-A3B",
+          "label": "Qwen3 30B A3B"
+        },
+        {
+          "value": "Qwen/Qwen2.5-Coder-32B-Instruct",
+          "label": "Qwen2.5 Coder 32B"
+        }
+      ],
+      "voices": [],
+      "voice_id": ""
+    },
+    {
+      "key": "baseten",
+      "kind": "llm",
+      "label": "Baseten",
+      "base_url": "https://inference.baseten.co/v1",
+      "chat_model": "deepseek-ai/DeepSeek-V4-Pro",
+      "work_model": "moonshotai/Kimi-K3",
+      "thinking_supported": false,
+      "system_layout": "anywhere",
+      "models": [
+        {
+          "value": "deepseek-ai/DeepSeek-V4-Pro",
+          "label": "DeepSeek V4 Pro"
+        },
+        {
+          "value": "deepseek-ai/DeepSeek-V4-Flash-0731",
+          "label": "DeepSeek V4 Flash 0731"
+        },
+        {
+          "value": "moonshotai/Kimi-K3",
+          "label": "Kimi K3"
+        },
+        {
+          "value": "moonshotai/Kimi-K2.7-Code",
+          "label": "Kimi K2.7 Code"
+        },
+        {
+          "value": "openai/gpt-oss-120b",
+          "label": "GPT-OSS 120B"
+        }
+      ],
+      "voices": [],
+      "voice_id": ""
+    },
+    {
+      "key": "ant-ling",
+      "kind": "llm",
+      "label": "蚂蚁 Ling",
+      "base_url": "https://api.ant-ling.com/v1",
+      "chat_model": "Ling-2.6-flash",
+      "work_model": "Ling-2.6-1T",
+      "thinking_supported": false,
+      "system_layout": "anywhere",
+      "models": [
+        {
+          "value": "Ling-2.6-flash",
+          "label": "Ling 2.6 Flash（快速）"
+        },
+        {
+          "value": "Ling-2.6-1T",
+          "label": "Ling 2.6 1T（旗舰）"
+        },
+        {
+          "value": "Ring-2.6-1T",
+          "label": "Ring 2.6 1T（推理）"
+        }
+      ],
+      "voices": [],
+      "voice_id": ""
+    },
+    {
+      "key": "breeze",
+      "kind": "voice",
+      "label": "BreezeBlue",
+      "base_url": "https://api.breeze.blue/v1",
+      "chat_model": "",
+      "work_model": "",
+      "thinking_supported": false,
+      "system_layout": "anywhere",
+      "models": [],
+      "voices": [
+        {
+          "value": "voc_8yud7hz7c9q2",
+          "label": "迷糊版（dreamy）"
+        },
+        {
+          "value": "voc_u3nxkd5578wc",
+          "label": "机灵版（clever）"
+        }
+      ],
+      "voice_id": "voc_8yud7hz7c9q2"
+    },
+    {
+      "key": "minimax-cn",
+      "kind": "voice",
+      "label": "MiniMax（国内站）",
+      "base_url": "https://api.minimaxi.com/v1",
+      "chat_model": "",
+      "work_model": "",
+      "thinking_supported": false,
+      "system_layout": "anywhere",
+      "models": [],
+      "voices": [],
+      "voice_id": ""
+    },
+    {
+      "key": "minimax-intl",
+      "kind": "voice",
+      "label": "MiniMax（国际站）",
+      "base_url": "https://api.minimax.io/v1",
+      "chat_model": "",
+      "work_model": "",
+      "thinking_supported": false,
+      "system_layout": "anywhere",
+      "models": [],
+      "voices": [],
+      "voice_id": ""
+    }
+  ]
+}

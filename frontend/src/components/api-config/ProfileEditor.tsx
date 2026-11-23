@@ -8,7 +8,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { api, errorText } from '../../api/client'
 import { useT } from '../../i18n/I18nContext'
 import { Button, Input, Modal, SecretInput, Select } from '../ui'
-import type { ApiKind, ApiProfile, ApiProvider } from './types'
+import type { ApiKind, ApiProvider } from './types'
 
 export interface ProfileDraft {
   id?: number

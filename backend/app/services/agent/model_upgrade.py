@@ -74,7 +74,7 @@ async def upgrade_provider_config(db: AsyncSession) -> int:
     from sqlalchemy import select
 
     from app.models.system_settings import SystemSettings
-    from app.services.agent.provider_presets import MODEL_ALIASES, PRESETS
+    from app.utils.pure.provider_presets import MODEL_ALIASES, get_all_presets
     from app.utils.pure.provider_config import align_provider_models
 
     row = (await db.execute(select(SystemSettings).order_by(SystemSettings.id).limit(1))).scalars().first()
@@ -85,7 +85,7 @@ async def upgrade_provider_config(db: AsyncSession) -> int:
     if not isinstance(items, list) or not items:
         return 0
     # 只看 LLM 预设：语音预设没有 models/chat_model（见 provider_presets.ProviderPreset）
-    llm_presets = [p for p in PRESETS.values() if (p.get("kind") or "llm") == "llm"]
+    llm_presets = get_all_presets("llm")
     labels = {m["value"]: m["label"] for p in llm_presets for m in p.get("models") or []}
     presets = preset_models_for_alignment(llm_presets)
     new_items, changed = align_provider_models(
@@ -103,7 +103,7 @@ async def upgrade_stored_model_names(db: AsyncSession) -> dict[str, int]:
     逐个别名一条 UPDATE：别名表只有几行，一条 SQL 对应一次改名，执行计划简单，行数也便于核对。
     不在这里 commit —— 交给调用方，免得替别人的事务收尾。
     """
-    from app.services.agent.provider_presets import MODEL_ALIASES
+    from app.utils.pure.provider_presets import MODEL_ALIASES
 
     changed: dict[str, int] = {}
     for old_name, new_name in MODEL_ALIASES.items():

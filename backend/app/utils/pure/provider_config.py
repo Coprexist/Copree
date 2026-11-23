@@ -4,7 +4,9 @@
 包含：查找默认供应商、按名称/URL 匹配、模型列表收集、thinking 判定。
 """
 import json
-from typing import Any
+from typing import Any, Mapping
+
+from app.utils.pure.provider_presets import get_preset
 
 
 def find_default_provider(providers: list[dict]) -> dict | None:
@@ -56,20 +58,26 @@ def find_provider_for_pool_key(providers: list[dict], provider_name: str | None,
     return find_default_provider(providers)
 
 
-def resolve_system_layout(provider: dict | None, preset_layout: str | None = None) -> str:
+def resolve_system_layout(provider: dict | None, preset_layout: str | None = None,
+                          base_url: str | None = None) -> str:
     """这一轮该用哪一档 system 摆放（anywhere / leading / none）。
 
     **只认一处存储**：provider_config 条目里的 `system_layout` —— 探测结论与用户手选
-    都写在这一个字段。条目没有就回落到出厂预设，再没有就 anywhere。
+    都写在这一个字段。条目没有就回落到出厂预设；连预设都没有时，与用户配置档那条路径
+    用同一条规则：按地址保守猜（字面私网 → leading，见 chat_template.guess_layout_from_host）。
     宁可宽松：认不出就保持现状，不把能跑的通道误判成严格档。
     """
-    from app.utils.pure.chat_template import LAYOUTS, normalize_layout
+    from app.utils.pure.chat_template import (
+        LAYOUTS, guess_layout_from_host, normalize_layout,
+    )
 
     stored = (provider or {}).get("system_layout")
     if isinstance(stored, str) and stored.strip().lower() in LAYOUTS:
         return normalize_layout(stored)
     # 没存 / 存了脏值：都当"没结论"，回落到出厂预设
-    return normalize_layout(preset_layout)
+    if preset_layout:
+        return normalize_layout(preset_layout)
+    return guess_layout_from_host(base_url)
 
 
 def channel_provider_info(provider: dict | None, api_base_url: str,
@@ -90,14 +98,14 @@ def channel_provider_info(provider: dict | None, api_base_url: str,
             if isinstance(m, dict) and m.get("value")
         ]
     preset_default = provider.get("global_default_chat_model") or provider.get("chat_model") or None
-    from app.services.agent.provider_presets import get_preset
-
     preset = get_preset(str(provider.get("provider") or "")) or {}
     return {
         "base_url": api_base_url,
         "provider_name": provider.get("name", ""),
         "thinking_supported": provider.get("thinking_supported", "deepseek.com" in (api_base_url or "")),
-        "system_layout": resolve_system_layout(provider, preset.get("system_layout")),
+        "system_layout": resolve_system_layout(
+            provider, preset.get("system_layout"), api_base_url,
+        ),
         "models": ids,
         "default_model": default_model or preset_default,
         "global_default_chat_model": preset_default,
@@ -124,8 +132,6 @@ def collect_all_models(providers: list[dict]) -> list[dict]:
 
 def build_provider_summaries(providers: list[dict]) -> list[dict]:
     """构建前端可用的供应商摘要列表"""
-    from app.services.agent.provider_presets import get_preset
-
     result: list[dict] = []
     for p in providers:
         provider_key = p.get("provider", "unknown")
@@ -210,29 +216,43 @@ def normalize_legacy_config(raw: Any) -> list[dict]:
 
 
 def build_provider_config(
-    name: str,
-    provider_key: str,
-    base_url: str = "",
-    chat_model: str = "",
-    work_model: str = "",
-    embedding_model: str = "",
-    model_options: list[dict] | None = None,
-    thinking_supported: bool = False,
-    is_default: bool = False,
-    system_layout: str = "anywhere",
+    *,
+    provider_key: str | None = None,
+    overrides: Mapping[str, Any] | None = None,
 ) -> dict:
-    """构建一个规范化的供应商配置字典（纯函数）"""
+    """把「预设」+「表单里显式填的值」合成一条规范的供应商配置（纯函数）。
+
+    **单一构造入口**：调用方不再逐字段写 body.x or preset["x"]。那份「没填就沿用预设」
+    的语义写三遍就是三个 bug 的温床 —— 2026-11-23 插件商城保存本地预设必 500 就是其中
+    一个（调用方按「字段齐全」直索引，而预设那边没写全）。
+
+    - provider_key 决定预设；None 或未知键 = 纯手工配置（没有任何默认值）
+    - overrides 里**假值视为「没给」**，沿用预设；这与历史 or 语义逐字节一致。
+      布尔用 None 表示没给，显式 False 是有效值（thinking_supported=False 要保留）
+    - name 留空时回落到厂商 label：空名字会让 upsert_provider 按 name 匹配失效
+    """
+    preset = get_preset(provider_key) if provider_key else None
+    given = overrides or {}
+    base = preset or {}
+
+    def text(out_key: str, preset_key: str) -> str:
+        return given.get(out_key) or base.get(preset_key) or ""
+
+    thinking = given.get("thinking_supported")
+    if thinking is None:
+        thinking = bool(base.get("thinking_supported"))
+
     return {
-        "name": name,
-        "provider": provider_key,
-        "base_url": base_url,
-        "chat_model": chat_model,
-        "work_model": work_model,
-        "embedding_model": embedding_model,
-        "model_options": model_options or [],
-        "thinking_supported": thinking_supported,
-        "is_default": is_default,
-        "system_layout": system_layout,
+        "name": text("name", "label"),
+        "provider": provider_key or "",
+        "base_url": text("base_url", "base_url"),
+        "chat_model": text("chat_model", "chat_model"),
+        "work_model": text("work_model", "work_model"),
+        "embedding_model": text("embedding_model", "embedding_model"),
+        "model_options": given.get("model_options") or base.get("models") or [],
+        "thinking_supported": bool(thinking),
+        "is_default": bool(given.get("is_default")),
+        "system_layout": given.get("system_layout") or base.get("system_layout") or "anywhere",
     }
 
 

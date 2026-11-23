@@ -41,7 +41,7 @@ async def ensure_auto_providers(db: AsyncSession) -> list[str]:
     from sqlalchemy import select
 
     from app.models.system_settings import SystemSettings
-    from app.services.agent.provider_presets import PRESETS
+    from app.utils.pure.provider_presets import get_all_presets
     from app.services.infrastructure.system_settings_service import get_providers
     from app.utils.pure.provider_config import build_provider_config, upsert_provider
 
@@ -54,19 +54,17 @@ async def ensure_auto_providers(db: AsyncSession) -> list[str]:
     have = {str(p.get("provider") or "") for p in providers}
     dismissed = {str(k) for k in (_runtime_config(row).get(DISMISSED_KEY) or [])}
     added: list[str] = []
-    for preset in PRESETS.values():
+    # 只补 LLM：语音预设（kind="voice"）不是模型厂商配置项，补进去会变成一条
+    # 没有 chat_model 的空配置（见 provider_presets.ProviderPreset 的 kind 说明）。
+    # 遍历预设置信 get_all_presets：它给的是归一化后的完整字段，直索引才安全。
+    for preset in get_all_presets("llm"):
         key = str(preset["key"])
-        # 只补 LLM：语音预设（kind="voice"）不是模型厂商配置项，补进去会变成一条
-        # 没有 chat_model 的空配置（见 provider_presets.ProviderPreset 的 kind 说明）
-        if (preset.get("kind") or "llm") != "llm":
-            continue
         if not preset.get("auto_config") or key in have or key in dismissed:
             continue
+        # 只给 key，其余全由预设决定（含 system_layout：以前这里漏传，
+        # llama.cpp 这类 leading 的预设被自动配置时 layout 会退化成 anywhere）
         providers = upsert_provider(providers, build_provider_config(
-            name=preset["label"], provider_key=key, base_url=preset["base_url"],
-            chat_model=preset["chat_model"], work_model=preset["work_model"],
-            embedding_model=preset["embedding_model"], model_options=preset["models"],
-            thinking_supported=preset["thinking_supported"], is_default=False,
+            provider_key=key, overrides={"is_default": False},
         ))
         added.append(key)
     if added:

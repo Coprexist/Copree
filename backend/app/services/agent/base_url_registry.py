@@ -21,7 +21,7 @@ async def _platform_urls(db: AsyncSession) -> list[str]:
     """平台自己配的地址：内置预设 + system_settings.provider_config。"""
     urls: list[str] = []
     try:
-        from app.services.agent.provider_presets import get_all_presets
+        from app.utils.pure.provider_presets import get_all_presets
         urls += [p.get("base_url") or "" for p in get_all_presets()]
     except Exception:
         pass
@@ -33,24 +33,45 @@ async def _platform_urls(db: AsyncSession) -> list[str]:
     return urls
 
 
+async def _column_values(db: AsyncSession, query) -> list[str]:
+    """查一列地址；某张表结构对不上不该让「测试连接」整个不可用——少一个登记来源而已。"""
+    try:
+        rows = await db.execute(query)
+    except Exception:
+        return []
+    return [r[0] for r in rows.all() if r[0]]
+
+
 async def _user_urls(db: AsyncSession, user_id: int) -> list[str]:
-    """该用户自己的 user / agent / world 配置里已经保存过的地址。"""
+    """该用户自己的配置里已经保存过的地址（账号 / AI / 群助手 / API 厂商）。
+
+    **厂商表必须在里面**：用户自己填的 llama-server 地址只存在 user_api_providers，
+    漏了它这条地址就永远不算「已保存过」——保存时判不了 system 布局，测连接也探不了，
+    表现是自建本地服务只能用猜的（见 services/agent/channel_layout.py）。
+
+    这里不查 worlds：世界表没有地址列（历史上那个分支一直被 except 吞掉，从没生效过）。
+    """
     from app.models.agent import Agent
+    from app.models.api_profile import UserApiProvider
+    from app.models.group import Group
     from app.models.user import User
-    from app.models.world import World
+    from app.models.world import GroupAssistant
 
     urls: list[str] = []
-    for model, cond in (
-        (User, User.id == user_id),
-        (Agent, Agent.owner_id == user_id),
-        (World, World.owner_id == user_id),
+    # 直接按「人」归属的：账号、AI、API 厂商（厂商表的列名是 base_url，不是 api_base_url）
+    for cond, column in (
+        (User.id == user_id, User.api_base_url),
+        (Agent.owner_id == user_id, Agent.api_base_url),
+        (UserApiProvider.user_id == user_id, UserApiProvider.base_url),
     ):
-        try:
-            rows = await db.execute(select(model.api_base_url).where(cond, model.api_base_url.isnot(None)))
-            urls += [r[0] for r in rows.all() if r[0]]
-        except Exception:
-            # 某个表结构对不上不该让"测试连接"整个不可用：少一个登记来源而已
-            continue
+        urls += await _column_values(db, select(column).where(cond, column.isnot(None)))
+
+    # 群助手挂在群上：先按群主缩小到自己的群
+    owned_groups = select(Group.id).where(Group.owner_id == user_id)
+    urls += await _column_values(db, select(GroupAssistant.api_base_url).where(
+        GroupAssistant.group_id.in_(owned_groups),
+        GroupAssistant.api_base_url.isnot(None),
+    ))
     return urls
 
 

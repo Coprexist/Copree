@@ -2,7 +2,7 @@
 
 
 def test_alias_targets_are_current_names():
-    from app.services.agent.provider_presets import MODEL_ALIASES, PRESETS
+    from app.utils.pure.provider_presets import MODEL_ALIASES, PRESETS
 
     # 只看 LLM 预设：语音预设（kind="voice"）没有 models，混进来会 KeyError
     known = {
@@ -16,7 +16,7 @@ def test_alias_targets_are_current_names():
 
 
 def test_canonical_model_keeps_unknown_names():
-    from app.services.agent.provider_presets import canonical_model
+    from app.utils.pure.provider_presets import canonical_model
 
     assert canonical_model("deepseek-v4-flash") == "deepseek-flash"
     assert canonical_model("deepseek-flash") == "deepseek-flash"

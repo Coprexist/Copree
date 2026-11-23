@@ -70,7 +70,7 @@ async def list_voice_presets(
     普通用户也要能取（不是管理员专用）：预设只是"填什么 base_url 的提示"，
     键本身还是要用户自己填。必须定义在 /{agent_id} 之前，否则会被当成 agent_id。
     """
-    from app.services.agent.provider_presets import get_voice_presets
+    from app.utils.pure.provider_presets import get_voice_presets
 
     return get_voice_presets()
 

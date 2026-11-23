@@ -16,6 +16,8 @@ Key 一律加密存、只回末四位；没有"读出明文"的接口——那�
 删除是有约束的（不是后路）：默认档不许直接删（要先指认另一条为默认），
 厂商名下还有档时要显式 force。宁可多问一句，也不要让某个 AI 悄悄换了 Key。
 """
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -25,6 +27,7 @@ from app.database import get_db
 from app.models.api_profile import UserApiProvider, UserApiProfile
 from app.utils.auth import get_current_user
 from app.utils.crypto import decrypt_api_key, encrypt_api_key
+from app.utils.pure.provider_presets import ProviderPreset, get_preset
 
 router = APIRouter(prefix="/user/api-config", tags=["用户 API 配置"])
 
@@ -103,6 +106,11 @@ def _provider_dict(p: UserApiProvider, profiles: list[UserApiProfile]) -> dict:
         "default_secondary": p.default_secondary,
         "thinking_supported": bool(p.thinking_supported),
         "system_layout": p.system_layout,
+        # 布局的判定证据：source 为空表示"从未判定"，界面据此显示「自动识别」
+        "system_layout_source": p.system_layout_source or "",
+        "system_template_hash": p.system_template_hash or "",
+        "system_layout_checked_at": (p.system_layout_checked_at.isoformat()
+                                     if p.system_layout_checked_at else ""),
         "profiles": [_profile_dict(x) for x in profiles],
     }
 
@@ -165,24 +173,39 @@ async def create_provider(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """接入一家厂商。带 preset_key 时先按内置预设填好，再用请求里的字段覆盖。"""
+    """接入一家厂商。带 preset_key 时先按内置预设填好，再用请求里的字段覆盖。
+
+    system 布局在这里**判一次**（手选 > 探测 > 预设 > 按地址猜）：用户自己填的地址
+    大多没有预设，光靠一个默认 anywhere 会让每轮都 500（见 channel_layout.py）。
+    """
     kind = _check_kind(req.kind)
-    preset = _preset_of(req.preset_key, kind) if req.preset_key else None
+    preset = _preset_of(req.preset_key, kind)
+    defaults = _preset_values(preset)
+    base_url = req.base_url or defaults["base_url"]
+    # 预设原地址就不用探测：平台已经给过结论，为每一家各等 5 秒换不来新信息；
+    # 一旦地址被改成别处（中转站、本机服务），就必须重新认。
+    layout = await _decide_layout(
+        db, current_user["user_id"],
+        base_url=base_url,
+        model=req.default_primary or defaults["default_primary"],
+        manual=req.system_layout,
+        preset_layout=preset["system_layout"] if preset else None,
+        probe=preset is None or base_url != preset["base_url"],
+    )
 
     provider = UserApiProvider(
         user_id=current_user["user_id"],
         kind=kind,
         name=req.name or (preset["label"] if preset else "自定义厂商"),
-        preset_key=req.preset_key if preset else None,
-        base_url=req.base_url or (preset["base_url"] if preset else ""),
-        options=req.options if req.options is not None else _options_of(preset),
-        default_primary=req.default_primary or _primary_of(preset),
-        default_secondary=req.default_secondary or _secondary_of(preset),
+        preset_key=defaults["preset_key"],
+        base_url=base_url,
+        options=req.options if req.options is not None else defaults["options"],
+        default_primary=req.default_primary or defaults["default_primary"],
+        default_secondary=req.default_secondary or defaults["default_secondary"],
         thinking_supported=(req.thinking_supported
                             if req.thinking_supported is not None
-                            else bool(preset.get("thinking_supported")) if preset else False),
-        system_layout=req.system_layout or (preset.get("system_layout") if preset else None)
-        or "anywhere",
+                            else defaults["thinking_supported"]),
+        **_layout_columns(layout),
     )
     _apply_key(provider, req.api_key, PROVIDER_KEY_FIELD)
     db.add(provider)
@@ -212,18 +235,14 @@ async def connect_presets(
         preset = _preset_of(key, kind)
         if preset is None:
             raise HTTPException(status_code=404, detail=f"没有这条预设：{key}")
-        provider = UserApiProvider(
-            user_id=current_user["user_id"],
-            kind=kind,
-            name=preset["label"],
-            preset_key=key,
+        # 批量接入不探测：预设已经给了结论，为每家各等 5 秒换不来新信息
+        layout = await _decide_layout(
+            db, current_user["user_id"],
             base_url=preset["base_url"],
-            options=_options_of(preset),
-            default_primary=_primary_of(preset),
-            default_secondary=_secondary_of(preset),
-            thinking_supported=bool(preset.get("thinking_supported")),
-            system_layout=preset.get("system_layout") or "anywhere",
+            model=preset["chat_model"] or preset["voice_id"] or None,
+            manual=None, preset_layout=preset["system_layout"], probe=False,
         )
+        provider = _new_provider(current_user["user_id"], kind, preset, layout)
         db.add(provider)
         created.append(provider)
     await db.flush()
@@ -238,10 +257,32 @@ async def update_provider(
     db: AsyncSession = Depends(get_db),
 ):
     provider = await _own_provider(db, provider_id, current_user["user_id"])
+    # system_layout 不在这份列表里：它不是"随手改的字段"，而是要重算的判定结论
     for field in ("name", "base_url", "default_primary", "default_secondary",
-                  "thinking_supported", "system_layout", "options"):
+                  "thinking_supported", "options"):
         if field in req.model_fields_set and getattr(req, field) is not None:
             setattr(provider, field, getattr(req, field))
+
+    # 何时重算布局：用户手选了、或者地址/主型号变了（换了服务就该重新认一次）。
+    # 只改名字、Key、模型清单时不重算：那不会改变对端模板。
+    base_url_changed = "base_url" in req.model_fields_set and req.base_url is not None
+    model_changed = ("default_primary" in req.model_fields_set
+                     and req.default_primary is not None)
+    if req.system_layout or base_url_changed or model_changed:
+        preset = _preset_of(provider.preset_key, provider.kind)
+        # 地址还在预设原处就信预设的结论，改到别处才重新探测
+        probe = preset is None or provider.base_url != preset["base_url"]
+        layout = await _decide_layout(
+            db, current_user["user_id"],
+            base_url=provider.base_url,
+            model=provider.default_primary,
+            manual=req.system_layout,
+            preset_layout=preset["system_layout"] if preset else None,
+            probe=probe,
+        )
+        for column, value in _layout_columns(layout).items():
+            setattr(provider, column, value)
+
     _apply_key(provider, req.api_key, PROVIDER_KEY_FIELD)
     await db.flush()
     profiles = (await db.execute(
@@ -258,20 +299,49 @@ async def restore_provider(
 ):
     """按内置预设把地址/模型清单/能力恢复成原样（Key 不动，那是你的东西）"""
     provider = await _own_provider(db, provider_id, current_user["user_id"])
-    preset = _preset_of(provider.preset_key, provider.kind) if provider.preset_key else None
+    preset = _preset_of(provider.preset_key, provider.kind)
     if preset is None:
         raise HTTPException(status_code=400, detail="这条厂商不是从内置预设接入的，无法恢复")
-    provider.base_url = preset["base_url"]
-    provider.options = _options_of(preset)
-    provider.default_primary = _primary_of(preset)
-    provider.default_secondary = _secondary_of(preset)
-    provider.thinking_supported = bool(preset.get("thinking_supported"))
-    provider.system_layout = preset.get("system_layout") or "anywhere"
+    # 恢复默认不联网探：这一步是"回到出厂值"，结论本来就写在预设里
+    layout = await _decide_layout(
+        db, current_user["user_id"],
+        base_url=preset["base_url"],
+        model=preset["chat_model"] or preset["voice_id"] or None,
+        manual=None, preset_layout=preset["system_layout"], probe=False,
+    )
+    _reset_provider(provider, preset, layout)
     await db.flush()
     profiles = (await db.execute(
         select(UserApiProfile).where(UserApiProfile.provider_id == provider.id)
     )).scalars().all()
     return _provider_dict(provider, profiles)
+
+
+@router.post("/providers/{provider_id}/probe-layout")
+async def probe_provider_layout(
+    provider_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """重新识别这家厂商的 system 摆放，并把结论落库。
+
+    用户主动点的「重新识别」：此时地址已经保存过，所以私网也允许探一次
+    （登记规则见 services/agent/base_url_registry.py）。改完本地服务、换了模型之后
+    点一下就能拿到新结论，不必等到下次保存。
+    """
+    provider = await _own_provider(db, provider_id, current_user["user_id"])
+    preset = _preset_of(provider.preset_key, provider.kind)
+    layout = await _decide_layout(
+        db, current_user["user_id"],
+        base_url=provider.base_url,
+        model=provider.default_primary,
+        manual=None,
+        preset_layout=preset["system_layout"] if preset else None,
+    )
+    for column, value in _layout_columns(layout).items():
+        setattr(provider, column, value)
+    await db.flush()
+    return {"layout": layout.layout, "source": layout.source, "message": layout.message}
 
 
 @router.delete("/providers/{provider_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -416,34 +486,96 @@ async def _has_default(db: AsyncSession, user_id: int, kind: str) -> bool:
     return row is not None
 
 
-def _preset_of(key: str | None, kind: str) -> dict | None:
-    if not key:
-        return None
-    from app.services.agent.provider_presets import get_all_presets
+def _preset_of(key: str | None, kind: str) -> ProviderPreset | None:
+    """按 key 取内置预设，并校验它属于这个 kind（LLM 与语音不能互相接错）
 
-    for p in get_all_presets(kind):
-        if p["key"] == key:
-            return p
-    return None
+    取预设一律走 pure 层的 get_preset（它给归一化后的完整形状），
+    不要自己遍历 get_all_presets 找 key——那就是第二套查找逻辑。
+    """
+    preset = get_preset(key) if key else None
+    return preset if preset and preset["kind"] == kind else None
 
 
-def _options_of(preset: dict | None) -> list[dict] | None:
-    """内置预设的 models/voices → 通用 options 形状（LLM 与语音同一条路径）"""
+def _preset_values(preset: ProviderPreset | None) -> dict:
+    """内置预设 → 厂商行的默认字段（没有预设时给「自定义厂商」的空底）
+
+    新建（POST/connect）与"恢复默认"共用这一份：字段怎么从预设里取，
+    只在这里定义一次，否则三个端点迟早各写各的（副模型有、语音主模型没有之类）。
+
+    **system 布局不在这里**：它不是"从预设抄一个值"，而是一次判定
+    （手选 > 探测 > 预设 > 按地址猜，见 services/agent/channel_layout.py）。
+    把预设值当作布局直接抄下来，正是自建地址拿到默认 anywhere、每轮 500 的来源。
+    """
     if not preset:
-        return None
-    rows = preset.get("models") or preset.get("voices") or []
-    out = [{"value": r.get("value", ""), "label": r.get("label") or r.get("value", "")}
-           for r in rows if r.get("value")]
-    return out or None
+        return {"preset_key": None, "base_url": "", "options": None,
+                "default_primary": None, "default_secondary": None,
+                "thinking_supported": False}
+    # 下拉项：LLM 取 models、语音取 voices，统一成 [{value,label}]
+    rows = preset["models"] or preset["voices"]
+    options = [{"value": r.get("value", ""), "label": r.get("label") or r.get("value", "")}
+               for r in rows if r.get("value")]
+    return {
+        "preset_key": preset["key"],
+        "base_url": preset["base_url"],
+        "options": options or None,
+        # 主模型：LLM 是 chat_model、语音是 voice_id（同一个位置，两种叫法）
+        "default_primary": preset["chat_model"] or preset["voice_id"] or None,
+        "default_secondary": preset["work_model"] or None,
+        "thinking_supported": preset["thinking_supported"],
+    }
 
 
-def _primary_of(preset: dict | None) -> str | None:
-    if not preset:
-        return None
-    return preset.get("chat_model") or preset.get("voice_id") or None
+async def _decide_layout(
+    db: AsyncSession, user_id: int, *,
+    base_url: str,
+    model: str | None,
+    manual: str | None,
+    preset_layout: str | None,
+    probe: bool = True,
+):
+    """定这条厂商的 system 摆放：共享判定 + 「已保存的私网地址」这条授权线。
+
+    私网地址只有在**已经保存过**时才允许去探（否则这个接口就是一台内网扫描器）。
+    新建一条本机 llama-server 时它还没登记，于是退化成「按地址保守猜」——
+    字面私网会得到 leading，正好是本地推理服务需要的。
+    """
+    from app.services.agent.base_url_registry import saved_private_hosts
+    from app.services.agent.channel_layout import decide_system_layout
+
+    return await decide_system_layout(
+        base_url=base_url, model=model, manual=manual, preset_layout=preset_layout,
+        probe=probe,
+        allow_private_hosts=await saved_private_hosts(db, user_id) if probe else (),
+    )
 
 
-def _secondary_of(preset: dict | None) -> str | None:
-    if not preset:
-        return None
-    return preset.get("work_model") or None
+def _layout_columns(decision) -> dict:
+    """判定结论 → 厂商行上的四列（时间列是 naive，与 created_at 同口径）"""
+    checked_at = None
+    if decision.checked_at:
+        try:
+            checked_at = datetime.fromisoformat(
+                decision.checked_at.replace("Z", "+00:00")).replace(tzinfo=None)
+        except ValueError:
+            checked_at = None
+    return {
+        "system_layout": decision.layout,
+        "system_layout_source": decision.source,
+        "system_template_hash": decision.template_hash or None,
+        "system_layout_checked_at": checked_at,
+    }
+
+
+def _new_provider(user_id: int, kind: str, preset: ProviderPreset, layout) -> UserApiProvider:
+    """从内置预设接一家厂商（名称沿用预设的厂商名）"""
+    return UserApiProvider(user_id=user_id, kind=kind, name=preset["label"],
+                           **_preset_values(preset), **_layout_columns(layout))
+
+
+def _reset_provider(provider: UserApiProvider, preset: ProviderPreset, layout) -> None:
+    """按内置预设恢复地址/模型清单/能力（Key 不动，那是用户的东西；身份也不变）"""
+    values = _preset_values(preset)
+    values.pop("preset_key")
+    values.update(_layout_columns(layout))
+    for field, value in values.items():
+        setattr(provider, field, value)

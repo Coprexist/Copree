@@ -14,6 +14,7 @@ Revision ID: 0123
 Revises: 0122
 """
 import json
+from pathlib import Path
 from typing import Sequence, Union
 
 import sqlalchemy as sa
@@ -27,6 +28,13 @@ depends_on: Union[str, Sequence[str], None] = None
 
 # 与 models/api_profile.py 的 json_column() 同一口径
 JSON_TYPE = sa.JSON().with_variant(JSONB, "postgresql")
+
+# 内置预设的冻结快照（versions/_provider_presets_snapshot.json）
+# 迁移不能问 app 里的活代码：预设以后改地址、加模型，已经升过级的库不会重跑这段，
+# 而还没升级的库却会跑去问"今天的内置清单"——同一版迁移因此在不同时间给出不同结果。
+_FROZEN_PRESETS = json.loads(
+    Path(__file__).with_name("_provider_presets_snapshot.json").read_text(encoding="utf-8")
+)["presets"]
 
 
 def upgrade() -> None:
@@ -91,8 +99,8 @@ def upgrade() -> None:
 def _migrate_global_config() -> None:
     """把每个用户的旧全局 API 配置变成「厂商 + 默认配置档」
 
-    单独成函数：这段只在有旧数据时才有意义，新库（users 为空）会整段跳过，
-    因此这里才延迟 import 内置预设——内置清单以后怎么改都不影响已跑过的迁移。
+    单独成函数：这段只在有旧数据时才有意义，新库（users 为空）会整段跳过。
+    预设一律取模块级的冻结快照，不问 app 里的活代码——迁移要的是"当年的内置清单"。
     """
     conn = op.get_bind()
     rows = conn.execute(sa.text(
@@ -104,11 +112,9 @@ def _migrate_global_config() -> None:
     if not rows:
         return
 
-    from app.services.agent.provider_presets import PRESETS
-
     by_host: dict[str, dict] = {}
-    for preset in PRESETS.values():
-        if preset.get("kind", "llm") != "llm":
+    for preset in _FROZEN_PRESETS:
+        if preset["kind"] != "llm":
             continue
         host = _host_of(preset.get("base_url", ""))
         if host:

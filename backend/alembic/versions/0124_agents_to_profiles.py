@@ -19,6 +19,7 @@ Revision ID: 0124
 Revises: 0123
 """
 import json
+from pathlib import Path
 from typing import Sequence, Union
 
 import sqlalchemy as sa
@@ -28,6 +29,11 @@ revision: str = "0124"
 down_revision: Union[str, None] = "0123"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
+
+# 内置预设的冻结快照（与 0123 同一份）：迁移问的是"当年的内置清单"，不是今天的活代码
+_FROZEN_PRESETS = json.loads(
+    Path(__file__).with_name("_provider_presets_snapshot.json").read_text(encoding="utf-8")
+)["presets"]
 
 
 def upgrade() -> None:
@@ -67,11 +73,9 @@ def upgrade() -> None:
     if not owners:
         return
 
-    from app.services.agent.provider_presets import PRESETS
-
     by_host: dict[str, dict] = {}
-    for preset in PRESETS.values():
-        if preset.get("kind", "llm") != "llm":
+    for preset in _FROZEN_PRESETS:
+        if preset["kind"] != "llm":
             continue
         host = _host(preset.get("base_url", ""))
         if host:

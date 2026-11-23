@@ -3318,7 +3318,7 @@ async def get_provider_presets(
     kind 决定取哪一类：llm（默认，与历史行为一致）| voice（TTS 提供商）。
     两类预设同表不同类，见 provider_presets.ProviderPreset。
     """
-    from app.services.agent.provider_presets import get_all_presets
+    from app.utils.pure.provider_presets import get_all_presets
     from app.services.infrastructure.system_settings_service import get_providers
 
     presets = get_all_presets(kind)
@@ -3386,40 +3386,32 @@ async def save_provider(
 ):
     """新增或更新一个 LLM 供应商配置（保存到 system_settings.provider_config 数组）"""
     import json
-    from app.services.agent.provider_presets import get_preset
+    from app.utils.pure.provider_presets import get_preset
     from app.services.infrastructure.system_settings_service import get_providers
     from app.utils.pure.provider_config import build_provider_config, upsert_provider
 
-    if body.provider == "manual":
-        config = build_provider_config(
-            name=body.name, provider_key="manual",
-            base_url=body.base_url or "", chat_model=body.chat_model or "",
-            work_model=body.work_model or "", embedding_model=body.embedding_model or "",
-            model_options=body.model_options or [],
-            thinking_supported=body.thinking_supported or False,
-            is_default=body.is_default,
-            system_layout="anywhere",
-        )
-    else:
-        preset = get_preset(body.provider)
-        if preset is None:
-            raise HTTPException(400, f"未知厂商: {body.provider}")
-        config = build_provider_config(
-            name=body.name, provider_key=preset["key"],
-            base_url=body.base_url or preset["base_url"],
-            chat_model=body.chat_model or preset["chat_model"],
-            work_model=body.work_model or preset["work_model"],
-            embedding_model=body.embedding_model or preset["embedding_model"],
-            model_options=body.model_options or preset["models"],
-            thinking_supported=body.thinking_supported if body.thinking_supported is not None else preset["thinking_supported"],
-            is_default=body.is_default,
-            system_layout=preset.get("system_layout", "anywhere"),
-        )
+    if body.provider != "manual" and get_preset(body.provider) is None:
+        raise HTTPException(400, f"未知厂商: {body.provider}")
+
+    # 默认值全部交给构造器：这里只交出"表单里实际填了什么"，不再逐字段 or 预设
+    config = build_provider_config(
+        provider_key=body.provider,
+        overrides={
+            "name": body.name,
+            "base_url": body.base_url,
+            "chat_model": body.chat_model,
+            "work_model": body.work_model,
+            "embedding_model": body.embedding_model,
+            "model_options": body.model_options,
+            "thinking_supported": body.thinking_supported,
+            "is_default": body.is_default,
+        },
+    )
 
     providers = await get_providers(db)
     existing = next((p for p in providers if p.get("name") == body.name), None)
     layout_note = await _apply_system_layout(
-        config, body, preset if body.provider != "manual" else None, existing,
+        config, body, get_preset(body.provider) if body.provider != "manual" else None, existing,
     )
     providers = upsert_provider(providers, config, body.index)
 
@@ -3472,44 +3464,35 @@ async def probe_provider_template(
 async def _apply_system_layout(
     config: dict, body: "SaveProviderBody", preset: dict | None, existing: dict | None = None,
 ) -> dict:
-    """决定这条通道的 system 摆放：用户手选 > 保存时探测 > 出厂预设 > anywhere。
+    """把判定结论写进这条 provider_config 条目，并把「给人看的一句话」返回给前端。
 
-    探测是**增强项**：5 秒上限、失败不阻塞保存、拿不到就保持预设值。
-    对话路径永远不探测，只读这里写下的结论。
+    优先级与用户配置档那条路径**完全同一份**（services/agent/channel_layout.py）：
+    手选 > 保存时探测 > 出厂预设 > 按地址保守猜。探测是增强项：5 秒上限、失败不阻塞保存。
     """
-    from datetime import datetime, timezone
-
-    from app.services.agent.template_probe import probe_chat_template
+    from app.services.agent.channel_layout import decide_system_layout
     from app.utils.pure.chat_template import normalize_layout
 
-    if body.system_layout:
-        config["system_layout"] = normalize_layout(body.system_layout)
-        config["system_layout_source"] = "user"
-        return {"layout": config["system_layout"], "source": "user", "message": "已按手动指定保存"}
-
     preset_layout = (preset or {}).get("system_layout")
-    config.setdefault("system_layout", normalize_layout(preset_layout))
-    config["system_layout_source"] = "preset"
-    base_url = config.get("base_url") or ""
-    if not base_url:
-        return {"layout": config["system_layout"], "source": "preset", "message": "未填地址，沿用预设"}
-
-    probe = await probe_chat_template(
-        base_url, model=config.get("chat_model") or None, allow_private=True,
+    decision = await decide_system_layout(
+        base_url=config.get("base_url") or "",
+        model=config.get("chat_model") or None,
+        manual=body.system_layout,
+        preset_layout=preset_layout,
+        allow_private=True,
     )
-    if not probe.ok:
-        return {"layout": config["system_layout"], "source": "preset", "message": "未识别到模板，沿用预设"}
+    config["system_layout"] = decision.layout
+    config["system_layout_source"] = decision.source
+    if decision.template_hash:
+        config["system_template_hash"] = decision.template_hash
+    if decision.checked_at:
+        config["system_layout_checked_at"] = decision.checked_at
 
     previous = normalize_layout((existing or {}).get("system_layout") or preset_layout)
-    config["system_layout"] = probe.layout
-    config["system_layout_source"] = "detected"
-    config["system_template_hash"] = probe.template_hash
-    config["system_layout_checked_at"] = datetime.now(timezone.utc).isoformat()
     return {
-        "layout": probe.layout,
-        "source": "detected",
-        "message": probe.message,
-        "changed": probe.layout != previous,
+        "layout": decision.layout,
+        "source": decision.source,
+        "message": decision.message,
+        "changed": decision.layout != previous,
     }
 
 

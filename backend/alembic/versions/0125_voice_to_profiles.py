@@ -16,6 +16,7 @@ Revision ID: 0125
 Revises: 0124
 """
 import json
+from pathlib import Path
 from typing import Sequence, Union
 
 import sqlalchemy as sa
@@ -25,6 +26,12 @@ revision: str = "0125"
 down_revision: Union[str, None] = "0124"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
+
+# 内置预设的冻结快照（与 0123 同一份）：迁移问的是"当年的内置清单"，不是今天的活代码
+_FROZEN_PRESETS = json.loads(
+    Path(__file__).with_name("_provider_presets_snapshot.json").read_text(encoding="utf-8")
+)["presets"]
+_FROZEN_BY_KEY = {p["key"]: p for p in _FROZEN_PRESETS}
 
 TAG = "· 迁移语音"
 
@@ -43,8 +50,6 @@ def upgrade() -> None:
     if not rows:
         return
 
-    from app.services.agent.provider_presets import PRESETS
-
     providers: dict[tuple, int] = {}
     profiles: dict[tuple, int] = {}
 
@@ -61,7 +66,7 @@ def upgrade() -> None:
             # 插进去只会撞唯一约束被改名成「BreezeBlue 2」，界面上多一张空壳卡片。
             provider_id = _find_provider(conn, row.owner_id, row.base_url)
             if provider_id is None:
-                preset = PRESETS.get(pkey) if pkey else None
+                preset = _FROZEN_BY_KEY.get(pkey) if pkey else None
                 if preset is not None and preset.get("kind") != "voice":
                     preset = None
                 label = (preset or {}).get("label") or pkey or "语音厂商"

@@ -5,6 +5,8 @@
 2. 401 不能被兜底掩盖（路径是通的，真因是 key）。
 另外守住"响应体里的 key 不能原样回给浏览器"。
 """
+import json
+
 import httpx
 import pytest
 
@@ -17,7 +19,7 @@ MIMO = "https://api.xiaomimimo.com"
 
 def _preset_chat_model(base_url: str) -> str:
     """预设里的 chat_model —— 探针兜底用的就是这个值，别在这里手抄模型名"""
-    from app.services.agent.provider_presets import get_all_presets
+    from app.utils.pure.provider_presets import get_all_presets
 
     target = base_url.rstrip("/")
     return next(
@@ -28,6 +30,28 @@ def _preset_chat_model(base_url: str) -> str:
 
 def _client(handler) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+def _chat_only_handler(*, calls: list[str] | None = None, body: dict | None = None):
+    """「只有 chat 能通」的通道：/models 与 Ollama 原生 /api/tags 都不存在。
+
+    探针的兜底链是 models → 原生 tags → chat（api_probe.probe_provider），所以三条路径
+    都得各自应答。只判 /models 的话，chat 的 JSON 会被当成 /api/tags 的 200 响应，
+    探针接着按「这不是 ollama」往下走 —— 表面上还能过，但断言会跟真实链路错开。
+    """
+    def handler(request):
+        path = request.url.path
+        if calls is not None:
+            calls.append(path)
+        if path == "/api/tags":
+            return httpx.Response(404)
+        if path.endswith("/models"):
+            return httpx.Response(404, text="<html>404 Not Found</html>")
+        if body is not None:
+            body.update(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "hi"}}]})
+
+    return handler
 
 
 async def test_models_ok_reports_model_count():
@@ -43,20 +67,15 @@ async def test_models_ok_reports_model_count():
 
 
 async def test_models_404_falls_back_to_tiny_chat():
-    """/models 不存在 → 真发一次极小 chat；MiMo 这条路径必须判成功"""
+    """/models 不存在 → 先问一次 Ollama 原生 /api/tags，再退化成真发一次极小 chat"""
     calls: list[str] = []
 
-    def handler(request):
-        calls.append(request.url.path)
-        if request.url.path.endswith("/models"):
-            return httpx.Response(404, text="<html>404 Not Found</html>")
-        return httpx.Response(200, json={"choices": [{"message": {"content": "hi"}}]})
-
-    async with _client(handler) as c:
+    async with _client(_chat_only_handler(calls=calls)) as c:
         r = await probe_provider(MIMO, "sk-test", client=c)
 
     assert r.ok and r.kind == "ok"
-    assert calls == ["/v1/models", "/v1/chat/completions"]
+    # 兜底链的顺序就是契约：多一步少一步都要能被这条断言发现
+    assert calls == ["/v1/models", "/api/tags", "/v1/chat/completions"]
     assert _preset_chat_model(MIMO) in r.message     # 模型名取自预设
 
 
@@ -64,14 +83,7 @@ async def test_chat_probe_body_is_minimal():
     """兜底请求必须是极小请求：max_tokens=1、不流式，别真让模型写作文"""
     body: dict = {}
 
-    def handler(request):
-        if request.url.path.endswith("/models"):
-            return httpx.Response(404)
-        import json
-        body.update(json.loads(request.content))
-        return httpx.Response(200, json={"choices": []})
-
-    async with _client(handler) as c:
+    async with _client(_chat_only_handler(body=body)) as c:
         await probe_provider(MIMO, "sk-test", client=c)
 
     assert body["max_tokens"] == 1 and body["stream"] is False

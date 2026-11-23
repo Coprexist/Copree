@@ -7,7 +7,7 @@ work_model 是 NotRequired（有些档只有一个模型）。KeyError 让"把�
 配置档里新选的模型因此被判成"清单里没有"（陈屿的 qwen3:4b 就是这样丢的）。
 """
 from app.services.agent.model_upgrade import preset_models_for_alignment
-from app.services.agent.provider_presets import PRESETS
+from app.utils.pure.provider_presets import PRESETS
 
 
 def test_every_llm_preset_survives_the_mapping():
