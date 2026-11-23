@@ -1,5 +1,4 @@
 import { useState, useEffect, type CSSProperties } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { api } from '../api/client'
 import ChatView from './ChatView'
 import ChatHeader from './shared/ChatHeader'
@@ -26,7 +25,6 @@ export default function DMChatView({ sessionId, onMobileBack }: DMChatViewProps)
   const [showSettings, setShowSettings] = useState(false)
   const [showProfile, setShowProfile] = useState(false)
   const [tokenUsage, setTokenUsage] = useState<{ total_tokens: number; api_calls: number } | null>(null)
-  const navigate = useNavigate()
 
   useEffect(() => {
     if (!sessionId) return
@@ -55,11 +53,6 @@ export default function DMChatView({ sessionId, onMobileBack }: DMChatViewProps)
     window.addEventListener('dm-partner-state-change', handler)
     return () => window.removeEventListener('dm-partner-state-change', handler)
   }, [])
-
-  // 监听到新消息时刷新 token 用量
-  const refreshTokenUsage = () => {
-    api.get(`/dm/${sessionId}/my-token-usage`).then(setTokenUsage).catch(() => {})
-  }
 
   const handleToggleDnd = async () => {
     try {

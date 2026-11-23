@@ -11,7 +11,7 @@ import { IN_APP_NOTIFICATION_KEY } from '../hooks/useNotificationSocket'
 import MagicVisionFilter from '../components/MagicVisionFilter.tsx'
 import ThemeCustomizer from '../components/ThemeCustomizer'
 import SkinPicker from '../components/SkinPicker'
-import { normalizePrefs, defaultPrefs, loadFromStorage, saveToStorage, apply } from '../utils/cssFilters'
+import { defaultPrefs, loadFromStorage, saveToStorage, apply } from '../utils/cssFilters'
 import type { MagicVisionPrefs } from '../utils/cssFilters'
 import { useResizableSidebar } from '../hooks/useResizableSidebar'
 import { useRailCollapsed, RAIL_COLLAPSED_WIDTH as RAIL_W } from '../hooks/useRailCollapsed'
@@ -20,7 +20,7 @@ import { LANGUAGES } from '../i18n/languages'
 import { NOTICE_BOX_CLASS, NOTICE_TEXT_CLASS, useNotice } from '../hooks/useNotice'
 import { isDesktop } from '../utils/platform'
 import { invoke } from '../utils/tauri'
-import { Key, Zap, Save, Clock, Palette, Bell, Eye, EyeOff, CheckCircle, XCircle, Loader2, Globe, Layout, Bot, Pencil, X, Ticket, Plus, ChevronDown, ChevronRight, Shield, AlertTriangle, ArrowLeft, Mail, Monitor, HardDrive, Trash2, Cpu, Wrench, Box, ExternalLink, BarChart3, Star, ChevronLeft } from 'lucide-react'
+import { Key, Zap, Save, Clock, Palette, Bell, CheckCircle, XCircle, Loader2, Globe, Layout, Ticket, Plus, ChevronDown, ChevronRight, Shield, AlertTriangle, ArrowLeft, Mail, Monitor, HardDrive, Trash2, Cpu, Wrench, Box, ExternalLink, BarChart3, ChevronLeft } from 'lucide-react'
 import { useNavigate, useBlocker, useLocation, useSearchParams } from 'react-router-dom'
 
 // 常用时区列表
@@ -123,11 +123,11 @@ export default function SettingsPage() {
   const [autoStart, setAutoStart] = useState(false)
   const [buildFactoryExpanded, setBuildFactoryExpanded] = useState(false)
   const [buildEnvInstalled, setBuildEnvInstalled] = useState(false)
-  const [buildEnvVersion, setBuildEnvVersion] = useState('')
+  const [buildEnvVersion] = useState('')
   const [building, setBuilding] = useState(false)
   const [installingEnv, setInstallingEnv] = useState(false)
   const [lastBuild, setLastBuild] = useState('')
-  const [downloadLink, setDownloadLink] = useState('')
+  const [downloadLink] = useState('')
   const [clearCacheMsg, setClearCacheMsg] = useState('')
 
   // 检测当前平台

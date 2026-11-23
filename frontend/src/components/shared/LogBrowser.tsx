@@ -17,7 +17,7 @@ import RequestBodyViewer, { type RequestBodyViewerApi } from './RequestBodyViewe
 import OutlineNav, { type OutlineEntry } from './OutlineNav'
 import { RunStatusChip } from './RunStatus'
 import {
-  StateChip, SwitchChip, groupByState, isSwitchRow, logStateOf, stateKeyOf, stateFrameOfKey,
+  StateChip, SwitchChip, groupByState, isSwitchRow, logStateOf, stateKeyOf,
   type LogStateFrame,
 } from './LogState'
 

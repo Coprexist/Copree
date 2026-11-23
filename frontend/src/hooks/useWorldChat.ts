@@ -2,7 +2,7 @@
  * 世界 AI 对话 hook — 聊天状态 + 流式发送 + 排队 + 建议按钮 + 斜杠命令
  * 从 WorldDesignPage 拆分（2026-08-06 重构）
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject, type Dispatch, type SetStateAction, type UIEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject, type Dispatch, type SetStateAction } from 'react'
 import { api } from '../api/client'
 import type { ReadyAttachment } from './useAttachmentUpload'
 import { BOTTOM_THRESHOLD, useStickToBottom } from './useStickToBottom'
@@ -195,7 +195,7 @@ export function useWorldChat({ wid, onRefresh, onMsg }: UseWorldChatOptions) {
   })
   const {
     listRef, listEls, eachList, firstList, isAtBottom, isAtBottomRef, canScroll: chatCanScroll,
-    scrollToBottom, forceScrollToBottom, follow, resetFollow, measure,
+    scrollToBottom, forceScrollToBottom, follow, measure,
   } = stick
   const sessionListRef = useRef(sessionList)
   sessionListRef.current = sessionList

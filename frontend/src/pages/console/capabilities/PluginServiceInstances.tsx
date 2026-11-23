@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { CheckCircle, Circle, Play, Plus, RefreshCw, Settings2, Square, Trash2 } from 'lucide-react'
+import {   Play, Plus, RefreshCw, Settings2, Square, Trash2 } from 'lucide-react'
 import { api } from '../../../api/client'
 import { useT } from '../../../i18n/I18nContext'
 import type { PluginServiceInstance, PluginView } from '../../../utils/skin'

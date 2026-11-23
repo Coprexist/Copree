@@ -7,7 +7,6 @@
  */
 import { useState } from 'react'
 import { FileText, Brain, Search, Globe, Terminal, Package, Clock, Wrench, Eraser, ChevronDown } from 'lucide-react'
-import { WidthHandles } from '../ui'
 import { useWidthDrag } from '../../hooks/useWidthDrag'
 
 // ── 对话内容列宽（学 DSH ConversationRoot / WidthHandle）──

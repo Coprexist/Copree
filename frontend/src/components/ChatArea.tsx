@@ -5,12 +5,12 @@ import ChatView from './ChatView'
 import ChatSidebar from './ChatSidebar'
 import DMChatView from './DMChatView'
 import GroupSettingsPanel from './GroupSettingsPanel'
-import { GroupAvatarHeader, thumbUrl } from './GroupAvatar'
+import { GroupAvatarHeader } from './GroupAvatar'
 import ChatHeader from './shared/ChatHeader'
 import { CHAT_HEADER_INSET } from './shared/chatHeaderInset'
 import ProfileCard from './ProfileCard'
 import SearchOverlay from './SearchOverlay'
-import { Bell, BellOff, UserPlus, Settings, Bot, User, Globe, X, Check, Users, AlertTriangle } from 'lucide-react'
+import { Bell, BellOff, UserPlus, Settings, Bot, User, Globe, X, Check, AlertTriangle } from 'lucide-react'
 import { useT } from '../i18n/I18nContext'
 import { APP_DATA_READY_EVENT } from './EnterTransition'
 import { useResizableSidebar } from '../hooks/useResizableSidebar'
@@ -515,7 +515,7 @@ function InviteMemberModal({
   const [friends, setFriends] = useState<SearchResult[]>([])
   const [friendsOffset, setFriendsOffset] = useState(0)
   const [friendsLoading, setFriendsLoading] = useState(false)
-  const [friendsHasMore, setFriendsHasMore] = useState(true)
+  const [, setFriendsHasMore] = useState(true)
   const friendsLoadingRef = useRef(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [selectedEntries, setSelectedEntries] = useState<Map<string, SearchResult>>(new Map())

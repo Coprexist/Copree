@@ -5,7 +5,7 @@ import { ExpandPanel } from './ui'
 import { STATE_LABELS, STATE_TAG_COLORS } from '../constants'
 import {
   MessagesSquare, Folder, Brain, Users, Settings, Clock,
-  ChevronDown, ChevronUp, Puzzle, X } from 'lucide-react'
+  ChevronDown, ChevronUp, Puzzle } from 'lucide-react'
 
 // ─── 类型 ────────────────────────────────────────────
 

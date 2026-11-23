@@ -4,7 +4,7 @@ import { api } from '../api/client'
 import { fetchPendingRequests } from '../hooks/usePendingRequests'
 import { useT } from '../i18n/I18nContext'
 import { getStateDotColor } from '../constants'
-import { X, Bell, Pause, BellOff, LogOut, UserX, Shield, ShieldOff, UserPlus, Volume2, VolumeX, Download, Clock, Globe, Loader2, ArrowLeft, Crown, Pin, PinOff, Image, Camera, Users, CheckCircle2, MessageSquare, RefreshCw } from 'lucide-react'
+import {  Bell, Pause, BellOff, LogOut, UserX, Shield, ShieldOff, UserPlus, Volume2, Download, Clock, Globe, Loader2, Crown, Pin, Image, Camera, Users, CheckCircle2, MessageSquare, RefreshCw } from 'lucide-react'
 import Toggle from './Toggle'
 import { Button, Slider, UnderlineTabs } from './ui'
 import AvatarPickerModal from './AvatarPickerModal'
@@ -23,7 +23,7 @@ interface FederationPeerStatus {
 function FederationShareSection({ groupId }: { groupId: number }) {
   const t = useT()
   const [peers, setPeers] = useState<FederationPeerStatus[]>([])
-  const [loading, setLoading] = useState(false)
+  const [, setLoading] = useState(false)
   const [loaded, setLoaded] = useState(false)
   const [toggling, setToggling] = useState<number | null>(null)
   const [myDisplayName, setMyDisplayName] = useState('')
@@ -189,7 +189,6 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
   const navigate = useNavigate()
   const [tab, setTab] = useState<Tab>('general')
   const [members, setMembers] = useState<GroupMember[]>([])
-  const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
   // 表单状态
@@ -208,7 +207,7 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
   const [pinned, setPinned] = useState(false)
   const [speakLimit, setSpeakLimit] = useState(group?.speak_limit_per_minute === -1 ? -1 : (group?.speak_limit_per_minute || 0))
   const [speakWindow, setSpeakWindow] = useState(group?.speak_limit_window_seconds || 120)
-  const [speakEnabled, setSpeakEnabled] = useState((group?.speak_limit_per_minute ?? 0) >= 0)
+  const [speakEnabled] = useState((group?.speak_limit_per_minute ?? 0) >= 0)
   const [concurrentAiLimit, setConcurrentAiLimit] = useState(group?.concurrent_ai_limit ?? 2)
   const [vectorAccel, setVectorAccel] = useState(group?.is_vector_accelerated || false)
   const [dndUntil, setDndUntil] = useState<string | null>(null)

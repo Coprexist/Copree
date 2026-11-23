@@ -108,6 +108,7 @@ function describe(item: NotificationItem, t: (k: string) => string): { title: st
       // 新增 kind 忘了加分支时这里编译不过（KIND_STYLE 那张表靠 Record 守住，这张靠 never 守）；
       // 真到了运行时（新后端 + 老前端）给个兜底标题，别白屏
       const _exhaustive: never = kind
+      void _exhaustive
       return { title: t('notify:system'), body: preview || '' }
     }
   }

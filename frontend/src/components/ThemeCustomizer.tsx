@@ -5,7 +5,7 @@ import { useT } from '../i18n/I18nContext'
 import { RotateCcw, Check, Plus, Trash2, Smartphone } from 'lucide-react'
 import type { PluginView } from '../utils/skin'
 import {
-  THEME_COLOR_KEYS, THEME_COLORS_PREF_KEY, applyUserTheme,
+  THEME_COLOR_KEYS, THEME_COLORS_PREF_KEY,
   getEffectiveThemeColors, themeVarName, hexToRgbTriplet,
   type ThemeColorKey,
 } from '../utils/userTheme'

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useT, useLang } from '../i18n/I18nContext'
@@ -16,7 +16,7 @@ import {
   User, Settings, LogOut, Shield,
   Gift, BarChart3, Bot, ChevronRight, Edit3,
   Loader2, Check, X, ArrowRight, Activity,
-  FileText, HardDrive, Camera, Users, MessageSquare, Share2, Github, QrCode
+  FileText, HardDrive, Camera, Users, MessageSquare, Github, QrCode
 } from 'lucide-react'
 import AvatarPickerModal from '../components/AvatarPickerModal'
 import { avatarGradient, avatarShadowColor } from '../utils/avatar'

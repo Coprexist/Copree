@@ -33,7 +33,6 @@ const ENTRY_ATTACK = 0.85
 const ENTRY_RELEASE = 0.35
 const QUIET_MX = 18
 const LOUD_MX = 72
-const RANK_MIX = 0.55
 
 // 传播两版并存，PROP_MODE 切换；默认 v1，v2 留着之后调。
 const PROP_MODE: 'delay' | 'frames' = 'delay'
@@ -50,7 +49,6 @@ const WAVE_SPEEDS = [2.6, 5.2, 7.8]        // 相位推进速度（Hz）
 const WAVE_PHASES = [0, 1.7, 3.1]          // 初始相位
 const WAVE_MIX = 0.75                      // 行波占多少，实时频谱占其余
 // v1：单帧延迟线 —— 形状整体右移 1 格，长短关系原样带过去
-const PROP_DECAY = 0.98                    // 每推进一格衰减（0.98^31≈0.53，走到右端还看得见）
 // v2：多帧加权 —— 每格 = 前几帧各自左移 k 格的值按 PROP_FRAME_DECAY^k 加权平均
 const PROP_FRAMES = 8
 const PROP_FRAME_DECAY = 0.85

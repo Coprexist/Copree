@@ -218,7 +218,7 @@ export default function WorldDesignPage() {
   // 下载弹窗确认：按格式执行
   const doDownload = async (format: 'md' | 'docx') => {
     if (!downloadTarget) return
-    const { scope, title } = downloadTarget
+    const { scope } = downloadTarget
     const filename = scope === 'section' ? `api-doc-${docsActive || 'doc'}` : 'copree-world-api-docs'
     if (format === 'md') {
       const md = scope === 'section' ? docsContent : await getAllDocsMd()

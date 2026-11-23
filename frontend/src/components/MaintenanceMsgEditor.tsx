@@ -143,7 +143,7 @@ export default function MaintenanceMsgEditor() {
   }, [])
 
   /** 每栏标题行右侧的保存按钮 */
-  const SaveButton = ({ section, state, onSave }: { section: 'hard' | 'soft'; state: SaveState; onSave: () => void }) => {
+  const SaveButton = ({ state, onSave }: { state: SaveState; onSave: () => void }) => {
     const label = state === 'dirty' ? '保存更改' : state === 'saving' ? '保存中…' : state === 'saved' ? '已保存' : '保存并更新'
     return (
       <button
@@ -338,7 +338,7 @@ export default function MaintenanceMsgEditor() {
             <Lock size={13} className="text-rose-400" /> 暂停服务
             <span className="text-textMuted font-normal text-3xs ml-1 hidden sm:inline">——用户看到弹窗/顶栏，API 全部返回 503</span>
             <span className="ml-auto shrink-0">
-              <SaveButton section="hard" state={hardState} onSave={() => save('hard')} />
+              <SaveButton state={hardState} onSave={() => save('hard')} />
             </span>
           </div>
           <div className="space-y-2.5">
@@ -429,7 +429,7 @@ export default function MaintenanceMsgEditor() {
             <Megaphone size={13} className="text-accent-400" /> 温馨提示
             <span className="text-textMuted font-normal text-3xs ml-1 hidden sm:inline">——用户看到顶栏/弹窗提示，API 正常运行</span>
             <span className="ml-auto shrink-0">
-              <SaveButton section="soft" state={softState} onSave={() => save('soft')} />
+              <SaveButton state={softState} onSave={() => save('soft')} />
             </span>
           </div>
           <div className="space-y-2.5">

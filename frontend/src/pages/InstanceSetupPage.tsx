@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useT } from '../i18n/I18nContext'
-import { isDesktop, getInstanceUrl } from '../utils/platform'
+import { isDesktop } from '../utils/platform'
 import { Globe, CheckCircle, XCircle, Loader2, ArrowRight } from 'lucide-react'
 
 export default function InstanceSetupPage() {

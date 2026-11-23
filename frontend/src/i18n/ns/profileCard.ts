@@ -10,7 +10,6 @@ import type { TranslationDict } from '../types'
 export const profileCardZh: TranslationDict = {
 
   // ======================== 个人资料卡 / ProfileCard ========================
-  'blocked': '已屏蔽',
   'aiPrefix': 'AI ·',
   'human': '人类',
   'sending': '发起中...',
@@ -33,7 +32,6 @@ export const profileCardZh: TranslationDict = {
 }
 
 export const profileCardEn: TranslationDict = {
-  'blocked': 'Blocked',
   'aiPrefix': 'AI ·',
   'human': 'Human',
   'sending': 'Starting...',
@@ -56,7 +54,6 @@ export const profileCardEn: TranslationDict = {
 }
 
 export const profileCardJa: TranslationDict = {
-  'blocked': 'ブロック中',
   'aiPrefix': 'AI ·',
   'human': '人間',
   'sending': '開始中...',

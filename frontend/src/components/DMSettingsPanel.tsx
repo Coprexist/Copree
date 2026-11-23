@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { api } from '../api/client'
 import { useT } from '../i18n/I18nContext'
-import { X, Bell, BellOff, Download, Clock, ArrowLeft, Pin, Heart, PinOff, HeartOff } from 'lucide-react'
+import { X, Bell, BellOff, Download, Clock, ArrowLeft, Pin, Heart } from 'lucide-react'
 import Toggle from './Toggle'
 
 interface Partner {

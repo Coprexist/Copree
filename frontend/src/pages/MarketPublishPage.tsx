@@ -4,9 +4,9 @@
  * - 标题/描述/标签
  * - 可选"同步到 GitHub"（需后台已配置）
  */
-import { useCallback, useEffect, useState } from 'react'
+import {  useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Upload, X, Globe, Github } from 'lucide-react'
+import { Upload, Github } from 'lucide-react'
 import { api } from '../api/client'
 import { PageShell } from '../components/ui'
 

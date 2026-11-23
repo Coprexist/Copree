@@ -1,4 +1,4 @@
-import { createBrowserRouter, Navigate, Outlet, useLocation } from 'react-router-dom'
+import { createBrowserRouter, Navigate, useLocation } from 'react-router-dom'
 import { lazy } from 'react'
 import { useAuth } from './context/AuthContext'
 import Layout from './components/Layout'

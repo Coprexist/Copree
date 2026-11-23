@@ -18,12 +18,12 @@ import { markConversationRead, refreshChatLists } from '../hooks/useChatLists'
 import ActivityBar, { type ActivityUser } from './ActivityBar'
 import MobileScrollbar from './MobileScrollbar'
 import ProfileCard from './ProfileCard'
-import { EmptyState, MenuPanel, MenuItem } from './ui'
-import { Loader2, AlertTriangle, X, ArrowDown, ArrowUp, Bot, User, MessageSquare, Settings, Gamepad2, Globe } from 'lucide-react'
-import { getStateDotColor, CHAT_REFRESH_EVENT } from '../constants'
+import { EmptyState } from './ui'
+import { Loader2, AlertTriangle, X, ArrowDown, ArrowUp, MessageSquare, Settings, Gamepad2, Globe } from 'lucide-react'
+import { CHAT_REFRESH_EVENT } from '../constants'
 import { useT } from '../i18n/I18nContext'
 import { tryOpenWorldWindow } from '../utils/worldView'
-import { isTauri, onKeyboardChange } from '../utils/tauri'
+import {  onKeyboardChange } from '../utils/tauri'
 import { scrollToInContainer } from '../utils/scroll'
 import { useAttachmentUpload } from '../hooks/useAttachmentUpload'
 import { AttachmentChips, DropMask } from './AttachmentChips'
@@ -245,12 +245,9 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
     return Array.from(map.values())
   }, [thinkingAgents, typingAgents, speakingAgents, humanTyping])
 
-  // @提及 自动补全（仅群聊）
+  // 群成员（ChatInput 的 @提及 与成员状态点都用它）
   const [groupMembers, setGroupMembers] = useState<Array<{ type: string; id: number; name: string; state?: string }>>([])
-  const [mentionActive, setMentionActive] = useState(false)
   const [replyTo, setReplyTo] = useState<{ id: number; sender_name: string; content: string } | null>(null)
-  const [mentionQuery, setMentionQuery] = useState('')
-  const [mentionIdx, setMentionIdx] = useState(0)
 
   // 文件附件：上传逻辑与群视界世界对话共用 useAttachmentUpload
   //（图片如何进 LLM 多模态由后端 app/utils/multimodal.py 统一处理）
@@ -1134,45 +1131,6 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
   // @提及逻辑（仅群聊）
   // ============================================================
 
-  const mentionFiltered = useMemo(() => mentionQuery
-    ? groupMembers.filter((m) => m.name.toLowerCase().includes(mentionQuery.toLowerCase()))
-    : groupMembers
-  , [mentionQuery, groupMembers])
-
-  const detectMention = (value: string, cursorPos: number) => {
-    if (conversationType === 'dm') return
-    const beforeCursor = value.slice(0, cursorPos)
-    const atIdx = beforeCursor.lastIndexOf('@')
-    if (atIdx === -1) { setMentionActive(false); return }
-    const prev = atIdx > 0 ? beforeCursor[atIdx - 1] : ''
-    const allowed = prev === '' || prev === ' ' || /[，。！？、；：""【】（）]/.test(prev)
-    if (!allowed) { setMentionActive(false); return }
-    const query = beforeCursor.slice(atIdx + 1, cursorPos)
-    if (query.includes(' ')) { setMentionActive(false); return }
-    setMentionQuery(query)
-    setMentionIdx(0)
-    setMentionActive(true)
-  }
-
-  const insertMention = (name: string) => {
-    const ta = textareaRef.current
-    if (!ta) return
-    const value = input
-    const cursorPos = ta.selectionStart
-    const beforeCursor = value.slice(0, cursorPos)
-    const atIdx = beforeCursor.lastIndexOf('@')
-    if (atIdx === -1) return
-    const newBefore = beforeCursor.slice(0, atIdx) + '@' + name + ' '
-    const newValue = newBefore + value.slice(cursorPos)
-    setInput(newValue)
-    setMentionActive(false)
-    requestAnimationFrame(() => {
-      ta.focus()
-      const newPos = newBefore.length
-      ta.setSelectionRange(newPos, newPos)
-    })
-  }
-
   // 文件上传处理（超限/失败记成错误态附件，不再 alert 打断流程）
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files?.length) attachments.pick(e.target.files)
@@ -1200,22 +1158,11 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
     }
     localStorage.removeItem(`draft_${conversationType}_${conversationId}`)
     attachments.clear()
-    setMentionActive(false)
     window.dispatchEvent(new CustomEvent(CHAT_REFRESH_EVENT, { detail: { type: 'message_sent' } }))
   }
   // 故意在 render 里赋值（不放进 effect）：mermaid 错误事件可能在本轮 effect 跑完前就到，
   // 走 effect 同步会在那之前拿到 null
   handleSendRef.current = handleSend
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (mentionActive && mentionFiltered.length > 0) {
-      if (e.key === 'ArrowDown') { e.preventDefault(); setMentionIdx((prev) => (prev + 1) % mentionFiltered.length); return }
-      if (e.key === 'ArrowUp') { e.preventDefault(); setMentionIdx((prev) => (prev - 1 + mentionFiltered.length) % mentionFiltered.length); return }
-      if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); insertMention(mentionFiltered[mentionIdx].name); return }
-      if (e.key === 'Escape') { e.preventDefault(); setMentionActive(false); return }
-    }
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); }
-  }
 
   // ============================================================
   // 渲染
@@ -1446,26 +1393,6 @@ export default function ChatView({ conversationType, conversationId, myRole, ove
 
         {/* 附件预览列表（与群视界世界对话共用同一组件） */}
         <AttachmentChips items={attachments.items} onRemove={attachments.remove} errorText={t('chat:uploadFailed')} />
-
-        {/* @提及 自动补全下拉 */}
-        {mentionActive && mentionFiltered.length > 0 && (
-          <MenuPanel className="absolute bottom-full left-3 right-3 mb-1 max-h-48 overflow-y-auto z-modal">
-            {mentionFiltered.map((m, i) => (
-              <MenuItem
-                key={`${m.type}:${m.id}`}
-                active={i === mentionIdx}
-                onClick={() => insertMention(m.name)}
-                className="flex items-center gap-2 py-2 text-sm"
-              >
-                <span className={`w-2 h-2 rounded-full shrink-0 ${getStateDotColor(m.state)}`} />
-                <span className="font-medium">{m.name}</span>
-                <span className="text-textMuted text-xs ml-auto">
-                  {m.type === 'ai' ? <><Bot size={12} className="inline" /> AI</> : <User size={12} className="inline" />}
-                </span>
-              </MenuItem>
-            ))}
-          </MenuPanel>
-        )}
 
         {replyTo && (
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-t-xl border border-border bg-surface/50">

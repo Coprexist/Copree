@@ -1,5 +1,4 @@
-import { memo, useState, useMemo, useEffect, useRef, type ReactNode } from 'react'
-import { useAuth } from '../context/AuthContext'
+import { memo, useState, useMemo, useEffect, type ReactNode } from 'react'
 import { useBubbleDark } from '../hooks/useBubbleDark'
 import { FileIcon, Download, Globe, ShieldAlert, MessageSquare, MoreHorizontal } from 'lucide-react'
 import { formatMessageTime } from '../utils/time'
@@ -101,7 +100,6 @@ const MessageBubble = memo(function MessageBubble({
   senderName, senderAvatarUrl, content, isMine, createdAt, state,
   senderType, senderId, thinking, isTyping, sourcePublicId, via, attachments, messageType, onAvatarClick, messageId, replyTo, onReply, revoked, onRevoke, transcripts,
 }: MessageBubbleProps) {
-  const { user } = useAuth()
   const lang = useLang()
   const t = useT()
   useTimeTick()  // 全局 tick，驱动相对时间更新（不需要返回值）

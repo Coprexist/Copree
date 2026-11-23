@@ -1,14 +1,13 @@
 import { useState, useEffect } from 'react'
-import { useSearchParams } from 'react-router-dom'
 import { api } from '../api/client'
 import { useT, useLang } from '../i18n/I18nContext'
 import { useIsDark } from '../hooks/useIsDark'
 import { fmtTokenNum, cacheHitRatePct } from '../utils/format'
 import {
-  BarChart, Bar, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+  BarChart, Bar, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, ComposedChart, Line
 } from 'recharts'
-import { ArrowLeft, Loader2, BarChart3, Activity, FileText, Cpu } from 'lucide-react'
+import {  Loader2, BarChart3, Activity, FileText, Cpu } from 'lucide-react'
 import { Button, PageShell } from '../components/ui'
 
 interface DailyPoint {
@@ -50,7 +49,6 @@ interface AgentSummary {
 export default function UsagePage() {
   const t = useT()
   const lang = useLang()
-  const [searchParams] = useSearchParams()
   const [days, setDays] = useState(30)
   const [overview, setOverview] = useState<AgentSummary[]>([])
   const [selectedAgent, setSelectedAgent] = useState<number | null>(null)

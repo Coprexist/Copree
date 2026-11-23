@@ -1,14 +1,14 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useOutletContext } from 'react-router-dom'
-import { api, ApiError } from '../api/client'
-import { Bot, Plus, Edit3, History, Power, Download, Upload, X, RotateCcw, Eye, EyeOff, ArrowLeft, Menu } from 'lucide-react'
+import { api } from '../api/client'
+import { Bot, Plus, Edit3, History, Power, Download, Upload, X, RotateCcw, Menu } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import Toggle from '../components/Toggle'
 import { Button, Dialog, IconButton, PageHeader, Select, Slider, SecretInput } from '../components/ui'
 import { useT, useLang } from '../i18n/I18nContext'
 import { fmtDate, fmtDateTime } from '../utils/time'
 
-import { STATE_BADGE_COLORS, STATE_CHIP, AI_TYPE_LABEL } from '../constants'
+import {  STATE_CHIP, AI_TYPE_LABEL } from '../constants'
 
 interface ModelOption {
   value: string

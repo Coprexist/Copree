@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
 import { api } from '../../../api/client'
-import { useT, useLang } from '../../../i18n/I18nContext'
-import { fmtDateTime } from '../../../utils/time'
+import { useT } from '../../../i18n/I18nContext'
 import { Settings, Bot, Eye, Loader2, Save, Sliders } from 'lucide-react'
 import Toggle from '../../../components/Toggle'
 import { Button, Slider, UnderlineTabs } from '../../../components/ui'
@@ -47,7 +46,6 @@ interface AgentOption {
 
 export default function ConversationLogTab() {
   const t = useT()
-  const lang = useLang()
   const [section, setSection] = useState<'config' | 'agents' | 'viewer'>('config')
   const [config, setConfig] = useState<GlobalConfig | null>(null)
   const [configLoading, setConfigLoading] = useState(true)
@@ -131,11 +129,6 @@ export default function ConversationLogTab() {
       setAgentSettings(updated)
     } catch (err: any) { alert(err.message) }
     finally { setAgentSaving(false) }
-  }
-
-  const formatTime = (t: string | null) => {
-    if (!t) return '-'
-    return fmtDateTime(t, lang)
   }
 
   return (

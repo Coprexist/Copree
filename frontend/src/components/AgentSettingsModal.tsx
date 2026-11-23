@@ -1,11 +1,11 @@
 import { useState } from 'react'
 import { api } from '../api/client'
 import { useT } from '../i18n/I18nContext'
-import { ArrowLeft, X, Loader2, RotateCw, Ticket, ChevronRight } from 'lucide-react'
+import { ArrowLeft, X, Loader2, ChevronRight } from 'lucide-react'
 import StatusColorPicker from './shared/StatusColorPicker'
 import SkillBackpack from './SkillBackpack'
 import Toggle from './Toggle'
-import { SliderField, SecretInput } from './ui'
+import { SliderField } from './ui'
 // 档位预设与创建弹窗共用一份，避免两处各维护一套数字
 import { PRESETS } from './agent-create/presets'
 // 模型下拉也共用一份渲染：清单按通道给（后端 /agents/models），"当前通道不支持"的提示也在那里
@@ -97,22 +97,6 @@ const PROFILE_OPTIONS = [
   { value: 'digital_life', label: 'agentDetail:profileDigitalLife', desc: 'agentDetail:profileDigitalLifeDesc', color: 'bg-primary-500/10 text-primary-400 border-primary-400/30' },
 ]
 
-/** API Key 获取链接 */
-function ApiKeyGetLink({ providers }: { providers?: ProviderItem[] }) {
-  const defaultProvider = providers?.find(p => p.is_default) || providers?.[0]
-  if (!defaultProvider?.api_key_url) return null
-  return (
-    <a
-      href={defaultProvider.api_key_url}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="text-3xs text-primary-400 hover:text-primary-500 dark:hover:text-primary-300 underline underline-offset-2 font-normal"
-    >
-      获取 API Key →
-    </a>
-  )
-}
-
 /** 模型选项渲染：与创建弹窗同一份实现（按通道分组）*/
 function renderGroupedModels(models: ModelOption[], providers?: ProviderItem[], current?: string) {
   return renderModelOptions(models, providers || [], current)
@@ -167,8 +151,8 @@ export default function AgentSettingsModal({
   const [othersChatUsed, setOthersChatUsed] = useState(agent.others_chat_used ?? 0)
   const [disallowMode, setDisallowMode] = useState(agent.disallow_mode || 'strict')
   const [apiCreditCost, setApiCreditCost] = useState(agent.api_credit_cost || 0)
-  const [apiBaseUrl, setApiBaseUrl] = useState(agent.api_base_url || '')
-  const [apiKey, setApiKey] = useState('')
+  const [apiBaseUrl] = useState(agent.api_base_url || '')
+  const [apiKey] = useState('')
   const [bio, setBio] = useState(agent.bio || '')
   const [statusText, setStatusText] = useState(agent.status_text || '')
   const [statusColor, setStatusColor] = useState(agent.status_color || '')
@@ -188,14 +172,6 @@ export default function AgentSettingsModal({
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState('')
   const [saveOk, setSaveOk] = useState<boolean | null>(null)
-  const [testingApi, setTestingApi] = useState(false)
-  const [testApiMsg, setTestApiMsg] = useState('')
-  const [testApiOk, setTestApiOk] = useState<boolean | null>(null)
-  const [redeemCode, setRedeemCode] = useState('')
-  const [redeeming, setRedeeming] = useState(false)
-  const [redeemMsg, setRedeemMsg] = useState('')
-  const [redeemOk, setRedeemOk] = useState<boolean | null>(null)
-
   // ── 应用预设 ──
   const applyPreset = (profile: string) => {
     setConfigProfile(profile)
@@ -215,42 +191,6 @@ export default function AgentSettingsModal({
     if (p.reminder_grace !== undefined) setReminderGrace(p.reminder_grace)
     if (p.memory_load_mode !== undefined) setMemoryLoadMode(p.memory_load_mode)
     if (p.memory_recent_count !== undefined) setMemoryRecentCount(p.memory_recent_count)
-  }
-
-  const handleTestApi = async () => {
-    setTestingApi(true)
-    setTestApiMsg('')
-    try {
-      const data = await api.post<{ ok: boolean; message: string }>('/user/test-api-connection', {
-        api_base_url: apiBaseUrl || null,
-        api_key: apiKey || null,
-      })
-      setTestApiOk(data.ok)
-      setTestApiMsg(data.message || (data.ok ? t('modal:testSuccess') : t('modal:testFailed')))
-    } catch (err: any) {
-      setTestApiOk(false)
-      setTestApiMsg(err.message || t('error:testFailed'))
-    } finally {
-      setTestingApi(false)
-    }
-  }
-
-  const handleRedeem = async () => {
-    if (!redeemCode.trim()) return
-    setRedeeming(true)
-    setRedeemMsg('')
-    setRedeemOk(null)
-    try {
-      const data = await api.post<{ message: string }>('/user/redeem', { code: redeemCode.trim() })
-      setRedeemOk(true)
-      setRedeemMsg(data.message || t('modal:redeemSuccess'))
-      setRedeemCode('')
-    } catch (err: any) {
-      setRedeemOk(false)
-      setRedeemMsg(err.message || t('modal:redeemFailed'))
-    } finally {
-      setRedeeming(false)
-    }
   }
 
   const handleSave = async () => {

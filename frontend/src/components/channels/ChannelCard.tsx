@@ -622,7 +622,7 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
   /** 轨迹的动作名：插件声明 → 按语言翻译；缺了就显示工具 id 本身 */
   const trailLabel = (action: string) => trailText(activity?.i18n?.actions, action, action)
   /** 轨迹的参数：参数名也翻译（keyword → 关键词），值原样；不是 JSON 的老行直接显示 */
-  const trailArgs = (action: string, raw: string) => {
+  const trailArgs = (raw: string) => {
     const text = (raw || '').trim()
     if (!text) return ''
     try {
@@ -1170,7 +1170,7 @@ export default function ChannelCard({ agentId, showTitle = true }: { agentId: nu
                       {activityRaw ? row.action : trailLabel(row.action)}
                     </span>
                     <span className={(activityRaw ? 'text-textMuted font-mono' : 'text-textPrimary') + ' break-words min-w-0 flex-1'}>
-                      {(activityRaw ? row.raw : trailArgs(row.action, row.raw)) || '—'}
+                      {(activityRaw ? row.raw : trailArgs(row.raw)) || '—'}
                     </span>
                     {row.ms > 0 && (
                       <span className="text-textMuted tabular-nums whitespace-nowrap">{row.ms} ms</span>

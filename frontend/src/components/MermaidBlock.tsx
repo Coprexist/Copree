@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, useId, memo } from 'react'
+import { useEffect, useRef, useState, useId, memo } from 'react'
 import { Loader2, AlertTriangle, Maximize2, Minimize2, ZoomIn, ZoomOut, Download } from 'lucide-react'
 import CodeRenderer from './shared/CodeRenderer'
 import { useIsDark } from '../hooks/useIsDark'

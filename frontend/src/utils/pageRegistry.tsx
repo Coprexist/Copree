@@ -39,7 +39,6 @@ const MarketPublishPage = lazy(() => import('../pages/MarketPublishPage'))
 const WorldDesignPage = lazy(() => import('../pages/WorldDesignPage'))
 const WorldViewPage = lazy(() => import('../pages/WorldViewPage'))
 const StudyRoomPage = lazy(() => import('../pages/StudyRoomPage'))
-const NotFoundPage = lazy(() => import('../pages/NotFoundPage'))
 const DshChatPage = lazy(() => import('../pages/DshChatPage'))
 
 // ── 路由定义类型 ──

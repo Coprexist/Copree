@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { X, MessageSquare, UserPlus, Bot, User, Star } from 'lucide-react'
+import { X, MessageSquare, UserPlus, Star } from 'lucide-react'
 import { api } from '../api/client'
-import { getStateDotColor } from '../constants'
 import { avatarGradient } from '../utils/avatar'
 import { useT, useLang } from '../i18n/I18nContext'
 import { getStatusTextStyle, BG_ELEVATED_LIGHT, BG_ELEVATED_DARK } from '../utils/statusColor.tsx'
@@ -133,17 +132,6 @@ export default function ProfileCard({ entityType, entityId, entityName, state, a
     }
   }
 
-  const getStateText = (s?: string) => {
-    switch (s) {
-      case 'active': return t('dm:online')
-      case 'dnd': return t('dm:dnd')
-      case 'inactive': return t('dm:offline')
-      case 'blocked': return t('profileCard:blocked')
-      default: return ''
-    }
-  }
-
-  const displayState = profile?.state || state
 
   if (loading) {
     return (

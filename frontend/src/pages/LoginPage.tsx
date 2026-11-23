@@ -7,7 +7,7 @@ import { api } from '../api/client'
 import { useAppVersion } from '../hooks/useAppVersion'
 import { isEmbedded } from '../embed/bridge'
 import type { ReactNode } from 'react'
-import { Loader2, Lock, Mail, MessageCircle, User } from 'lucide-react'
+import { Loader2, Lock, Mail, User } from 'lucide-react'
 import { AutoHeight, Button, PasswordInput, UnderlineTabs } from '../components/ui'
 import VerificationCodeInput from '../components/VerificationCodeInput'
 import { useLayoutShift } from '../hooks/useLayoutShift'
@@ -212,8 +212,6 @@ export default function LoginPage() {
     }
   }
 
-  const showEmailFields = loginMethod === 'email_code' || (mode === 'register' && requireEmailVerification)
-  const showDirectFields = loginMethod === 'direct'
   const isRegister = mode === 'register'
   const isLogin = mode === 'login'
 

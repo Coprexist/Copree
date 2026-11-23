@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import {
-  BookOpen, Box, FileDown, Globe, Link2, Palette, Plug, RefreshCw, RefreshCcw, Server, Trash2, Wand2,
+  BookOpen, Box, FileDown, Link2, Plug, RefreshCw, RefreshCcw, Server, Trash2,
 } from 'lucide-react'
 import { api } from '../../../api/client'
 import { Button, EmptyState, Input, ListPanel, LIST_CELL_FLEX, Select, confirmAsync } from '../../../components/ui'

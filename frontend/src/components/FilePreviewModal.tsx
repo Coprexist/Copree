@@ -3,7 +3,7 @@ import { Download, X, ArrowLeft, FileIcon, Loader2, AlertTriangle, ZoomIn, ZoomO
 import { useT } from '../i18n/I18nContext'
 import { api, fileDownloadUrl } from '../api/client'
 import { formatFileSize } from '../utils/format'
-import { isTextPreviewable, getCodeLang, isMarkdownFile, resolveMimeType, EXT_LANG_MAP } from '../utils/mime'
+import { isTextPreviewable, getCodeLang, isMarkdownFile, resolveMimeType } from '../utils/mime'
 import { PREVIEW_SANDBOX, buildPreviewDocument } from '../utils/previewSandbox'
 import MarkdownContent from './shared/MarkdownContent'
 // 语音在预览弹窗里也用全站唯一那套波形条，不再另写一个原生 <audio>
@@ -299,7 +299,6 @@ export default function FilePreviewModal({ fileId, fileName, fileSize, mimeType,
 
   if (!previewable) return null
 
-  const fileForForward = { file_id: fileId, name: fileName, size: fileSize, mime_type: mimeType }
 
   // 非全屏默认宽度/高度
   const defaultWidth = 'md:w-[800px]'

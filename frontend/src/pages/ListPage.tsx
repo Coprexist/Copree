@@ -1,7 +1,6 @@
 import { useState, useEffect, useMemo, type ReactNode } from 'react'
 import { useNavigate, useOutletContext, useSearchParams } from 'react-router-dom'
 import { api } from '../api/client'
-import { useAuth } from '../context/AuthContext'
 import { useT, useLang } from '../i18n/I18nContext'
 import { uiLocale } from '../utils/time'
 import { Users, MessageSquare, UserPlus, Check, X, Search, ArrowLeft, Bot, User, Menu, Star } from 'lucide-react'
@@ -206,7 +205,6 @@ export default function ListPage() {
   const [sortMode, setSortMode] = useState<SortMode>('smart')
   const [searchQuery, setSearchQuery] = useState('')
   const [showSearch, setShowSearch] = useState(false)
-  const { user } = useAuth()
   const { theme } = useTheme()
   const navigate = useNavigate()
   const { openDrawer } = useOutletContext<{ openDrawer: () => void }>()
@@ -254,7 +252,7 @@ export default function ListPage() {
     }
   }
 
-  const handleStartDM = async (friendType: string, friendId: number, friendUserId?: number | null) => {
+  const handleStartDM = async (friendId: number, friendUserId?: number | null) => {
     try {
       const targetUserId = friendUserId || friendId
       const dm = await api.post(`/dm/${targetUserId}`)
@@ -445,7 +443,7 @@ export default function ListPage() {
                 // ui-standard-ignore: 好友行整行可点（头像+名字+备注），不是按钮形态
                 <button
                   key={`${f.friend_type}:${f.friend_id}`}
-                  onClick={() => handleStartDM(f.friend_type, f.friend_id, f.friend_user_id)}
+                  onClick={() => handleStartDM(f.friend_id, f.friend_user_id)}
                   className="w-full flex items-center gap-3 px-4 py-3.5 hover:bg-elevated transition-colors text-left"
                 >
                   <AvatarPic url={f.avatar_url} name={f.friend_name} />
@@ -593,7 +591,7 @@ export default function ListPage() {
                     onClick={() => {
                       setShowSearch(false)
                       setSearchQuery('')
-                      handleStartDM(f.friend_type, f.friend_id, f.friend_user_id)
+                      handleStartDM(f.friend_id, f.friend_user_id)
                     }}
                     className="w-full flex items-center gap-3 px-4 py-3.5 hover:bg-elevated transition-colors text-left"
                   >
@@ -635,7 +633,7 @@ export default function ListPage() {
                           onClick={() => {
                             setShowSearch(false)
                             setSearchQuery('')
-                            handleStartDM(f.friend_type, f.friend_id, f.friend_user_id)
+                            handleStartDM(f.friend_id, f.friend_user_id)
                           }}
                           className="w-full flex items-center gap-3 px-4 py-3 hover:bg-canvas transition-colors text-left"
                         >

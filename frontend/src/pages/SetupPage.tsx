@@ -8,7 +8,7 @@ import { type Lang, DEFAULT_LANG, LANGUAGES } from '../i18n/languages'
 import { api } from '../api/client'
 import {
   Globe, Check, User, Key, Bot, Mail, Shield, Sparkles,
-  Upload, Loader2, Eye, EyeOff, ChevronLeft, ChevronRight,
+  Upload, Loader2, ChevronLeft, ChevronRight,
   Server, ExternalLink, Star } from 'lucide-react'
 
 import AvatarCropModal from '../components/AvatarCropModal'
@@ -130,7 +130,6 @@ export default function SetupPage() {
   // ── Step 4: API 配置 ──
   const [apiBaseUrl, setApiBaseUrl] = useState('https://api.deepseek.com')
   const [apiKey, setApiKey] = useState('')
-  const [showApiKey, setShowApiKey] = useState(false)
   const [providerPresets, setProviderPresets] = useState<{name:string;provider:string;base_url:string;is_default:boolean}[]>([])
 
   // 拉取供应商预设

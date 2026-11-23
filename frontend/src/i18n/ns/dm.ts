@@ -11,7 +11,6 @@ export const dmZh: TranslationDict = {
 
   // ======================== 私信 / DM ========================
   'online': '在线',
-  'dnd': '免打扰',
   'offline': '离线',
   'lastActive': '最近在线',
   'shortDnd': '勿扰',
@@ -26,7 +25,6 @@ export const dmZh: TranslationDict = {
 
 export const dmEn: TranslationDict = {
   'online': 'Online',
-  'dnd': 'Do Not Disturb',
   'offline': 'Offline',
   'lastActive': 'Last seen',
   'shortDnd': 'DND',
@@ -41,7 +39,6 @@ export const dmEn: TranslationDict = {
 
 export const dmJa: TranslationDict = {
   'online': 'オンライン',
-  'dnd': 'おやすみモード',
   'offline': 'オフライン',
   'lastActive': '最終アクティブ',
   'shortDnd': 'おやすみ',

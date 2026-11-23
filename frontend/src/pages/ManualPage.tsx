@@ -61,7 +61,7 @@ function DocLink({ href, children, ...props }: any) {
 }
 
 /** 自定义 code 渲染：mermaid 代码块用 MermaidBlock，其余默认 */
-function CodeRenderer({ className, children, inline, ...props }: any) {
+function CodeRenderer({ className, children, inline }: any) {
   const match = /language-(\w+)/.exec(className || '')
   const code = String(children).replace(/\n$/, '')
 

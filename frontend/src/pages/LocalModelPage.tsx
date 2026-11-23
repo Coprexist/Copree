@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useT } from '../i18n/I18nContext'
 import { isDesktop } from '../utils/platform'
 import { invoke } from '../utils/tauri'
-import { Cpu, RefreshCw, Play, Square, Star, Loader2, ArrowLeft, Circle } from 'lucide-react'
+import { Cpu, RefreshCw, Play, Square, Star, Loader2, Circle } from 'lucide-react'
 import { Button, PageHeader } from '../components/ui'
 import { formatFileSize } from '../utils/format'
 

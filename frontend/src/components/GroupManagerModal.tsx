@@ -8,7 +8,7 @@
  *              （need_api=false 的类型助手不显示填 API 按钮——纯后端操控）
  */
 import { useCallback, useEffect, useState } from 'react'
-import { X, Plus, Trash2, Link2, Key, Globe, RefreshCw, Users, BookOpen, CheckCircle2 } from 'lucide-react'
+import { X, Plus, Trash2, Link2, Key, Globe, RefreshCw, Users, BookOpen } from 'lucide-react'
 import { api } from '../api/client'
 import BindGroupModal from './world/BindGroupModal'
 import { Dialog, UnderlineTabs, SecretInput, Select } from './ui'
@@ -49,7 +49,7 @@ export default function GroupManagerModal({ worldId, isOwner, onClose }: Props) 
   const [types, setTypes] = useState<GroupType[]>([])
   const [assistants, setAssistants] = useState<Assistant[]>([])
   const [msg, setMsg] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [, setLoading] = useState(false)
 
   // ── 新建类型表单 ──
   const [newType, setNewType] = useState({ name: '', applies_to: 'group', rules: '', bind_limit: 3, count: 1, need_api: true, default_name: '群助手' })

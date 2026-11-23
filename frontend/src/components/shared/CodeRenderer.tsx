@@ -9,7 +9,7 @@ import hljs from 'highlight.js'
  * - inline code → 允许断词换行
  * - block code → 语法高亮 + 横向滚动
  */
-export default function CodeRenderer({ className, children, inline, ...props }: any) {
+export default function CodeRenderer({ className, children, inline }: any) {
   const match = /language-(\w+)/.exec(className || '')
   const code = String(children).replace(/\n$/, '')
 

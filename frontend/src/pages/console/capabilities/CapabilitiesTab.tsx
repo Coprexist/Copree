@@ -235,7 +235,6 @@ function SkillManagementTab() {
     }
   }
 
-  const agentName = agents.find(a => a.id === selectedAgent)?.name || ''
 
   return (
     <div className="space-y-4">

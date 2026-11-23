@@ -181,7 +181,6 @@ interface StructuredSub {
 }
 
 function StructuredMemoryView({ agentId }: { agentId: number }) {
-  const t = useT()
   const lang = useLang()
   const [data, setData] = useState<StructuredCategory[] | null>(null)
   const [loading, setLoading] = useState(true)
@@ -344,7 +343,6 @@ export default function AgentDetailPage() {
   const [token, setToken] = useState<string | null>(null)
   const [tokenMasked, setTokenMasked] = useState<string | null>(null)
   const [generatingToken, setGeneratingToken] = useState(false)
-  const [showToken, setShowToken] = useState(false)
 
   // Profile 颜色选择器 — 用本地状态避免频繁 API 调用
   const [profileStatusColor, setProfileStatusColor] = useState('')
@@ -362,7 +360,7 @@ export default function AgentDetailPage() {
   const [storage, setStorage] = useState<StorageInfo | null>(null)
 
   // Logs：列表/状态/详情都由 LogBrowser 自己管，页面只提供导出入口
-  const [logExporting, setLogExporting] = useState(false)
+  const [, setLogExporting] = useState(false)
 
   // Memories
   const [memories, setMemories] = useState<MemoryItem[]>([])
