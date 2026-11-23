@@ -830,6 +830,21 @@
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 .btn:focus-visible { outline: 2px solid rgb(var(--tw-primary-400) / .5); outline-offset: 1px; }
 
+/* 焦点态兜底（2026-11）：只有 .btn / .icon-btn 写了焦点环，其余原生可聚焦元素——会话行、
+   设置菜单行、整块可点的卡片这类直接 <button> 的地方——一律吃浏览器默认环。那个默认环在
+   浅色底上是「黑内圈 + 白外圈」，跟站内的主色语言完全不搭；而且它由访客的系统设置决定
+   （开了全键盘控制就会出现），我们关不掉访客的开关，只能把站点这侧的语言统一起来。
+
+   这里刻意跟 .btn 用同一组值（2px · primary-400 · 半透明），全站只有一种焦点语言；
+   两处差别都是形态决定的，不是两套设计：
+   · 优先级用 :where() 压到 0 —— .btn / .icon-btn 自己的环、以及任何 ring-/outline- 工具类照样覆盖；
+   · offset 取负值内嵌 —— 整行按钮总在 overflow 容器里，外扩的环会被裁掉半边；
+     只碰 outline，不碰 box-shadow，会话行的选中态 ring 不受影响。 */
+:where(button, a[href], [role="button"], summary, [tabindex]:not([tabindex="-1"])):focus-visible {
+  outline: 2px solid rgb(var(--tw-primary-400) / .5);
+  outline-offset: -2px;
+}
+
 /* 尺寸档位（固定高度，leading-none 由内联 flex 居中兜底）
    四档都沿用 .btn 的胶囊圆角：形状不再随尺寸变，只有高度与内距在变。
    md / lg 以前是 8px 圆角，和同排的 sm 胶囊挨在一起会显得「一个方一个圆」，已统一。 */
