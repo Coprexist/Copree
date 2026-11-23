@@ -830,16 +830,16 @@
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 .btn:focus-visible { outline: 2px solid rgb(var(--tw-primary-400) / .5); outline-offset: 1px; }
 
-/* 焦点环兜底（2026-11）：只有 .btn / .icon-btn 写了自己的焦点环，其余原生可聚焦元素——
+/* 不画焦点环（2026-11）：只有 .btn / .icon-btn 写了自己的焦点环，其余原生可聚焦元素——
    会话行、设置菜单行、整块可点的卡片这类直接 <button> 的地方——一律吃浏览器默认环。
-   新版 Chrome 的默认环在浅色底上是「黑内圈 + 白外圈」，看起来就像元素凭空多出一圈黑边框，
-   而且它由访客的系统/无障碍设置决定（开了全键盘控制就会出现），我们控制不了。
-   这里统一成与 .btn 同一套主色环：
-   · 用 :where() 把优先级压到 0 —— 谁自己写了 ring-/outline- 工具类，谁照样覆盖，不打架；
-   · offset 取负值内嵌 —— 整行按钮常放在 overflow 容器里，外扩的环会被裁掉半边。 */
+   新版 Chrome 的默认环在浅色底上是「黑内圈 + 白外圈」，看起来就像元素凭空多出一圈黑边框；
+   而且它由访客的系统/无障碍设置决定（开了全键盘控制就会出现），我们关不掉访客的设置，
+   只能在站点这侧把它抹平——这些元素本来就有 hover / 选中底色，再套一圈环只是脏。
+   · 用 :where() 把优先级压到 0 —— .btn / .icon-btn 自己的 :focus-visible 照样生效，
+     谁写了 ring-/outline- 工具类也照样覆盖，不打架；
+   · 只抹 outline，不动 box-shadow——会话行的选中态是 ring（box-shadow），不受影响。 */
 :where(button, a[href], [role="button"], summary, [tabindex]:not([tabindex="-1"])):focus-visible {
-  outline: 2px solid rgb(var(--tw-primary-400) / .55);
-  outline-offset: -2px;
+  outline: none;
 }
 
 /* 尺寸档位（固定高度，leading-none 由内联 flex 居中兜底）
