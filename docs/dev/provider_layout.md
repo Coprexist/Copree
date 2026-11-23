@@ -66,7 +66,9 @@ Jinja Exception: System message must be at the beginning
 - 用户配置档：`services/agent/api_config_resolver.py::provider_system_layout()`
 - 管理员通道：`utils/pure/provider_config.py::resolve_system_layout()`
 
-两者都是：有来源 → 信 `system_layout`；没来源 → `guess_layout_from_host(base_url)`。
+两者都是：有来源 → 信 `system_layout`；没来源（空、脏值、或历史条目里的默认值）→
+回落出厂预设，再 `guess_layout_from_host(base_url)`。两个入口共用
+`provider_config.resolve_system_layout` 这一个判定函数，不各写一份。
 对话路径**永不探测**（`services/agent/template_probe.py` 的文档也说这一点）：
 每轮发 HTTP 去问模板既慢又不该在失败路径上做。
 

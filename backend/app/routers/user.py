@@ -143,6 +143,7 @@ async def credit_status(
 class TestApiBody(BaseModel):
     api_base_url: str | None = None
     api_key: str | None = None
+    provider_id: int | None = None   # 编辑已有厂商时带上：用这条厂商自己的 Key
 
 
 @router.post("/test-api-connection")
@@ -154,20 +155,19 @@ async def test_api_connection(
     """测试 API 连接（服务端代理，避免浏览器 CORS 限制）。
 
     探测策略 / 文案 / 脱敏全部收敛在 app/services/agent/api_probe.py，
-    这里只负责取 key（用户输入 > 库里已存）与转成前端契约。
+    这里只负责取 key（输入框 > 这条厂商已存 > 没有）与转成前端契约。
+
+    **Key 只从这条配置自己身上取**：不回落用户账号级 Key（铁律见 api_profiles.md）。
+    本地引擎（ollama / llama.cpp）本来就不需要 Key，空 Key 也要能探——否则一个只用
+    本地模型、没配过云端 Key 的用户，第一步就会被「请先配置 API Key」拦住。
     """
     from app.services.agent.api_probe import probe_provider
 
     base_url = req.api_base_url or "https://api.deepseek.com"
     key = req.api_key
-
-    # 没传 key（输入框空着就点测试）→ 用库里已保存的那把
-    if not key:
-        from app.services.infrastructure.user_credentials import user_api_key
-        key = await user_api_key(db, current_user["user_id"])
-
-    if not key:
-        raise HTTPException(status_code=400, detail="请先配置 API Key")
+    if not key and req.provider_id:
+        from app.routers.user_api_config import provider_api_key
+        key = await provider_api_key(db, req.provider_id, current_user["user_id"])
 
     # 私网地址必须"已登记"（用户/平台保存过）才允许请求——否则这就是个内网端口扫描器
     from app.services.agent.base_url_registry import saved_private_hosts

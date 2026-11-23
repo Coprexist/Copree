@@ -58,23 +58,40 @@ def find_provider_for_pool_key(providers: list[dict], provider_name: str | None,
     return find_default_provider(providers)
 
 
+# 这几种来源才算「判定过」。空值、脏值，以及历史条目里当年默认写进去的值都不算——
+# provider_config 的老条目带着 `system_layout: "anywhere"` 却没有 source，那只是
+# build_provider_config 当年的默认值，不是谁选出来的。把它当结论的后果：管理员在
+# 系统设置里配的本地 ollama 每轮继续把 system 合并到开头（不 500，但前缀每轮重算）。
+_EVIDENCE_SOURCES = ("user", "detected", "preset")
+
+
 def resolve_system_layout(provider: dict | None, preset_layout: str | None = None,
                           base_url: str | None = None) -> str:
     """这一轮该用哪一档 system 摆放（anywhere / leading / none）。
 
-    **只认一处存储**：provider_config 条目里的 `system_layout` —— 探测结论与用户手选
-    都写在这一个字段。条目没有就回落到出厂预设；连预设都没有时，与用户配置档那条路径
-    用同一条规则：按地址保守猜（字面私网 → leading，见 chat_template.guess_layout_from_host）。
+    **唯一判定入口**（管理员 provider_config 与用户配置档都走这里）。三层依次：
+
+    1. 有来源的存储值（手选 / 探测 / 预设写回）—— 信它；
+    2. 出厂预设（如 Ollama 的 leading）—— 比"按地址猜"更准，因为它来自厂商语义；
+    3. 按地址保守猜（字面私网 → leading，见 chat_template.guess_layout_from_host）。
+
     宁可宽松：认不出就保持现状，不把能跑的通道误判成严格档。
+
+    为什么第 1 层要验来源：存储字段建表时就有默认值，"有没有这个值"和"有没有人判断过"
+    是两件事。0126 给用户配置档加了 source 列并承诺「NULL = 从未判定 → 按地址保守取」，
+    这条规则同样适用于管理员那边一直存在、但当年没人填 source 的老条目。
     """
     from app.utils.pure.chat_template import (
         LAYOUTS, guess_layout_from_host, normalize_layout,
     )
 
-    stored = (provider or {}).get("system_layout")
-    if isinstance(stored, str) and stored.strip().lower() in LAYOUTS:
+    provider = provider or {}
+    stored = provider.get("system_layout")
+    source = provider.get("system_layout_source")
+    if (source in _EVIDENCE_SOURCES
+            and isinstance(stored, str) and stored.strip().lower() in LAYOUTS):
         return normalize_layout(stored)
-    # 没存 / 存了脏值：都当"没结论"，回落到出厂预设
+    # 没来源 / 存了脏值：都当"没结论"，回落到出厂预设
     if preset_layout:
         return normalize_layout(preset_layout)
     return guess_layout_from_host(base_url)
@@ -242,6 +259,15 @@ def build_provider_config(
     if thinking is None:
         thinking = bool(base.get("thinking_supported"))
 
+    # 值必须与来源一起写：没有来源的 layout 在运行时不算证据（见 resolve_system_layout）
+    layout = given.get("system_layout") or base.get("system_layout") or "anywhere"
+    if given.get("system_layout"):
+        layout_source = "user"      # 表单/接口显式给的
+    elif base.get("system_layout"):
+        layout_source = "preset"    # 跟随厂商预设
+    else:
+        layout_source = ""
+
     return {
         "name": text("name", "label"),
         "provider": provider_key or "",
@@ -252,7 +278,8 @@ def build_provider_config(
         "model_options": given.get("model_options") or base.get("models") or [],
         "thinking_supported": bool(thinking),
         "is_default": bool(given.get("is_default")),
-        "system_layout": given.get("system_layout") or base.get("system_layout") or "anywhere",
+        "system_layout": layout,
+        "system_layout_source": layout_source,
     }
 
 

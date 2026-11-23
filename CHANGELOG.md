@@ -542,6 +542,14 @@
 
 - 世界对话不再「永远处理中」：进行中标记带心跳与租约，进程被强杀或收尾写库失败留下的死标记会在租约过期后被忽略，刷新页面能正常再发消息
 
+- 管理员配的本地模型通道不再被「历史默认值」拖住：`system_layout` 有没有值不等于有没有人判断过，解析时改为同时看 `system_layout_source`（只有 user / detected / preset 三种来源算结论），没来源的老条目回落预设再按地址猜；`build_provider_config` 现在写值一并写来源，两个入口（管理员 provider_config 与用户配置档）收敛到同一个判定函数
+
+- 接入本地模型不再被「请先配置 API Key」拦住：连通性探测与「刷新模型清单」只读这条配置自己的 Key（厂商默认 Key → 配置档覆盖），不再借用用户账号级 Key——「Key 不跨厂商借」在探测这条路上同样成立；ollama / llama.cpp 这类不需要鉴权的本地引擎空 Key 也能探
+
+- **本地模型（ollama）的思考型模型终于会说话了**：qwen3 这类模型在 ollama 的 OpenAI 兼容层默认先思考，思考 token 和正文抢同一个 `max_tokens`——实测 qwen3:4b 在 CPU 上 256 token 花 42 秒、800 token 花 109 秒，正文全是空串，用户看到的现象是「AI 一言不发」。现在对本地端点显式发 `reasoning_effort: "none"`（ollama 实测有效；llama.cpp / vLLM 会忽略，不会 400），同样 128 token 17 秒就出正文。同时补上 ollama 的 `reasoning` 字段：原来只认 DeepSeek 的 `reasoning_content`，思考内容被整段丢弃，日志与展示里都看不到它想过什么。
+
+- **布局结论必须带来源才算数 + 探测只用本厂商的 Key**：库里存着的 `system_layout` 以前一律当结论用——脏值、旧默认值、从没探测过的 `anywhere` 都算，于是「有值 ≠ 有结论」这个坑一直在（照它拼出中间 system，换一台严格模板的本地通道就直接 400）。现在只有带来源的值（手选 / 探测 / 预设）才算结论，其余回落预设、再按地址猜。另一条：`test-api-connection` 以前在请求没带 Key 时回落到账号级 Key，等于拿 A 家的 Key 去敲 B 家的地址（违反「Key 不跨厂商借」），还把没配 Key 的用户挡在 400 外——现在只读该厂商自己的 Key，没有就空着发（本地服务本来就不校验）。
+
 ### 🔧 变更
 
 - **评论通知只在需要动手时报**：一次回十条评论时，十条「公开成功」对 AI 没有任何增量信息，
@@ -741,6 +749,8 @@
 - 补上 `study_records` / `study_settings` 的迁移（此前只有 create_all 建的新库有这两张表，老库升级后 `/study` 一访问就报表不存在）；新增外键门禁测试：指向 `users` / `agents` 的新外键必须在 `app/models/fk_policy.py` 登记删除语义，模型、策略与迁移快照三者不一致时测试直接失败
 
 - 新增 `backend/scripts/selfcheck_local_llm.py`：用本地小模型真跑一遍「system 布局探测 + 一轮对话」，改 LLM 相关代码后一条命令验收（单元测试里的 client 都是替身，证明不了 Qwen 的 Jinja 会不会 500）；顺带把 Docker 的 `host.docker.internal` / `gateway.docker.internal` 认成本机地址，容器里的 Copree 指向宿主模型时不再被判成公网
+
+- **llama.cpp 的两种模板实测**（docs/dev/chat_template_compat.md）：同一个 llama-server 换不同 GGUF，「中间 system」可以一个 200、一个 400——宽松模板（本机 Qwen3-4B）把 system 静默降级成 user 并返回 200，严格 ChatML 直接 400，且新版 llama.cpp 的报错发生在 AOT parser 生成阶段（`Unable to generate parser ... Jinja Exception: System message must be at the beginning.`），不是旧版的聊天时 500。本机 11 个 GGUF 的模板都不含这句 raise，所以 0.4.16 那条「本地 llama 必 500」拿自带模板复现不出来，必须 `--chat-template-file` 换严格模板。探测对两种模板分别判 anywhere / leading（真机验证）。用户手册新增「接自己的本地模型（ollama / llama.cpp）」一节。
 
 ## [v0.4.16] - 2026-10-30
 

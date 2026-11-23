@@ -364,6 +364,20 @@ async def delete_provider(
     return None
 
 
+async def provider_api_key(db: AsyncSession, provider_id: int, user_id: int) -> str | None:
+    """这条厂商自己的 Key（解密后），没存就 None。
+
+    唯一用途：给「测试连通性 / 刷新模型清单」取 Key。**不回落用户账号级 Key**——
+    docs/dev/api_profiles.md 的铁律是「Key 绝不跨厂商借」，探测也不例外：
+    拿 DeepSeek 的 Key 去打 ollama 看似能通，实际把两条配置混成一条；
+    而只用本地模型、从没配过云端 Key 的用户会被一句「请先配置 API Key」挡在门外。
+    """
+    provider = await _own_provider(db, provider_id, user_id)
+    if not provider.default_api_key_encrypted:
+        return None
+    return decrypt_api_key(provider.default_api_key_encrypted)
+
+
 # ── 配置档 ────────────────────────────────────────────────────────────
 
 @router.post("/profiles", status_code=status.HTTP_201_CREATED)

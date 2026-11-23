@@ -80,8 +80,18 @@ system_template_hash: "sha256:…"        # 模板指纹，判断"换模型了�
 system_layout_checked_at: "2026-11-22T09:42:00+00:00"
 ```
 
-请求侧只读 `system_layout`，其余三个是诊断与重探依据。解析入口只有一个：
-`utils/pure/provider_config.py::resolve_system_layout`。
+**有值不等于有结论**：`system_layout` 建条时就有默认值（`build_provider_config` 兜底
+`"anywhere"`），所以解析时必须同时看 `system_layout_source`——只有 `user` / `detected` /
+`preset` 三种来源的值才算判定结论。没有来源的条目（历史数据、或写入方漏了 source）
+回落出厂预设，再退回按地址猜。
+
+这条规则不是为了兼容性好看：管理员在系统设置里配的本地 ollama 若老条目带着默认的
+`anywhere`，判 anywhere 就等于让它把 system 合并到开头，每轮前缀重算（不 500，但慢）。
+`build_provider_config` 现在写值时一并写 source（表单给的 → `user`，跟随预设 → `preset`）。
+
+请求侧只读 `system_layout`，其余三个是诊断与重探依据。**解析入口只有一个**：
+`utils/pure/provider_config.py::resolve_system_layout`——管理员 provider_config 与用户
+配置档行都走它（后者把行转成同样的 dict 再委托，不另写一份判定）。
 
 **地址与能力分开**："我要连哪个地址"的唯一真相是 `users.api_base_url` /
 `agents.api_base_url`；`provider_config` 里那条只是**按地址缓存的能力**，不参与路由。
@@ -132,6 +142,44 @@ provider_config 条目
 | llama.cpp | `http://localhost:8080` | `leading` | `--jinja` 直接执行模型模板，Qwen 会 raise |
 | LM Studio | `http://localhost:1234` | `anywhere` | 走 OpenAI 兼容层，能正确保留位置 |
 | vLLM | `http://localhost:8000` | `anywhere` | 同上 |
+
+## 实测：llama.cpp 的两种模板（2026-11-24）
+
+「llama.cpp 执行模型自带的 Jinja」这句话决定了它的行为**跟着模型变**，不是跟着
+llama.cpp 变。同一台 llama-server 换一个 GGUF，同一段「中间 system」的请求可以
+一个 200、一个 400：
+
+| 模板 | 循环里怎么处理 system | 中间 system 的结果 | 探测判定 |
+|---|---|---|---|
+| **宽松**（本机 Qwen3-4B 自带，4100 字符） | `message.role == "user" or message.role == "system"` → 渲染成 `<|im_start|>user` | **HTTP 200**，角色被静默降级成 user | `anywhere` |
+| **严格**（Qwen3.6 系官方 ChatML，含 `raise_exception('System message must be at the beginning.')`） | 直接抛异常 | **HTTP 400** | `leading` |
+
+两条都是真机跑出来的：
+
+```
+# 宽松模板（模型自带）
+POST /v1/chat/completions  [system, user, system, user]  → 200
+# 严格模板（--chat-template-file 指定）
+POST /v1/chat/completions  [system, user, system, user]  → 400
+  Unable to generate parser for this template. Automatic parser generation failed:
+  ... CallExpression at line 16 ... Jinja Exception: System message must be at the beginning.
+```
+
+三件要记住的事：
+
+1. **新版 llama.cpp 的失败发生在 AOT parser 生成阶段**（请求打进来、模板要转成
+   增量解析器时），报错是上面那段 `Unable to generate parser`。旧版是在聊天时
+   500。语义等价——都是「这个形状我不接受」——但按报错文本做匹配的旧钩子可能认不出。
+2. **本机 11 个 GGUF 的模板里一个都没有这句 `raise_exception`**。所以 0.4.16 那条
+   「本地 llama 必 500」的报障，要么当时的模型不是这几个，要么走的是别的渲染路径；
+   拿本机模型复现必须显式换严格模板（`--chat-template-file`），否则复现不出来。
+3. **宽松模板的 200 不是「支持任意位置」**：内容是保住了，但那条 system 变成了
+   user 说的一段话。`leading` 处理动态块时也是「就地降级成 user + `[系统]` 前缀」，
+   两种做法对模型看到的东西几乎一样——所以判 `anywhere` 不亏；判 `leading` 也不亏。
+   真正有代价的是**判错方向**：把严格模板判成 `anywhere` 会直接 400。
+
+因此 llama.cpp 预设给 `leading` 只是「没探测前的保守默认」；一旦探测成功，
+结论就跟着模型走（`source="detected"`）。
 
 ## 不变式
 

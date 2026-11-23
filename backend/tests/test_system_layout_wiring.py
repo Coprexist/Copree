@@ -1,8 +1,9 @@
 """system 摆放能力位：解析入口与 payload 出口（纯函数 + 一个构造体）。
 
-守两条：
+守三条：
 1. `anywhere` 通道的 payload messages 必须是**同一个对象**（DeepSeek 前缀缓存逐字节不变）；
-2. 存储只有一处 —— provider_config 条目的 `system_layout`，没存才回落预设。
+2. 存储只有一处 —— provider_config 条目的 `system_layout`，没存才回落预设；
+3. **有值不等于有结论**：没有 source 的存储值不算证据（历史条目里那个 anywhere 是默认值）。
 """
 from app.ai.llm import _build_chat_payload
 from app.utils.pure.provider_config import resolve_system_layout
@@ -18,7 +19,30 @@ MESSAGES = [
 # ---- 解析：只认一处存储 ---- #
 
 def test_stored_layout_wins_over_preset():
-    assert resolve_system_layout({"system_layout": "leading"}, "none") == "leading"
+    """手选/探测过的值优先于预设。"""
+    judged = {"system_layout": "leading", "system_layout_source": "user"}
+    assert resolve_system_layout(judged, "none") == "leading"
+
+
+def test_layout_without_source_is_not_a_conclusion():
+    """历史条目带着默认的 anywhere 且没有来源：不能当结论用。
+
+    这类条目的 layout 是 build_provider_config 当年的兜底值，不是谁判断出来的。
+    信它 → 管理员在系统设置里配的本地 ollama 每轮把 system 合并到开头，缓存全废。
+    """
+    historical = {"system_layout": "anywhere", "system_layout_source": None}
+    assert resolve_system_layout(historical, "leading") == "leading"
+
+    # 连预设都没有（自建中转站）→ 按地址猜：公网保持 anywhere
+    assert resolve_system_layout(historical, None, "https://relay.example.com/v1") == "anywhere"
+    # 私网地址 → leading（猜错一边的代价是缓存，不是 500）
+    assert resolve_system_layout(historical, None, "http://192.168.1.9:8080/v1") == "leading"
+
+
+def test_unknown_source_is_not_a_conclusion():
+    """来源是没见过的字符串：当没判过，回落预设。"""
+    weird = {"system_layout": "anywhere", "system_layout_source": "imported"}
+    assert resolve_system_layout(weird, "leading") == "leading"
 
 
 def test_preset_is_the_fallback():

@@ -168,18 +168,24 @@ async def _load_profile(db, profile_id: int | None, kind: str):
 def provider_system_layout(provider, base_url: str | None) -> str:
     """这条厂商这一轮该用哪一档 system 摆放（anywhere | leading | none）。
 
-    有判定来源（user / detected / preset / host）就信存下来的结论；来源为空表示
-    「从未判定」（历史行、或刚加列时还没回填），此时按地址保守猜：字面私网给 leading。
+    判定逻辑不在这里：转成与管理员 provider_config 条目相同的形状，交给
+    provider_config.resolve_system_layout。**单一入口**是关键——两处各写一份，
+    「有没有来源才算证据」这种规则迟早只剩一边还记得。
 
     以前这里只有 `provider.system_layout or "anywhere"`——而历史行里存着的正是默认的
     anywhere，于是自建的本机 llama-server 每轮都把 system 塞进对话中段，Qwen 的 Jinja
     直接 500（System message must be at the beginning）。
     """
-    from app.utils.pure.chat_template import guess_layout_from_host, normalize_layout
+    from app.utils.pure.provider_config import resolve_system_layout
 
-    if getattr(provider, "system_layout_source", None):
-        return normalize_layout(provider.system_layout)
-    return guess_layout_from_host(base_url or getattr(provider, "base_url", None))
+    return resolve_system_layout(
+        {
+            "system_layout": getattr(provider, "system_layout", None),
+            "system_layout_source": getattr(provider, "system_layout_source", None),
+        },
+        None,
+        base_url or getattr(provider, "base_url", None),
+    )
 
 
 def provider_info_of(provider, resolved: ResolvedLlm) -> dict:

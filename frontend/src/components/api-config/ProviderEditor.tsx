@@ -158,9 +158,11 @@ export default function ProviderEditor({
     setRefreshing(true)
     setRefreshNote(null)
     try {
+      // provider_id 让后端用「这条厂商自己的 Key」；不传就会退化成"无 Key 探测"，
+      // 绝不借用用户账号级 Key（Key 不跨厂商借，探测也不例外）
       const data = await api.post<{ ok: boolean; message: string; kind?: string; models?: string[] }>(
         '/user/test-api-connection',
-        { api_base_url: baseUrl.trim(), api_key: apiKey || null },
+        { api_base_url: baseUrl.trim(), api_key: apiKey || null, provider_id: provider?.id ?? null },
       )
       if (!data.ok) {
         // 内网地址要先"登记"（保存过才允许探）——这是探针的安全策略，不是配置写错了，

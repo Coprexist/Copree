@@ -284,6 +284,9 @@ def _build_chat_payload(
     provider_supports_thinking: bool | None = None,
     stream: bool = False,
     system_layout: str = ANYWHERE,
+    # 位置放在末尾：只为判断「是不是本地端点」（决定用哪种方言关思考），
+    # 不参与请求拼接。已有的位置参数调用因此不受影响。
+    api_base_url: str = "",
 ) -> dict:
     """构建 LLM chat completions 请求 payload（流式/非流式共用主体）。
 
@@ -318,6 +321,14 @@ def _build_chat_payload(
     _thinking_ok = provider_supports_thinking if provider_supports_thinking is not None else settings.is_deepseek_api
     if _thinking_ok and thinking_enabled is not None:
         payload["thinking"] = {"type": "enabled" if thinking_enabled else "disabled"}
+    # 本地推理服务（ollama / llama.cpp / vLLM）上的思考型模型**默认就会思考**，而思考
+    # token 与正文抢同一个 max_tokens：qwen3:4b 在 CPU 上 256 token 花 42 秒、800 token
+    # 109 秒，正文仍是空串（2026-11-24 实测）。DeepSeek 那套 `thinking` 对象本地不认，
+    # 这一档只认 `reasoning_effort: "none"`（ollama 实测有效；llama.cpp、vLLM 直接忽略，
+    # 不会 400）。只对本地端点发——公网服务对未知字段的态度各不相同，不替它们做主；
+    # 上层显式要思考（thinking_enabled=True）时也不发，那是调用方的决定。
+    if not _thinking_ok and thinking_enabled is not True and is_local_endpoint(api_base_url):
+        payload["reasoning_effort"] = "none"
     if user_id and _thinking_ok:
         payload["user_id"] = user_id
     return payload
@@ -346,7 +357,8 @@ async def _chat_completion_non_streaming(
     """
     url, headers = _build_request_url_and_headers(api_base_url, api_key)
     payload = _build_chat_payload(
-        messages=messages, model=model, temperature=temperature, top_p=top_p,
+        messages=messages, model=model, api_base_url=api_base_url,
+        temperature=temperature, top_p=top_p,
         max_tokens=max_tokens, tools=tools, response_format=response_format,
         presence_penalty=presence_penalty, frequency_penalty=frequency_penalty,
         thinking_enabled=thinking_enabled, user_id=user_id,
@@ -376,9 +388,12 @@ async def _chat_completion_non_streaming(
             "usage": usage,
             "finish_reason": choice.get("finish_reason", "stop"),
         }
-        # DeepSeek 推理模式会返回 reasoning_content，必须传回给 API
-        if message.get("reasoning_content"):
-            result["reasoning_content"] = message["reasoning_content"]
+        # 思考内容有**两个名字**：DeepSeek 叫 reasoning_content，ollama 的 OpenAI
+        # 兼容层叫 reasoning（llama.cpp 给的是 reasoning_content）。只读一个名字的后果
+        # 是「思考了一整轮、正文空、这里也没有」——用户看到的现象是 AI 一言不发。
+        reasoning = message.get("reasoning_content") or message.get("reasoning")
+        if reasoning:
+            result["reasoning_content"] = reasoning
         return result
 
 
@@ -413,7 +428,8 @@ async def _chat_completion_streaming(
     """
     url, headers = _build_request_url_and_headers(api_base_url, api_key)
     payload = _build_chat_payload(
-        messages=messages, model=model, temperature=temperature, top_p=top_p,
+        messages=messages, model=model, api_base_url=api_base_url,
+        temperature=temperature, top_p=top_p,
         max_tokens=max_tokens, tools=tools, response_format=response_format,
         presence_penalty=presence_penalty, frequency_penalty=frequency_penalty,
         thinking_enabled=thinking_enabled, user_id=user_id,
@@ -473,9 +489,11 @@ async def _chat_completion_streaming(
                 if delta.get("content"):
                     full_content += delta["content"]
 
-                # 累加推理内容（仅日志记录，不推送前端）
-                if delta.get("reasoning_content"):
-                    full_reasoning += delta["reasoning_content"]
+                # 累加推理内容（仅日志记录，不推送前端）。
+                # 两个字段名都要认：DeepSeek/llama.cpp 用 reasoning_content，ollama 用 reasoning。
+                _reasoning_delta = delta.get("reasoning_content") or delta.get("reasoning")
+                if _reasoning_delta:
+                    full_reasoning += _reasoning_delta
 
                 # 累加工具调用（增量到达）
                 if delta.get("tool_calls"):

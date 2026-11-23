@@ -225,3 +225,51 @@ async def test_connect_rejects_preset_of_another_kind(migrated_db):
             await connect_presets(ConnectIn(kind="llm", preset_keys=["breeze"]), _me(), db)
         assert err.value.status_code == 404
         assert (await list_providers("llm", _me(), db))["providers"] == []
+
+
+async def test_probe_uses_only_this_provider_key(migrated_db, monkeypatch):
+    """探测取 Key 只认这条厂商，不借用户账号级 Key。
+
+    「Key 绝不跨厂商借」是 api_profiles.md 的铁律，探测这条路也一样：以前这里会回落到
+    users.api_key_encrypted，于是拿 DeepSeek 的 Key 去打 ollama（看着能通，实际把两条
+    配置混成一条）；而只用本地模型、没配过云端 Key 的用户会被 400「请先配置 API Key」
+    挡在门外——本地引擎根本不需要 Key。
+    """
+    from db_reset import clear
+    from app.database import async_session
+    from app.models.user import User
+    from app.routers.user import TestApiBody, test_api_connection
+    from app.routers.user_api_config import (
+        create_provider, update_provider, ProviderIn,
+    )
+    from app.services.agent import api_probe as probe_mod
+    from app.utils.crypto import encrypt_api_key
+
+    captured: dict = {}
+
+    async def fake_probe(base_url, key, *, allow_private_hosts=()):
+        captured["key"] = key
+        return probe_mod.ProbeResult(ok=True, kind="ok", message="探针替身", models=("gemma4:26b",))
+
+    monkeypatch.setattr(probe_mod, "probe_provider", fake_probe)
+
+    async with async_session() as db:
+        await clear(db, "user_api_providers", "users")
+        owner = User(username="探测主人", password_hash="x", type="human",
+                     api_key_encrypted=encrypt_api_key("sk-user-global"))
+        db.add(owner)
+        await db.flush()
+        me = {"user_id": owner.id, "role": "admin"}
+        provider = await create_provider(ProviderIn(kind="llm", preset_key="ollama"), me, db)
+        await db.commit()
+
+        body = TestApiBody(api_base_url=provider["base_url"], provider_id=provider["id"])
+        res = await test_api_connection(body, me, db)
+        assert res["ok"] is True and list(res["models"]) == ["gemma4:26b"]
+        assert captured["key"] is None, "厂商没存 Key 时不许借用用户账号级 Key"
+
+        # 这条厂商自己存了 Key → 用它
+        await update_provider(provider["id"], ProviderIn(api_key="sk-ollama"), me, db)
+        await db.commit()
+        await test_api_connection(body, me, db)
+        assert captured["key"] == "sk-ollama"
