@@ -532,6 +532,16 @@
 
 - 焦点态统一成站内主色环：会话行、设置菜单行这类没单独写焦点样式的原生按钮，以前访客开了全键盘控制就会露出一圈浏览器默认的「黑内圈 + 白外圈」，跟主色语言不搭；现在与 `.btn` 同一组值（2px 主色半透明、内嵌不外扩），全站只有一种焦点语言。
 
+- 预设访问器统一成同一份归一化形状：`get_preset()` 原先直接返回原始 dict，插件商城保存 llama.cpp / lmstudio / vllm 预设必然 500（`KeyError: 'work_model'`，这三家本地预设只写了 `chat_model`）；现在两个访问器共用 `_normalized()`，遍历预设置信 `get_all_presets()`，并补了形状契约回归测试（`tests/test_provider_presets_contract.py`）。顺带清掉与表结构完全脱节的死代码 `api_key_pool_service.py`（零引用，且按旧列 `provider` / `api_key` / `last_used_at` 访问已重构的表）。
+
+- 自己填的本地 / 中转站地址不再把 system 消息塞进对话中段：保存时判一次 system 摆放并记下来源（手选 > 探测 > 预设 > 按地址保守猜），运行时只读结论；早先缺少判定证据的行按地址保守取 `leading`。此前用户接了本机 llama-server 跑 Qwen 模板时，每轮都报 `System message must be at the beginning`（500）。
+
+- 删除 AI 不再报「服务器内部错误」：指向 `users` / `agents` 的 67 个外键一次补齐删除语义（从属数据级联删除、用量与审计记录留成 NULL），删除链不再依赖「先删谁后删谁」的手工顺序；作者注销后商城作品仍在架上（`author_name` 已冗余），只是不能再以作者身份同步到 GitHub
+
+- 世界对话里「AI 正在回复时又发一条」不再可能丢掉：插入消息被取出、落库前抛异常时会放回队列重放，而不是从队列与数据库里同时消失；含附件/空文本的批次也不会再被整批重落成两条一样的消息
+
+- 世界对话不再「永远处理中」：进行中标记带心跳与租约，进程被强杀或收尾写库失败留下的死标记会在租约过期后被忽略，刷新页面能正常再发消息
+
 ### 🔧 变更
 
 - **评论通知只在需要动手时报**：一次回十条评论时，十条「公开成功」对 AI 没有任何增量信息，
@@ -671,6 +681,12 @@
   撑得开时才看得出笔锋；`inline`（聊天）`taper = 0`，退化为规整圆角胶囊。规则落在
   `docs/dev/ui_system.md` 的语音条目里，以后只调 `taper` 一个常量。
 
+- API 配置的「系统消息位置」多了「自动识别」，旁边多了「重新识别」：自己填的本地 / 中转地址在保存后点一下就能拿到精确结论，不必手动猜该给 `leading` 还是 `anywhere`。
+
+### 🧹 清理
+
+- 前端清掉 19 处未使用声明（含随输入框抽成 `ChatInput` 后失效的旧 @提及实现），并打开 `noUnusedLocals` / `noUnusedParameters` 编译门禁——以后新增死代码会在 `tsc` 阶段直接失败
+
 ### 📝 文档与工程
 
 - **浏览器直连后端的路径收成一份清单，并加了守卫**：`/channels`、`/world`、`/federation`、`/ws` 这几条
@@ -719,6 +735,12 @@
 - API 配置两处文档补齐与代码之间的落差：`docs/dev/api_profiles.md` 补「已绑的配置档再点一次即取消（PUT null，不删档）」、0125 可重复执行与迁移指纹改内容哈希、两张表 Key 列名不同（`default_api_key_encrypted` / `api_key_encrypted`）、ORM 漏 `Column()` 会让 `options` 未映射导致 AI 全线不回，并新增 §7「本地推理服务」——选了配置档时空 Key 照常请求、本地超时单独放宽、无原生工具调用走文本协议、模型以配置档为准；`docs/guides/用户手册.md` §1.3 同步这两条用户可见行为。
 
 - 知识库这套改动的文档补齐：新增 `docs/dev/agent_knowledge.md`（文件是真源 / 同步规则 / 前端以磁盘 stat 为准 / 权限走 `is_ai_editable` / 索引上限 / 创建阶段是虚拟表单 / 摘要派生规则），`docs/SUMMARY.md` 开发参考加一行索引，`docs/guides/用户手册.md` §1.4 补「知识库（可选）」——含「不看着它就没法开口的写进性格描述，想起来再去翻的放知识库」这条判据，并说明创建阶段只是表单内容、建号后才落地。
+
+- 迁移链加了机器校验（`tests/test_migration_chain.py`）：必须唯一线性、0069 之后必须是连续 4 位顺序号、文件名必须与 revision 一致；约定与「老 id 为什么不能改」「迁移必须自包含」写进 `docs/dev/migrations.md`。
+
+- 补上 `study_records` / `study_settings` 的迁移（此前只有 create_all 建的新库有这两张表，老库升级后 `/study` 一访问就报表不存在）；新增外键门禁测试：指向 `users` / `agents` 的新外键必须在 `app/models/fk_policy.py` 登记删除语义，模型、策略与迁移快照三者不一致时测试直接失败
+
+- 新增 `backend/scripts/selfcheck_local_llm.py`：用本地小模型真跑一遍「system 布局探测 + 一轮对话」，改 LLM 相关代码后一条命令验收（单元测试里的 client 都是替身，证明不了 Qwen 的 Jinja 会不会 500）；顺带把 Docker 的 `host.docker.internal` / `gateway.docker.internal` 认成本机地址，容器里的 Copree 指向宿主模型时不再被判成公网
 
 ## [v0.4.16] - 2026-10-30
 
