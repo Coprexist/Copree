@@ -15,7 +15,7 @@ class OpenCLIConfig(Base):
     global_enabled = Column(Boolean, default=False)
     default_rate_limit_per_minute = Column(Integer, default=5)
     timeout_seconds = Column(Integer, default=30)
-    updated_by = Column(Integer, ForeignKey("users.id"))
+    updated_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
@@ -39,7 +39,7 @@ class OpenCLICommandWhitelist(Base):
     description = Column(String(200))
     enabled = Column(Boolean, default=True)
     default_enabled = Column(Boolean, default=False)  # True=全部AI默认可用，跳过白名单
-    created_by = Column(Integer, ForeignKey("users.id"))
+    created_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
     created_at = Column(DateTime, server_default=func.now())
 
 

@@ -541,21 +541,6 @@ async def get_effective_config(
     }
 
 
-async def _purge_ai_dm(db, user_id: int) -> None:
-    """清掉这个账号参与的私信会话（会话里的消息随 session_id 的 CASCADE 一起走）。
-
-    私信表对 users.id 是 NO ACTION：账号删了、会话还挂着就删不动账号。
-    会话对已经删掉的 AI 没有意义，跟着一起清；这也是它比"改 FK 成 CASCADE"更保守的地方——
-    只有删账号这一条路会动到这里。
-    """
-    await db.execute(
-        delete(DMSession).where(
-            or_(DMSession.user1_id == user_id, DMSession.user2_id == user_id)
-        )
-    )
-    await db.flush()
-
-
 async def _transplant_ai_assets(db, agent_id: int, ai_user_id: int | None, owner_id: int) -> dict:
     """删 AI 之前，把它名下的人类资产交还给主人：它建的群、它名下的世界。
 
@@ -638,14 +623,12 @@ async def delete_agent(
     # 群与世界对 AI 是裸 id（没有 FK 兜底）：删之前先交还给主人，不留悬空的群主
     await _transplant_ai_assets(db, agent_id, ai_user_id, owner_id)
 
-    # 顺序是这条链唯一的正确顺序，换一行就 500：
-    # agents.user_id 与 dm_messages.sender_id 对 users.id 的 FK 都是 NO ACTION，
-    # 先删账号会被它们挡下来（2026-11-15「删除 AI 报服务器内部错误」，卡在 dm_messages）。
+    # 删除顺序不再敏感：从属表随 agents 级联、私信随 users 级联（0128 的 FK 策略）。
+    # 唯一不能省的是上面那步"先交还资产"——那是业务逻辑，数据库替不了。
     await db.delete(agent)
     await db.flush()
 
     if ai_user_id:
-        await _purge_ai_dm(db, ai_user_id)
         ai_user = (await db.execute(select(User).where(User.id == ai_user_id))).scalar_one_or_none()
         if ai_user:
             await db.delete(ai_user)

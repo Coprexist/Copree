@@ -252,7 +252,7 @@ class WorldMarketItem(Base):
     title = Column(String(100), nullable=False, comment="商品标题")
     description = Column(Text, default="", comment="商品描述")
     tags = Column(json_column(), default=list, comment="标签数组，如 [\"2d冒险\",\"卡牌\"]")
-    author_id = Column(Integer, ForeignKey("users.id"), nullable=False, comment="发布者")
+    author_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, comment="发布者（删号留作品，显示冗余 author_name）")
     author_name = Column(String(50), default="", comment="发布者名（冗余，列表免 join）")
     source_world_id = Column(Integer, nullable=True, comment="发布来源世界（kind=world 时）")
     source = Column(String(10), default="local", nullable=False, comment="local=本站发布 | github=GitHub 同步缓存")

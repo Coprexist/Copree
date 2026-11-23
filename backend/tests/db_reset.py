@@ -8,8 +8,9 @@ TRUNCATE 要给闭包里每张表换 relfilenode（建文件 + 写 WAL + 目录 
 几乎不花时间。两者清掉的是**同一组表**（TRUNCATE CASCADE 的范围就是外键闭包），
 所以语义一致；测试里的 id 都是显式写死的，也不需要 TRUNCATE 的额外效果。
 
-DELETE 期间把 session_replication_role 临时调成 replica：不用操心删除顺序，也不用管
-那些没写 ON DELETE 的外键（dm_sessions、group_invitations 等一批都是 NO ACTION）。
+DELETE 期间把 session_replication_role 临时调成 replica：不用操心删除顺序。
+（0128 之后指向 users/agents 的外键都带了 ON DELETE 语义，但其它表之间的 NO ACTION
+外键仍然存在，闭包里删表的顺序照样不保证，所以这里不开 replica 不行。）
 删完立刻调回 default —— 后面的 INSERT 仍然要正常做外键检查，别把测试的"脏数据"放过去。
 """
 from sqlalchemy import text

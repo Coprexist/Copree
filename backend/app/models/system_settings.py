@@ -65,5 +65,5 @@ class SystemSettings(Base):
 
     last_cleanup_stats = Column(json_column(), nullable=True, comment="上次清理统计：{cleaned_files, cleaned_refs, orphan_cleaned, run_at}")
 
-    updated_by = Column(Integer, ForeignKey("users.id"))
+    updated_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

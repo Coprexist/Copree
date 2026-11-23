@@ -12,7 +12,7 @@ class VectorAccelerationRequest(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     group_id = Column(Integer, ForeignKey("groups.id", ondelete="CASCADE"), nullable=False)
-    requester_id = Column(Integer, ForeignKey("agents.id"), nullable=False)
+    requester_id = Column(Integer, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False)
     status = Column(String(20), default="pending")  # pending|approved|rejected
     approver_type = Column(String(10))  # human|ai|system
     approver_id = Column(Integer)

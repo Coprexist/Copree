@@ -69,6 +69,19 @@ class UserApiProvider(Base):
         comment="对端模板认不认中间 system（anywhere|leading|none），见 utils/pure/chat_template.py；"
                 "中转站经常需要改这一项",
     )
+    system_layout_source = Column(
+        String(16), nullable=True,
+        comment="这一档是怎么来的：user|detected|preset|host；NULL = 从未判定，运行时按地址保守取值。"
+                "见 services/agent/channel_layout.py",
+    )
+    system_template_hash = Column(
+        String(32), nullable=True,
+        comment="探测到的 chat 模板指纹：同一台机器换了模型/模板能看出来",
+    )
+    system_layout_checked_at = Column(
+        DateTime, nullable=True,
+        comment="最后一次判定 system_layout 的时间",
+    )
     sort_order = Column(Integer, nullable=False, default=0, server_default="0")
 
     created_at = Column(DateTime, server_default=func.now())

@@ -35,7 +35,7 @@ class ConversationLogConfig(Base):
     idle_threshold_percent = Column(Integer, nullable=True)   # T_idle 插值系数（1-99）
     compress_target_percent = Column(Integer, nullable=True)  # T_post = T_hot × 这个比例（1-99）
 
-    updated_by = Column(Integer, ForeignKey("users.id"))
+    updated_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 
@@ -44,9 +44,9 @@ class ConversationLog(Base):
     __tablename__ = "ai_conversation_logs"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    agent_id = Column(Integer, ForeignKey("agents.id"), nullable=True, index=True, comment="普通 AI 记录；世界 AI 用量为空（记账走 user_id）")
+    agent_id = Column(Integer, ForeignKey("agents.id", ondelete="SET NULL"), nullable=True, index=True, comment="普通 AI 记录；世界 AI 用量为空（记账走 user_id）")
     # 世界 AI 用量记账：不建占位 agent，直接记 user_id（世界主人）；普通 AI 记录此列为空
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True, comment="记账人（世界 AI 用量 = 世界主人）")
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True, comment="记账人（世界 AI 用量 = 世界主人）")
     # 对话发生的上下文：群聊或私信
     group_id = Column(Integer, ForeignKey("groups.id"), nullable=True)
     session_id = Column(String(50), nullable=True)  # DM session_id

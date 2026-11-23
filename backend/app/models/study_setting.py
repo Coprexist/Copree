@@ -10,7 +10,8 @@ class StudySetting(Base):
     __tablename__ = "study_settings"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    # unique=True 已经建了唯一索引，index=True 只是同一条索引的第二份声明
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True)
     # 时长设置
     focus = Column(Integer, nullable=False, default=25, comment="专注时长（分钟）")
     short = Column(Integer, nullable=False, default=5, comment="短休息时长（分钟）")

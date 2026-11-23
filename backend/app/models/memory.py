@@ -21,7 +21,7 @@ class RoughMemory(Base):
     scope = Column(String(10), default="private")  # private | group | cross_user
     group_id = Column(Integer, ForeignKey("groups.id"), nullable=True)
     # v0.1.3: per-user 记忆隔离（共振 AI 为 NULL，通用/半通用填触发用户 ID）
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
     # v0.1.4: 延迟归档字段
     status = Column(String(20), default="active", comment="active | pending_archive | discarded")
     # 设定权值 1-5（v1.1）：1=日常流水, 3=一般, 5=人物与关系定位。

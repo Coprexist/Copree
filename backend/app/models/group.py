@@ -125,14 +125,14 @@ class GroupInvitation(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     group_id = Column(Integer, ForeignKey("groups.id", ondelete="CASCADE"), nullable=False)
-    inviter_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    invitee_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    inviter_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    invitee_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     status = Column(String(20), default="pending", nullable=False)  # pending | accepted | rejected
     # 群 approve_invites=true 时，成员邀请先卡审批：pending → 群主/管理员批准后才通知被邀请人。
     # 存量记录与群主/管理员的邀请一律 approved（默认值就是它，避免历史数据被拦）。
     approval_status = Column(String(20), default="approved", nullable=False,
                              server_default=text("'approved'"))  # pending | approved | rejected
-    approved_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    approved_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     approved_at = Column(DateTime, nullable=True)
     message = Column(Text, nullable=True)  # 附言
     dm_session_id = Column(String(64), nullable=True)  # 关联的 DM 会话
@@ -161,7 +161,7 @@ class GroupJoinRequest(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     status = Column(String(20), default="pending", nullable=False)  # pending | approved | rejected
     message = Column(Text, nullable=True)  # 申请附言
-    resolver_id = Column(Integer, ForeignKey("users.id"), nullable=True)  # 审批人
+    resolver_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)  # 审批人
     created_at = Column(DateTime, server_default=func.now())
     resolved_at = Column(DateTime, nullable=True)
 

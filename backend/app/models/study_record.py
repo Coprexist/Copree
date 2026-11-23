@@ -12,7 +12,8 @@ class StudyRecord(Base):
     __tablename__ = "study_records"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    # 不单独建 user_id 索引：uq_study_user_date 的前缀就是它，再建一条是冗余
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     date = Column(String(10), nullable=False, comment="YYYY-MM-DD")
     minutes = Column(Integer, nullable=False, default=0, comment="当日累计学习分钟")
     created_at = Column(DateTime, server_default=func.now())

@@ -349,6 +349,9 @@ async def sync_item_to_github(db, item) -> dict:
         raise ValueError("商品包文件缺失，无法同步")
 
     # 发布者的 GitHub 身份与作者签名密钥（users 表）
+    if item.author_id is None:
+        # 作者注销后作品仍在架上（0128：author_id 是 SET NULL），但没有主体就签不出作者签名
+        raise ValueError("发布者账号已注销，无法以作者身份同步到 GitHub")
     from sqlalchemy import text as _text
     row = (await db.execute(_text(
         "SELECT github_id, github_username, github_public_key, github_sign_key_encrypted FROM users WHERE id = :uid"

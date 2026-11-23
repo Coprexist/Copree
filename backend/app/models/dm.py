@@ -16,8 +16,8 @@ class DMSession(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     session_id = Column(String(64), unique=True, nullable=False)  # "min_id_max_id"
-    user1_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    user2_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    user1_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user2_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
 
     # per-session 免打扰（每方独立）
     user1_dnd_until = Column(DateTime)
@@ -45,7 +45,7 @@ class DMMessage(Base):
         ForeignKey("dm_sessions.session_id", ondelete="CASCADE"),
         nullable=False,
     )
-    sender_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    sender_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     content = Column(Text, nullable=False)
     reply_to = Column(Integer)  # 回复的消息 ID
     attachments = Column("attachments", Text)  # JSON array of {file_id, name, size, mime_type}

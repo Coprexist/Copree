@@ -81,7 +81,7 @@ class Agent(Base):
 
     # AI 在 users 表中的虚拟账号（社交身份）。群成员、消息 sender_id、好友、世界绑定用它；
     # 资源归属（文件/沙箱/记忆）用上面的 id，两套标识不要互相换算后写进对方的列
-    user_id = Column(Integer, ForeignKey("users.id"))
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
 
     # 对话日志：此 AI 的保留上限（NULL=使用全局 max_conversation_logs）
     conversation_logs_limit = Column(Integer, nullable=True)

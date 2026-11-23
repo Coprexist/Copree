@@ -25,9 +25,9 @@ class RedemptionCode(Base):
     expires_at = Column(DateTime)
     # v0.1.5 的单人字段：0100 已把已有数据回填进 redemption_records，
     # 新流程只读流水、不再读写这两列；保留列是为了老库回滚时数据不丢。
-    used_by = Column(Integer, ForeignKey("users.id"), nullable=True, comment="已废弃：见 redemption_records")
+    used_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, comment="已废弃：见 redemption_records")
     used_at = Column(DateTime, comment="已废弃：见 redemption_records")
-    created_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     # v0.1.5: 兑换码增强
     note = Column(Text, nullable=True, comment="管理员备注（不暴露给用户）")
     max_usage = Column(Integer, nullable=True, comment="此码最多可用多少 credit（NULL=一次性全额）")
