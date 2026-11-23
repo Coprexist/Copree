@@ -1137,6 +1137,7 @@ async def chat_status(
     await _require_owner(db, world_id, current_user["user_id"])
     from app.models.world import World as _World
     from app.services.world.world_turn import get_world_worker
+    from app.utils.pure.turn_lease import lease_alive
     # 待审批项 + 运行模式：前端刷新页面后据此重画弹窗、显示当前模式（内存态，轮次中断即失效）
     from app.services.world.world_ai_mode import get_mode, pending_approvals
     world_row = await db.get(_World, world_id)
@@ -1148,7 +1149,9 @@ async def chat_status(
     turn_id = None
     if not processing:
         act = (world_row.config or {}).get("active_turn") if world_row else None
-        if act:
+        # 标记在 ≠ 有人还在跑：心跳停了（租约超期）说明这一轮已经死了。再报 processing
+        # 只会让前端永远转圈，用户既不敢再发、也看不到任何进度。
+        if act and lease_alive(act):
             processing = True
             turn_id = act.get("turn_id")  # 刷新后前端据此订阅 SSE 直播，而不是干等到整轮结束
     return {

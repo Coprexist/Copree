@@ -19,8 +19,63 @@ from sqlalchemy import select
 from app.database import async_session
 from app.models.world import World, WorldChatMessage
 from app.services.world.world_chat_items import ChatItem
+from app.utils.pure.turn_lease import HEARTBEAT_SECONDS
 
 logger = logging.getLogger(__name__)
+
+
+def _stamp() -> str:
+    """落库口径的时间戳：naive UTC ISO 串（与 0117 之前的历史数据同形）。"""
+    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+
+
+async def persist_insert_entry(db, world_id: int, entry: dict, sid_db: str | None) -> tuple[int, list]:
+    """把一条「插入消息」落库并广播回执，返回 (处理到的下标, 本次落库的 ChatItem)。
+
+    db 可以是 AsyncSession 也可以是仓库（都只要 add/flush）。**不提交**：调用方提交成功
+    后再把返回的下标写回 entry["cursor"]——这样提交失败时游标没动，重放一次也不会漏。
+
+    用游标而不是「msg_ids 长度 == items 长度」判断进度：后者一旦有条目为空（只发图/纯附件
+    被折叠成空文本）就永远不相等，收尾兜底会整批重落一遍，用户看到两条一样的消息。
+    """
+    items = entry.get("items") or []
+    cursor = int(entry.get("cursor") or 0)
+    if cursor >= len(items):
+        return cursor, []
+
+    tb = entry.get("tb")
+    user_id = entry.get("user_id")
+    if cursor == 0 and items and tb:
+        try:
+            await tb.broadcast(f"data: [INSERTED]{json.dumps({'count': len(items)}, ensure_ascii=False)}\n\n")
+        except Exception as e:
+            # 回执发不出去 = 前端排队弹窗永远清不掉（用户可见），必须留痕
+            logger.warning(f"🌐 世界 #{world_id} [INSERTED] 回执广播失败: {e}")
+
+    persisted: list = []
+    for idx in range(cursor, len(items)):
+        it = items[idx]
+        if not it.is_empty:
+            wm = WorldChatMessage(
+                world_id=world_id, user_id=user_id, role="user",
+                content=it.text, session_id=sid_db,
+                attachments=list(it.attachments) or None,
+            )
+            db.add(wm)
+            await db.flush()
+            entry.setdefault("msg_ids", []).append(wm.id)
+            persisted.append(it)
+            if tb:
+                try:
+                    payload = {
+                        "msg_id": wm.id, "content": it.text,
+                        "attachments": [dict(a) for a in it.attachments],
+                    }
+                    await tb.broadcast(f"data: [INSERT]{json.dumps(payload, ensure_ascii=False)}\n\n")
+                except Exception as e:
+                    # 同上：气泡画不出来（用户可见）。消息已落库，下次 loadChat 会补上
+                    logger.warning(f"🌐 世界 #{world_id} [INSERT] 回执广播失败（msg_id={wm.id}）: {e}")
+    return len(items), persisted
 
 
 async def recover_orphaned_turn(world_id: int) -> None:
@@ -122,6 +177,10 @@ class WorldTurnWorker:
         # 普通消息插入通道：AI 工具轮进行中时，非命令消息直接注入下一轮 LLM 调用
         # （只有命令（/compact 等）需要等当前轮次结束再发送）
         self._inserts: list[dict] = []
+        # 已 drain 出去、还没确认落库的插入消息。drain 与落库之间隔着 await，
+        # 中间任何一次异常都会把它们从两个队列里同时抹掉（用户消息凭空消失），
+        # 所以留一份在途清单，轮次收尾时放回 _inserts 重放。
+        self._inflight_inserts: list[dict] = []
         self._inserts_lock = asyncio.Lock()
         self.task = asyncio.create_task(self._run(), name=f"world-turn-{world_id}")
 
@@ -129,20 +188,8 @@ class WorldTurnWorker:
         while True:
             item = await self.msg_queue.get()
             tb = self.turns.get(item["turn_id"])
-            # 标记进行中的轮次（DB）：recover_orphaned_turn 据此判断真中断 vs 正常等待（排队消息/AI 思考中）
-            try:
-                async with async_session() as _db:
-                    _w = await _db.get(World, self.world_id)
-                    if _w is not None:
-                        _w.config = {**(dict(_w.config or {})), "active_turn": {
-                            "turn_id": item["turn_id"],
-                            "started_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
-                        }}
-                        await _db.commit()
-            except Exception as e:
-                # active_turn 写不进 DB → status 接口会把"排队/AI 思考中"误判成中断，
-                # recover_orphaned_turn 也可能误收尾。降级可接受但必须留痕
-                logger.warning(f"🌐 世界 #{self.world_id} active_turn 标记写入失败: {e}")
+            await self._open_lease(item["turn_id"])
+            heartbeat = asyncio.create_task(self._heartbeat(item["turn_id"]))
             try:
                 from app.repositories.world_repo import SQLAlchemyWorldRepository
                 from app.services.world.world_chat_service import stream_world_chat
@@ -157,28 +204,80 @@ class WorldTurnWorker:
                 if tb:
                     await tb.broadcast(f"data: [ERROR]{str(e)[:150]}\n\n")
             finally:
-                # 清除 active_turn（轮次结束；无论正常/异常/中断收尾都跑）
-                try:
-                    async with async_session() as _db:
-                        _w = await _db.get(World, self.world_id)
-                        if _w is not None and (_w.config or {}).get("active_turn", {}).get("turn_id") == item["turn_id"]:
-                            _cfg = dict(_w.config or {})
-                            _cfg.pop("active_turn", None)
-                            _w.config = _cfg
-                            await _db.commit()
-                except Exception as e:
-                    # 清不掉会残留 → status 永远报 processing，前端卡在"处理中"
-                    logger.warning(f"🌐 世界 #{self.world_id} active_turn 标记清除失败: {e}")
+                await self._stop_heartbeat(heartbeat)
+                await self._close_lease(item["turn_id"])
                 if tb:
-                    # ⚠️ 顺序关键：残留插入消息的补发必须在 tb.end() **之前**。
-                    # end() 会置 ended=True，之后 broadcast 会被 TurnBroadcast.broadcast
-                    # 的 ended 检查直接丢弃——这个兜底因此长期形同虚设（前端弹窗清不掉）
+                    # ⚠️ 顺序关键：先把被 drain 走但没确认落库的插入消息放回去，再补发。
+                    # 两步都必须在 tb.end() **之前**——end() 置 ended=True 之后广播会被丢弃，
+                    # 这个兜底就形同虚设（前端弹窗清不掉、消息也消失）。
+                    await self._requeue_inflight_inserts()
                     await self._flush_leftover_inserts(tb)
                     tb.end()
                     # 清理本 turn + 代理到它的插入 turn（插入消息广播随活跃 turn 收尾）
                     self.turns.pop(item["turn_id"], None)
                     for _tid in [t for t, _tb in self.turns.items() if _tb.proxy is tb]:
                         self.turns.pop(_tid, None)
+
+    async def _open_lease(self, turn_id: str) -> None:
+        """标记进行中的轮次（DB）：recover_orphaned_turn 据此判断真中断 vs 正常等待。"""
+        try:
+            async with async_session() as _db:
+                _w = await _db.get(World, self.world_id)
+                if _w is not None:
+                    now = _stamp()
+                    _w.config = {**(dict(_w.config or {})), "active_turn": {
+                        "turn_id": turn_id,
+                        "started_at": now,
+                        "heartbeat_at": now,
+                    }}
+                    await _db.commit()
+        except Exception as e:
+            # active_turn 写不进 DB → status 接口会把"排队/AI 思考中"误判成中断，
+            # recover_orphaned_turn 也可能误收尾。降级可接受但必须留痕
+            logger.warning(f"🌐 世界 #{self.world_id} active_turn 标记写入失败: {e}")
+
+    async def _heartbeat(self, turn_id: str) -> None:
+        """租约续期：只要这一轮还在跑，就定期刷新 heartbeat_at。
+
+        没有心跳时，一个卡住的轮次会让 status 永远报 processing（前端「思考中」转圈
+        到天荒地老）。心跳 + 租期让「标记在但没人续期」变成可判定的死状态。
+        """
+        while True:
+            await asyncio.sleep(HEARTBEAT_SECONDS)
+            try:
+                async with async_session() as _db:
+                    _w = await _db.get(World, self.world_id)
+                    active = (_w.config or {}).get("active_turn") if _w is not None else None
+                    if not active or active.get("turn_id") != turn_id:
+                        return  # 标记已被清掉或换了轮次：这轮不再是租约主人
+                    _w.config = {**(dict(_w.config or {})), "active_turn": {**active, "heartbeat_at": _stamp()}}
+                    await _db.commit()
+            except Exception as e:
+                # 续期失败不致命：下一拍会再试，真停了就等租约自然过期
+                logger.debug(f"🌐 世界 #{self.world_id} 租约续期失败: {e}")
+
+    async def _stop_heartbeat(self, task: "asyncio.Task") -> None:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.debug(f"🌐 世界 #{self.world_id} 心跳任务退出异常: {e}")
+
+    async def _close_lease(self, turn_id: str) -> None:
+        """清除 active_turn（轮次结束；无论正常/异常/中断收尾都跑）。"""
+        try:
+            async with async_session() as _db:
+                _w = await _db.get(World, self.world_id)
+                if _w is not None and (_w.config or {}).get("active_turn", {}).get("turn_id") == turn_id:
+                    _cfg = dict(_w.config or {})
+                    _cfg.pop("active_turn", None)
+                    _w.config = _cfg
+                    await _db.commit()
+        except Exception as e:
+            # 清不掉会残留 → status 永远报 processing，前端卡在"处理中"
+            logger.warning(f"🌐 世界 #{self.world_id} active_turn 标记清除失败: {e}")
 
     async def _flush_leftover_inserts(self, tb: "TurnBroadcast") -> None:
         """轮次收尾兜底：把 _inserts 里还没被 _inject_pending_user_messages 处理的插入消息
@@ -195,29 +294,16 @@ class WorldTurnWorker:
                 sid = session_id_for_db(world_row) if world_row else None
                 pending = self._inserts
                 self._inserts = []
+                # 落库 → 提交 → 才推进游标：提交失败时游标不动，整批下次重放
+                progressed: list[tuple[dict, int]] = []
                 flushed = 0
                 for _it in pending:
-                    items = _it.get("items") or []
-                    if len(_it.get("msg_ids") or []) == len(items):
-                        continue  # 已由 _inject_pending_user_messages 落库
-                    await tb.broadcast(f"data: [INSERTED]{json.dumps({'count': len(items)}, ensure_ascii=False)}\n\n")
-                    for it in items:
-                        if it.is_empty:
-                            continue
-                        wm = WorldChatMessage(
-                            world_id=self.world_id, user_id=_it["user_id"],
-                            role="user", content=it.text, session_id=sid,
-                            attachments=list(it.attachments) or None,
-                        )
-                        _db.add(wm)
-                        await _db.flush()
-                        flushed += 1
-                        payload = {
-                            "msg_id": wm.id, "content": it.text,
-                            "attachments": [dict(a) for a in it.attachments],
-                        }
-                        await tb.broadcast(f"data: [INSERT]{json.dumps(payload, ensure_ascii=False)}\n\n")
+                    next_index, persisted = await persist_insert_entry(_db, self.world_id, _it, sid)
+                    progressed.append((_it, next_index))
+                    flushed += len(persisted)
                 await _db.commit()
+                for _it, next_index in progressed:
+                    _it["cursor"] = next_index
                 if flushed:
                     # 只在「消息发得太晚、本轮已无注入点」时触发，不是每轮都打，不会刷屏
                     logger.info(f"🌐 世界 #{self.world_id} 轮次收尾补发插入消息 {flushed} 条")
@@ -273,6 +359,7 @@ class WorldTurnWorker:
             else:
                 items = [i for i in self._inserts if i["user_id"] == user_id]
                 self._inserts = [i for i in self._inserts if i["user_id"] != user_id]
+            self._inflight_inserts.extend(items)
         # 重指代理：取当前未结束且自身不是代理的 turn（即真正的活跃 turn）
         active = next((tb for tb in self.turns.values() if not tb.ended and tb.proxy is None), None)
         if active is not None:
@@ -281,6 +368,27 @@ class WorldTurnWorker:
                 if _tb is not None:
                     _tb.proxy = active
         return items
+
+    def confirm_inserts(self, entries: list[dict]) -> None:
+        """插入消息已落库并提交：从在途清单里销账（按对象身份，同一批只销一次）。"""
+        if not entries:
+            return
+        done = {id(entry) for entry in entries}
+        self._inflight_inserts = [e for e in self._inflight_inserts if id(e) not in done]
+
+    async def _requeue_inflight_inserts(self) -> None:
+        """轮次收尾：把 drain 走却没确认落库的插入消息放回队首，交给下一轮重放。
+
+        没有这一步时，落库中途抛异常的消息既不在 _inserts 也不在库里——用户看到
+        「已发送」，AI 从没见过，重进页面也找不回。
+        """
+        async with self._inserts_lock:
+            if not self._inflight_inserts:
+                return
+            restored = len(self._inflight_inserts)
+            self._inserts = self._inflight_inserts + self._inserts
+            self._inflight_inserts = []
+        logger.warning(f"🌐 世界 #{self.world_id} 有 {restored} 条插入消息未落库，已放回队列等待重放")
 
     @property
     def queue_size(self) -> int:

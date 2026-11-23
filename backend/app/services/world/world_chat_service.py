@@ -828,13 +828,13 @@ async def resolve_chat_model(
 
     # 2. 管理员配置的提供商（get_providers 返回数组；get_default_provider 只返回默认项，不能用于匹配）
     from app.services.infrastructure.system_settings_service import get_providers
-    from app.services.agent.provider_presets import PRESETS
+    from app.utils.pure.provider_presets import get_all_presets
 
     provider = find_provider_by_base_url(await get_providers(repo), api_base)
     # 3. 管理员没配这个 base_url → 回退内置预设
     if provider is None:
         provider = find_provider_by_base_url(
-            [p for p in PRESETS.values() if (p.get("kind") or "llm") == "llm"], api_base,
+            get_all_presets("llm"), api_base,
         )
     if provider:
         model = provider.get("global_default_chat_model") or provider.get("chat_model")
@@ -1002,54 +1002,30 @@ async def _inject_pending_user_messages(
     （前端清排队弹窗 + 画真实气泡）——用户看到"已发送" = AI 已看到。
     无排队消息时直接返回（零开销）。
     """
-    from app.services.world.world_turn import get_world_worker
-    insert_items = await get_world_worker(world_id).drain_inserts()
+    from app.services.world.world_turn import get_world_worker, persist_insert_entry
+    worker = get_world_worker(world_id)
+    insert_items = await worker.drain_inserts()
     if not insert_items:
         return
-    # 落库 + 广播（先 [INSERTED] 清前端排队弹窗，再逐条落库 + [INSERT] 画气泡）
-    from app.models.world import World, WorldChatMessage
+    from app.models.world import World
     from app.config import settings
-    from app.models.world import World, WorldChatMessage
+
+    progressed: list[tuple[dict, int, list]] = []
     for _it in insert_items:
-        tb = _it.get("tb")
-        user_id = _it.get("user_id")
-        items = _it.get("items") or []
-        if tb:
-            try:
-                await tb.broadcast(f"data: [INSERTED]{json.dumps({'count': len(items)}, ensure_ascii=False)}\n\n")
-            except Exception as e:
-                # 回执发不出去 = 前端排队弹窗永远清不掉（用户可见），必须留痕
-                logger.warning(f"🌐 世界 #{world_id} [INSERTED] 回执广播失败: {e}")
-        ids: list[int] = []
-        for it in items:
-            if it.is_empty:
-                continue
-            # 落库（真实 msg_id → 前端 [INSERT] 画的气泡与历史一致，刷新不重复）
-            if sid_db is None:
-                _w = await world_repo.get(World, world_id)
-                sid_db = session_id_for_db(_w) if _w else None
-            wm = WorldChatMessage(
-                world_id=world_id, user_id=user_id, role="user",
-                content=it.text, session_id=sid_db,
-                attachments=list(it.attachments) or None,
-            )
-            world_repo.add(wm)
-            await world_repo.flush()
-            ids.append(wm.id)
-            if tb:
-                try:
-                    payload = {
-                        "msg_id": wm.id, "content": it.text,
-                        "attachments": [dict(a) for a in it.attachments],
-                    }
-                    await tb.broadcast(f"data: [INSERT]{json.dumps(payload, ensure_ascii=False)}\n\n")
-                except Exception as e:
-                    # 同上：气泡画不出来（用户可见）。消息已落库，下次 loadChat 会补上
-                    logger.warning(f"🌐 世界 #{world_id} [INSERT] 回执广播失败（msg_id={wm.id}）: {e}")
-            # 注入 AI 上下文（真正"发送"给 AI）：带图则实时转多模态
-            messages.append({"role": "user", "content": build_content(it.text, it.attachments, settings.data_dir)})
-        _it["msg_ids"] = ids
+        if sid_db is None:
+            _w = await world_repo.get(World, world_id)
+            sid_db = session_id_for_db(_w) if _w else None
+        next_index, persisted = await persist_insert_entry(world_repo, world_id, _it, sid_db)
+        progressed.append((_it, next_index, persisted))
     await world_repo.commit()
+
+    # 提交成功才算送达：推进游标（中途失败下次从断点续），并从在途清单销账
+    for _it, next_index, persisted in progressed:
+        _it["cursor"] = next_index
+        # 注入 AI 上下文（真正"发送"给 AI）：带图则实时转多模态
+        for it in persisted:
+            messages.append({"role": "user", "content": build_content(it.text, it.attachments, settings.data_dir)})
+    worker.confirm_inserts(insert_items)
 
 
 async def _run_one_tool_call(

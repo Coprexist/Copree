@@ -514,6 +514,11 @@ HTTP 三种入参（`items` / `messages` / `message`）只在**路由层归一�
 [INSERT]{"msg_id", "content"}  ← 消息（已落库、记入历史）：前端画用户气泡（真实 id）
 ```
 
+**「正在处理」怎么判定**（`GET /worlds/{id}/chat/status`）：看 `worlds.config.active_turn`
+标记，标记带心跳（`heartbeat_at`，30 秒一次）与 90 秒租约（`app/utils/pure/turn_lease.py`）。
+心跳停了的标记视为死状态——否则进程被 kill -9、收尾写库失败都会留下一个没人负责的标记，
+前端「思考中」转到天荒地老。轮次收尾由 `_close_lease` 清标记（正常/异常/中断三条路都走）。
+
 **哪些消息必须等本轮结束，由命令声明决定**（`world_chat_commands._COMMANDS` 是唯一来源，
 经 `GET /worlds/{id}/chat` 的 `commands` 字段下发前端）：
 - `mid_turn=False`（默认）= 等本轮结束再执行；`mid_turn=True` = 允许工具轮进行中直接插入
@@ -526,13 +531,18 @@ HTTP 三种入参（`items` / `messages` / `message`）只在**路由层归一�
 - ⚠️ 清弹窗的依据是「这条当初是否走了插入通道」（同一判定），**不是**弹窗项的显示标签；
   否则将来把某命令标为 `mid_turn=True` 时，`[INSERTED]` 会清不掉它，被 drain 重复发送
 
-**回执投递的两处保证（2026-09-13 修复）**：
+**回执投递的三处保证（2026-09-13 修复，第三处 2026-11-24 补）**：
 1. **插入消息的广播代理会重指到当前活跃 turn**（`drain_inserts` 时）。
    消息可能在 T1 进行中入队（proxy=T1），却在 T1 结束、T2 开始后才被 T2 的首轮前注入取走；
    若仍转发给已结束的 T1，`TurnBroadcast.broadcast` 会因 `T1.ended` 直接丢弃事件
    → 前端收不到 `[INSERTED]`/`[INSERT]`，弹窗永远清不掉（只能等轮次结束 `loadChat` 才补上）
 2. **轮次收尾的残留消息补发必须在 `tb.end()` 之前**（`_flush_leftover_inserts`）。
    `end()` 会置 `ended=True`，之后 broadcast 同样被丢弃——该兜底曾因此长期形同虚设
+3. **drain 走的消息在确认落库前一直留在在途清单里**（`_inflight_inserts`）。
+   轮次收尾时没确认的放回 `_inserts` 重放，否则它们既不在队列也不在库里——用户看到
+   「已发送」，AI 从没见过，重进页面也找不回。落库进度按下标推进（`entry["cursor"]`，
+   **提交成功后才前进**），所以重放是幂等的；含空条目（纯附件）的批次也不会再被
+   「长度相等」误判成未落库而整批重落成两条一样的消息
 
 **工具状态事件**（同 tool_id 多状态，气泡原地更新）：
 
