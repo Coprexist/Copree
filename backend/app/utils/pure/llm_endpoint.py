@@ -86,6 +86,25 @@ def is_local_endpoint(base_url: str) -> bool:
     return bool(addr.is_loopback or addr.is_private or addr.is_link_local)
 
 
+def thinking_supported_for(base_url: str, explicit: bool | None = None) -> bool:
+    """这条通道能不能开关思考——全平台唯一判定入口（纯函数，零 IO）。
+
+    两件事分开看，别混成一个：
+
+      * **地址即事实**：DeepSeek 认 `thinking` 对象；本机/内网自建服务
+        （ollama / llama.cpp / vLLM / LM Studio）认 `reasoning_effort`。这条判定
+        压过厂商行里存着的旧勾选——那个勾选是 0.1.x 写的，当时只有 DeepSeek 会思考，
+        照搬会把本地通道的「深度推理」开关直接藏掉（2026-11-24 修正）。
+      * **手选**：其余厂商认不认思考开关、方言是什么，只有用户知道，用他在这条
+        通道上的勾选 `explicit`，不替他猜。
+
+    真正决定 payload 怎么发的仍是 llm.py：地址决定说哪种方言，开关决定开还是关。
+    """
+    if "deepseek.com" in (base_url or "") or is_local_endpoint(base_url):
+        return True
+    return bool(explicit)
+
+
 def embeddings_url(base_url: str) -> str:
     """向量端点；base_url 允许直接给完整的 `.../embeddings` 路径。"""
     base = (base_url or "").rstrip("/")

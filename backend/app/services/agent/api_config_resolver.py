@@ -28,6 +28,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from app.utils.pure.llm_endpoint import thinking_supported_for
+
 logger = logging.getLogger(__name__)
 
 
@@ -198,7 +200,8 @@ def provider_info_of(provider, resolved: ResolvedLlm) -> dict:
     return {
         "base_url": resolved.base_url,
         "provider_name": provider.name,
-        "thinking_supported": bool(provider.thinking_supported),
+        # 地址即事实：本地自建服务也能开关思考，厂商行里的旧勾选压不掉它
+        "thinking_supported": thinking_supported_for(resolved.base_url, bool(provider.thinking_supported)),
         "system_layout": provider_system_layout(provider, resolved.base_url),
         "models": [o["value"] for o in (provider.options or []) if o.get("value")],
         "default_model": resolved.chat_model,

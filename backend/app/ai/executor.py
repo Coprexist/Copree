@@ -19,6 +19,7 @@ from app.config import settings
 from app.database import async_session
 from app.chat import chat_api
 from app.utils.pure.history import tool_ledger_note
+from app.utils.pure.llm_endpoint import thinking_supported_for
 from app.utils.pure.provider_config import channel_provider_info
 from app.utils.pure.timeutil import get_zoneinfo
 from app.utils.pure.tool_chain import heal_tool_chain
@@ -444,7 +445,7 @@ async def _get_api_config(
             _channel_cache[base] = cached
         return cached
 
-    provider_info = {"thinking_supported": settings.is_deepseek_api, "base_url": api_base,
+    provider_info = {"thinking_supported": thinking_supported_for(api_base), "base_url": api_base,
                      "models": [], "default_model": None}
 
     if excluded_sources is None:

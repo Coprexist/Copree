@@ -6,6 +6,7 @@
 import json
 from typing import Any, Mapping
 
+from app.utils.pure.llm_endpoint import thinking_supported_for
 from app.utils.pure.provider_presets import get_preset
 
 
@@ -119,7 +120,8 @@ def channel_provider_info(provider: dict | None, api_base_url: str,
     return {
         "base_url": api_base_url,
         "provider_name": provider.get("name", ""),
-        "thinking_supported": provider.get("thinking_supported", "deepseek.com" in (api_base_url or "")),
+        # 地址即事实：DeepSeek 与本地自建服务都能开关思考，旧勾选压不掉这条（见 thinking_supported_for）
+        "thinking_supported": thinking_supported_for(api_base_url, provider.get("thinking_supported")),
         "system_layout": resolve_system_layout(
             provider, preset.get("system_layout"), api_base_url,
         ),
@@ -165,7 +167,7 @@ def build_provider_summaries(providers: list[dict]) -> list[dict]:
             "api_key_url": api_key_url,
             "chat_model": p.get("chat_model", ""),
             "work_model": p.get("work_model", ""),
-            "thinking_supported": p.get("thinking_supported", False),
+            "thinking_supported": thinking_supported_for(p.get("base_url", ""), p.get("thinking_supported")),
             "is_default": p.get("is_default", False),
             "models": p.get("model_options", []),
             # system 摆放：与运行期**同一口径**（条目没存就回落预设）。
@@ -193,10 +195,8 @@ def get_thinking_supported(providers: list[dict], api_base_url: str | None = Non
     if default:
         return bool(default.get("thinking_supported", False))
 
-    # 最后回退：域名检测
-    if api_base_url:
-        return "deepseek.com" in api_base_url or "dashscope" in api_base_url
-    return False
+    # 最后回退：地址判定（DeepSeek / 本地自建服务）
+    return thinking_supported_for(api_base_url or "")
 
 
 def get_default_models(providers: list[dict]) -> tuple[str, str]:

@@ -569,7 +569,7 @@ function EditAgentModal({ agent, onClose, onUpdated }: {
                   </div>
                 ))}
               </div>
-              {/* 深度推理模式（仅 DeepSeek API 显示） */}
+              {/* 深度推理模式：通道能开关思考就显示（DeepSeek 与本地自建服务都算，见 thinking_supported_for） */}
               {thinkingSupported && (
                 <div className="flex items-center justify-between pt-2 border-t border-border mt-2">
                   <div>

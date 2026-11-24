@@ -550,6 +550,8 @@
 
 - **布局结论必须带来源才算数 + 探测只用本厂商的 Key**：库里存着的 `system_layout` 以前一律当结论用——脏值、旧默认值、从没探测过的 `anywhere` 都算，于是「有值 ≠ 有结论」这个坑一直在（照它拼出中间 system，换一台严格模板的本地通道就直接 400）。现在只有带来源的值（手选 / 探测 / 预设）才算结论，其余回落预设、再按地址猜。另一条：`test-api-connection` 以前在请求没带 Key 时回落到账号级 Key，等于拿 A 家的 Key 去敲 B 家的地址（违反「Key 不跨厂商借」），还把没配 Key 的用户挡在 400 外——现在只读该厂商自己的 Key，没有就空着发（本地服务本来就不校验）。
 
+- **本地模型的「深度推理」开关不再是隐身状态**：原来判定「这条通道能不能开关思考」只认 `deepseek.com`（`config.py` 的 `is_thinking_supported_for`），ollama / llama.cpp / vLLM 一律被当成「不支持」，AI 设置里那个开关根本不渲染，上一版只能退而在代码里无条件发 `reasoning_effort: "none"` 把思考硬关掉。现在判据收成 `llm_endpoint.thinking_supported_for()` 一个入口：**地址即事实**（DeepSeek 认 `thinking` 对象、本地自建服务认 `reasoning_effort`），其余厂商才看用户勾选。`executor` / `agents` / `provider_config` / `api_config_resolver` 四处各自的旧判据全部改走它。
+
 ### 🔧 变更
 
 - **评论通知只在需要动手时报**：一次回十条评论时，十条「公开成功」对 AI 没有任何增量信息，
@@ -571,6 +573,10 @@
 - 创建助手的分流判据写进提示词：**不看着它就没法开口的进 system_prompt**（身份、关系、现在的心结、说话方式与口头禅、相处边界）；**想起来再去翻的放知识库**（详尽的世界观背景、大段私史与年表、成批示例对话、外部参考资料）。知识库不是垃圾桶——重要设定漏在人设外会让它说话没底气，全塞进人设则每轮都要为它们付 token、还稀释性格。知识库摘要的派生规则同步收紧：跳过标题 / 代码块 / 表格 / 分隔线 / 引用块 / 列表项与 `[目录](#…)` 链接，整篇没有正文段落就留空（索引只显示标题）。
 
 - ollama 预设不再写死 5 个模型（chat_model 一起去掉）；`POST /user/test-api-connection` 在 `/models` 404 时先试 Ollama 原生 `/api/tags`（只认 models 数组形状），并把 `models` 返回给前端——探测结论从「通不通」变成「通不通 + 有哪些模型」。
+
+- **本地通道的思考开关改为三态语义**（`llm.py`）：`thinking_enabled=False` → 发 `reasoning_effort: "none"` 关思考；`True` 与「不表态」→ 不发参数，交给模型默认（qwen3 这类思考型模型本来就思考）。原来的实现是「本地端点一律发 none」（除显式开），等于平台替用户做了决定，和本地小模型「靠思考组织语言」的实际用法相反。DeepSeek 通道仍走 `thinking` 对象，公网其他厂商 payload 逐字节不变。
+
+- **本地通道开着思考时不设输出上限**（`llm.py`）：思考与正文共用一个输出额度，给个数字就等于替模型决定「想多久」——想不完就被截断（`finish_reason=length`），下一轮同样的上下文还得从头再想，时间花两遍、正文一个字都没有（实测 qwen3:4b 在 1024 额度下思考写满 1024 token、正文 0 字）。现在本地端点只有在**明确关掉思考**时才发 `max_tokens`（正文需要边界），开着思考或未表态时不发，交给 ollama 的 `num_predict=-1` / llama.cpp 的 `n_predict=-1` 想到自然结束。公网通道照旧发上限（成本与超时都要有边界）。
 
 ### ♻️ 重构
 
@@ -751,6 +757,8 @@
 - 新增 `backend/scripts/selfcheck_local_llm.py`：用本地小模型真跑一遍「system 布局探测 + 一轮对话」，改 LLM 相关代码后一条命令验收（单元测试里的 client 都是替身，证明不了 Qwen 的 Jinja 会不会 500）；顺带把 Docker 的 `host.docker.internal` / `gateway.docker.internal` 认成本机地址，容器里的 Copree 指向宿主模型时不再被判成公网
 
 - **llama.cpp 的两种模板实测**（docs/dev/chat_template_compat.md）：同一个 llama-server 换不同 GGUF，「中间 system」可以一个 200、一个 400——宽松模板（本机 Qwen3-4B）把 system 静默降级成 user 并返回 200，严格 ChatML 直接 400，且新版 llama.cpp 的报错发生在 AOT parser 生成阶段（`Unable to generate parser ... Jinja Exception: System message must be at the beginning.`），不是旧版的聊天时 500。本机 11 个 GGUF 的模板都不含这句 raise，所以 0.4.16 那条「本地 llama 必 500」拿自带模板复现不出来，必须 `--chat-template-file` 换严格模板。探测对两种模板分别判 anywhere / leading（真机验证）。用户手册新增「接自己的本地模型（ollama / llama.cpp）」一节。
+
+- **更正上一版「思考把正文吃空」的结论**：那是 256 / 800 token 的探针预算（思考与正文共用一个输出上限，探针预算太小必然截断），产品本身的默认上限是 64000、世界对话 32000，正文不会被吃空。真机补测四档（qwen3:4b，`num_predict=1024`）：`think=false` 515 token / 758 字正文 / 84 秒；`low` 1024 token 满额截断；`medium` 529 token / 676 字思考 + 114 字正文 / 68 秒；`high` 522 token / 670 字思考 + 105 字正文 / 67 秒——**medium 与 high 几乎逐字重合，Qwen3 只认开/关、不认强度档**（档位是给 gpt-oss 那种模型用的）。用户手册里「深度推理是 DeepSeek 专有功能」同步改成三条通道各自的方言与上限口径。
 
 ## [v0.4.16] - 2026-10-30
 

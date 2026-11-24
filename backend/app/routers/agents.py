@@ -7,6 +7,7 @@ import json
 from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
+from app.utils.pure.llm_endpoint import thinking_supported_for
 from app.schemas.agent import (
     AgentCreateRequest,
     AgentGenerateRequest,
@@ -99,7 +100,7 @@ async def get_available_models(
         models = settings.get_model_options()
         channels = [{
             "name": "默认", "provider": "deepseek", "base_url": settings.deepseek_base_url,
-            "api_key_url": "", "thinking_supported": settings.is_deepseek_api,
+            "api_key_url": "", "thinking_supported": settings.is_thinking_supported_for(settings.deepseek_base_url),
             "is_default": True, "chat_model": settings.default_chat_model,
             "work_model": settings.default_work_model, "models": models,
         }]

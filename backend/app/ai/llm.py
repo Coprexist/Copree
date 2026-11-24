@@ -296,13 +296,20 @@ def _build_chat_payload(
     **这里是 system 摆放的唯一出口**（流式与非流式都经过它）：`system_layout` 由调用方
     从通道能力里读出来，`fit_system_layout` 按它调整。`anywhere` 原对象返回，payload
     与今天逐字节一致——DeepSeek 的前缀缓存不受这个功能影响。"""
+    _is_local = is_local_endpoint(api_base_url)
     payload = {
         "model": model,
         "messages": fit_system_layout(messages, system_layout),
         "temperature": temperature,
         "top_p": top_p,
-        "max_tokens": max_tokens,
     }
+    # 输出上限只在「不思考」或公网通道上发。本地通道开着思考时**不设上限**：思考与正文
+    # 抢同一个额度，给个数就等于替模型决定「想多久」——想不完被截断（finish_reason=length），
+    # 下一轮同样的上下文又得从头再想一遍，时间花两遍、正文却一个字都没有（2026-11-24 实测：
+    # qwen3:4b 在 num_predict=1024 下思考写满 1024 token、正文 0 字）。本地服务自己就有兜底
+    # （ollama 的 num_predict 默认 -1、llama.cpp 的 n_predict 默认 -1），不传就是想到自然结束。
+    if not (_is_local and thinking_enabled is not False):
+        payload["max_tokens"] = max_tokens
     if stream:
         payload["stream"] = True
     if presence_penalty != 0:
@@ -315,20 +322,24 @@ def _build_chat_payload(
     if response_format:
         payload["response_format"] = response_format
     # 思考开关是**三态**：None=不表态（交给服务端默认）、True=显式开、False=显式关。
-    # 显式关不是可有可无：DeepSeek v4 默认就会思考，思考 token 与正文**抢同一个 max_tokens 预算**，
-    # 摘要这类短输出调用会被思考吃满 → content 为空（2026-09-17 实测：budget=800 时
-    # completion=800 / reasoning=800 / finish_reason=length / content 空）。
+    # 显式关不是可有可无：思考 token 与正文**抢同一个输出上限**——OpenAI 的
+    # `max_completion_tokens` 注释原文是 including visible output tokens and reasoning
+    # tokens；Anthropic 的 thinking 文档写 thinking tokens count toward your max_tokens；
+    # ollama 实测 completion_tokens 恒等于 max_tokens 满额。摘要这类短输出调用必须显式关，
+    # 否则思考把预算吃满 → content 为空（2026-09-17 DeepSeek、2026-11-24 ollama 各见一次）。
+    #
+    # 三条通道说三种话，别互相借：
+    #   DeepSeek → {"thinking": {"type": "enabled"|"disabled"}}
+    #   本地     → {"reasoning_effort": "none"} 表示关；"开"不表态（思考型模型默认就思考，
+    #              ollama 的档位对 Qwen3 这类只认开关的模型没有可测差别，2026-11-24 实测）
+    #   其它公网 → 不表态，不替厂商做主（未知字段有的直接 400）
     _thinking_ok = provider_supports_thinking if provider_supports_thinking is not None else settings.is_deepseek_api
-    if _thinking_ok and thinking_enabled is not None:
+    if _is_local:
+        # 本地端点认 reasoning_effort、不认 DeepSeek 的 thinking 对象；只在明确关闭时发。
+        if thinking_enabled is False:
+            payload["reasoning_effort"] = "none"
+    elif _thinking_ok and thinking_enabled is not None:
         payload["thinking"] = {"type": "enabled" if thinking_enabled else "disabled"}
-    # 本地推理服务（ollama / llama.cpp / vLLM）上的思考型模型**默认就会思考**，而思考
-    # token 与正文抢同一个 max_tokens：qwen3:4b 在 CPU 上 256 token 花 42 秒、800 token
-    # 109 秒，正文仍是空串（2026-11-24 实测）。DeepSeek 那套 `thinking` 对象本地不认，
-    # 这一档只认 `reasoning_effort: "none"`（ollama 实测有效；llama.cpp、vLLM 直接忽略，
-    # 不会 400）。只对本地端点发——公网服务对未知字段的态度各不相同，不替它们做主；
-    # 上层显式要思考（thinking_enabled=True）时也不发，那是调用方的决定。
-    if not _thinking_ok and thinking_enabled is not True and is_local_endpoint(api_base_url):
-        payload["reasoning_effort"] = "none"
     if user_id and _thinking_ok:
         payload["user_id"] = user_id
     return payload

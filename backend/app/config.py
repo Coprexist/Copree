@@ -169,8 +169,12 @@ class Settings(BaseSettings):
 
     @staticmethod
     def is_thinking_supported_for(base_url: str) -> bool:
-        """检查某个 API base URL 是否支持 thinking/reasoning 参数"""
-        return "deepseek.com" in base_url
+        """这条通道能不能开关思考（转发到 app.utils.pure.llm_endpoint 的唯一入口）
+
+        别在这里写第二份判据：本地自建服务（ollama / llama.cpp / vLLM）也认思考开关，
+        只按 "deepseek.com" 判断会把它们的开关整条藏掉（2026-11-24 修正）。"""
+        from app.utils.pure.llm_endpoint import thinking_supported_for
+        return thinking_supported_for(base_url)
 
     # ── 数据卷：数据库之外的运行时文件（上传、AI 文件空间、插件、世界、商城）──
     # 同一个变量两种视角：宿主机上看到的是 .env 里的目录（compose 拿它做挂载源），
