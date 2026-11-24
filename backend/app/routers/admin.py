@@ -3351,8 +3351,8 @@ async def fetch_provider_models(
 
     key = body.api_key
     if not key:
-        from app.services.infrastructure.user_credentials import user_api_key
-        key = await user_api_key(db, admin["user_id"])
+        from app.services.agent.api_config_resolver import resolve_user_llm
+        key = (await resolve_user_llm(db, admin["user_id"])).api_key
 
     # 管理员是这台机器的信任根：新加的私网供应商必须能先测再存，所以这里不设限
     probe = await probe_provider(body.base_url, key, allow_private=True)

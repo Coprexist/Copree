@@ -48,8 +48,13 @@ def mask_dsn(url: str) -> str:
 class Settings(BaseSettings):
     """全局应用配置 — 所有字段由 pydantic-settings 自动从环境变量读取"""
 
-    # ── 应用版本（唯一出处；可被环境变量 APP_VERSION 覆盖，默认值见右）──
-    app_version: str = "0.4.16"
+    # ── 应用版本（**全仓唯一出处**；可被环境变量 APP_VERSION 覆盖）──
+    # 发版 tag 必须与这个值一致；预发布后缀按 SemVer 比同号正式版小（1.0.0-preview < 1.0.0），
+    # 所以「有没有新版本」的提示照常工作（见 utils/pure/version.py）。
+    # 反馈请一并给出「版本 + 构建标识」：版本说明是哪一代，构建标识（commit / 迁移号）说明是哪一刻，
+    # 只有版本号时，两个相差几天的 preview 快照分不出来（2026-11-25 踩过：对方自称 0.4.16，
+    # 实际是 11-22 的 1.0.0 预览）。
+    app_version: str = "1.0.0-preview"
     # 本实例的发行方式：source | docker | desktop。
     # 只影响「怎么升级」的引导文案（git pull / compose / 下载安装包），不影响任何功能；
     # 由 docker-compose.yml 与桌面启动器注入，见 services/infrastructure/update_check.py。

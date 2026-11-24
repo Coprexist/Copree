@@ -46,19 +46,17 @@ def channel_summary(provider: dict | None, base_url: str, *, models: list | None
 
 
 async def selectable_channels(db: AsyncSession, user_id: int) -> list[dict]:
-    """这个账号能用的通道，按运行期的优先顺序排列（与 _get_api_config 同一套来源）。
+    """这个账号能用的通道（与运行期同源：池 + 配置档），按可用顺序排列。
 
-    - 有额度 → 平台池 Key（它自己记着模型清单与默认模型）
-    - 配了本人 Key → 按它的 base_url 找供应商预设，拿那条通道认得的模型
-    - 最后补一条全局默认，保证列表永远不空
+    以前这里自己拼「池 Key / 用户裸 Key / 全局默认」三档 —— 与运行期各写一份，
+    用户 Key 被删掉之后还会指着一个不存在的通道。现在只读「配置」：
+    有额度时池里那一条，加上这个人的 kind=llm 配置档；同地址只列一次。
     """
-    from app.config import settings
+    from app.models.api_profile import UserApiProvider, UserApiProfile
     from app.models.user import User
-    from app.services.infrastructure.system_settings_service import (
-        get_provider_by_base_url, get_provider_for_pool_key,
-    )
+    from app.services.agent.api_config_resolver import pool_candidate
 
-    user = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+    user = await db.get(User, user_id)
     channels: list[dict] = []
     seen: set[str] = set()
 
@@ -70,23 +68,30 @@ async def selectable_channels(db: AsyncSession, user_id: int) -> list[dict]:
         channel["is_default"] = not channels
         channels.append(channel)
 
-    credit = max(0, getattr(user, "platform_gifted_credit", 0) or 0) + (getattr(user, "api_credit", 0) or 0)
-    if user is not None and credit > 0:
-        from app.services.infrastructure.quota_service import find_best_pool_key
+    pool = await pool_candidate(db, user)
+    if pool.hit:
+        add(channel_summary(pool.provider_info, pool.base_url,
+                            models=list(pool.models),
+                            default_model=pool.chat_model))
 
-        pool_key = await find_best_pool_key(db, user.id)
-        if pool_key is not None:
-            base = pool_key.api_base_url or settings.deepseek_base_url
-            provider = await get_provider_for_pool_key(db, pool_key)
-            add(channel_summary(provider, base,
-                                models=getattr(pool_key, "models", None),
-                                default_model=getattr(pool_key, "default_model", None)))
-
-    if user is not None and user.api_key_encrypted:
-        base = user.api_base_url or settings.deepseek_base_url
-        add(channel_summary(await get_provider_by_base_url(db, base), base,
-                            default_model=getattr(user, "global_chat_model", None)))
-
-    base = settings.deepseek_base_url
-    add(channel_summary(await get_provider_by_base_url(db, base), base))
+    stmt = (
+        select(UserApiProfile, UserApiProvider)
+        .join(UserApiProvider, UserApiProvider.id == UserApiProfile.provider_id)
+        .where(UserApiProfile.user_id == user_id, UserApiProvider.kind == "llm")
+        .order_by(UserApiProfile.is_default.desc(),
+                  UserApiProfile.sort_order, UserApiProfile.id)
+    )
+    for profile, provider in (await db.execute(stmt)).all():
+        add(channel_summary(
+            {
+                "name": provider.name,
+                "system_layout": provider.system_layout,
+                "system_layout_source": provider.system_layout_source,
+                "thinking_supported": provider.thinking_supported,
+                "model_options": [o for o in (provider.options or [])
+                                  if isinstance(o, dict)],
+            },
+            provider.base_url or "",
+            default_model=profile.primary_model or provider.default_primary,
+        ))
     return channels

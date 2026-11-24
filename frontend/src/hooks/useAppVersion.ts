@@ -15,10 +15,14 @@ import { getApiBaseUrl } from '../api/client'
 
 export interface RuntimeInfo {
   version: string
+  /** 构建标识：commit 短哈希（source 部署）或 BUILD_ID 环境变量；容器里可能为空 */
+  build: string
+  /** 数据库迁移版本：反馈定位用，回答「库在哪一步」 */
+  migration: string
   distribution: string
 }
 
-const EMPTY: RuntimeInfo = { version: '', distribution: '' }
+const EMPTY: RuntimeInfo = { version: '', build: '', migration: '', distribution: '' }
 
 let cached: RuntimeInfo | null = null
 let inflight: Promise<RuntimeInfo> | null = null
@@ -32,6 +36,8 @@ async function fetchRuntimeInfo(): Promise<RuntimeInfo> {
       const data = await res.json()
       cached = {
         version: typeof data?.version === 'string' ? data.version : '',
+        build: typeof data?.build === 'string' ? data.build : '',
+        migration: typeof data?.migration === 'string' ? data.migration : '',
         distribution: typeof data?.distribution === 'string' ? data.distribution : '',
       }
     } catch {

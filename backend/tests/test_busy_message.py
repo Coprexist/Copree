@@ -158,8 +158,13 @@ async def test_interrupt_buffer_is_capped():
         for i in range(MAX_PENDING_INTERRUPTS + 5):
             await add_pending_interrupt(47, {"type": "user_message", "content": f"第{i}条", "group_id": 69})
         kept = await drain_pending_interrupts(47, group_id=69)
-        assert len(kept) == MAX_PENDING_INTERRUPTS, len(kept)
-        assert kept[0]["content"] == "第5条", kept[0]           # 最旧的 5 条被丢
-        assert kept[-1]["content"] == f"第{MAX_PENDING_INTERRUPTS + 4}条", kept[-1]
+        # 丢弃不再静默：多一条「丢了 5 条」的说明（docs/dev/tool_execution.md §3.4.7）
+        notices = [m for m in kept if m.get("type") == "notice"]
+        assert len(notices) == 1, kept
+        assert "5 条" in notices[0]["content"], notices[0]
+        messages = [m for m in kept if m.get("type") != "notice"]
+        assert len(messages) == MAX_PENDING_INTERRUPTS, len(messages)
+        assert messages[0]["content"] == "第5条", messages[0]    # 最旧的 5 条被丢
+        assert messages[-1]["content"] == f"第{MAX_PENDING_INTERRUPTS + 4}条", messages[-1]
     finally:
         await drain_pending_interrupts(47)

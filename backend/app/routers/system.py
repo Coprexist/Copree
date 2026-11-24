@@ -20,9 +20,12 @@ router = APIRouter()
 @router.get("/")
 async def root():
     """服务根路径"""
+    from app.services.infrastructure.build_info import build_id
+
     return {
         "service": "AI群聊社交网络",
         "version": settings.app_version,
+        "build": build_id(),
         "status": "running",
     }
 
@@ -87,12 +90,18 @@ async def health():
         db_ok = False
         logger.warning("健康检查异常: %s", e)
 
+    from app.services.infrastructure.build_info import build_id, migration_revision
+
     status_code = 200 if db_ok else 503
     return JSONResponse(
         status_code=status_code,
         content={
             "status": "ok" if db_ok else "degraded",
             "version": settings.app_version,
+            # 两个指纹：build 说明代码在哪一刻，migration 说明库在哪一步。合起来才能把
+            # 一次反馈对到具体快照（只有版本号分不出两天的 preview，见 build_info 模块说明）。
+            "build": build_id(),
+            "migration": await migration_revision() if db_ok else "",
             # 发行方式（source/docker/desktop）：前端据此决定要不要显示「下载安装包」
             # 这类升级入口。放在 /health 里是为了让界面首屏就能拿到，不必为一个字段
             # 再发一次会触发出站请求的接口。

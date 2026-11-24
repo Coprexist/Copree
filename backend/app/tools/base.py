@@ -5,13 +5,21 @@
 文件末尾调用 ToolRegistry.register() 即可自动注册，无需修改框架代码。
 """
 
+import asyncio
 import time
 import json
 import logging
 from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.tools.errors import ToolError
+
 logger = logging.getLogger(__name__)
+
+# 工具执行超时（docs/dev/error_handling.md §3.3）：默认 120s 覆盖绝大多数工具；
+# 世界运行、生图、大文件这类慢工具在插件类上声明 timeout_seconds 覆盖，
+# 不要用一个全局 60s 把正常慢工具砍掉。
+DEFAULT_TOOL_TIMEOUT_SECONDS = 120.0
 
 
 # ============================================================
@@ -562,19 +570,48 @@ class ToolRegistry:
                 ToolErrorCode.INVALID_ARGS, state_denied_text(agent_state, tool_name))
 
         t0 = time.monotonic()
+        tool_timeout = getattr(plugin, "timeout_seconds", None) or DEFAULT_TOOL_TIMEOUT_SECONDS
         try:
             # 运行期补上插件身份：插件公共接口（如 api.enter_frame）要靠它认命名空间
             from app.services.plugin.api import plugin_context
 
             with plugin_context(getattr(plugin, "owner", "")):
-                result = await plugin.execute(db, agent_id, group_id, arguments, context)
+                # 卡死的工具会占住整个 AI 轮次（_active_runs 迟迟不释放 → 该 AI 永久正忙），
+                # 超时是把「永久阻塞」变成「一次可处理的失败」的最低成本办法。
+                result = await asyncio.wait_for(
+                    plugin.execute(db, agent_id, group_id, arguments, context),
+                    timeout=tool_timeout,
+                )
+        except ToolError as e:
+            # 作者主动声明的业务错误：配置/参数问题，没有半个写操作要回滚，也不需要 traceback
+            logger.warning(
+                "工具 %s 报业务错误 %s: %s（plugin=%s）",
+                tool_name, e.code, e.message, _plugin_label(plugin),
+            )
+            await cls._record_call(db, agent_id, tool_name, time.monotonic() - t0, False, context)
+            return e.to_result()
+        except asyncio.TimeoutError:
+            # 超时同样可能已经把会话写脏（插件写到一半被取消），收拾口径与失败一致
+            await cls._recover_session(db, context, tool_name)
+            logger.error(
+                "工具 %s 执行超时（%.0fs，plugin=%s）",
+                tool_name, tool_timeout, _plugin_label(plugin),
+            )
+            await cls._record_call(db, agent_id, tool_name, time.monotonic() - t0, False, context)
+            return _build_tool_error(
+                ToolErrorCode.TOOL_EXEC_FAILED,
+                f"执行超时（{tool_timeout:.0f}s），已跳过", retryable=True)
         except Exception as e:
             # 工具炸了不许把整轮带走：写库抛在 flush 上（唯一约束、类型、长度）之后，
             # 会话会停在"必须先 rollback"的状态，此后连记账都要再抛一次，异常一路窜到
             # 最外层——AI 这一轮的回复就这样静默消失了（日志里只剩一行 Session 已回滚）。
             # 就地收拾干净：这个工具写下去的东西不要了，会话还能继续给 AI 用。
             await cls._recover_session(db, context, tool_name)
-            logger.error(f"工具 {tool_name} 执行失败: {e}", exc_info=True)
+            # 日志必须带 plugin：插件作者看到「工具 xxx 执行失败」才知道是不是自己那件
+            logger.error(
+                "工具 %s 执行失败（plugin=%s）: %s",
+                tool_name, _plugin_label(plugin), e, exc_info=True,
+            )
             await cls._record_call(db, agent_id, tool_name, time.monotonic() - t0, False, context)
             return _build_tool_error(ToolErrorCode.TOOL_EXEC_FAILED, f"执行失败：{e}")
 
@@ -672,8 +709,19 @@ class ToolRegistry:
 # 辅助函数
 # ============================================================
 
-def _build_tool_error(code: str, message: str) -> dict:
-    return {"error": True, "error_code": code, "message": message}
+def _plugin_label(plugin) -> str:
+    """失败日志里的归属：内置工具记 internal，插件工具记插件 id。
+
+    没有它，插件作者看到「工具 xxx 执行失败」根本不知道是不是自己那件。
+    """
+    return getattr(plugin, "owner", "") or "internal"
+
+
+def _build_tool_error(code: str, message: str, *, retryable: bool = False) -> dict:
+    result = {"error": True, "error_code": code, "message": message}
+    if retryable:
+        result["retryable"] = True
+    return result
 
 
 def _py_type(value) -> str:

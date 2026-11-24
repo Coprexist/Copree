@@ -382,12 +382,15 @@ async def apply_global_api(db: AsyncSession, world_id: int, operator_id: int, as
         "SELECT member_id FROM group_members WHERE group_id=:g AND member_type='human' AND role='owner' LIMIT 1"
     ), {"g": ga.group_id})).first()
     group_owner = int(owner_row[0]) if owner_row else 0
-    from app.models.user import User
-    user = await db.get(User, group_owner)
-    if not user or not user.api_key_encrypted:
-        raise ValueError("你还没有配置全局 API（在「我的」页设置）")
-    ga.api_key_encrypted = user.api_key_encrypted
-    ga.api_base_url = user.api_base_url
+    from app.services.agent.api_config_resolver import resolve_user_llm
+    from app.utils.crypto import encrypt_api_key
+
+    # 群主可用配置 → 群助手自己的列（群助手不共用配置档表，见 api_config_chain.md §11.1）
+    resolved = await resolve_user_llm(db, group_owner)
+    if not resolved.usable:
+        raise ValueError("你还没有配置可用的 API（在「我的」页设置）")
+    ga.api_key_encrypted = encrypt_api_key(resolved.api_key) if resolved.api_key else None
+    ga.api_base_url = resolved.base_url or None
     await db.commit()
     return {"success": True, "assistant_id": assistant_id, "configured": True, "source": "global"}
 
@@ -407,18 +410,18 @@ async def assistant_api_status(db: AsyncSession, world_id: int, assistant_id: in
     db = _ensure_repo(db)
     """群助手 API 状态（不回显 key）。"""
     ga = await _get_assistant(db, world_id, assistant_id)
-    from app.models.user import User
+    from app.services.agent.api_config_resolver import resolve_user_llm
     from sqlalchemy import text as _t
     owner_row = (await db.execute(_t(
         "SELECT member_id FROM group_members WHERE group_id=:g AND member_type='human' AND role='owner' LIMIT 1"
     ), {"g": ga.group_id})).first()
     group_owner = int(owner_row[0]) if owner_row else 0
-    user = await db.get(User, group_owner) if group_owner else None
+    has_global = bool(group_owner) and (await resolve_user_llm(db, group_owner)).usable
     return {
         "success": True,
         "assistant_id": assistant_id,
         "configured": bool(ga.api_key_encrypted),
-        "has_global": bool(user and user.api_key_encrypted),
+        "has_global": has_global,
         "name": ga.name,
     }
 

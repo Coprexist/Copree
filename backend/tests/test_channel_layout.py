@@ -73,21 +73,23 @@ async def test_without_any_evidence_it_guesses_from_the_address():
 
 
 def test_runtime_trusts_recorded_source_and_guesses_when_missing():
-    """有来源就信存下来的结论；来源为空（历史行）才按地址猜。"""
-    from app.services.agent.api_config_resolver import provider_system_layout
+    """有来源就信存下来的结论；来源为空（历史行）才按地址猜。
 
-    judged = SimpleNamespace(system_layout="none", system_layout_source="detected",
-                             base_url="http://192.168.1.9:8080")
-    assert provider_system_layout(judged, judged.base_url) == "none"
+    判定逻辑只有 provider_config.resolve_system_layout 一处；运行时通道信息
+    走 channel_provider_info（与管理端预设同形），不再有第二份实现。
+    """
+    from app.utils.pure.provider_config import channel_provider_info
 
-    legacy = SimpleNamespace(system_layout="anywhere", system_layout_source=None,
-                             base_url="http://192.168.1.9:8080")
-    assert provider_system_layout(legacy, legacy.base_url) == LEADING
+    def layout(stored, source, base_url):
+        return channel_provider_info(
+            {"system_layout": stored, "system_layout_source": source}, base_url,
+        )["system_layout"]
 
+    assert layout("none", "detected", "http://192.168.1.9:8080") == "none"
+    # 来源为空 = 没有结论：内网地址保守判 leading
+    assert layout("anywhere", None, "http://192.168.1.9:8080") == LEADING
     # 老行里存的 anywhere 不再被当结论：它只是当年的默认值
-    public = SimpleNamespace(system_layout="anywhere", system_layout_source=None,
-                             base_url="https://api.deepseek.com")
-    assert provider_system_layout(public, public.base_url) == ANYWHERE
+    assert layout("anywhere", None, "https://api.deepseek.com") == ANYWHERE
 
 
 async def _seed(db):

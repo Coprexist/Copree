@@ -678,7 +678,7 @@ async def run_turn(user_id: int, draft_id: int, message: str) -> AsyncIterator[s
 
 async def _run_turn(db: AsyncSession, user_id: int, draft: AgentCreationDraft, message: str) -> AsyncIterator[str]:
     """一轮的实体：上下文 + 工具循环 → 存档（对话日志即请求体与用量）"""
-    from app.services.agent.llm_credentials import resolve_user_credentials
+    from app.services.agent.api_config_resolver import resolve_user_llm
     from app.services.content.conversation_log_service import save_conversation_log
     from app.services.world.world_chat_service import resolve_chat_model
     from app.repositories.content_repo import SQLAlchemyContentRepository
@@ -692,7 +692,8 @@ async def _run_turn(db: AsyncSession, user_id: int, draft: AgentCreationDraft, m
     if not draft.title:
         await update_draft(db, draft, title=message.strip()[:30])
 
-    api_key, api_base = await resolve_user_credentials(db, user_id)
+    resolved = await resolve_user_llm(db, user_id)
+    api_key, api_base = resolved.api_key, resolved.base_url
     model = await resolve_chat_model(db, api_base, owner_id=user_id)
     tools = creator_tools()
     usage_total: dict = {}

@@ -79,7 +79,7 @@ function VersionBlock({ label, value, highlight }: { label: string; value: strin
 export default function UpdateCard({ className = '' }: { className?: string }) {
   const t = useT()
   const lang = useLang()
-  const { version, distribution } = useRuntimeInfo()
+  const { version, build, migration, distribution } = useRuntimeInfo()
   const { status, loading, failed, refresh } = useUpdateStatus(true)
 
   const current = status?.current || version
@@ -114,6 +114,16 @@ export default function UpdateCard({ className = '' }: { className?: string }) {
         />
         <span className="ml-1">{badge}</span>
       </div>
+
+      {/* 构建标识：反馈定位用。版本号说明「哪一代」，这两项说明「哪一刻、库在哪一步」，
+          三者合起来才能把一次反馈对到具体快照（只有版本号分不出两天的 preview）。 */}
+      {(build || migration) && (
+        <div className="mt-1 text-3xs font-mono text-textMuted">
+          {build && <span>{t('update:buildId')} {build}</span>}
+          {build && migration && <span className="mx-1">·</span>}
+          {migration && <span>{t('update:migrationId')} {migration}</span>}
+        </div>
+      )}
 
       <div className="space-y-1 text-xs text-textMuted">
         {status?.published_at && (

@@ -206,6 +206,8 @@
 
 - **AI 设置项：工具集范围**（`agents.tool_scope`：all / minimal / none）。原来 77 个工具无条件全发（约 1.75 万 token），小模型在几十个 schema 里挑不准、返回文字不调工具，本地 CPU 上这些 token 还要真金白银地预填充。`minimal` 只留 7 个「不说就办不成事」的工具（send_gm / send_dm / send_file / send_voice / expand_message / recall_message / end_turn），体积 5.2 万字符 → 5.4 千字符。判定入口 `ToolRegistry.get_allowed_tools(..., tool_scope=)`，五个调用点（群聊、私信、闹钟 ×2、系统提示段）统一带上。
 
+- 插件工具错误协议 `app/tools/errors.py`：作者抛 `ToolError(code, message, retryable, outward)`，`dispatch` 原样转成结构化结果给模型（不再被改写成 `执行失败：{e}`）；未捕获异常与超时的日志统一带 `plugin=<插件 id>`，插件作者能定位到自己。配套文档 `docs/plugin-dev/tool-errors.md`。
+
 ### 🐛 修复
 
 - **滚动条不再并排出现两条**：iOS / iPadOS 的滚动指示器是系统 overlay，`scrollbar-width`
@@ -556,6 +558,16 @@
 
 - **本地模型的「深度推理」开关不再是隐身状态**：原来判定「这条通道能不能开关思考」只认 `deepseek.com`（`config.py` 的 `is_thinking_supported_for`），ollama / llama.cpp / vLLM 一律被当成「不支持」，AI 设置里那个开关根本不渲染，上一版只能退而在代码里无条件发 `reasoning_effort: "none"` 把思考硬关掉。现在判据收成 `llm_endpoint.thinking_supported_for()` 一个入口：**地址即事实**（DeepSeek 认 `thinking` 对象、本地自建服务认 `reasoning_effort`），其余厂商才看用户勾选。`executor` / `agents` / `provider_config` / `api_config_resolver` 四处各自的旧判据全部改走它。
 
+- 工具执行不再无声失败：`dispatch` 加 `asyncio.wait_for` 超时（默认 120s，插件可用 `timeout_seconds` 覆盖，超时同样复原会话）；工具返回 `error=True` 时注入一条失败提醒（一个 turn 一次），对外动作（`send_gm`/`send_dm`/`send_voice`/`send_file`）失败额外私信 AI 的主人，避免「以为发了」。
+
+- `expand_context` 工具补上实现：此前压缩提示写着「用 expand_context 工具可展开」，而全仓只有这句文案、没有工具，AI 去调只会撞 `UNKNOWN_TOOL`。新增 `context_segments` 表（迁移 0130）保存折叠前的原文（保留 7 天，启动时清理），压缩提示带上段号，AI 可按段号回看。
+
+- 忙时注入缓冲超上限（20 条）不再静默丢弃：下一轮 `drain` 时附一条说明「有 N 条没送进来，用 read_conversation 往回翻」，与群消息窗口截断的 `gap` 口径一致。
+
+- **AI 的 API 配置收成一条链**：原先「用谁的 Key、打哪个地址、用哪个模型」有四五份实现（`api_config_resolver` / `llm_credentials` / `user_credentials` / 两个私有小函数），其中三份的文档还都写着「唯一入口」。现在只有 `api_config_resolver.resolve_llm()` 一处判断：① AI 绑定的配置档 → ② 池配置 → ③ 用户默认配置，一档要么整条命中、要么整条跳过，不再有「地址来自 A、Key 来自 B」。`users.api_base_url/api_key_encrypted` 与 `agents.api_base_url/api_key_encrypted` 两档裸 Key 从解析链删除（迁移 `0131` 清空，清空前把有 Key 但没绑配置档的 AI 补建成配置档），`prefer_own_key` 开关删除（池固定排在用户默认之前）。「没有 Key」的判断改成「这条通道需不需要 Key」——本地 llama.cpp / ollama 不校验 Key，以前会被当成「没配置」而一句话不说。设置页显示的是默认配置档，不再回显已不生效的旧值。
+
+- **AI 设置里填的 Key 现在真的生效**：几个旧表单还在提交 `api_base_url` / `api_key`，而解析链已不读那两个裸列。写入端现在把它们翻译成一条配置档并绑定（`services/agent/legacy_config_bridge.py`），不再「填了却没反应」；用户全局设置同理，翻译成默认配置档。这段桥是阶段性的——前端切到「选择配置档」后，桥与两个裸列一起删。
+
 ### 🔧 变更
 
 - **评论通知只在需要动手时报**：一次回十条评论时，十条「公开成功」对 AI 没有任何增量信息，
@@ -583,6 +595,8 @@
 - **本地通道开着思考时不设输出上限**（`llm.py`）：思考与正文共用一个输出额度，给个数字就等于替模型决定「想多久」——想不完就被截断（`finish_reason=length`），下一轮同样的上下文还得从头再想，时间花两遍、正文一个字都没有（实测 qwen3:4b 在 1024 额度下思考写满 1024 token、正文 0 字）。现在本地端点只有在**明确关掉思考**时才发 `max_tokens`（正文需要边界），开着思考或未表态时不发，交给 ollama 的 `num_predict=-1` / llama.cpp 的 `n_predict=-1` 想到自然结束。公网通道照旧发上限（成本与超时都要有边界）。
 
 - **聊天档改名轻聊档**：`config_profile = chat` 的预设改成「少工具 + 文字直发」（`tool_scope=minimal`、`plain_text_action=send`），描述改为「轻量对话 — 少给工具、模型直接说话，适合本地小模型」。按「档位只是自由组合」的原则，这两个值同时是独立设置项，可单独覆盖；`presets.py` 把它们归入 STRONG_STRING_PARAMS，切档位时直接取预设值、之后仍可改。
+
+- 版本号定为 `1.0.0-preview`（`config.py` 唯一出处），并在版本卡片显示**构建标识与库迁移号**：`/health` 新增 `build` / `migration` 两个字段，容器部署可由 `BUILD_ID` 环境变量注入（compose 已透传）。起因是一次反馈：对方实例自称 `0.4.16`，实际拉的是两天前的 1.0.0 预览——只靠版本号无法定位快照。
 
 ### ♻️ 重构
 
@@ -767,6 +781,8 @@
 - **更正上一版「思考把正文吃空」的结论**：那是 256 / 800 token 的探针预算（思考与正文共用一个输出上限，探针预算太小必然截断），产品本身的默认上限是 64000、世界对话 32000，正文不会被吃空。真机补测四档（qwen3:4b，`num_predict=1024`）：`think=false` 515 token / 758 字正文 / 84 秒；`low` 1024 token 满额截断；`medium` 529 token / 676 字思考 + 114 字正文 / 68 秒；`high` 522 token / 670 字思考 + 105 字正文 / 67 秒——**medium 与 high 几乎逐字重合，Qwen3 只认开/关、不认强度档**（档位是给 gpt-oss 那种模型用的）。用户手册里「深度推理是 DeepSeek 专有功能」同步改成三条通道各自的方言与上限口径。
 
 - **实测更正：llama.cpp 也认 `reasoning_effort: "none"`**。上一轮以为它会被忽略、只能靠模型自己结束思考，真机复核（qwen3-4b，同一提示）四次：关两次均 `reasoning=0`、4.9~5.7s 答完；开 35.9s、思考 420 字；不表态 17.3s、思考 146 字。用户手册里那句「llama.cpp 会忽略它」改成两个引擎都有效，vLLM 才是忽略不报错的那个。
+
+- 发版文档补「预览期：日常更新不是发版」一节：版本号在正式发布前恒为 `-preview`、日常 pull 不动版本号、`/health` 的 `version`/`build`/`migration` 三个指纹的用途与三种部署形态的来源，以及 `APP_VERSION` 环境变量覆盖 `config.py` 的坑；同一份规则同步进 `.dsh/skills/release`。
 
 ## [v0.4.16] - 2026-10-30
 

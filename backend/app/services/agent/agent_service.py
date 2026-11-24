@@ -505,8 +505,8 @@ async def get_effective_config(
             "plain_text_action": agent.plain_text_action,
             "tool_scope": agent.tool_scope,
             "is_ai_editable": agent.is_ai_editable,
-            "api_base_url": agent.api_base_url,
-            "api_key_encrypted": agent.api_key_encrypted,
+            "api_base_url": await _effective_base_url(db, agent),
+            "has_api_key": bool(agent.llm_profile_id),
         }
 
     # 通用/半通用 AI：查询 per-user 配置
@@ -547,8 +547,8 @@ async def get_effective_config(
         "max_alarms": agent.max_alarms,
         "config_profile": agent.config_profile,
         "is_ai_editable": agent.is_ai_editable,
-        "api_base_url": agent.api_base_url,
-        "api_key_encrypted": agent.api_key_encrypted,
+        "api_base_url": await _effective_base_url(db, agent),
+        "has_api_key": bool(getattr(agent, "llm_profile_id", None)),
     }
 
 
@@ -664,6 +664,20 @@ def _invalidate_voice_probe(cfg) -> None:
     cfg.probe_kind = ""
     cfg.probe_message = ""
     cfg.probed_at = None
+
+
+async def _effective_base_url(db, agent) -> str | None:
+    """这个 AI 当前实际会打到哪个地址（给设置页显示真实值，不显示僵尸列）。
+
+    只走只读解析：绑定档有效就用它的厂商地址；否则 None（界面显示「继承默认」）。
+    代价是设置页多一次查询——比显示一个早就不生效的旧地址便宜。
+    """
+    if not getattr(agent, "llm_profile_id", None):
+        return None
+    from app.services.agent.api_config_resolver import _load_profile
+
+    profile, provider = await _load_profile(db, agent.llm_profile_id, "llm")
+    return provider.base_url if provider is not None else None
 
 
 async def _bind_profile(
@@ -849,16 +863,28 @@ async def update_agent_config(
                 operator_id=operator_id, is_admin=is_admin,
             )
 
-    # 单 AI 级 API 配置
-    if "api_base_url" in updates:
-        agent.api_base_url = updates.get("api_base_url")
-    if "api_key" in updates:
-        from app.utils.crypto import encrypt_api_key
-        api_key_val = updates["api_key"]
-        if api_key_val:
-            agent.api_key_encrypted = encrypt_api_key(api_key_val)
-        elif api_key_val == "":  # 空字符串表示清除
-            agent.api_key_encrypted = None
+    # 旧表单的「单 AI 级裸 Key」：不写回 agents 的两个裸列（解析链已不读它们），
+    # 翻译成一条配置档并绑定——「填了却不生效」比明说没配更难查。
+    if "api_key" in updates and updates.get("api_key") is not None:
+        from app.services.agent.legacy_config_bridge import upsert_profile
+        base = updates.get("api_base_url") or getattr(agent, "api_base_url", None)
+        if base:
+            profile_id = await upsert_profile(
+                db, user_id=agent.owner_id, kind="llm", base_url=base,
+                api_key=updates["api_key"],
+                primary_model=updates.get("chat_model"),
+                secondary_model=updates.get("work_model"),
+            )
+            if profile_id:
+                await _bind_profile(
+                    db, agent, kind="llm", profile_id=profile_id,
+                    operator_id=operator_id, is_admin=is_admin,
+                )
+        else:
+            logger.warning(
+                "AI %s(%s) 提交了 api_key 但没有地址，无法建配置档（已忽略）",
+                agent.name, agent.id,
+            )
 
     # chat_model / work_model 允许设为 None（重置为全局默认）
     for field in ("chat_model", "work_model"):
@@ -1681,8 +1707,9 @@ def agent_to_dict(agent: Agent) -> dict:
         "disallow_mode": agent.disallow_mode or "strict",
         "user_id": agent.user_id,
         "api_credit_cost": agent.api_credit_cost,
-        "api_base_url": agent.api_base_url,
-        "has_api_key": agent.api_key_encrypted is not None,
+        # 这里是同步序列化（没有 db）：不解析地址，界面按 llm_profile_id 显示绑定关系
+        "api_base_url": None,
+        "has_api_key": bool(getattr(agent, "llm_profile_id", None)),
         "llm_profile_id": getattr(agent, "llm_profile_id", None),
         "avatar_url": agent.avatar_url,
         "api_token": agent.api_token,

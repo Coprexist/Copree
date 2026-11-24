@@ -65,6 +65,7 @@ FK_POLICY: Final[dict[tuple[str, str], str]] = {
     ("agent_workspace", "agent_id"): CASCADE,
     ("channel_conversation_usage", "agent_id"): CASCADE,
     ("channel_token_policy", "agent_id"): CASCADE,
+    ("context_segments", "agent_id"): CASCADE,  # 压缩原文的短期缓存，AI 删了就该一起没
     ("member_silences", "agent_id"): CASCADE,
     ("opencli_agent_whitelist", "agent_id"): CASCADE,
     ("pending_messages", "agent_id"): CASCADE,

@@ -16,14 +16,12 @@ async def test_billing_person_for_group_and_external_dm(migrated_db):
     from app.models.agent import Agent
     from app.models.user import User
     from app.utils.auth import hash_password
-    from app.utils.crypto import encrypt_api_key
 
     async with async_session() as db:
         from db_reset import clear
         await clear(db, "agents", "users")
-        owner = User(username="通道主人", password_hash=hash_password("x" * 12), email="o@test.local",
-                     type="human", api_key_encrypted=encrypt_api_key("sk-owner"),
-                     api_base_url="https://api.deepseek.com")
+        owner = User(username="通道主人", password_hash=hash_password("x" * 12),
+                     email="o@test.local", type="human")
         stranger = User(username="QQ用户", password_hash=hash_password("x" * 12),
                         email="shadow@qq.bridge", type="external", origin_channel="qq")
         ai_user = User(username="化学老师", password_hash=hash_password("x" * 12),
@@ -32,6 +30,14 @@ async def test_billing_person_for_group_and_external_dm(migrated_db):
         await db.flush()
         agent = Agent(owner_id=owner.id, user_id=ai_user.id, name="化学老师", ai_type="semi_general")
         db.add(agent)
+        await db.flush()
+        # 主人的可用配置 = 一条默认配置档（裸 Key 两列已不参与解析）
+        from app.services.agent.legacy_config_bridge import upsert_profile
+
+        await upsert_profile(
+            db, user_id=owner.id, kind="llm",
+            base_url="https://api.deepseek.com", api_key="sk-owner", make_default=True,
+        )
         await db.commit()
         await db.refresh(agent)
 

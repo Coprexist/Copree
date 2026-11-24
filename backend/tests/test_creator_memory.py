@@ -98,7 +98,7 @@ def test_visible_messages_keeps_spoken_prose_and_drops_tool_plumbing():
 
 async def test_turn_snapshot_keeps_the_final_reply(migrated_db):
     """走真实的一轮：先调工具、再收尾，存档里必须留得住那句收尾回复"""
-    import app.services.agent.llm_credentials as credentials_module
+    import app.services.agent.api_config_resolver as credentials_module
     import app.services.content.conversation_log_service as log_service
     import app.services.world.world_chat_service as world_chat
     from app.database import async_session
@@ -131,7 +131,8 @@ async def test_turn_snapshot_keeps_the_final_reply(migrated_db):
             return 1
 
         async def fake_credentials(db_, user_id):
-            return None, "http://llm.test"
+            from types import SimpleNamespace
+            return SimpleNamespace(api_key=None, base_url="http://llm.test")
 
         async def fake_model(db_, api_base, *, owner_id):
             return "test-model"
@@ -141,7 +142,7 @@ async def test_turn_snapshot_keeps_the_final_reply(migrated_db):
             patch.set(creator, "_run_tool", fake_tool)
             patch.set(creator, "creator_tools", lambda: [])
             patch.set(log_service, "save_conversation_log", fake_save)
-            patch.set(credentials_module, "resolve_user_credentials", fake_credentials)
+            patch.set(credentials_module, "resolve_user_llm", fake_credentials)
             patch.set(world_chat, "resolve_chat_model", fake_model)
 
             async for _ in creator._run_turn(db, USER_ID, draft, "你创建AI有专业参考文档吗"):
@@ -162,7 +163,7 @@ CLOSING = "工具轮用满了，先说下现在填到哪一步：人设还在改
 
 async def test_round_cap_spends_one_free_closing_round(migrated_db):
     """工具轮用尽后白送一轮（这一轮不递工具）：快照必须以 assistant 收尾，否则下一轮又失忆"""
-    import app.services.agent.llm_credentials as credentials_module
+    import app.services.agent.api_config_resolver as credentials_module
     import app.services.content.conversation_log_service as log_service
     import app.services.world.world_chat_service as world_chat
     from app.database import async_session
@@ -197,7 +198,8 @@ async def test_round_cap_spends_one_free_closing_round(migrated_db):
             return 1
 
         async def fake_credentials(db_, user_id):
-            return None, "http://llm.test"
+            from types import SimpleNamespace
+            return SimpleNamespace(api_key=None, base_url="http://llm.test")
 
         async def fake_model(db_, api_base, *, owner_id):
             return "test-model"
@@ -207,7 +209,7 @@ async def test_round_cap_spends_one_free_closing_round(migrated_db):
             patch.set(creator, "_run_tool", fake_tool)
             patch.set(creator, "creator_tools", lambda: [{"type": "function"}])
             patch.set(log_service, "save_conversation_log", fake_save)
-            patch.set(credentials_module, "resolve_user_credentials", fake_credentials)
+            patch.set(credentials_module, "resolve_user_llm", fake_credentials)
             patch.set(world_chat, "resolve_chat_model", fake_model)
 
             events = [ev async for ev in creator._run_turn(db, USER_ID + 1, draft, "帮我建一个逻各斯")]

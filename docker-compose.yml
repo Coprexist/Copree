@@ -41,6 +41,10 @@ services:
       # 发行方式：网页版据此在「管理面板 → 通用」给 compose 升级命令，而不是给安装包下载
       # 按钮（见 backend/app/services/infrastructure/update_check.py）。桌面安装包里由启动器注入。
       APP_DISTRIBUTION: docker
+      # 构建标识：反馈定位用（见 backend/app/services/infrastructure/build_info.py）。
+      # 容器里没有 .git，只能由部署方注入：BUILD_ID=$(git rev-parse --short HEAD) docker compose up -d
+      # 不填则 /health 的 build 为空，排查时只剩版本号可用。
+      BUILD_ID: ${BUILD_ID:-}
       # 平台自带协议端（profile: napcat）时填这两项：插件据此把"地址 + token"标成托管字段，
       # 卡片上就不让用户填了。留空 = 用户自带协议端，字段照常显示。
       # 只作为新建实例时的默认值，不再全局覆盖：两个 AI 各接一个协议端时各填各的

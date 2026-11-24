@@ -59,7 +59,21 @@ _CLOSING_INSTRUCTION = (
     "再调别的工具不会有结果，只会把这最后一次机会也浪费掉。"
 )
 
+# 对外动作：失败的后果由第三方承担（对方没收到），所以除回模型外还要告诉 owner。
+# 见 docs/dev/error_handling.md §3.4——「以为发了」比「没发」更难查。
+_OUTWARD_TOOLS = ("send_gm", "send_dm", "send_voice", "send_file")
+
+# 工具失败提醒：与 _PROSE_REMINDER 对称——那条管「没调工具」，这条管「调了但失败」。
+# 一轮只提醒一次：反复提醒既烧 token（每次都是整段上下文重跑），也会把模型逼成瞎试。
+_TOOL_FAILURE_REMINDER = (
+    "你刚才调用的工具失败了：{tools}。\n"
+    "如果这条内容必须让对方看到，换一种方式重试，或者直接告诉对方「没发出去」；"
+    "不要把失败的调用当作已完成。"
+)
+
 _pending_interrupts: dict[int, list[dict]] = {}
+# 缓冲溢出时被丢掉的条数（只为告诉 AI「少了几条」，不是重放队列）
+_dropped_interrupts: dict[int, int] = {}
 # 正在 _tool_call_loop 里的 agent → 它在**哪些会话**里跑着（agent_id → {会话键}）。
 # 为什么要到会话级：同一个 AI 可以群 A 跑一轮、同时收到群 B 的消息；"忙"得能分清哪个会话忙，
 # 否则投递会串会话（见 conversation_of），也没法回答"能不能趁它干活喊一声"。
@@ -86,10 +100,25 @@ async def add_pending_interrupt(agent_id: int, message: dict) -> None:
         overflow = len(items) - MAX_PENDING_INTERRUPTS
         if overflow > 0:
             del items[:overflow]
+            # 丢了多少要**告诉 AI**，不能只写服务端日志：它看不到就会以为那段时间没人说话
+            # （降级必须可解释——见 docs/dev/tool_execution.md §3.4.7）
+            _dropped_interrupts[agent_id] = min(
+                _dropped_interrupts.get(agent_id, 0) + overflow, 999)
             logger.warning(
                 f"AI(agent={agent_id}) 忙时中断缓冲超过 {MAX_PENDING_INTERRUPTS} 条，丢弃最旧的 {overflow} 条"
                 "（消息仍在群/账本里，下一轮历史照常能看到）"
             )
+
+
+def _overflow_notice(count: int) -> dict:
+    """缓冲溢出时补的一条说明：只报数量与去哪里看，不重放内容。"""
+    return {
+        "type": "notice",
+        "content": (
+            f"（积压太多，有 {count} 条中途消息没能在这一轮之前送进来。"
+            "它们仍在群/私信历史里，用 read_conversation 往回翻；别当成那段时间没人说话。）"
+        ),
+    }
 
 
 def conversation_of(message: dict) -> tuple[str, object]:
@@ -113,6 +142,10 @@ async def drain_pending_interrupts(agent_id: int, *, group_id: int | None = None
     """
     async with _state_lock:
         items = _pending_interrupts.get(agent_id) or []
+        dropped = _dropped_interrupts.pop(agent_id, 0)
+        if dropped:
+            # 溢出说明不分会话（它说的是「你这边积压了」，哪个会话来取都给）
+            items.append(_overflow_notice(dropped))
         if group_id is None and session_id is None:
             _pending_interrupts.pop(agent_id, None)
             return items
@@ -279,44 +312,24 @@ async def _send_system_error(
     conversation_type: str = "group",
     group_id: int | None = None,
     session_id: str | None = None,
+    tool_name: str = "",
 ) -> None:
     """发送分类系统错误通知给 AI 的 owner（走 DM）"""
     from app.models.dm import DMMessage, DMSession
 
     SYSTEM_USER_ID = 0  # 硬编码：迁移保证 id=0 为系统用户
 
-    guidance = {
-        "no_api_key": (
-            f"⚠️ AI「{agent.name}」缺少 API Key，无法回复消息。\n\n"
-            f"📌 **解决方法**（任选其一）：\n"
-            f"1. 为 AI 单独配置：[AI 设置页](/agents/{agent.id}) → 完整设置 → API 提供商 → 填写 API Key\n"
-            f"2. 使用全局 Key：前往 [个人设置](/settings) → API 配置 → 填写你的 API Key（所有 AI 共用）\n"
-            f"3. 使用额度兑换：前往 [兑换码页面](/me) 输入兑换码获取 API 池额度\n\n"
-            f"设置完成后 AI 即可正常回复。"
-        ),
-        "insufficient_balance": (
-            f"⚠️ AI「{agent.name}」的 API 余额不足（402），无法回复消息。\n\n"
-            f"📌 **解决方法**：\n"
-            f"1. 前往所用 API 提供商的官网充值\n"
-            f"2. 前往 [个人设置](/settings) 更换全局 API Key\n"
-            f"3. 前往 [AI 设置页](/agents/{agent.id}) 更换此 AI 的 Key\n"
-            f"4. 或前往 [兑换码页面](/me) 输入兑换码获取额度"
-        ),
-        "auth_error": (
-            f"⚠️ AI「{agent.name}」的 API Key 无效（401），无法回复消息。\n\n"
-            f"📌 **解决方法**：\n"
-            f"1. 前往 [AI 设置页](/agents/{agent.id}) → API 提供商 → 检查并更新 API Key\n"
-            f"2. 或前往 [个人设置](/settings) 更新全局 API Key\n"
-            f"3. 确认 API Key 未过期、未被删除"
-        ),
-        "all_failed": (
-            f"⚠️ AI「{agent.name}」的 API 调用全部失败。\n\n"
-            f"错误详情：{detail}\n\n"
-            f"📌 请前往 [AI 设置页](/agents/{agent.id}) 或 [个人设置](/settings) 检查 API 配置。"
-        ),
-    }
+    from app.ai.error_catalog import render
 
-    content = guidance.get(error_type, guidance["all_failed"])
+    # 文案的唯一来源是 error_catalog.CATALOG（docs/dev/error_handling.md §3.1）；
+    # 这里只做投递，不再就地拼文案——加一种错误只改表，不改这个函数。
+    content = render(
+        error_type,
+        agent_name=getattr(agent, "name", "") or "",
+        agent_id=getattr(agent, "id", "") or "",
+        detail=detail,
+        tool=tool_name,
+    )
 
     try:
         # 统一走 DM 通知：发给 AI 的 owner，不广播到群
@@ -388,16 +401,6 @@ async def _send_system_error_notification(db, agent, content: str) -> None:
 # API 配置获取
 # ============================================================
 
-async def _provider_info_for_base(db, api_base: str) -> dict:
-    """自带 Key 的通道信息：按 base_url 找到它对应的供应商预设，带上这条通道认得的模型。
-
-    找不到预设就只带地址（模型清单为空 = 不约束模型名），否则没登记的自建中转会直接不可用。
-    """
-    from app.services.infrastructure.system_settings_service import get_provider_by_base_url
-    provider = await get_provider_by_base_url(db, api_base)
-    return channel_provider_info(provider, api_base)
-
-
 async def _get_api_config(
     db, agent,
     exclude_pool_key_id: int | None = None,
@@ -407,176 +410,56 @@ async def _get_api_config(
     excluded_sources: set[str] | None = None,
     bill_to_owner: bool = False,
 ) -> tuple[str | None, str, str, int | None, dict]:
+    """兼容薄壳：算好账单人，然后交给唯一的解析入口。
+
+    **这里不再判断「用哪一档」**——那件事只有
+    `app.services.agent.api_config_resolver` 做。返回旧五元组只是为了既有调用点先不动；
+    新代码请直接用 `resolve_llm()` 拿 `Resolution`（它同时带决策轨迹，界面与请求共用）。
+
+    账单人是业务规则，不是「用哪条配置」的一部分，所以留在这里：
+    - bill_to_owner / 群聊 owner 付费 → AI 主人
+    - 通用 AI 的私聊/聊天者付费 → 聊天者
     """
-    获取 API Key 和 Base URL（四层优先链 + 平台赠送额度）。
+    from app.services.agent.api_config_resolver import (
+        LEVEL_BOUND, LEVEL_DEFAULT, LEVEL_POOL, resolve_llm,
+    )
 
-    Tier 1: Agent 自有 Key
-    Tier 2: 账单人有可用额度 → API Key 池
-    Tier 3: 账单人自有 Key (api_credit/自配)
-
-    excluded_sources: 已尝试失败的来源，跳过（"agent_key", "pool_key", "user_key"）
-
-    prefer_own_key=True 时，账单人自有 Key 优先于池 Key。
-
-    v0.1.8: chatter_id 决定账单人（通用 AI 扣聊天者，否则扣主人）。
-            force_own_key=True 时跳过池 Key，直接走账单人自有 Key。
-    v0.2.2: 返回 provider_info 字典，含 thinking_supported / models / base_url。
-    v1.1.0: conversation_type + group_owner_pays 控制群聊账单人。
-    v1.2.0: bill_to_owner — 外部通道（QQ 等）来的会话一律记在 AI 主人头上：
-            对方不是平台用户，没有 Key 也没有额度，按"聊天者付费"必然解析成空。
-            调用方判断"这条是不是外部通道来的"，这里只负责照办。
-
-    返回: (api_key, api_base, credit_source, pool_key_id, provider_info)
-    """
-    from app.utils.crypto import decrypt_api_key, APIKeyDecryptError
-    from app.models.user import User as UserModel
-
-    api_key = None
-    api_base = settings.deepseek_base_url
-    credit_source = "none"
-    pool_key_id = None
-    # 通道信息按地址缓存：每一轮只会真正用到其中一个地址，没必要一进函数就查库
-    _channel_cache: dict[str, dict] = {}
-
-    async def _channel_info(base: str) -> dict:
-        cached = _channel_cache.get(base)
-        if cached is None:
-            cached = await _provider_info_for_base(db, base)
-            _channel_cache[base] = cached
-        return cached
-
-    provider_info = {"thinking_supported": thinking_supported_for(api_base), "base_url": api_base,
-                     "models": [], "default_model": None}
-
-    if excluded_sources is None:
-        excluded_sources = set()
-
-    # 记录解密失败（用于降级通知）
-    _decrypt_failures: list[str] = []
-
-    def _try_decrypt(source_label: str, encrypted: str) -> str | None:
-        """尝试解密，失败时记录来源并返回 None"""
-        try:
-            return decrypt_api_key(encrypted)
-        except APIKeyDecryptError as e:
-            _decrypt_failures.append(source_label)
-            logger.warning(f"⚠️ {source_label} 解密失败: {e}")
-            return None
-
-    # 确定账单人
     if bill_to_owner:
         bill_user_id = agent.owner_id
-    elif conversation_type and conversation_type != "dm" and getattr(agent, 'group_owner_pays', True):
+    elif conversation_type and conversation_type != "dm" and getattr(agent, "group_owner_pays", True):
         bill_user_id = agent.owner_id
     elif chatter_id and agent.ai_type in ("general", "semi_general"):
         bill_user_id = chatter_id
     else:
         bill_user_id = agent.owner_id
 
-    # 查账单用户
-    user_result = await db.execute(select(UserModel).where(UserModel.id == bill_user_id))
-    user = user_result.scalar_one_or_none()
+    # 旧来源名 → 新档位名（"agent_key" 是已删除的裸 Key 档，映射到 ① 保持重试语义）
+    exclude = {
+        {"agent_key": LEVEL_BOUND, "user_key": LEVEL_DEFAULT, "pool_key": LEVEL_POOL}.get(s, s)
+        for s in (excluded_sources or ())
+    }
+    res = await resolve_llm(
+        db, agent, bill_to=bill_user_id, exclude=exclude,
+        exclude_pool_key_id=exclude_pool_key_id, force_own_key=force_own_key,
+    )
 
-    # Tier 0: AI 选了一条配置档 —— 整包生效（地址、Key、能力全来自它）
-    #
-    # 这一档在"账单人"之后、Agent 自有 Key 之前：选了配置档就不该再被别的来源掺一脚，
-    # 否则用户以为换的是整套，实际只有模型换了、Key 还是旧的。
-    if getattr(agent, "llm_profile_id", None):
-        from app.services.agent.api_config_resolver import (
-            _load_profile, provider_info_of, resolve_from,
-        )
-        profile, provider = await _load_profile(db, agent.llm_profile_id, "llm")
-        if profile is not None and provider is not None:
-            resolved = resolve_from(
-                agent=agent, user=user, profile=profile, provider=provider,
-                default_base_url=settings.deepseek_base_url,
-            )
-            return (resolved.api_key, resolved.base_url, "profile", None,
-                    provider_info_of(provider, resolved))
-        logger.warning(
-            "AI %s(%s) 的配置档 %s 无效，回落到原有链路",
-            agent.name, agent.id, agent.llm_profile_id,
-        )
+    if not res.usable and res.decrypt_failures:
+        from app.models.user import User as UserModel
+        user = await db.get(UserModel, bill_user_id)
+        if user is not None:
+            notify = (_notify_force_own_key_failure if force_own_key
+                      else _notify_key_degradation)
+            asyncio.create_task(notify(db, agent, user, list(res.decrypt_failures)))
 
-    # Tier 1: Agent 自有 Key
-    if "agent_key" not in excluded_sources and agent.api_key_encrypted:
-        key = _try_decrypt(f"Agent「{agent.name}」自有 Key", agent.api_key_encrypted)
-        if key:
-            api_key = key
-            api_base = agent.api_base_url or settings.deepseek_base_url
-            credit_source = "agent_key"
-            provider_info = await _channel_info(api_base)
-            return api_key, api_base, credit_source, pool_key_id, provider_info
-
-    if user is None:
-        return api_key, api_base, credit_source, pool_key_id, provider_info
-
-    prefer_own = getattr(user, 'prefer_own_key', False)
-
-    # force_own_key: 跳过池 Key，只用用户自有 Key
-    if force_own_key:
-        if "user_key" not in excluded_sources and user.api_key_encrypted:
-            key = _try_decrypt(f"用户「{user.username}」自有 Key", user.api_key_encrypted)
-            if key:
-                api_key = key
-                api_base = user.api_base_url or settings.deepseek_base_url
-                credit_source = "user_key"
-                provider_info = await _channel_info(api_base)
-        # force_own_key 场景：解密失败 = 无法调用模型，通知用户重新配置
-        if api_key is None and _decrypt_failures:
-            asyncio.create_task(_notify_force_own_key_failure(db, agent, user, _decrypt_failures))
-        return api_key, api_base, credit_source, pool_key_id, provider_info
-
-    effective_credit = max(0, (user.platform_gifted_credit or 0)) + (user.api_credit or 0)
-
-    # 定义 tier 顺序（prefer_own 交换 pool_key 和 user_key 的优先级）
-    if prefer_own:
-        tier_order = [("user_key", user.api_key_encrypted), ("pool_key", effective_credit > 0)]
-    else:
-        tier_order = [("pool_key", effective_credit > 0), ("user_key", user.api_key_encrypted)]
-
-    for source_name, available in tier_order:
-        if source_name in excluded_sources or not available:
-            continue
-
-        if source_name == "pool_key":
-            from app.services.infrastructure.quota_service import find_best_pool_key
-            pool_key = await find_best_pool_key(db, user.id, exclude_pool_key_id=exclude_pool_key_id)
-            if not pool_key:
-                continue
-            key = _try_decrypt(f"池 Key #{pool_key.id}", pool_key.api_key_encrypted)
-            if key:
-                api_key = key
-                api_base = pool_key.api_base_url or settings.deepseek_base_url
-                credit_source = "pool_key"
-                pool_key_id = pool_key.id
-                from app.services.infrastructure.system_settings_service import get_provider_for_pool_key
-                pool_provider = await get_provider_for_pool_key(db, pool_key)
-                # 池 Key 自己记的模型清单优先（models/default_model）；没记才用它关联的供应商预设
-                provider_info = channel_provider_info(
-                    pool_provider, api_base,
-                    models=getattr(pool_key, "models", None),
-                    default_model=getattr(pool_key, "default_model", None),
-                )
-                return api_key, api_base, credit_source, pool_key_id, provider_info
-
-        elif source_name == "user_key":
-            if user.api_key_encrypted:
-                key = _try_decrypt(f"用户「{user.username}」自有 Key", user.api_key_encrypted)
-                if key:
-                    api_key = key
-                    api_base = user.api_base_url or settings.deepseek_base_url
-                    credit_source = "user_key"
-                    provider_info = await _channel_info(api_base)
-                    return api_key, api_base, credit_source, pool_key_id, provider_info
-
-    # 降级完成：如果发生了 Key 解密失败，通知用户（fire-and-forget，不阻塞回复）
-    if _decrypt_failures:
-        asyncio.create_task(_notify_key_degradation(db, agent, user, _decrypt_failures))
-
-    # 以上都不可用 → 返回空（通道信息仍按全局默认地址取一次，模型收敛照旧生效）
-    provider_info = await _channel_info(api_base)
-    return api_key, api_base, credit_source, pool_key_id, provider_info
+    api_base = res.base_url or settings.deepseek_base_url
+    provider_info = dict(res.provider_info) or {
+        "thinking_supported": thinking_supported_for(api_base), "base_url": api_base,
+        "models": [], "default_model": None,
+    }
+    # 能不能真的请求：本地自建服务可以没有 Key（F4）。调用方一律看这个，
+    # 不要再各自猜「api_key is None 就是没配」——池里那条本地配置会被误判。
+    provider_info["usable"] = res.usable
+    return res.api_key, api_base, res.credit_source, res.pool_key_id, provider_info
 
 
 async def _notify_key_degradation(db, agent, user, failures: list[str]) -> None:
@@ -823,9 +706,14 @@ async def _tool_call_loop(
     _self_ended = False
     # 各轮思考：没走 end_turn 就被收尾时，它是「为什么在干这件事」的唯一记录
     _reasoning_log: list[str] = []
-    # 这一轮写过、但没走发送工具的话。轮级状态：只留在 messages 里会随轮末一起消失，
-    # 下一个自己就不知道自己说过这句（它看得见的只有账本）
     _unsent_text = ""
+    # 工具失败提醒：一个 turn 只提醒一次（与「没调工具」的提醒各管一半，互不叠加）
+    _tool_fail_reminded = False
+    # 对外动作失败的私信：一个 turn 只发一次，避免批量失败把 owner 刷屏
+    _outward_notified = False
+    # 本轮失败的工具名（去重、保序）与对外动作失败明细
+    _failed_tools: list[str] = []
+    _outward_failures: list[dict] = []
 
     def _did_real_work() -> bool:
         """本轮除了发消息/结束，还干过别的事没有。"""
@@ -932,6 +820,10 @@ async def _tool_call_loop(
         )
         if stale and not getattr(context, "_precompressed", False):
             compressed_ok = False
+            # 段号先给出来：压缩函数要把它写进提示，原文在压缩成功后才存（原文即折叠前的列表）
+            from app.services.history.context_segment_service import new_segment_id
+            seg_ref = new_segment_id()
+            before_compress = messages
             # 优先 LLM 总结压缩（保留关键信息，适合继续对话的场景）
             if api_key:
                 try:
@@ -941,9 +833,15 @@ async def _tool_call_loop(
                         api_key=api_key,
                         model=model,
                         user_id=str(agent.id),
+                        segment_ref=seg_ref,
                     )
                     if compress_stats.get("compressed"):
                         compressed_ok = True
+                        await _save_compressed_segment(
+                            db, agent, conversation_type=conversation_type,
+                            group_id=group_id, session_id=session_id,
+                            before=before_compress, segment_ref=seg_ref,
+                        )
                         logger.info(
                             f"AI {agent.name}({agent.id}) 空闲>12h LLM 总结压缩: "
                             f"{compress_stats.get('before_tokens')}→{compress_stats.get('after_tokens')} tok"
@@ -952,9 +850,14 @@ async def _tool_call_loop(
                     logger.warning(f"空闲 LLM 压缩失败，回退内联截断: {e}")
             # API 不可用或总结失败 → 内联截断兜底
             if not compressed_ok:
-                messages, compress_stats = inline_compress(messages)
+                messages, compress_stats = inline_compress(messages, segment_ref=seg_ref)
                 if compress_stats.get("compressed"):
                     compressed_ok = True
+                    await _save_compressed_segment(
+                        db, agent, conversation_type=conversation_type,
+                        group_id=group_id, session_id=session_id,
+                        before=before_compress, segment_ref=seg_ref,
+                    )
                     logger.info(
                         f"AI {agent.name}({agent.id}) 空闲>12h 内联截断(API不可用): "
                         f"{compress_stats.get('before_tokens')}→{compress_stats.get('after_tokens')} tok"
@@ -1155,6 +1058,7 @@ async def _tool_call_loop(
                         last_task = task_summary
                     _pending_images.extend(_take_tool_images(result, tool_name))
                     _pending_results.append({"tc_id": tc_id, "result": result})
+                    _note_tool_failure(result, tool_name, _failed_tools, _outward_failures)
                     # 工具总账：工具名 + 失败原因或工具自报的摘要——轮末封存为一条 tool 条目
                     _tool_log.append({"name": tool_name, "note": tool_ledger_note(result)})
                     if isinstance(result, dict) and result.get("end_turn"):
@@ -1186,11 +1090,20 @@ async def _tool_call_loop(
                         messages, context_window=window, threshold=thresholds.idle)
                     if stale or (_has_sent_message and should_compress(
                             messages, context_window=window, threshold=thresholds.hot)):
+                        # 段号与折叠前原文：三条分支（内联 / LLM 总结 / 总结失败兜底）共用
+                        from app.services.history.context_segment_service import new_segment_id
+                        seg_ref = new_segment_id()
+                        before_compress = messages
                         if stale:
                             # 空闲压缩：直接内联截断（缓存已过期，不浪费 API）
-                            messages, compress_stats = inline_compress(messages)
+                            messages, compress_stats = inline_compress(messages, segment_ref=seg_ref)
                             if compress_stats.get("compressed"):
                                 _auto_compressed = True
+                                await _save_compressed_segment(
+                                    db, agent, conversation_type=conversation_type,
+                                    group_id=group_id, session_id=session_id,
+                                    before=before_compress, segment_ref=seg_ref,
+                                )
                         else:
                             # AI 刚发了消息：用 LLM 总结重要事件后再压缩，保留关键信息
                             # 压缩必须成功才能清空操作链，否则卡住重试
@@ -1200,20 +1113,31 @@ async def _tool_call_loop(
                                 api_key=current_api_key,
                                 model=model,
                                 user_id=str(agent.id),
+                                segment_ref=seg_ref,
                             )
                             if compress_stats.get("compressed"):
                                 messages = new_messages
                                 _auto_compressed = True
+                                await _save_compressed_segment(
+                                    db, agent, conversation_type=conversation_type,
+                                    group_id=group_id, session_id=session_id,
+                                    before=before_compress, segment_ref=seg_ref,
+                                )
                             else:
                                 logger.warning(
                                     f"AI {agent.name}({agent.id}) LLM 压缩失败"
                                     f"（{compress_stats.get('reason', '未知')}），降级为内联压缩兜底"
                                 )
                                 # 兜底：不依赖 LLM 的内联截断——避免 LLM 超时/Key 不可用时反复重试耗 API
-                                messages, inline_stats = inline_compress(messages)
+                                messages, inline_stats = inline_compress(messages, segment_ref=seg_ref)
                                 if inline_stats.get("compressed"):
                                     _auto_compressed = True
                                     compress_stats = inline_stats
+                                    await _save_compressed_segment(
+                                        db, agent, conversation_type=conversation_type,
+                                        group_id=group_id, session_id=session_id,
+                                        before=before_compress, segment_ref=seg_ref,
+                                    )
                         if _auto_compressed:
                             logger.info(
                                 f"AI {agent.name}({agent.id}) 上下文压缩完成："
@@ -1615,6 +1539,25 @@ async def _tool_call_loop(
                 _inject_tool_images(messages, _pending_images)
                 _pending_images.clear()
 
+            # ── 工具失败提醒（docs/dev/error_handling.md §3.2）──
+            # 与「没调工具」的提醒对称：那条管「没做」，这条管「做了但没成」。
+            # 一个 turn 只提醒一次——反复提醒既烧 token（每次都是整段上下文重跑），
+            # 也会把模型逼成瞎试。
+            if _failed_tools and not _tool_fail_reminded:
+                _tool_fail_reminded = True
+                messages.append({
+                    "role": "user",
+                    "content": _TOOL_FAILURE_REMINDER.format(
+                        tools="、".join(_failed_tools[:5])),
+                })
+                logger.info(
+                    f"AI {agent.name}({agent.id}) 工具失败提醒注入: "
+                    f"{'、'.join(_failed_tools[:5])}"
+                )
+                if _outward_failures and not _outward_notified:
+                    _outward_notified = True
+                    await _notify_outward_failure(db, agent, _outward_failures)
+
             # ── 闹钟模式：第一轮工具执行完后注入收尾提醒 ──
             if conversation_type == "alarm":
                 messages.append({
@@ -1806,6 +1749,74 @@ def _context_ref(group_id, session_id, conversation_type) -> str:
     """本会话在账本里的键（群 vs 私信）——实现在 context_unlock（那边也要用同一份）"""
     from app.services.history.context_unlock import context_ref_for
     return context_ref_for(conversation_type, group_id=group_id, session_id=session_id)
+
+
+def _note_tool_failure(result, tool_name: str, failed: list[str],
+                       outward: list[dict]) -> None:
+    """把一次工具失败记进本轮的两个桶（普通失败 / 对外动作失败）。
+
+    只认 error=True 的结果。INVALID_ARGS / UNKNOWN_TOOL 不进桶：模型自己知道改参数，
+    再提醒一遍只会让它把同一个错误重试一次。
+    """
+    if not isinstance(result, dict) or not result.get("error"):
+        return
+    code = str(result.get("error_code") or "")
+    if code in ("INVALID_ARGS", "UNKNOWN_TOOL"):
+        return
+    if tool_name not in failed:
+        failed.append(tool_name)
+    if result.get("outward") or tool_name in _OUTWARD_TOOLS:
+        outward.append({
+            "tool": tool_name,
+            "detail": str(result.get("message") or "")[:200],
+        })
+
+
+# 同一 AI 同一对外工具 10 分钟内只发一次私信：一个坏参数会把 owner 刷屏
+_outward_notice_seen: dict[tuple[int, str], float] = {}
+OUTWARD_NOTICE_INTERVAL_SECONDS = 600
+
+
+async def _notify_outward_failure(db, agent, failures: list[dict]) -> None:
+    """对外动作失败 → 给 owner 发一条私信（模型已收到提醒，用户也要知道）。
+
+    「以为发了」比「没发」更难查：这条私信回答的是「用户为什么没收到」。
+    """
+    if not failures:
+        return
+    first = failures[0]
+    tool = str(first.get("tool") or "")
+    key = (agent.id, tool)
+    now = time.monotonic()
+    last = _outward_notice_seen.get(key)
+    if last is not None and now - last < OUTWARD_NOTICE_INTERVAL_SECONDS:
+        return
+    _outward_notice_seen[key] = now
+    detail = "；".join(
+        f"{f.get('tool')}: {f.get('detail')}" for f in failures[:3])
+    await _send_system_error(
+        db, agent, "tool_outward_failed", detail, tool_name=tool)
+
+
+async def _save_compressed_segment(db, agent, *, conversation_type, group_id,
+                                   session_id, before, segment_ref) -> None:
+    """把折叠前的原文存成一段，供 expand_context 按段号取回。
+
+    存段是旁路：失败只记一行日志，不能让这一轮回复跟着失败——压缩本身已经成功，
+    原文丢了顶多是 AI 之后看不到细节。
+    """
+    try:
+        from app.services.history.context_segment_service import save
+        await save(
+            db, segment_id=segment_ref, agent_id=agent.id,
+            context_ref=(f"group:{group_id}" if conversation_type == "group"
+                         else f"dm:{session_id}"),
+            messages=before,
+            conversation_type=conversation_type,
+            group_id=group_id, session_id=session_id,
+        )
+    except Exception as e:  # noqa: BLE001 —— 旁路失败不影响本轮
+        logger.warning("压缩段保存失败（不影响本轮）: %s", e)
 
 
 async def _seal_turn(db, agent, *, group_id, session_id, conversation_type,

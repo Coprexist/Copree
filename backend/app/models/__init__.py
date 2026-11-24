@@ -26,6 +26,7 @@ from app.models.opencli import (
     OpenCLIDeniedCommand,
 )
 from app.models.conversation_log import ConversationLogConfig, ConversationLog
+from app.models.context_segment import ContextSegment
 from app.models.agent_metrics import AgentMetricsSnapshot
 from app.models.api_key_pool import ApiKeyPool, UserApiAssignment
 from app.models.api_usage_log import ApiUsageLog

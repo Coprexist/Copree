@@ -5,24 +5,13 @@
 import logging
 from app.models.user import User
 from app.utils.auth import hash_password, verify_password, create_access_token
-from app.utils.crypto import encrypt_api_key, decrypt_api_key
+from app.utils.crypto import decrypt_api_key
 from app.repositories.user_repo import UserRepository
 from app.repositories.system_settings_repo import SystemSettingsRepository
 from app.repositories.verification_repo import VerificationRepository
 from app.repositories.api_key_pool_repo import ApiKeyPoolRepository
 
 logger = logging.getLogger(__name__)
-
-
-def _get_api_key_last4(user) -> str:
-    """解密并返回 API Key 的后4位（用于前端标识），解密失败返回空"""
-    if not user.api_key_encrypted:
-        return ""
-    try:
-        key = decrypt_api_key(user.api_key_encrypted)
-        return key[-4:]
-    except Exception:
-        return ""
 
 
 async def register_user(
@@ -225,6 +214,20 @@ async def get_user_info(
     except Exception:
         pass
 
+    from app.services.agent.api_config_resolver import _decrypt_checked, _load_default_profile
+
+    default_profile, default_provider = await _load_default_profile(
+        user_repo.session, user.id, "llm")
+    default_base = default_provider.base_url if default_provider is not None else None
+    default_primary = (default_profile.primary_model or default_provider.default_primary
+                       if default_profile is not None and default_provider is not None else None)
+    default_secondary = (default_profile.secondary_model or default_provider.default_secondary
+                         if default_profile is not None and default_provider is not None else None)
+    raw_default_key = ((default_profile.api_key_encrypted
+                        or default_provider.default_api_key_encrypted)
+                       if default_profile is not None and default_provider is not None else None)
+    default_key = _decrypt_checked(raw_default_key)[0]
+
     return {
         "id": user.id,
         "username": user.username,
@@ -240,11 +243,12 @@ async def get_user_info(
         "bio": getattr(user, 'bio', None),
         "status_text": getattr(user, 'status_text', None),
         "status_color": getattr(user, 'status_color', None),
-        "api_base_url": user.api_base_url,
-        "global_chat_model": getattr(user, "global_chat_model", None),
-        "global_work_model": getattr(user, "global_work_model", None),
-        "has_api_key": user.api_key_encrypted is not None,
-        "api_key_last4": _get_api_key_last4(user) if user.api_key_encrypted else "",
+        # 设置页显示的是「默认配置档」，不再回显 users 上两个已不参与解析的裸列
+        "api_base_url": default_base,
+        "global_chat_model": default_primary,
+        "global_work_model": default_secondary,
+        "has_api_key": bool(default_key),
+        "api_key_last4": (default_key or "")[-4:] if default_key else "",
         "auto_approve_vector_timeout": user.auto_approve_vector_timeout,
         "auto_approve_vector_default": user.auto_approve_vector_default,
         "timezone": user.timezone or "Asia/Shanghai",
@@ -252,7 +256,8 @@ async def get_user_info(
         "ui_prefs": user.ui_prefs or {},
         "setup_completed": getattr(user, "setup_completed", True),
         "created_at": str(user.created_at) if user.created_at else None,
-        "prefer_own_key": getattr(user, 'prefer_own_key', False),
+        # 开关已删除（池固定排在用户默认之前）；字段保留一个版本给老前端
+        "prefer_own_key": False,
         "assigned_pool_key_name": assigned_pool_key_name,
         "email": getattr(user, "email", None),
         "email_verified": getattr(user, "email_verified", False),
@@ -359,10 +364,24 @@ async def update_user_settings(
         user.username = username
     if password is not None:
         user.password_hash = hash_password(password)
-    if api_base_url is not None:
-        user.api_base_url = api_base_url
-    if api_key is not None:
-        user.api_key_encrypted = encrypt_api_key(api_key)
+    # 旧设置页的裸 Key / 全局模型：翻译成「用户默认配置档」，不写回 users 的四个列
+    # （解析链已不读它们；写了只会让界面显示一个不生效的值）。
+    if (api_base_url is not None or api_key is not None
+            or global_chat_model is not None or global_work_model is not None):
+        from app.services.agent.legacy_config_bridge import upsert_profile
+
+        base = api_base_url if api_base_url is not None else getattr(user, "api_base_url", None)
+        if base:
+            await upsert_profile(
+                user_repo.session, user_id=user_id, kind="llm", base_url=base,
+                api_key=api_key,
+                primary_model=global_chat_model,
+                secondary_model=global_work_model,
+                make_default=True,
+            )
+        elif api_key is not None:
+            logger.warning(
+                "用户 %s 提交了 API Key 但没有地址，无法建默认配置档（已忽略）", user_id)
     if auto_approve_vector_timeout is not None:
         user.auto_approve_vector_timeout = auto_approve_vector_timeout
     if auto_approve_vector_default is not None:
@@ -384,12 +403,10 @@ async def update_user_settings(
         user.status_text = status_text
     if status_color is not None:
         user.status_color = status_color
+    # prefer_own_key 已删除（池固定排在用户默认之前）：参数保留一个版本只为不打断
+    # 老前端，值不再落库。
     if prefer_own_key is not None:
-        user.prefer_own_key = prefer_own_key
-    if global_chat_model is not None:
-        user.global_chat_model = global_chat_model or None
-    if global_work_model is not None:
-        user.global_work_model = global_work_model or None
+        logger.info("收到已废弃的 prefer_own_key（忽略）: user=%s", user_id)
 
     await user_repo.flush()
     await user_repo.refresh(user)

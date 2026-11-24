@@ -294,6 +294,7 @@ async def compress_messages(
     keep_system: bool = True,
     keep_last_n: int = DEFAULT_KEEP_LAST_N,
     user_id: str | None = None,
+    segment_ref: str = "",
 ) -> tuple[list[dict], dict]:
     """
     压缩消息列表。
@@ -306,6 +307,8 @@ async def compress_messages(
         keep_system: 是否保留第一条 system 消息
         keep_last_n: 保留最近 N 条消息
         user_id: DeepSeek API user_id（用于 prompt cache 命名空间）
+        segment_ref: 折叠原文的段号（调 compress_messages 前由调用方生成并存好原文）；
+                     非空时摘要里会告诉 AI 用 expand_context 回看原话
 
     返回:
         (new_messages, stats) — 压缩后的消息列表和统计信息
@@ -353,10 +356,15 @@ async def compress_messages(
         new_messages.append(messages[0])  # system prompt 不变，保持 cache 命中
 
     # 注入摘要消息（system 角色，放在 system prompt 之后）
-    summary_msg = {
-        "role": "system",
-        "content": f"[上下文摘要 — 以下是之前对话的压缩版本]\n{summary}",
-    }
+    summary_content = f"[上下文摘要 — 以下是之前对话的压缩版本]\n{summary}"
+    if segment_ref:
+        # 指路必须指向真实存在的工具：曾经这句写的是「用 expand_context 可展开」，
+        # 而那个工具根本没实现（2026-11-25 发现），等于骗 AI 去撞 UNKNOWN_TOOL。
+        summary_content += (
+            f"\n\n（这一段折叠了 {len(messages_to_compress)} 条原文，"
+            f'要看原话调用 expand_context(segment_id="{segment_ref}")）'
+        )
+    summary_msg = {"role": "system", "content": summary_content}
     new_messages.append(summary_msg)
 
     # 保留最近 N 条
@@ -391,6 +399,7 @@ def inline_compress(
     messages: list[dict],
     keep_system: bool = True,
     keep_last_n: int = DEFAULT_KEEP_LAST_N,
+    segment_ref: str = "",
 ) -> tuple[list[dict], dict]:
     """
     内联压缩——不调 API，直接截断中间消息，复用前缀保持 cache 命中。
@@ -418,12 +427,14 @@ def inline_compress(
         if m.get("role") == "system" and "摘要" in m.get("content", ""):
             head.append(m)
 
-    # 截断提示
+    # 截断提示：段号非空才指路，否则只报事实（指一个取不回的段号比不指路更糟）
     compressed_count = tail_start - len(head)
     if compressed_count > 0:
+        hint = (f'。要看原文调用 expand_context(segment_id="{segment_ref}")'
+                if segment_ref else "。")
         head.append({
             "role": "system",
-            "content": f"[上下文压缩] 中间 {compressed_count} 条消息已折叠。用 expand_context 工具可展开。",
+            "content": f"[上下文压缩] 中间 {compressed_count} 条消息已折叠{hint}",
         })
 
     # 拼接

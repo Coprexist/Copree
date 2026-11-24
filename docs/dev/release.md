@@ -32,6 +32,42 @@
 为什么不能多处各写一份：tag 与代码里的版本号一旦分叉，用户装到的包就是"标称 vA、实际 vB"，
 而更新检查会一直说"有新版本"（`docs/dev/update_check.md` 的版本比较只认版本号）。
 
+## 预览期：日常更新不是发版
+
+正式版发布之前，版本号**一直是预览号**：
+
+```
+正式发布前：  app_version = "1.0.0-preview"     # 任何人都自称 1.0.0 预览
+发布那天：    app_version = "1.0.0"             # 改这一行 → archive → check → tag
+```
+
+- **日常更新不动版本号、不打 tag、不归档 CHANGELOG**：改代码 → `git pull` / `docker compose up -d --build`，就完了。发版只发生在真正要出包的那一次。
+- 一直挂着 `-preview` 不会卡住升级：预发布按 SemVer 比同号正式版小（`1.0.0-preview < 1.0.0`，见 `utils/pure/version.py`），`update_check` 的 stable 频道只取正式版，所以正式版一发，所有预览实例都会看到更新提示。
+
+### 版本号之外的两个指纹
+
+同一个 `-preview` 名下会有几十个快照，版本号分不出"哪一刻"。`GET /api/health` 一并返回：
+
+| 字段 | 含义 | 从哪来 |
+|---|---|---|
+| `version` | 哪一代 | `config.py::app_version` |
+| `build` | 哪一刻的代码 | `BUILD_ID` 环境变量 → git 短哈希（含 `-dirty`）→ 空 |
+| `migration` | 库在哪一步 | `alembic_version.version_num` |
+
+三种部署形态下 `build` 的来源：
+
+| 形态 | 来源 |
+|---|---|
+| source（仓库里有 `.git`） | 自动，每次 `git pull` 都会变 |
+| docker（发布仓构建的镜像） | 构建时注入：`ARG BUILD_ID` → 镜像内 `ENV BUILD_ID` |
+| source 但跑在容器里（本机 dev） | 容器里没有 `.git`，只能由 `.env` 的 `BUILD_ID` 给，或留空 |
+
+**排查任何用户反馈都要这三项一起要**：只有版本号时，两个相差两天的预览快照长得一模一样（2026-11-25 踩过：对方自称 `0.4.16`，实际是 11-22 的 1.0.0 预览）。
+
+### 一个会让"改版本号无效"的坑
+
+`app_version` 可被 **`APP_VERSION` 环境变量覆盖**。如果 `.env` / compose 里写死了旧值，改 `config.py` 不会生效，现象和"版本号没改"完全一样。改完版本号先确认这一项。
+
 ## 推 tag 之后发生了什么
 
 `.github/workflows/release.yml`（主仓）在 `push: tags: v*` 时：

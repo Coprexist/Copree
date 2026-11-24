@@ -300,6 +300,22 @@ async def _embedding_dimension_selfcheck() -> None:
         logger.info("[OK] 向量维度自检通过")
 
 
+async def _purge_expired_context_segments() -> None:
+    """启动时清一次过期的上下文压缩段（保留 7 天）。
+
+    段是低频数据，不值得为它开定时任务；清不掉也只是多占几十 MB。
+    """
+    try:
+        from app.database import async_session
+        from app.services.history import context_segment_service
+        async with async_session() as db:
+            removed = await context_segment_service.purge_expired(db)
+        if removed:
+            logger.info("[OK] 清理过期上下文压缩段 %s 段", removed)
+    except Exception as e:  # noqa: BLE001 —— 旁路，清不掉不影响启动
+        logger.warning("清理过期压缩段失败（非致命）: %s", e)
+
+
 async def _startup_workers() -> None:
     """核心循环型后台 worker（异常退出自动重启）"""
     # 容量准入先装配再起 worker：从启动第一刻就有一个总闸，而不是等采样任务跑起来才有
@@ -535,6 +551,8 @@ async def lifespan(app: FastAPI):
     await _startup_db()
     # 自检不挡启动：跑完自己打日志
     spawn_task(_embedding_dimension_selfcheck, "_embedding_dimension_selfcheck")
+    # 压缩段过期清理（同上，旁路）
+    spawn_task(_purge_expired_context_segments, "_purge_expired_context_segments")
     await _upgrade_stored_model_names()
     await _ensure_auto_providers()
     # 插件自带的表要在插件代码加载前就位（插件的首次查询发生在启动阶段）

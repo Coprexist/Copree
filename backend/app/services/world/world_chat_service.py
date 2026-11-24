@@ -793,10 +793,11 @@ async def _save_ai_reply(world_repo: WorldRepository, world, content: str, reaso
 
 
 async def _resolve_world_credentials(world_repo: WorldRepository, world) -> tuple[str | None, str]:
-    """世界 AI 计费/凭证：账单人 = 世界主人（解析规则见 services/agent/llm_credentials.py）"""
-    from app.services.agent.llm_credentials import resolve_user_credentials
+    """世界 AI 计费/凭证：账单人 = 世界主人（唯一链：② 池 → ③ 用户默认）"""
+    from app.services.agent.api_config_resolver import resolve_user_llm
 
-    return await resolve_user_credentials(world_repo, world.owner_id)
+    resolved = await resolve_user_llm(world_repo, world.owner_id)
+    return resolved.api_key, resolved.base_url
 
 
 async def resolve_chat_model(

@@ -165,25 +165,6 @@ def _can_manage_agent_emoji(agent, current_user: dict) -> bool:
     )
 
 
-async def _get_user_api_key(db: AsyncSession, user_id: int) -> str | None:
-    """获取用户的 API Key（解密后）"""
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
-    if user and user.api_key_encrypted:
-        return decrypt_api_key(user.api_key_encrypted)
-    return None
-
-
-async def _get_user_api_base(db: AsyncSession, user_id: int) -> str:
-    """获取用户的 API Base URL"""
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
-    if user and user.api_base_url:
-        return user.api_base_url
-    from app.config import settings
-    return settings.deepseek_base_url
-
-
 @router.get("", response_model=list[AgentResponse])
 async def list_my_agents(
     current_user: dict = Depends(get_current_user),
@@ -324,12 +305,13 @@ async def generate_personality(
 ):
     """AI 辅助生成性格配置"""
     try:
-        api_key = await _get_user_api_key(db, current_user["user_id"])
-        api_base = await _get_user_api_base(db, current_user["user_id"])
+        # 用这个人自己的配置（② 池 → ③ 默认，唯一链），不再读 users 上的裸 Key
+        from app.services.agent.api_config_resolver import resolve_user_llm
+        resolved = await resolve_user_llm(db, current_user["user_id"])
         result = await generate_agent_personality(
             description=req.description,
-            api_base_url=api_base,
-            api_key=api_key,
+            api_base_url=resolved.base_url,
+            api_key=resolved.api_key,
         )
         return result
     except Exception as e:

@@ -381,6 +381,17 @@ async def continue_with_own_key(
 # 内部：AI 回复触发
 # ============================================================
 
+async def _has_own_llm_config(db, user_id: int) -> bool:
+    """这个人有没有自己的 LLM 配置（③ 用户默认档）。
+
+    以前直接读 users.api_key_encrypted；裸 Key 两档随迁移清空后，这个判断会
+    永远返回「没有」，own_key 模式就再也放不进人来（见 api_config_chain.md §3.3）。
+    """
+    from app.services.agent.api_config_resolver import LEVEL_POOL, resolve_user_llm
+    resolved = await resolve_user_llm(db, user_id, exclude={LEVEL_POOL})
+    return resolved.usable
+
+
 async def _maybe_trigger_dm_ai_reply(
     db: AsyncSession,
     session_id: str,
@@ -464,12 +475,8 @@ async def _maybe_trigger_dm_ai_reply(
             # 禁止模式
             if agent.disallow_mode == "own_key" and not force_own_key:
                 # 检查聊天者是否有自有 Key
-                chatter_result = await db.execute(
-                    select(User).where(User.id == sender_id)
-                )
-                chatter = chatter_result.scalar_one_or_none()
-                if chatter and chatter.api_key_encrypted:
-                    force_own_key = True  # 允许，走自有 Key
+                if await _has_own_llm_config(db, sender_id):
+                    force_own_key = True  # 允许，走他自己的配置
                 else:
                     # 聊天者无自有 Key → 发系统 DM 提示
                     await _send_system_dm_notice(
@@ -491,11 +498,7 @@ async def _maybe_trigger_dm_ai_reply(
                     await _notify_owner_quota_exhausted(db, agent, used, quota)
                     # 进入禁止分支
                     if agent.disallow_mode == "own_key":
-                        chatter_result = await db.execute(
-                            select(User).where(User.id == sender_id)
-                        )
-                        chatter = chatter_result.scalar_one_or_none()
-                        if chatter and chatter.api_key_encrypted:
+                        if await _has_own_llm_config(db, sender_id):
                             force_own_key = True
                         else:
                             await _send_system_dm_notice(
@@ -519,7 +522,7 @@ async def _maybe_trigger_dm_ai_reply(
         if chatter:
             chatter_eff = max(0, (chatter.platform_gifted_credit or 0)) + (chatter.api_credit or 0)
             if chatter_eff <= 0:
-                if chatter.api_key_encrypted:
+                if await _has_own_llm_config(db, sender_id):
                     # 有自有 Key → WebSocket 弹窗询问
                     from app.routers.ws import manager
                     await manager.send_to_user(sender_id, {
