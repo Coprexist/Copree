@@ -43,13 +43,6 @@ _TOOL_ACTIVITY_STATE = {
     "send_voice": "speaking",
 }
 
-# 一个 turn 里最多发几条消息。为什么不靠 max_tool_rounds：那管的是「跑几轮工具」，
-# 而小模型是在**每一轮里都发一条**——轮次够多就能刷屏。发言条数必须单独有闸。
-# 3 条足够表达「回一句 + 补一句 + 道别」，再多基本就是自言自语（2026-11-24 实测 22 条）。
-_MAX_SENDS_PER_TURN = 3
-# 发送类工具：只有它们会真的把消息推到会话里
-_SEND_TOOLS = ("send_gm", "send_dm", "send_voice")
-
 # 收尾轮指令：轮次已用尽，这一轮白送（不占额度）
 # 只说话、不调工具时的提醒文案。工具轮里的 system_reminder 与轮末账本条目共用这一份——
 # 两处各写一遍，迟早出现"账本说 A、提醒说 B"，而这条文字就是 AI 唯一能学到的纠错说明。
@@ -680,33 +673,6 @@ def _inject_tool_images(messages: list[dict], items: list[dict]) -> int:
 
 
 
-# 直发前的「这不是回复，是回声」检查：模型会把上下文标记原样复述出来
-_ECHO_PATTERNS = (
-    (re.compile(r"\[msg_id=\d+\]"), "抄了消息标记"),
-    (re.compile(r"[（(]id=\d+[）)]"), "复述了说话人标记"),
-    (re.compile(r"^\s*\[(Shanghai|Beijing|Tokyo|UTC)[^\]]*\]"), "复述了时间戳行"),
-)
-
-
-def plain_text_reject_reason(text: str) -> str:
-    """这条「文字直发」能不能发？返回拒绝原因，空串 = 可以发。
-
-    2026-11-24 实测：模型把上下文标记原样复述了一遍——
-    `[Shanghai 11-24 21:26] ShuAICFR（id=1）: 可以用中文吗 [msg_id=5700]`——
-    直发就等于把用户自己的话当成 AI 的话回了过去。这不是回复，是回声，
-    而且里面还带着内部标记。宁可落回「静默留账 + 提醒」，也不能把它发出去。
-    """
-    text = (text or "").strip()
-    if not text:
-        return "空正文"
-    if len(text) < 2:
-        return "只有标点"
-    for pattern, reason in _ECHO_PATTERNS:
-        if pattern.search(text):
-            return reason
-    return ""
-
-
 def _plain_text_send_enabled(agent) -> bool:
     """这个 AI 有没有把「只回文字」显式设成直接发？——直发开关的唯一判定入口。
 
@@ -844,9 +810,6 @@ async def _tool_call_loop(
     _auto_compressed = False
     # AI 尚未在本次循环中发过消息 → 压缩只应在空闲强制时触发，保中间结果
     _has_sent_message = False
-    # 本轮**真正发出去**的消息条数：小模型会陷进「发完一句、下一轮又接一句」的自言自语，
-    # 2026-11-24 实测一个 turn 连发 22 条、来回重复两句话。超过上限就不再放行发送类工具。
-    _sends_this_turn = 0
     # 轮末封存用的工具总账（工具轮历史 → 账本）
     _tool_log: list[dict] = []
     # 已经就"Key 不可用"给用户发过一条带降级上下文的私信：末尾别再补一条同义的
@@ -1101,7 +1064,7 @@ async def _tool_call_loop(
                     return None
 
                 async def _dispatch_one_tool(tc: dict):
-                    nonlocal last_task, _end_turn, _settlement, _closing_active, _has_sent_message, _sends_this_turn
+                    nonlocal last_task, _end_turn, _settlement, _closing_active, _has_sent_message
                     if _end_turn:
                         # 同一批里前一个工具已 end_turn → 后面的不执行，但**必须**留一条 tool 响应：
                         # assistant(tool_calls) 里每个 id 都要有回应，少一条整次请求 400
@@ -1138,19 +1101,6 @@ async def _tool_call_loop(
                     if not is_valid:
                         logger.warning(f"工具格式校验失败: {validate_error}")
                         _pending_results.append({"tc_id": tc_id, "result": {"error": True, "message": validate_error}})
-                        return
-                    # 发言人闸：超了就拒发，并明确告诉它该收尾——否则它会一直「再说一句」
-                    if tool_name in _SEND_TOOLS and _sends_this_turn >= _MAX_SENDS_PER_TURN:
-                        logger.warning(
-                            f"AI {agent.name}({agent.id}) 本轮已发 {_sends_this_turn} 条，"
-                            f"拒绝再次调用 {tool_name}（防自言自语刷屏）"
-                        )
-                        _pending_results.append({"tc_id": tc_id, "result": {
-                            "error": True,
-                            "message": (f"本轮你已经发出 {_sends_this_turn} 条消息了，不能再发。"
-                                        "如果该说的都说完了，调用 end_turn 结束本轮；"
-                                        "还想补充的内容留到对方下一次说话时再说。"),
-                        }})
                         return
                     logger.info(f"AI {agent.name} 调用工具: {tool_name}({arguments})")
                     # 消息类工具推送活动状态（正在输入 / 正在录音），见 _TOOL_ACTIVITY_STATE
@@ -1219,8 +1169,6 @@ async def _tool_call_loop(
                             and not result.get("error")
                             and result.get("success") is not False):
                         _has_sent_message = True
-                        if tool_name in _SEND_TOOLS:
-                            _sends_this_turn += 1
                         # AI 刚发了消息→重置压缩标记，允许下一轮清理之前的操作链
                         _auto_compressed = False
 
@@ -1553,13 +1501,7 @@ async def _tool_call_loop(
                 #   send = 直接发到当前状态帧对应的会话——用户明确选了「像别的平台那样说话」；
                 #   发不出去（没有会话/异常）就落回下面那套静默留账，不丢内容也不打挂这一轮。
                 if _plain_text_send_enabled(agent):
-                    _reject = plain_text_reject_reason(_unsent_text)
-                    if _reject:
-                        logger.info(
-                            f"AI {agent.name}({agent.id}) 文字直发被拦下（{_reject}），回落静默留账: "
-                            f"{_unsent_text[:60]}"
-                        )
-                    elif await _deliver_plain_text(
+                    if await _deliver_plain_text(
                         db, agent, _unsent_text,
                         conversation_type=conversation_type,
                         group_id=group_id, session_id=session_id,
