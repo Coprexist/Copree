@@ -486,7 +486,9 @@ async def _process_alarm_event(db, event: dict):
 
     from app.services.skill.skill_engine import _is_delay_reply_allowed
     delay_allowed = await _is_delay_reply_allowed(db, agent)
-    tools = get_allowed_tools("active", thinking_enabled=effective_cfg["thinking_enabled"], delay_reply_allowed=delay_allowed)
+    tools = get_allowed_tools("active", thinking_enabled=effective_cfg["thinking_enabled"],
+                              delay_reply_allowed=delay_allowed,
+                              tool_scope=getattr(agent, "tool_scope", "all") or "all")
     tool_names = [t["function"]["name"] for t in tools]
     tool_list = "、".join(tool_names)
     system_prompt += (
@@ -580,7 +582,8 @@ async def _standalone_agent_turn(db, agent, *, session_block: str, user_content:
     effective_cfg = await _get_eff_cfg(db, agent.id, user_id=None)
     delay_allowed = await _is_delay_reply_allowed(db, agent)
     tools = get_allowed_tools("active", thinking_enabled=effective_cfg["thinking_enabled"],
-                              delay_reply_allowed=delay_allowed)
+                              delay_reply_allowed=delay_allowed,
+                              tool_scope=getattr(agent, "tool_scope", "all") or "all")
     tool_list = "、".join(t["function"]["name"] for t in tools)
     system_prompt += f"\n\n## 当前会话\n{session_block}\n\n## 当前可用工具\n{tool_list}\n"
 

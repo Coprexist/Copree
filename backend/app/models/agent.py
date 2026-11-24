@@ -79,6 +79,14 @@ class Agent(Base):
     # 三档 AI 配置：chat / immersive / digital_life（选一个作为起点，之后可自由调参）
     config_profile = Column(String(20), default="chat")
 
+    # 模型只回了文字、没有调工具时怎么办：silent=不发出（写账本 + 提醒，默认）| send=直接发到当前会话
+    # 这不是「渠道开关」而是**AI 设置项**：档位只是它的预设组合，用户随时可以单独改
+    plain_text_action = Column(String(16), nullable=False, default="silent", server_default="silent")
+
+    # 一次给模型多少工具：all=全部（默认）| minimal=精简核心集 | none=不给（纯文字对话）
+    # 同上是设置项：档位给个起点，之后可覆盖。小模型用它把 1.75 万 token 的工具 schema 降下来
+    tool_scope = Column(String(16), nullable=False, default="all", server_default="all")
+
     # AI 在 users 表中的虚拟账号（社交身份）。群成员、消息 sender_id、好友、世界绑定用它；
     # 资源归属（文件/沙箱/记忆）用上面的 id，两套标识不要互相换算后写进对方的列
     user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))

@@ -34,6 +34,8 @@ interface Agent {
   chat_model: string | null
   work_model: string | null
   thinking_enabled: boolean
+  plain_text_action?: string
+  tool_scope?: string
   hide_ai_identity: boolean
   config_profile: string
   delay_reply_enabled: boolean | null
@@ -319,6 +321,9 @@ function EditAgentModal({ agent, onClose, onUpdated }: {
   const [chatModel, setChatModel] = useState(agent.chat_model || '')
   const [workModel, setWorkModel] = useState(agent.work_model || '')
   const [thinkingEnabled, setThinkingEnabled] = useState(agent.thinking_enabled)
+  // 两个 AI 设置项（档位只是预设组合，这里可单独覆盖）
+  const [plainTextAction, setPlainTextAction] = useState(agent.plain_text_action || 'silent')
+  const [toolScope, setToolScope] = useState(agent.tool_scope || 'all')
   const [emotionVectorized, setEmotionVectorized] = useState(agent.emotion_vectorized || false)
   const [hideAiIdentity, setHideAiIdentity] = useState(agent.hide_ai_identity || false)
   const [delayReplyEnabled, setDelayReplyEnabled] = useState<boolean | null>(agent.delay_reply_enabled ?? null)
@@ -373,6 +378,8 @@ function EditAgentModal({ agent, onClose, onUpdated }: {
         chat_model: chatModel || null,
         work_model: workModel || null,
         thinking_enabled: thinkingEnabled,
+        plain_text_action: plainTextAction,
+        tool_scope: toolScope,
         emotion_vectorized: emotionVectorized,
         hide_ai_identity: hideIdentity,
         delay_reply_enabled: delayReplyEnabled,
@@ -579,6 +586,37 @@ function EditAgentModal({ agent, onClose, onUpdated }: {
                   <Toggle checked={thinkingEnabled} onChange={setThinkingEnabled} />
                 </div>
               )}
+              {/* 文字出口：模型只回了文字、没调工具时怎么办（AI 设置项，档位只是预设） */}
+              <div className="flex items-center justify-between gap-3 pt-2 border-t border-border mt-2">
+                <div className="min-w-0">
+                  <span className="text-xs text-textSecondary">{t('agents:plainTextLabel')}</span>
+                  <p className="text-3xs text-textMuted mt-0.5">{t('agents:plainTextDesc')}</p>
+                </div>
+                <select
+                  value={plainTextAction}
+                  onChange={e => setPlainTextAction(e.target.value)}
+                  className="field field-sm shrink-0"
+                >
+                  <option value="silent">{t('agents:plainTextSilent')}</option>
+                  <option value="send">{t('agents:plainTextSend')}</option>
+                </select>
+              </div>
+              {/* 工具集范围：给模型多少个工具是设置项，不是档位写死的 */}
+              <div className="flex items-center justify-between gap-3 pt-2 border-t border-border mt-2">
+                <div className="min-w-0">
+                  <span className="text-xs text-textSecondary">{t('agents:toolScopeLabel')}</span>
+                  <p className="text-3xs text-textMuted mt-0.5">{t('agents:toolScopeDesc')}</p>
+                </div>
+                <select
+                  value={toolScope}
+                  onChange={e => setToolScope(e.target.value)}
+                  className="field field-sm shrink-0"
+                >
+                  <option value="all">{t('agents:toolScopeAll')}</option>
+                  <option value="minimal">{t('agents:toolScopeMinimal')}</option>
+                  <option value="none">{t('agents:toolScopeNone')}</option>
+                </select>
+              </div>
               {/* AI 身份隐藏 */}
               <div className="flex items-center justify-between pt-2 border-t border-border mt-2">
                 <div>

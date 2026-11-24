@@ -23,12 +23,29 @@ def test_unsent_text_goes_to_the_ledger_with_the_reminder():
     assert "第7行" in many["content"] and "第8行" not in many["content"]
 
 
-def test_auto_send_path_is_gone():
-    """账本取代了"替它发出去"。有人把这套投递加回来，这条会红——它会绕过"这句是给谁的"这个判断。"""
-    import app.ai.executor as ex
+def test_plain_text_send_is_opt_in():
+    """直发是**显式设置项**，默认仍然是「不替它发」。
 
-    assert not hasattr(ex, "_deliver_plain_text")
-    assert not hasattr(ex, "_looks_like_monologue")
+    2026-10-18 的结论没变：平台分不清纯文字是给谁的，所以默认写账本。
+    2026-11-24 用户要求把「文字出口」做成 AI 设置项，直发才回到代码里——
+    但只能经由 agent.plain_text_action == "send" 进入，默认值必须是 silent。
+    """
+    from app.ai.executor import _plain_text_send_enabled
+    from app.models.agent import Agent
+
+    class _Default:
+        pass
+
+    class _Silent:
+        plain_text_action = "silent"
+
+    class _Send:
+        plain_text_action = "send"
+
+    assert not _plain_text_send_enabled(_Default()), "列没写 → 按 silent"
+    assert not _plain_text_send_enabled(_Silent())
+    assert _plain_text_send_enabled(_Send())
+    assert Agent.plain_text_action.default.arg == "silent", "模型默认必须是 silent"
 
 
 async def test_dm_leftover_messages_are_requeued():

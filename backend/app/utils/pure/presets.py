@@ -18,6 +18,8 @@ STRONG_BOOL_PARAMS = [
 # 字符串枚举参数：切换预设时直接覆盖（不合并）
 STRONG_STRING_PARAMS = [
     "memory_load_mode", "memory_shared_scope",
+    # 枚举设置项：切档位时直接取预设值，之后用户可单独覆盖（档位只是组合，不是锁死）
+    "plain_text_action", "tool_scope",
 ]
 # 与档位无关的参数：切换档位时原样保留，预览里单独列出来给人看
 INDEPENDENT_PARAMS = [

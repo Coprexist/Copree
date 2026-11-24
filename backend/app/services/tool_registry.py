@@ -62,9 +62,10 @@ def __getattr__(name: str):
 # 向后兼容的函数接口（委托给 ToolRegistry）
 # ============================================================
 
-def get_allowed_tools(state: str, thinking_enabled: bool | None = None, delay_reply_allowed: bool = True) -> list[dict]:
-    """根据 AI 状态返回允许使用的工具定义列表"""
-    return ToolRegistry.get_allowed_tools(state, thinking_enabled, delay_reply_allowed)
+def get_allowed_tools(state: str, thinking_enabled: bool | None = None,
+                      delay_reply_allowed: bool = True, tool_scope: str = "all") -> list[dict]:
+    """根据 AI 状态与工具集范围返回允许使用的工具定义列表"""
+    return ToolRegistry.get_allowed_tools(state, thinking_enabled, delay_reply_allowed, tool_scope)
 
 
 async def dispatch_tool_call(

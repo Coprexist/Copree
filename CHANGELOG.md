@@ -202,6 +202,10 @@
 
 - 厂商编辑器加「刷新模型」：从端点现取真实模型清单，只追加不覆盖已有行。ollama / llama.cpp / LM Studio / vLLM 一律可用，本机装了新模型点一下就能选。
 
+- **AI 设置项：模型只回文字时的处理方式**（`agents.plain_text_action`）。平台里 AI 靠调 `send_gm` / `send_dm` 说话（多会话才分得清发给谁），模型若只把话说在正文里，原来的口径是「静默留账 + 提醒一次」，一条都不发。现在这是**可选项**：默认 `silent`（维持现状），选 `send` 则直接发到它当前正在说话的那个会话——不外推、不跨会话，所以 2026-10-18 担心的「这句可能是给别的对话的」在这个显式选择下不成立。判定收在 `executor._plain_text_send_enabled()` 一个入口，默认值有测试锁死。
+
+- **AI 设置项：工具集范围**（`agents.tool_scope`：all / minimal / none）。原来 77 个工具无条件全发（约 1.75 万 token），小模型在几十个 schema 里挑不准、返回文字不调工具，本地 CPU 上这些 token 还要真金白银地预填充。`minimal` 只留 7 个「不说就办不成事」的工具（send_gm / send_dm / send_file / send_voice / expand_message / recall_message / end_turn），体积 5.2 万字符 → 5.4 千字符。判定入口 `ToolRegistry.get_allowed_tools(..., tool_scope=)`，五个调用点（群聊、私信、闹钟 ×2、系统提示段）统一带上。
+
 ### 🐛 修复
 
 - **滚动条不再并排出现两条**：iOS / iPadOS 的滚动指示器是系统 overlay，`scrollbar-width`
@@ -577,6 +581,8 @@
 - **本地通道的思考开关改为三态语义**（`llm.py`）：`thinking_enabled=False` → 发 `reasoning_effort: "none"` 关思考；`True` 与「不表态」→ 不发参数，交给模型默认（qwen3 这类思考型模型本来就思考）。原来的实现是「本地端点一律发 none」（除显式开），等于平台替用户做了决定，和本地小模型「靠思考组织语言」的实际用法相反。DeepSeek 通道仍走 `thinking` 对象，公网其他厂商 payload 逐字节不变。
 
 - **本地通道开着思考时不设输出上限**（`llm.py`）：思考与正文共用一个输出额度，给个数字就等于替模型决定「想多久」——想不完就被截断（`finish_reason=length`），下一轮同样的上下文还得从头再想，时间花两遍、正文一个字都没有（实测 qwen3:4b 在 1024 额度下思考写满 1024 token、正文 0 字）。现在本地端点只有在**明确关掉思考**时才发 `max_tokens`（正文需要边界），开着思考或未表态时不发，交给 ollama 的 `num_predict=-1` / llama.cpp 的 `n_predict=-1` 想到自然结束。公网通道照旧发上限（成本与超时都要有边界）。
+
+- **聊天档改名轻聊档**：`config_profile = chat` 的预设改成「少工具 + 文字直发」（`tool_scope=minimal`、`plain_text_action=send`），描述改为「轻量对话 — 少给工具、模型直接说话，适合本地小模型」。按「档位只是自由组合」的原则，这两个值同时是独立设置项，可单独覆盖；`presets.py` 把它们归入 STRONG_STRING_PARAMS，切档位时直接取预设值、之后仍可改。
 
 ### ♻️ 重构
 

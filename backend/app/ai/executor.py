@@ -671,6 +671,75 @@ def _inject_tool_images(messages: list[dict], items: list[dict]) -> int:
     return len(kept)
 
 
+
+
+def _plain_text_send_enabled(agent) -> bool:
+    """这个 AI 有没有把「只回文字」显式设成直接发？——直发开关的唯一判定入口。
+
+    默认 silent：平台不替它发（正文可能是给自己记的过程，也可能是给别的会话的话）。
+    用户在 AI 设置里选成 send，才认为「这句就是发给当前这些人的」，此时才允许投递。
+    """
+    return (getattr(agent, "plain_text_action", "silent") or "silent") == "send"
+
+
+async def _deliver_plain_text(
+    db, agent, text: str, *,
+    conversation_type: str = "group",
+    group_id: int | None = None,
+    session_id: str | None = None,
+    agent_name: str = "",
+) -> bool:
+    """把模型「直接说出口」的正文发到**当前会话**——plain_text_action=send 的唯一出口。
+
+    为什么需要它：Copree 里 AI 靠调 send_gm / send_dm 说话，多会话才分得清「这句发给谁」。
+    但小模型（本地 4B 那种）在几十个工具里挑不准，常常只返回文字；用户把这个 AI 设为
+    「直接发」之后，平台就替它把这句发给**它正在说话的那个会话**——不外推、不跨会话，
+    所以原来担心的「纯文字可能是给别的对话的」在这个选项下不成立（那是用户的选择）。
+
+    返回 True=发出去了；False=没发（没有可用会话或发送失败，调用方回落静默留账）。
+    """
+    text = (text or "").strip()
+    if not text:
+        return False
+    name = agent_name or getattr(agent, "name", "AI")
+    try:
+        if conversation_type == "dm" and session_id:
+            from app.chat.dm import send_dm_message
+            message = await send_dm_message(
+                db, session_id, sender_id=agent.user_id, content=text,
+            )
+            await db.commit()
+            try:
+                await chat_api.broadcast_to_dm(session_id, {
+                    "type": "new_dm_message",
+                    "message": {**message, "sender_name": name},
+                })
+            except Exception:
+                pass
+            return True
+        if group_id:
+            from app.chat.gm import gm_message_to_dict, send_gm_message
+            message = await send_gm_message(
+                db, group_id=group_id, sender_type="ai",
+                sender_id=agent.user_id, content=text,
+            )
+            await db.commit()
+            try:
+                await chat_api.broadcast_to_group(group_id, {
+                    "type": "message",
+                    "data": gm_message_to_dict(
+                        message, sender_name=name,
+                        sender_avatar_url=getattr(agent, "avatar_url", None),
+                    ),
+                })
+            except Exception:
+                pass
+            return True
+    except Exception as e:  # noqa: BLE001 —— 发不出去不该把这一轮打挂，回落静默留账
+        logger.warning(f"直接发文字失败，回落静默留账: {e}")
+    return False
+
+
 async def _tool_call_loop(
     db,
     agent,
@@ -1428,6 +1497,29 @@ async def _tool_call_loop(
             if content and not tool_calls and not _pending_results:
                 # 记下来：这一轮可能被提醒后改走工具收尾，那句话不能跟着 messages 一起没掉
                 _unsent_text = content.strip()
+                # AI 设置项 plain_text_action（默认 silent）：
+                #   send = 直接发到当前状态帧对应的会话——用户明确选了「像别的平台那样说话」；
+                #   发不出去（没有会话/异常）就落回下面那套静默留账，不丢内容也不打挂这一轮。
+                if _plain_text_send_enabled(agent):
+                    if await _deliver_plain_text(
+                        db, agent, _unsent_text,
+                        conversation_type=conversation_type,
+                        group_id=group_id, session_id=session_id,
+                        agent_name=agent.name,
+                    ):
+                        logger.info(
+                            f"AI {agent.name}({agent.id}) 只回了文字、按设置直发到当前会话: "
+                            f"{_unsent_text[:60]}"
+                        )
+                        _unsent_text = ""
+                        _has_sent_message = True
+                        await _seal(response.get("reasoning_content") or "")
+                        await _save_conversation_log_safe(
+                            db, agent, messages, conversation_type,
+                            group_id, session_id,
+                            has_output=True, model=model, token_usage=total_usage,
+                        )
+                        return
                 # 提醒只发一次：协议讲一遍就够。反复要它「改用工具重说」既烧 token（每一遍都是
                 # 整段上下文重跑），也会把模型逼成胡话——曾经一个晚上重试到第 10 遍才憋出一段乱码。
                 # 提醒过还只说话，**不替它发**：正文可能是它给自己记的过程，也可能是准备发给另一个

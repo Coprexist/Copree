@@ -29,6 +29,8 @@ class AgentCreateRequest(BaseModel):
     thinking_enabled: bool = Field(default=False)
     hide_ai_identity: bool = Field(default=False)
     config_profile: str | None = Field(default=None, description="预设档位: chat|immersive|digital_life")
+    plain_text_action: str | None = Field(default=None, description="模型只回文字时: silent=不发出(默认) | send=直接发到当前会话")
+    tool_scope: str | None = Field(default=None, description="给模型多少工具: all=全部 | minimal=精简 | none=不给")
     delay_reply_enabled: bool | None = Field(default=None, description="延迟回复开关，NULL=继承全局默认")
     max_tool_rounds: int = Field(default=6, ge=1, le=20, description="单次回复最大工具调用轮次")
     alarm_max_tool_rounds: int = Field(default=10, ge=1, le=30, description="闹钟/心跳最大工具调用轮次")
@@ -110,6 +112,8 @@ class AgentUpdateConfigRequest(BaseModel):
     api_credit_cost: int | None = Field(default=None, ge=0, le=100000)
     is_paused: bool | None = None
     config_profile: str | None = None
+    plain_text_action: str | None = Field(default=None, description="silent=不发出(默认) | send=直接发到当前会话")
+    tool_scope: str | None = Field(default=None, description="all=全部 | minimal=精简 | none=不给")
     delay_reply_enabled: bool | None = None
     max_tool_rounds: int | None = Field(default=None, ge=1, le=20, description="工具调用轮次上限")
     alarm_max_tool_rounds: int | None = Field(default=None, ge=1, le=30, description="闹钟/心跳轮次上限")
@@ -208,6 +212,8 @@ class AgentResponse(BaseModel):
     is_ai_editable: bool
     thinking_enabled: bool
     config_profile: str | None = None
+    plain_text_action: str = "silent"
+    tool_scope: str = "all"
     delay_reply_enabled: bool | None = None
     max_tool_rounds: int = 6
     alarm_max_tool_rounds: int = 10

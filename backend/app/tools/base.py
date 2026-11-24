@@ -31,6 +31,13 @@ class ToolErrorCode:
 # 技能段元数据
 # ============================================================
 
+# 「精简工具集」白名单：只放**不说就办不成事**的那几个——发言、收尾、读被折叠的原文。
+# 记忆 / 群管理 / 文件 / 闹钟 / 自我配置一律不给：轻聊档的用户要的就是「像别人家那样说话」。
+MINIMAL_TOOL_NAMES = frozenset({
+    "send_gm", "send_dm", "send_file", "send_voice",
+    "expand_message", "recall_message", "end_turn",
+})
+
 SKILL_SEGMENT_META: dict[str, dict] = {
     "chat_social": {
         "name": "群聊社交",
@@ -392,6 +399,7 @@ class ToolRegistry:
     def get_allowed_tools(
         cls, state: str, thinking_enabled: bool | None = None,
         delay_reply_allowed: bool = True,
+        tool_scope: str = "all",
     ) -> list[dict]:
         """根据 AI 状态返回允许使用的工具定义列表"""
         whitelist = cls._build_whitelist()
@@ -407,6 +415,14 @@ class ToolRegistry:
             t for t in cls.get_all_definitions()
             if t["function"]["name"] in allowed_names
         ]
+
+        # 工具集范围是 **AI 设置项**（档位只是预设组合，见 agents.tool_scope）：
+        # none=一个不给（纯文字对话）；minimal=只给「不说就办不成事」的那几个。
+        # 弱模型在几十个 schema 里挑不准，工具体积也不该白烧——1.75 万 token 的实测。
+        if tool_scope == "none":
+            return []
+        if tool_scope == "minimal":
+            allowed = [t for t in allowed if t["function"]["name"] in MINIMAL_TOOL_NAMES]
 
         # thinking_enabled=False 时隐藏 toggle_thinking
         if thinking_enabled is not None and not thinking_enabled:

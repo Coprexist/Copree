@@ -1109,7 +1109,9 @@ async def _maybe_trigger_ai_reply(
     # （实测与归因见 docs/dev/capability_lazy_loading.md「tools 不再快照」）。
     from app.services.tool_registry import get_allowed_tools
     delay_allowed = await _is_delay_reply_allowed(db, agent)
-    current_tools = get_allowed_tools(agent.state, thinking_enabled=effective_cfg["thinking_enabled"], delay_reply_allowed=delay_allowed)
+    current_tools = get_allowed_tools(agent.state, thinking_enabled=effective_cfg["thinking_enabled"],
+                                     delay_reply_allowed=delay_allowed,
+                                     tool_scope=getattr(agent, "tool_scope", "all") or "all")
     # 语音是可选的平台能力：没配、或配了但没测通，这个工具就不出现在工具表里
     # （模型不知道有它，自然不会去调一个用不了的工具）。门控判据只有一处：voice_config
     from app.services.agent.voice_config import has_voice_capability
@@ -1357,7 +1359,9 @@ async def _trigger_dm_ai_reply(
     # 获取工具：用当前值（与群聊 7.5 同一口径——tools 在请求最后，改了只重算工具段）
     from app.services.tool_registry import get_allowed_tools
     delay_allowed = await _is_delay_reply_allowed(db, agent)
-    current_tools = get_allowed_tools(agent_state, thinking_enabled=effective_cfg["thinking_enabled"], delay_reply_allowed=delay_allowed)
+    current_tools = get_allowed_tools(agent_state, thinking_enabled=effective_cfg["thinking_enabled"],
+                                     delay_reply_allowed=delay_allowed,
+                                     tool_scope=getattr(agent, "tool_scope", "all") or "all")
     # 语音是可选的平台能力：没配、或配了但没测通，这个工具就不出现在工具表里
     # （模型不知道有它，自然不会去调一个用不了的工具）。门控判据只有一处：voice_config
     from app.services.agent.voice_config import has_voice_capability

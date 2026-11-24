@@ -43,12 +43,15 @@ AI_TYPES = ("general", "semi_general", "resonance")
 # 三档 AI 配置预设值
 CONFIG_PROFILES = {
     "chat": {
-        "name": "聊天档",
-        "description": "被动响应 · 低成本 — 只回答你问的，不多说一句",
+        "name": "轻聊档",
+        "description": "轻量对话 — 少给工具、模型直接说话（返回的文字发到当前会话），适合本地小模型",
         "ai_type": "general",
         # 模型参数
         "temperature": 0.7, "top_p": 0.9, "presence_penalty": 0.3, "frequency_penalty": 0.3,
         "thinking_enabled": False,
+        # 工具集与文字出口：两个都是 AI 设置项，档位只给起点（见 agent.tool_scope / plain_text_action）
+        "tool_scope": "minimal",
+        "plain_text_action": "send",
         # 工具调用
         "max_tool_rounds": 6,
         "alarm_max_tool_rounds": 8,
@@ -165,6 +168,8 @@ async def apply_config_profile(
         "memory_load_mode": agent.memory_load_mode,
         "memory_shared_scope": agent.memory_shared_scope,
         "reminder_grace": agent.reminder_grace,
+        "plain_text_action": agent.plain_text_action,
+        "tool_scope": agent.tool_scope,
     }
 
     # 合并
@@ -252,6 +257,8 @@ async def create_agent(
     hide_ai_identity: bool = False,
     delay_reply_enabled: bool | None = None,
     config_profile: str | None = None,
+    plain_text_action: str = "silent",
+    tool_scope: str = "all",
     max_tool_rounds: int = 3,
     alarm_max_tool_rounds: int = 10,
     force_alarm_on_end: bool = False,
@@ -341,6 +348,8 @@ async def create_agent(
         work_model=work_model,
         thinking_enabled=thinking_enabled,
         config_profile=config_profile,
+        plain_text_action=plain_text_action,
+        tool_scope=tool_scope,
         state="active",
         api_credit_cost=api_credit_cost,
         hide_ai_identity=hide_ai_identity,
@@ -493,6 +502,8 @@ async def get_effective_config(
             "retire_handover_self": agent.retire_handover_self,
             "max_alarms": agent.max_alarms,
             "config_profile": agent.config_profile,
+            "plain_text_action": agent.plain_text_action,
+            "tool_scope": agent.tool_scope,
             "is_ai_editable": agent.is_ai_editable,
             "api_base_url": agent.api_base_url,
             "api_key_encrypted": agent.api_key_encrypted,
@@ -972,6 +983,11 @@ async def update_agent_config(
     # config_profile：手动调参不改变预设（预设只是起点，用户可以基于它自由修改）
     if "config_profile" in updates and updates["config_profile"] is not None:
         agent.config_profile = updates["config_profile"]
+    # 文字出口与工具集：同样是独立设置项，改了不影响档位标记
+    if "plain_text_action" in updates and updates["plain_text_action"] is not None:
+        agent.plain_text_action = updates["plain_text_action"]
+    if "tool_scope" in updates and updates["tool_scope"] is not None:
+        agent.tool_scope = updates["tool_scope"]
 
     await db.flush()
     await db.refresh(agent)
@@ -1643,6 +1659,8 @@ def agent_to_dict(agent: Agent) -> dict:
         "emotion_vectorized": agent.emotion_vectorized,
         "llm_call_count": agent.llm_call_count,
         "config_profile": agent.config_profile or "chat",
+        "plain_text_action": agent.plain_text_action or "silent",
+        "tool_scope": agent.tool_scope or "all",
         "delay_reply_enabled": agent.delay_reply_enabled,
         "max_tool_rounds": agent.max_tool_rounds,
         "alarm_max_tool_rounds": agent.alarm_max_tool_rounds,

@@ -965,6 +965,7 @@ async def _build_tools_segment(db, agent, is_dm: bool = False, emoji_note: str =
     current_tools = get_allowed_tools(
         agent.state, thinking_enabled=agent.thinking_enabled,
         delay_reply_allowed=delay_allowed,
+        tool_scope=getattr(agent, "tool_scope", "all") or "all",
     )
     current_tool_names = {t["function"]["name"] for t in current_tools}
 
