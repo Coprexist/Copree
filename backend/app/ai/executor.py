@@ -1203,16 +1203,6 @@ async def _tool_call_loop(
                             session_id=session_id)
                     if task_summary:
                         last_task = task_summary
-                    # 发完一条就在工具结果里明说「没有补充就 end_turn」：模型读工具结果比读长协议认真。
-                    # 4B 实测在 7 个工具（含 end_turn）的情况下也会连发 22 条——它不会主动结束，
-                    # 得在每个回合的返回值里提醒；真正的兜底仍是 _MAX_SENDS_PER_TURN 的硬闸。
-                    if (tool_name in _SEND_TOOLS and isinstance(result, dict)
-                            and not result.get("error") and result.get("success") is not False):
-                        result = {
-                            **result,
-                            "hint": "消息已经发出。没有要补充的就调用 end_turn 结束本轮；"
-                                    "还想说的话留到对方下次说话时再说。",
-                        }
                     _pending_images.extend(_take_tool_images(result, tool_name))
                     _pending_results.append({"tc_id": tc_id, "result": result})
                     # 工具总账：工具名 + 失败原因或工具自报的摘要——轮末封存为一条 tool 条目
