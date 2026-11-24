@@ -79,7 +79,7 @@ def _last4(enc: str | None) -> str:
         return ""
 
 
-def _profile_dict(p: UserApiProfile) -> dict:
+def _profile_dict(p: UserApiProfile, used_by: list[dict] | None = None) -> dict:
     return {
         "id": p.id,
         "name": p.name,
@@ -89,10 +89,46 @@ def _profile_dict(p: UserApiProfile) -> dict:
         "secondary_model": p.secondary_model,
         "is_default": bool(p.is_default),
         "sort_order": p.sort_order,
+        # 反向索引：哪些 AI 绑着这条配置（见 docs/dev/api_config_chain.md §6.4）
+        "used_by": list(used_by or []),
+        "used_by_count": len(used_by or []),
     }
 
 
-def _provider_dict(p: UserApiProvider, profiles: list[UserApiProfile]) -> dict:
+async def _profile_usage(db: AsyncSession, profile_ids: list[int]) -> dict[int, list[dict]]:
+    """这条配置被哪些 AI 绑着（反向索引，静态）。
+
+    语义严格是「**绑定了**」，不是「正在用」：后者要算额度、可达性与优先级，
+    静态读不出来，硬算就是第二个真相。绑定数只回答「改这条会影响到谁」。
+    LLM 与语音两处都查：同一条配置只会属于一种 kind，合并归堆不会串。
+    """
+    from app.models.agent import Agent
+    from app.models.agent_voice import AgentVoiceConfig
+
+    usage: dict[int, list[dict]] = {}
+    ids = [i for i in profile_ids if i]
+    if not ids:
+        return usage
+    llm_rows = (await db.execute(
+        select(Agent.llm_profile_id, Agent.id, Agent.name)
+        .where(Agent.llm_profile_id.in_(ids))
+        .order_by(Agent.name)
+    )).all()
+    for pid, aid, name in llm_rows:
+        usage.setdefault(pid, []).append({"id": aid, "name": name})
+    voice_rows = (await db.execute(
+        select(AgentVoiceConfig.voice_profile_id, Agent.id, Agent.name)
+        .join(Agent, Agent.id == AgentVoiceConfig.agent_id)
+        .where(AgentVoiceConfig.voice_profile_id.in_(ids))
+        .order_by(Agent.name)
+    )).all()
+    for pid, aid, name in voice_rows:
+        usage.setdefault(pid, []).append({"id": aid, "name": name})
+    return usage
+
+
+def _provider_dict(p: UserApiProvider, profiles: list[UserApiProfile],
+                   usage: dict[int, list[dict]] | None = None) -> dict:
     return {
         "id": p.id,
         "kind": p.kind,
@@ -111,7 +147,7 @@ def _provider_dict(p: UserApiProvider, profiles: list[UserApiProfile]) -> dict:
         "system_template_hash": p.system_template_hash or "",
         "system_layout_checked_at": (p.system_layout_checked_at.isoformat()
                                      if p.system_layout_checked_at else ""),
-        "profiles": [_profile_dict(x) for x in profiles],
+        "profiles": [_profile_dict(x, (usage or {}).get(x.id)) for x in profiles],
     }
 
 
@@ -164,7 +200,8 @@ async def list_providers(
     for prof in profiles:
         by_provider.setdefault(prof.provider_id, []).append(prof)
 
-    return {"providers": [_provider_dict(p, by_provider[p.id]) for p in rows]}
+    usage = await _profile_usage(db, [x.id for x in profiles])
+    return {"providers": [_provider_dict(p, by_provider[p.id], usage) for p in rows]}
 
 
 @router.post("/providers", status_code=status.HTTP_201_CREATED)
@@ -288,7 +325,7 @@ async def update_provider(
     profiles = (await db.execute(
         select(UserApiProfile).where(UserApiProfile.provider_id == provider.id)
     )).scalars().all()
-    return _provider_dict(provider, profiles)
+    return _provider_dict(provider, profiles, await _profile_usage(db, [x.id for x in profiles]))
 
 
 @router.post("/providers/{provider_id}/restore")
@@ -314,7 +351,7 @@ async def restore_provider(
     profiles = (await db.execute(
         select(UserApiProfile).where(UserApiProfile.provider_id == provider.id)
     )).scalars().all()
-    return _provider_dict(provider, profiles)
+    return _provider_dict(provider, profiles, await _profile_usage(db, [x.id for x in profiles]))
 
 
 @router.post("/providers/{provider_id}/probe-layout")
@@ -423,7 +460,7 @@ async def update_profile(
         profile.secondary_model = req.secondary_model
     _apply_key(profile, req.api_key, PROFILE_KEY_FIELD)
     await db.flush()
-    return _profile_dict(profile)
+    return _profile_dict(profile, (await _profile_usage(db, [profile.id])).get(profile.id))
 
 
 @router.post("/profiles/{profile_id}/default")

@@ -70,3 +70,19 @@ def test_legacy_credential_modules_are_gone():
     """
     assert not (APP / "services/agent/llm_credentials.py").exists()
     assert not (APP / "services/infrastructure/user_credentials.py").exists()
+
+
+def test_messages_do_not_switch_frames():
+    """消息到达不许自动切帧（docs/dev/frame_turn_lifecycle.md §7.3）。
+
+    系统只把帧摆进状态链、记一条未读；去不去由 AI 自己 pop。这条一旦破，世界帧又会
+    被群消息拖走——而单测跑在「直接调 ensure_active_frame」上，测不出调用方错了。
+    """
+    offenders = []
+    for rel in ("ai/response_worker.py", "routers/dm.py", "tools/chat_social/send_dm.py"):
+        text = (APP / rel).read_text(encoding="utf-8")
+        if "ensure_active_frame" in text:
+            offenders.append(f"{rel}: 消息路径还在调 ensure_active_frame")
+        if "attach_stimulus" not in text:
+            offenders.append(f"{rel}: 消息路径没走 attach_stimulus")
+    assert not offenders, chr(10).join(offenders)

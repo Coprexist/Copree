@@ -494,7 +494,13 @@ async def _pull(db: AsyncSession, agent_id: int, stack: list[dict], frame: dict,
             turn.suspend(prev)        # 形态 1：挂着，额度保留
         _record_switch(frame, prev, leave=leave, handoff=handoff)
     frame["status"] = "active"
-    turn.resume(frame)                # 无新刺激的切回：沿用 steps_used（§4.1）
+    if int(frame.get("unread") or 0) > 0:
+        # 认领：他自己过去了。未读清零，这一次刺激按 §4.1 重置额度
+        frame["unread"] = 0
+        frame["waiting_since"] = ""
+        turn.new_stimulus(frame, await _agent_step_limit(db, agent_id))
+    else:
+        turn.resume(frame)            # 无新刺激的切回：沿用 steps_used（§4.1）
     touch(frame)
     await _save(db, agent_id, stack)
     logger.info(f"Agent({agent_id}) pull [{frame.get('type')}]({frame.get('id')})"
@@ -1277,7 +1283,11 @@ async def ensure_active_frame(
     title: str, actor_name: str,
 ) -> None:
     """
-    确保当前帧 = 当前会话（DM/群聊触发时自动调用）。
+    确保当前帧 = 当前会话（**只给 AI 自己的动作**，消息路径不要调）。
+
+    消息到达走 attach_stimulus：系统把帧摆进链、记未读，去不去由 AI 自己 pop 过来
+    （docs/dev/frame_turn_lifecycle.md §7.3）。谁从消息路径调这个函数，就等于替 AI
+    决定去留——世界帧被群消息拖走就是这么发生的。
 
     聊天是一个情景：AI 切换会话时自动记录「我去干什么 / 我干了什么 /
     回去接着干什么」，切回时带交接摘要，使 AI 在任何会话都能感知手头的事。
@@ -1359,6 +1369,74 @@ async def ensure_active_frame(
 
     touch(frame)
     await _save(db, agent_id, stack)
+
+
+async def attach_stimulus(
+    db: AsyncSession, agent_id: int,
+    conv_type: str, context_ref: str,
+    title: str, actor_name: str, summary: str = "",
+) -> dict:
+    """外界在某个会话里找他：把那一帧摆上状态链并记一条未读，**不动当前帧**。
+
+    与 ensure_active_frame 的分界（docs/dev/frame_turn_lifecycle.md 刺激传导）：
+    那个是「把他拉过去」（他自己切帧、进世界）；这个是「把帧摆好、把事实告诉他」，
+    去不去、什么时候去由他定——正在跑的那一轮不被打断，要过去就自己 pop_state。
+
+    帧已在链上就原地记号（不新建、不换 id：闹钟与计划板记着的长期指针不能换人），
+    已结束的复活成挂起。**链尾仍还给原来那帧**：链尾是「正在跑的那一帧」，
+    新挂上的这条只是排在链上等着。返回那一帧（调用方若要投递告知可用）。
+    """
+    db = _ensure_repo(db)
+    if conv_type not in ("dm", "group_chat"):
+        return {}
+    stack = await _get_stack(db, agent_id)
+    prev = current(stack)
+    conv_label = "私信" if conv_type == "dm" else "群"
+    label = f"{conv_label}「{title}」"
+    now = datetime.now(timezone.utc).isoformat()
+
+    frame = frame_of(stack, context_ref)
+    if frame is not None and prev is not None and frame.get("id") == prev.get("id"):
+        # 他就在这一段里：消息本来就该在这一轮处理，不算「别处有人找」
+        return frame
+    if frame is None:
+        frame = make_state_frame(
+            type_=conv_type, context_ref=context_ref, label=label,
+            why=f"{actor_name}在{conv_label}「{title}」里找你",
+            doing=f"{conv_label}「{title}」里有人在等你",
+            status="suspended",
+        )
+        stack.append(frame)
+    else:
+        frame["status"] = "suspended"     # 结束过的帧复活：记录与 id 都不动
+        frame["label"] = label
+        if not frame.get("doing"):
+            frame["doing"] = f"{conv_label}「{title}」里有人在等你"
+    if prev is None:
+        # 他不在任何帧里：这一条就是当前帧，消息在该轮处理，不算「别处有人找」
+        frame["status"] = "active"
+        await _save(db, agent_id, stack)
+        return frame
+    frame["unread"] = int(frame.get("unread") or 0) + 1
+    frame["waiting_since"] = frame.get("waiting_since") or now
+    frame["last_stimulus"] = {
+        "actor": actor_name, "summary": (summary or "")[:200], "at": now,
+    }
+
+    # 帧上链，但**不夺链尾**：链尾是正在跑的那一帧，这条只是挂上链等着。
+    # 先挂链并把链尾还给原来那帧，再交给 _save 兜底对账（它只 append 没节点的帧）
+    chain = await _ensure_chain(db, agent_id, stack)
+    await _chain_attach(db, agent_id, chain, str(frame.get("id") or ""))
+    if prev is not None:
+        prev_node = state_chain.node_of_frame(chain, str(prev.get("id") or ""))
+        if prev_node is not None:
+            await _chain_move_tail(db, agent_id, chain, prev_node)
+            frame["status"] = "suspended"
+    await _save(db, agent_id, stack)
+    logger.info(
+        f"Agent({agent_id}) 收到别处刺激：{label}（未读 {frame.get('unread')} 条）"
+        f"，当前帧不动 [{(prev or {}).get('id')}]")
+    return frame
 
 
 async def touch_active_frame(db: AsyncSession, agent_id: int) -> None:

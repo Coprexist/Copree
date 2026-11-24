@@ -1282,6 +1282,10 @@ textarea.field.field-noresize { resize: none; }
 .card-interactive { transition: background-color .15s ease, border-color .15s ease, box-shadow .15s ease; }
 .card-interactive:hover { background: rgb(var(--tw-elevated)); }
 .card-interactive.is-active { background: rgb(var(--tw-primary-500) / .1); border-color: rgb(var(--tw-primary-400)); }
+/* 结论卡片：命中（这条真的在打）/ 失败（三档都没命中）。语义同 .is-active，
+   是 .card 的状态变体；页面里不要拼 border-mint-400/50 这类组合 */
+.card.is-live { border-color: rgb(var(--tw-mint-500) / .45); background: rgb(var(--tw-mint-500) / .06); }
+.card.is-fail { border-color: rgb(var(--tw-rose-500) / .45); background: rgb(var(--tw-rose-500) / .06); }
 
 .chip {
   display: inline-flex;

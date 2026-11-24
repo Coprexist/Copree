@@ -244,6 +244,13 @@ class User:   default: Config | None
 
 ## 6. 界面
 
+> **实现状态（2026-11-25）**：stepper 在 frontend/src/components/api-config/RuntimeChain.tsx，
+> 数据来自 GET /agents/{id}/api-chain（与真实请求共用 resolve_llm，显示即实跑）；列表的
+> 「生效中 / 未生效」徽标与设置页的绑定数浮标在 ProviderCards.tsx，绑定数由
+> /user/api-config/providers 的 used_by / used_by_count 一次查出（LLM 与语音两处都算）。
+> 「请求链路 →」只对管理员显示，跳到 /admin/conversation-log?agent=<id> 并定位到该 AI。
+> ② 池节点暂不可点：池还没有独立界面，点了会进死链——等池改配置表（0132）时一起做。
+
 ### 6.1 三个位置的职责
 
 | 位置 | 回答 | 数据来源 |

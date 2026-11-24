@@ -62,15 +62,15 @@ class SendDM(ToolPlugin):
             # 2026-08-09: 聊天即情景——发送方主动进入目标会话，切帧到目标会话（接收侧触发已建帧，
             # 主动发送侧也要建/切，否则 AI 换回其他会话时感知不到「我正在跟 X 聊」）
             try:
-                from app.services.agent.state_stack_service import ensure_active_frame
+                from app.services.agent.state_stack_service import attach_stimulus
                 from app.models.user import User as UserModel
                 trow = await db.execute(
                     select(UserModel.username).where(UserModel.id == target_user_id)
                 )
                 target_name = trow.scalar_one_or_none() or f"用户{target_user_id}"
-                await ensure_active_frame(
+                await attach_stimulus(
                     db, agent.id, "dm", session_id,
-                    title=target_name, actor_name=target_name,
+                    title=target_name, actor_name=target_name, summary=content,
                 )
             except Exception as e:
                 logger.warning(f"send_dm 发送方会话帧维护失败（非致命）: {e}")

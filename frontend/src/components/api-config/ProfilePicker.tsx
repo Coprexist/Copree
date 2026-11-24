@@ -7,10 +7,11 @@
  *
  * 没有"单独配置"这种私有选项：所有 API 配置都是可复用的配置档。
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, errorText } from '../../api/client'
 import { useT } from '../../i18n/I18nContext'
 import ProviderCards from './ProviderCards'
+import RuntimeChain from './RuntimeChain'
 import { useApiDialogs } from './useApiDialogs'
 import type { ApiKind } from './types'
 
@@ -26,7 +27,10 @@ export default function ProfilePicker({
   const t = useT()
   const voice = kind === 'voice'
   const [selected, setSelected] = useState<number | null>(null)
+  // 「生效中」那条 = Resolution 实际命中的配置；和 stepper 共用一份结论，不另请求
+  const [liveProfileId, setLiveProfileId] = useState<number | null>(null)
   const [error, setError] = useState('')
+  const listRef = useRef<HTMLDivElement>(null)
 
   // 当前选了哪条：null = 老数据没选过，界面按默认档显示。
   // 语音的选中值在子资源里（/voice），LLM 在 AI 本体上——两处都读一次同一个 state。
@@ -72,11 +76,23 @@ export default function ProfilePicker({
       {error && <p className="text-xs text-rose-400">{error}</p>}
       <p className="text-3xs text-textMuted">{voice ? t('apiConfig:voicePickerHint') : t('apiConfig:pickerHint')}</p>
 
+      {/* 实际使用：现在真的走哪条、前面为什么跳过（语音不走三档解析，不显示） */}
+      {!voice && (
+        <RuntimeChain
+          agentId={agentId}
+          onData={(chain) => setLiveProfileId(
+            chain && chain.source === 'bound' ? (chain.profile_id ?? null) : null)}
+          onGoBind={() => listRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+        />
+      )}
+
+      <div ref={listRef}>
       <ProviderCards
         kind={kind}
         providers={providers}
         mode="pick"
         selectedId={selected}
+        liveProfileId={liveProfileId}
         onSelect={choose}
         presets={presets}
         onPickPreset={(presetKey) => openProvider({ presetKey, focusKey: true })}
@@ -87,6 +103,7 @@ export default function ProfilePicker({
         onEditProfile={(id) => openProfile({ id })}
         onChanged={() => { reloadProviders(); loadAgent() }}
       />
+      </div>
     </div>
   )
 }

@@ -8,12 +8,13 @@
  * 两处各写一份迟早漂成两种长相。
  */
 import { useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Check, ChevronDown, MoreHorizontal, Plus } from 'lucide-react'
 import { api, errorText } from '../../api/client'
 import { useT } from '../../i18n/I18nContext'
 import { AutoHeight, Badge, Button, IconButton, MenuItem, MenuPanel } from '../ui'
 import KeyMark from './KeyMark'
-import type { ApiKind, ApiProvider, BuiltinPreset } from './types'
+import type { ApiKind, ApiProvider, ApiProfile, BuiltinPreset } from './types'
 
 interface MenuAction {
   label: string
@@ -76,11 +77,52 @@ function RowMenu({
   )
 }
 
+/** 「几个 AI 绑着这条配置」：点开列名字，点了跳那个 AI 的详情（反向索引，静态） */
+function UsageMenu({ profile }: { profile: ApiProfile }) {
+  const t = useT()
+  const navigate = useNavigate()
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [open])
+
+  if (!profile.used_by_count) return null
+  const users = profile.used_by || []
+  return (
+    <div className="relative shrink-0" ref={ref}>
+      <button type="button" aria-label={t('apiConfig:usageCount')}
+        onClick={() => setOpen((v) => !v)}>
+        <Badge tone="muted">{profile.used_by_count}</Badge>
+      </button>
+      {open && (
+        <MenuPanel className="absolute right-0 top-full mt-1 z-50 min-w-[10rem] py-1">
+          {users.length === 0 ? (
+            <div className="px-2 py-1 text-3xs text-textMuted">{t('apiConfig:usageEmpty')}</div>
+          ) : users.map((a) => (
+            <MenuItem key={a.id}
+              onClick={() => { setOpen(false); navigate('/agents/' + a.id) }}>
+              {a.name}
+            </MenuItem>
+          ))}
+        </MenuPanel>
+      )}
+    </div>
+  )
+}
+
 export default function ProviderCards({
   kind,
   providers,
   mode = 'manage',
   selectedId = null,
+  liveProfileId = null,
   onSelect,
   presets = [],
   onPickPreset,
@@ -96,6 +138,8 @@ export default function ProviderCards({
   /** pick = 这些卡是给"这个 AI 用哪套"挑的；manage = 设置页管理 */
   mode?: 'manage' | 'pick'
   selectedId?: number | null
+  /** 解析实际命中的那条（只有 pick 模式有）：用来区分「已选」与「生效中」 */
+  liveProfileId?: number | null
   onSelect?: (profileId: number) => void
   /** 内置厂商清单：底部铺成胶囊，点一下就接入 */
   presets?: BuiltinPreset[]
@@ -293,10 +337,17 @@ export default function ProviderCards({
                     <>
                       <span className="text-sm text-textPrimary truncate">{profile.name}</span>
                       {profile.is_default && <Badge tone="primary">{t('apiConfig:defaultBadge')}</Badge>}
+                      {/* 已选是声明，生效中是事实：只有已经选中的那条才会出现这两种 */}
+                      {picked && liveProfileId !== null && liveProfileId !== undefined && (
+                        profile.id === liveProfileId
+                          ? <Badge tone="mint">{t('apiConfig:badgeLive')}</Badge>
+                          : <Badge tone="accent">{t('apiConfig:badgeNotLive')}</Badge>
+                      )}
                       <span className="text-3xs text-textMuted truncate">
                         {profile.primary_model || provider.default_primary || ''}
                         {profile.has_key ? ' · ' + t('apiConfig:keyEndsWith', { last4: profile.key_last4 }) : ''}
                       </span>
+                      <UsageMenu profile={profile} />
                       {picked && <Check size={14} className="ml-auto shrink-0 text-primary-500" />}
                     </>
                   )

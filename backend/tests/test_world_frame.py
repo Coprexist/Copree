@@ -244,7 +244,9 @@ async def test_the_role_reads_the_ai_binding_first_then_the_group_he_came_throug
 async def test_the_group_talk_does_not_drag_him_out_of_the_world(migrated_db):
     """在世界里时，群里来消息不会把身份切回群会话——沉浸靠这一条"""
     from app.database import async_session
-    from app.services.agent.state_stack_service import ensure_active_frame, get_current_frame
+    from app.services.agent.state_stack_service import (
+        attach_stimulus, get_current_frame, get_frames,
+    )
     from app.utils.pure.state_stack import world_id_of
 
     async with async_session() as db:
@@ -252,8 +254,11 @@ async def test_the_group_talk_does_not_drag_him_out_of_the_world(migrated_db):
         await EnterWorld().execute(db, AI_ID, GROUP_OK, {}, {})
         await db.commit()
 
-        await ensure_active_frame(db, AI_ID, "group_chat", "group:59", "甲群", "某人")
+        # 消息路径 = attach_stimulus（把帧摆进链 + 记未读），不再机械切帧
+        await attach_stimulus(db, AI_ID, "group_chat", "group:59", "甲群", "某人", summary="在吗")
         await db.commit()
         current = await get_current_frame(db, AI_ID)
         assert world_id_of(current) == WORLD_ID, current
         assert current["doing"].startswith(f"在世界「测试世界」里游玩"), current["doing"]
+        parked = [f for f in await get_frames(db, AI_ID) if f.get("context_ref") == "group:59"]
+        assert len(parked) == 1 and parked[0]["unread"] == 1, parked

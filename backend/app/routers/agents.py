@@ -332,6 +332,25 @@ async def get_agent_detail(
     return agent_to_dict(agent)
 
 
+@router.get("/{agent_id}/api-chain")
+async def get_agent_api_chain(
+    agent_id: int,
+    db: AsyncSession = Depends(get_db),
+    agent=Depends(_require_agent_access),
+):
+    """这个 AI 现在实际打哪条配置，以及前面几档为什么跳过（界面 stepper 的唯一数据源）。
+
+    与真实请求共用 resolve_llm —— 显示即实跑，不在路由层另写一套判断。
+    账单人按 AI 的主人算：群里谁付费是业务规则，详情页看的是「这个 AI 自己会走哪条」。
+    """
+    from app.services.agent.api_config_resolver import resolve_llm
+
+    resolution = await resolve_llm(db, agent)
+    payload = resolution.as_dict()
+    payload["profile_id"] = getattr(agent, "llm_profile_id", None)
+    return payload
+
+
 @router.put("/{agent_id}/config", response_model=AgentResponse)
 async def update_config(
     agent_id: int,

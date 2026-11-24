@@ -62,7 +62,12 @@ export default function ConversationLogTab() {
   const [agentSaving, setAgentSaving] = useState(false)
 
   // Log viewer
-  const [viewAgentId, setViewAgentId] = useState<number | null>(null)
+  // ?agent=<id>：从 AI 详情的「请求链路 →」进来时直接定位到那个 AI（默认展开最新一条）
+  const [viewAgentId, setViewAgentId] = useState<number | null>(() => {
+    const raw = new URLSearchParams(window.location.search).get('agent')
+    const id = raw ? parseInt(raw, 10) : NaN
+    return Number.isFinite(id) ? id : null
+  })
 
 
   // ── Load global config ──

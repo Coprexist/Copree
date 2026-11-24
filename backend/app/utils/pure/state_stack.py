@@ -104,6 +104,12 @@ _FRAME_FIELDS = (
     # dormant：预建好、还没进去过的沉睡帧（插件替 AI 建的）。它不在链上，
     # 但确实是"能进去的一帧"，清单要列它；一旦上过链就不再算沉睡
     "dormant",
+    # unread / waiting_since / last_stimulus：有人在别的会话里找他，而他那时不在那儿。
+    # 帧挂进链上（suspended）并记未读，由他自己决定什么时候过去（pull 过去即认领、清未读）。
+    # 系统不自动切帧——切帧是 AI 的动作，这里只把帧与事实摆到台面上
+    "unread",
+    "waiting_since",
+    "last_stimulus",
 )
 
 
@@ -148,6 +154,10 @@ def make_state_frame(type_: str, context_ref: str = "", **extras) -> dict:
         "steps_limit": 0,
         "lent_out": 0,
         "borrow_from": [],
+        # 未读刺激：别的会话里有人找他。去不去由他定，pull 过去才认领
+        "unread": 0,
+        "waiting_since": "",
+        "last_stimulus": {},
     }
     for key, value in extras.items():
         if key in _FRAME_FIELDS and value is not None:
@@ -277,7 +287,7 @@ def frame_of(stack: list[dict], context_ref: str) -> dict | None:
     （存储顺序里运行区在末尾，最后那帧就是最近切进来的），全都不在跑时取最近激活的那条——
     该复活的是最近离开的那次，不是更早的某次。
 
-    切会话（ensure_active_frame）、他自己压帧（push_state）、插件代建（enter_frame）都从这里
+    切会话（ensure_active_frame，只给 AI 自己的动作）、他自己压帧（push_state）、插件代建（enter_frame）都从这里
     认帧，于是不会有一条路径自己另起一帧。
     """
     ref = str(context_ref or "")
@@ -628,6 +638,24 @@ def format_state_stack_summary(stack: list[dict], max_chars: int = 500,
             src_type = (top.get("source_emotion") or {}).get("type") or ""
             prefix = f"   ← 来源状态({src_type})情感: " if src_type else "   ← 来源状态情感: "
             lines.append(prefix + emotion_to_text(src_vec))
+        # 📬 有人在别的会话里找他：帧已经在链上，去不去由他决定（刺激传导）
+        waiting = [f for f in stack
+                   if f is not top and int(f.get("unread") or 0) > 0]
+        for w in waiting[:3]:
+            n = int(w.get("unread") or 0)
+            stim = w.get("last_stimulus") or {}
+            who = stim.get("actor") or ""
+            last = " ".join(str(stim.get("summary") or "").split())[:40]
+            at = str(stim.get("at") or "")
+            clock = at[11:16] if len(at) > 16 else ""
+            name = w.get("label") or w.get("context_ref") or "?"
+            head = f"   📬 {name} 有 {n} 条未读"
+            tail = " · ".join(x for x in ((f"{who}：{last}" if who else last), clock) if x)
+            lines.append(f"{head}（{tail}）" if tail else head)
+        if waiting:
+            lines.append("     要过去就 pop_state(target_frame_id=帧 id，见帧清单)；不去也行，继续手头的事")
+        if len(waiting) > 3:
+            lines.append(f"   📬 另有 {len(waiting) - 3} 段有未读")
         live = running(stack)
         if len(live) > 1:
             lines.append(f"   ⏸ 另有 {len(live) - 1} 帧未完成（见开头的帧清单）")

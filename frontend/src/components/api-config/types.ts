@@ -16,6 +16,9 @@ export interface ApiProfile {
   secondary_model: string | null
   is_default: boolean
   sort_order: number
+  /** 绑着这条配置的 AI（反向索引；语义是「绑定」不是「正在生效」） */
+  used_by?: { id: number; name: string }[]
+  used_by_count?: number
 }
 
 export interface ApiProvider {

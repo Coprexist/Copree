@@ -587,15 +587,15 @@ async def _maybe_trigger_dm_ai_reply(
 async def _note_dm_contact(db: AsyncSession, agent, session_id: str, sender_id: int) -> None:
     """把「这个私信会话里有人找过我」记进状态链——不触发回复的路径也要记。
 
-    与 response_worker 的帧维护同一个入口（ensure_active_frame）：那边是「真要回」时把帧
-    置顶，这里是「没回也得知道」。失败只告警：一条私信不该因为状态链写不进去就丢掉。
+    与 response_worker 走同一个入口（attach_stimulus）：把这段会话的帧摆进状态链并记一条
+    未读，去不去由 AI 自己定。失败只告警：一条私信不该因为状态链写不进去就丢掉。
     """
     try:
-        from app.services.agent.state_stack_service import ensure_active_frame
+        from app.services.agent.state_stack_service import attach_stimulus
         from app.utils.display_name import display_name
 
         name = await display_name(db, sender_id)
-        await ensure_active_frame(
+        await attach_stimulus(
             db, agent.id, "dm", session_id, title=name, actor_name=name,
         )
     except Exception as e:
