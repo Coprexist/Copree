@@ -31,6 +31,7 @@ from app.repositories.agent_repo import AgentRepository, SQLAlchemyAgentReposito
 from app.utils.pure.handover import drop_note
 from app.models.agent_state_chain import AgentStateChain, AgentStateChainNode
 from app.utils.pure import state_chain
+from app.utils.pure import frame_turn as turn
 from app.utils.pure.state_stack import (
     FRAME_TEXT_FIELDS,
     handoff_pending,
@@ -270,6 +271,19 @@ async def _reconcile_chain(db: AsyncSession, agent_id: int, chain: dict,
     return plan
 
 
+async def _agent_step_limit(db: AsyncSession, agent_id: int) -> int:
+    """一帧一轮的步数上限：沿用 AI 的 max_tool_rounds（可配），没有就用默认。"""
+    from app.models.agent import Agent
+    from app.utils.pure.frame_turn import DEFAULT_STEPS_LIMIT
+
+    agent = await db.get(Agent, agent_id)
+    value = getattr(agent, "max_tool_rounds", None) if agent is not None else None
+    try:
+        return max(1, int(value or DEFAULT_STEPS_LIMIT))
+    except (TypeError, ValueError):
+        return DEFAULT_STEPS_LIMIT
+
+
 async def _frame_capacity(db: AsyncSession, agent_id: int) -> int:
     """帧容量（AI 可自配）：NULL/0 回落到默认值。"""
     db = _ensure_repo(db)
@@ -473,11 +487,14 @@ async def _pull(db: AsyncSession, agent_id: int, stack: list[dict], frame: dict,
     if prev is not None and prev is not frame:
         if leave == LEAVE_END:
             prev["status"] = ENDED_STATUS
+            turn.close(prev)          # §4.3：出链回收剩余额度
             await _auto_journal(db, agent_id, "pop", prev)
         else:
             prev["status"] = "suspended"
+            turn.suspend(prev)        # 形态 1：挂着，额度保留
         _record_switch(frame, prev, leave=leave, handoff=handoff)
     frame["status"] = "active"
+    turn.resume(frame)                # 无新刺激的切回：沿用 steps_used（§4.1）
     touch(frame)
     await _save(db, agent_id, stack)
     logger.info(f"Agent({agent_id}) pull [{frame.get('type')}]({frame.get('id')})"
@@ -665,6 +682,7 @@ async def push_state(
 
     if prev is not None and prev is not target:
         prev["status"] = "suspended"
+        turn.suspend(prev)
         if not target.get("source_emotion"):
             target["source_emotion"] = {
                 "type": prev.get("type"),
@@ -675,6 +693,14 @@ async def push_state(
         if not target.get("handoff"):
             target["handoff"] = _left_conversation(prev)
     target["status"] = "active"
+    # 新帧：给出初始额度（不是刺激重置——他没收到外部消息，只是自己切过来）；
+    # 链上已有帧：resume，沿用已用步数
+    turn.ensure_fields(target)
+    if existing is None and target["steps_limit"] <= 0:
+        target["steps_limit"] = turn.DEFAULT_STEPS_LIMIT
+        target["turn_state"] = turn.RUNNING
+    else:
+        turn.resume(target)
     touch(target)
 
     await _save(db, agent_id, stack)
@@ -689,6 +715,43 @@ async def push_state(
 
     logger.info(f"Agent({agent_id}) 切回 [{target.get('type')}] {target.get('context_ref', '')}")
     return stack, f"已切回状态帧 [{target.get('type')}]（同一段会话只有一帧，帧身份不变）"
+
+
+async def borrow_steps(
+    db: AsyncSession, agent_id: int, wanted: int, frame_id: str = "",
+) -> tuple[int, str]:
+    """从当前帧沿链向父帧借步数（§4.2；I3 每个父帧留 1 步；I6 只向上借）。
+
+    额度只转移、不创造（I2）：父帧 steps_used 与 lent_out 同增，子帧 steps_limit 同增。
+    链底仍不够就如实拒绝——不把父帧的收尾步也借走。
+    """
+    db = _ensure_repo(db)
+    stack = await _get_stack(db, agent_id)
+    live = running(stack)
+    if not live:
+        return 0, "状态链为空，没有可借的帧"
+    child = by_id(stack, frame_id) if frame_id else live[-1]
+    if child is None:
+        return 0, f"没找到状态帧 {frame_id}"
+    idx = stack.index(child)
+    # 父帧 = 栈里排在它前面、还在链上的帧，由近及远
+    parents = [f for f in reversed(stack[:idx])
+               if f.get("status") != ENDED_STATUS]
+    borrowed = 0
+    for parent in parents:
+        if borrowed >= wanted:
+            break
+        take = turn.borrow(wanted - borrowed, parent)
+        if take:
+            turn.record_borrow(child, parent, take)
+            borrowed += take
+    if borrowed:
+        turn.ensure_fields(child)
+        child["steps_limit"] += borrowed
+        await _save(db, agent_id, stack)
+        logger.info(f"Agent({agent_id}) 借额度 {borrowed} 步（frame={child.get('id')}）")
+        return borrowed, f"已从上一帧借到 {borrowed} 步"
+    return 0, "上一帧也没有可借的步数（每帧至少给自己留 1 步）"
 
 
 async def pop_state(
@@ -717,9 +780,11 @@ async def pop_state(
 
     popped = live[-1]                     # 只弹当前这一帧
     popped["status"] = ENDED_STATUS       # 出状态链；记录留在存储里，等他以后交接
+    turn.close(popped)                    # §4.3：剩余额度清零
     resume = resume_target(stack)         # 链尾自然落到它的前驱——就是拉取那一刻的来处
     if resume is not None:
         resume["status"] = "active"
+        turn.resume(resume)
         touch(resume)
         resume["completed_handoff"] = {
             "type": popped.get("type"),
@@ -746,9 +811,11 @@ def _close_frame(stack: list[dict], frame: dict) -> None:
     统一提为 active——否则会出现"状态链里一个 active 都没有"，摘要就没有当前帧可念。
     """
     frame["status"] = ENDED_STATUS
+    turn.close(frame)
     nxt = resume_target(stack)
     if nxt is not None:
         nxt["status"] = "active"
+        turn.resume(nxt)
         touch(nxt)
 
 
@@ -1233,6 +1300,8 @@ async def ensure_active_frame(
         frame["why"] = (f"由于外界环境改变（{actor_name}在这个会话里说话），替他拉起这一帧"
                         if revived else f"收到{actor_name}的消息")
         frame["doing"] = f"在{conv_label}「{title}」中回复{actor_name}"
+        # 外部消息是刺激：重置这一帧的额度（§4.1）。系统通知不走这里。
+        turn.new_stimulus(frame, await _agent_step_limit(db, agent_id))
     else:
         # 这个会话从没有过帧：建一条（handoff 写在新帧上——渲染读当前帧）
         frame = make_state_frame(
@@ -1245,6 +1314,7 @@ async def ensure_active_frame(
         if prev is not None:
             _park_when_called_elsewhere(prev)
             frame["handoff"] = _left_conversation(prev)
+        turn.new_stimulus(frame, await _agent_step_limit(db, agent_id))
         stack.append(frame)
 
     touch(frame)

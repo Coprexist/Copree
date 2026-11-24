@@ -208,6 +208,8 @@
 
 - 插件工具错误协议 `app/tools/errors.py`：作者抛 `ToolError(code, message, retryable, outward)`，`dispatch` 原样转成结构化结果给模型（不再被改写成 `执行失败：{e}`）；未捕获异常与超时的日志统一带 `plugin=<插件 id>`，插件作者能定位到自己。配套文档 `docs/plugin-dev/tool-errors.md`。
 
+- **帧的轮生命周期（第一批）**：一帧现在记 turn_state（closed / open / running）、steps_used / steps_limit 与借贷账（lent_out / borrow_from）。外部消息到达时重置该帧额度；主动切帧与被调度切回都不重置（防刷：刺激能续额度，切帧不能）；帧出链时剩余额度清零。借贷只能沿链向父帧、每个父帧保留 1 步给自己收尾（I3），额度只转移不创造（I2）。老帧读时懒补默认，不需要数据迁移。执行循环的每步扣减、批量交接与刺激传导注入在第二批（见 docs/dev/frame_turn_lifecycle.md §12）。
+
 ### 🐛 修复
 
 - **滚动条不再并排出现两条**：iOS / iPadOS 的滚动指示器是系统 overlay，`scrollbar-width`

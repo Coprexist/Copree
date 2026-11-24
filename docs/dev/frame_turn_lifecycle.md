@@ -417,3 +417,28 @@ completed_handoff = {
 5. **超时**：额度已由刺激驱动，超时不再影响额度；但它影响**交接时效**——隔数小时回来的帧，其 `tail` 与 `doing` 是否还有意义，需要在注入时降权或标注「这是 X 小时前的进度」。
 6. **汇报的过滤**：回 A 汇报时，别处会话的细节不应进入 A 的作用域。
 7. **切帧的身份重入**：同一帧被反复 `enter` 时，`turn_state` 与 `steps_used` 的一致性需幂等保证。
+
+---
+
+## 12. 落地进度（2026-11-25）
+
+### 已完成（第一批：账目与形态）
+
+- app/utils/pure/frame_turn.py：三态（closed / open / running）、额度重置与回收、
+  借贷（I3 保留 1 步）、三种合法回归形态的白名单。纯函数、零 IO。
+- 帧字段进 state_stack 的 JSON（turn_state / steps_used / steps_limit /
+  lent_out / borrow_from），老帧用 ensure_fields() 懒补默认，不跑数据迁移。
+- 接入现有帧操作：ensure_active_frame（外部消息 = 刺激 → 重置额度）、
+  push_state（主动切 → 挂起 / 初始额度）、_pull（suspend/end）、
+  pop_state / close_state（出链回收）、resume（无刺激切回不重置）。
+- borrow_steps()：沿链向父帧借，额度只转移不创造（I2）。
+- 测试：tests/test_frame_turn_lifecycle.py（9 条）。
+
+### 未完成（第二批：执行循环与投递）
+
+1. **每步扣减**：_tool_call_loop 每次模型调用扣 1 步；steps_left = 0 时停止并告知。
+2. **刺激传导注入**（§7）：忙时中断消息块带「当前状态 + 切走的后果」，附时间与来源。
+3. **批量交接**（§6）：end_scope=segment 与逐帧 completed_handoff。
+4. **统一投递**：消费端判断忙闲（app/ai/delivery.py 已写好但未接入）。
+5. **触发器作用域**：agent_triggers.origin_context_ref。
+6. **总量闸**：小时 / 天调用上限（§10 F1）。
