@@ -434,11 +434,17 @@ completed_handoff = {
 - borrow_steps()：沿链向父帧借，额度只转移不创造（I2）。
 - 测试：tests/test_frame_turn_lifecycle.py（9 条）。
 
-### 未完成（第二批：执行循环与投递）
+### 已完成（第二批：执行侧）
 
-1. **每步扣减**：_tool_call_loop 每次模型调用扣 1 步；steps_left = 0 时停止并告知。
-2. **刺激传导注入**（§7）：忙时中断消息块带「当前状态 + 切走的后果」，附时间与来源。
-3. **批量交接**（§6）：end_scope=segment 与逐帧 completed_handoff。
-4. **统一投递**：消费端判断忙闲（app/ai/delivery.py 已写好但未接入）。
-5. **触发器作用域**：agent_triggers.origin_context_ref。
-6. **总量闸**：小时 / 天调用上限（§10 F1）。
+- **每步扣减**：consume_step() 每次模型调用扣 1 步；不够先向父帧借，链底借不到才停，
+  并把「步数用完了」作为一条 user 消息告诉 AI。白送轮（收尾 / 提醒）不扣。
+- **刺激传导注入**（§7）：忙时中断消息后附 status_note（在哪、第几步、切走的后果），
+  一段状态只附一次；只含结构性事实，不带别的会话正文（I5）。
+- 老帧兜底：steps_limit = 0 视为「没有账」，按 max_tool_rounds 给一次初始额度。
+
+### 未完成（第三批：交接与投递）
+
+1. **批量交接**（§6）：end_scope=segment 与逐帧 completed_handoff。
+2. **统一投递**：消费端判断忙闲（app/ai/delivery.py 已写好但未接入）。
+3. **触发器作用域**：agent_triggers.origin_context_ref。
+4. **总量闸**：小时 / 天调用上限（§10 F1）。

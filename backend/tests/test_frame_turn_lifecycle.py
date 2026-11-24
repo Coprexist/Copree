@@ -6,7 +6,7 @@
 from app.utils.pure.frame_turn import (
     CLOSED, DEFAULT_STEPS_LIMIT, OPEN, RESERVE_STEPS, RUNNING,
     borrow, close, ensure_fields, new_stimulus, record_borrow, resume,
-    steps_left, suspend, validate_regression,
+    status_note, steps_left, suspend, validate_regression,
 )
 
 
@@ -96,3 +96,18 @@ def test_only_three_regression_shapes_are_legal():
     for (leave, middle), expect in legal.items():
         assert validate_regression(leave=leave, middle=middle, enter=True) is expect, (leave, middle)
     assert validate_regression(leave="end", middle="keep", enter=False) is False
+
+
+def test_status_note_reports_scope_steps_and_consequence():
+    """§7.1：注入必须带「在哪、第几步、切走的后果」——模型默认消息都是实时的。"""
+    note = status_note(_frame(label="群「甲群」", turn_state=RUNNING,
+                              steps_used=5, steps_limit=20))
+    assert "群「甲群」" in note
+    assert "5/20" in note
+    assert "open" in note and "额度保留" in note
+    assert "尚未发出消息" in note
+
+
+def test_status_note_says_sent_when_it_has():
+    note = status_note(_frame(label="dm:1_2", steps_used=1, steps_limit=3), has_sent=True)
+    assert "已经发过消息" in note

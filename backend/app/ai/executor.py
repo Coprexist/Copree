@@ -892,6 +892,19 @@ async def _tool_call_loop(
             _free_round = _free_next
             _free_next = False
             set_round_budget(messages, round_no=loop_idx + 1, total=max_loops, free=_free_round)
+            # 帧额度（docs/dev/frame_turn_lifecycle.md §4）：一步 = 一次模型调用。
+            # 不够先向父帧借（每个父帧留 1 步），链底也借不到才停——额度只转移不创造。
+            # 白送的那一轮（收尾 / 提醒）不扣：它是平台给的，不是刺激给的。
+            if not _free_round:
+                from app.services.agent.state_stack_service import consume_step
+                _steps_left, _no_steps = await consume_step(db, agent.id)
+                if not _steps_left:
+                    logger.info(f"AI {agent.name}({agent.id}) 帧额度用尽，本轮停止：{_no_steps}")
+                    messages.append({
+                        "role": "user",
+                        "content": ("〔本轮的步数用完了：" + _no_steps + "。〕" + chr(10) + "这一轮到此为止：先把已经做的事收个尾，剩下的下次再说。"),
+                    })
+                    break
             # ── v0.1.5: 带分类重试的 LLM 调用 ──
             from app.ai.llm import RateLimitError, ServerError, KeyFatalError
             from app.services.infrastructure.api_key_concurrency import concurrency_mgr
@@ -1163,9 +1176,25 @@ async def _tool_call_loop(
                 )
                 if pending_msgs:
                     try:
+                        # 刺激传导（docs/dev/frame_turn_lifecycle.md §7）：先取一次当前帧，
+                        # 它说的「在」必须是消息进来时他正在做的那一段。只给结构性事实，
+                        # 不含别的会话正文（I5）。
+                        from app.services.agent.state_stack_service import get_current_frame
+                        from app.utils.pure.frame_turn import status_note
+
+                        try:
+                            _frame = await get_current_frame(db, agent.id)
+                        except Exception:  # noqa: BLE001 —— 取帧失败不该吞掉消息
+                            _frame = None
+                        state_note = (status_note(_frame, has_sent=_has_sent_message)
+                                      if _frame else "")
                         for pm in pending_msgs:
                             if pm.get("type") == "user_message":
                                 messages.append(interrupt_message_block(pm, agent.name))
+                                if state_note:
+                                    # 一段状态只附一次：多条消息共用同一个处境
+                                    messages.append({"role": "system", "content": state_note})
+                                    state_note = ""
                         logger.info(f"AI {agent.name}({agent.id}): 注入 {len(pending_msgs)} 条中断消息")
                     except Exception:
                         # 注入失败：回写缓冲，避免消息永久丢失

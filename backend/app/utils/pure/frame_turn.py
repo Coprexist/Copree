@@ -131,3 +131,22 @@ def validate_regression(*, leave: str, middle: str, enter: bool) -> bool:
     if not enter:
         return False
     return (leave, middle) in {("suspend", "keep"), ("end", "keep"), ("end", "end")}
+
+
+def status_note(frame: dict, *, has_sent: bool = False) -> str:
+    """刺激传导里的「你现在的状态」一段（§7.1）。
+
+    模型默认所有消息都是实时的，不强调就会把两小时前的进度当成刚发生；
+    所以这块必须带：在哪个作用域、本轮走到第几步、切走的后果。
+    作用域之外的正文不进来（I5）——这里只有结构性事实。
+    """
+    ensure_fields(frame)
+    label = frame.get("label") or frame.get("context_ref") or "这一段"
+    lines = [f"〔你现在的状态〕"]
+    if frame["steps_limit"]:
+        lines.append(f"- 在：{label}，本轮第 {frame['steps_used']}/{frame['steps_limit']} 步")
+    else:
+        lines.append(f"- 在：{label}")
+    lines.append("- 本轮已经发过消息" if has_sent else "- 本轮尚未发出消息")
+    lines.append("- 切走：本帧记为 open，可回来继续；额度保留")
+    return chr(10).join(lines)

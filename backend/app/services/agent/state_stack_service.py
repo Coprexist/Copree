@@ -754,6 +754,46 @@ async def borrow_steps(
     return 0, "上一帧也没有可借的步数（每帧至少给自己留 1 步）"
 
 
+async def consume_step(db: AsyncSession, agent_id: int, n: int = 1) -> tuple[int, str]:
+    """扣一步额度（step = 一次模型调用），返回 (剩余步数, 停下的原因)。
+
+    这是「额度不创造」的执行侧落点（§4.4）：不够时先沿链向父帧借（每个父帧保留
+    1 步，I3），链底也借不到才返回 0，调用方据此结束本轮。
+    没有帧的 AI（老路径 / 插件帧）不限制，返回一个足够大的数。
+    """
+    stack = await _get_stack(db, agent_id)
+    live = running(stack)
+    if not live:
+        return 999, ""
+    frame = live[-1]
+    turn.ensure_fields(frame)
+    if frame["steps_limit"] <= 0:
+        # 老帧从没记过额度：给它一次初始额度，别把「没有账」当成「用完了」
+        frame["steps_limit"] = await _agent_step_limit(db, agent_id)
+        frame["steps_used"] = 0
+    need = n - turn.steps_left(frame)
+    if need > 0:
+        idx = stack.index(frame)
+        for parent in reversed(stack[:idx]):
+            if need <= 0:
+                break
+            if parent.get("status") == ENDED_STATUS:
+                continue
+            take = turn.borrow(need, parent)
+            if take:
+                turn.record_borrow(frame, parent, take)
+                frame["steps_limit"] += take
+                need -= take
+    if turn.steps_left(frame) < n:
+        turn.close(frame)
+        await _save(db, agent_id, stack)
+        return 0, f"本轮 {frame.get('steps_limit')} 步已用完，上一帧也没有可借的"
+    frame["steps_used"] += n
+    frame["turn_state"] = turn.RUNNING
+    await _save(db, agent_id, stack)
+    return turn.steps_left(frame), ""
+
+
 async def pop_state(
     db: AsyncSession, agent_id: int, target_frame_id: str = "",
 ) -> tuple[list[dict], str]:
