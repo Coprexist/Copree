@@ -375,6 +375,7 @@ stepper 回答的是「**现在**用哪条」，一次性的结论。要看「**
 | 一 | #3 无 Key 判断（已做）+ #4 展示（stepper / 列表 / 浮标 / 请求链路入口）+ 日志补列 0133 | 一半：#3 与 usable 判定已落地；展示与日志未做 |
 | 二 | 单一解析器 + 删两档裸 Key + 自检 + 三条机械测试 | ✅ 2026-11-25：resolve_llm / resolve_user_llm、test_api_config_contract.py、test_api_config_resolver.py |
 | 三 | 池迁移（0132）+ 清列（0131） | 清列 ✅ 2026-11-25（含补建孤儿 Key 的配置档）；池改表未做 |
+| 四 | #7 模板自纠正（任意自建 / 中转通道的 system 摆放） | ✅ 2026-11-25，见 §11.4 |
 
 每批都要跑：`docker exec` 内 pytest、前端 `tsc --noEmit` + 三个 check 脚本；改了 LLM 相关再用本地小模型真跑一遍（`scripts/selfcheck_local_llm.py`）。
 
@@ -387,4 +388,32 @@ stepper 回答的是「**现在**用哪条」，一次性的结论。要看「**
 1. **语音链留到后续**：`agent_voice_configs` 上也有裸 `base_url / api_key_encrypted`，与 LLM 同构。等本文落地后照抄一遍，不同时改两条线。
 2. **只支持一个池**：`api_pools` 结构允许多条，但先不提供创建入口、也不定「用户怎么分到哪个池」的规则。等真有按额度档或按厂商分池的需求再设计。
 3. **平台归属用 `user_id = 0`**：沿用仓库已有的 `SYSTEM_USER_ID = 0` 约定（系统通知那套在用）。新建系统账号要额外处理「不能登录、不计入用户数、不进后台列表」，代价更大。
-4. **模板错误自纠正，不做运行期探测**：请求返回 400 且错误含 `System message must be at the beginning` 时，把这条厂商的 `system_layout` 纠正为 `leading`、`system_layout_source` 记为 `detected` 并写回，下一轮生效。运行期探测每轮 5 秒超时，不值。
+**4. 模板错误自纠正（#7 落地设计）**
+
+请求返回 400 且错误含 `System message must be at the beginning` 时，把这条厂商的
+`system_layout` 纠正为 `leading`、`system_layout_source` 记为 `detected` 并写回，
+下一轮生效。运行期探测每轮 5 秒超时，不值——所以只在真报错时学一次。
+
+**数据流（四层，单向，各管一件事）**：
+
+1. `ai/llm.py` 只做「识别」，不碰库：
+   `_raise_classified_error(..., base_url)` 遇到上述错误文本 → 抛
+   `SystemLayoutError(base_url, error_text)`；其它 400 行为不变（仍是普通 Exception）。
+   这样 LLM 层保持纯传输，不在错误路径里开数据库会话。
+2. `services/agent/channel_layout.py` 做「学习」，是唯一写 `system_layout` 的地方：
+   `learn_from_error(db, base_url, error_text) -> bool` 按 base_url 找用户厂商行，
+   写 `system_layout=leading`、`source=detected`、`checked_at=now`；已一致则直接返回。
+   **只改用户厂商行，不改系统预设**：系统预设是管理员维护的模板，自动改写会让
+   「我只填了个地址，配置怎么自己变了」无从解释；系统预设那条只在日志里提示管理员。
+3. `ai/executor.py` 的 LLM 异常处理捕获它：调一次 `learn_from_error`（失败只记日志，
+   不影响本轮），本轮按已有错误路径处理（告知 owner「这家要求 system 放开头，
+   已自动记录，下一轮生效」），**不重试**——重试要用新布局重建整个请求，风险与收益
+   不划算，而下一轮就会用新结论。
+4. 可观测：纠正成功记 info（哪条通道、从哪档改成哪档）；§7 的启动自检复查
+   `system_layout_source` 的分布——同一家反复被纠正，说明有人在手选里改回去了。
+
+**幂等**：DB 已是 `leading + detected` 就直接返回；同一 base_url 10 分钟内只写一次
+（进程级内存桶）。多进程各写一次也无害（结果相同，最后一次覆盖）。
+
+**测试**：错误文本匹配（含大小写、前后缀、其它 400 不触发）；写回用户厂商行且不动
+系统预设；已是 leading 时不重复写；`_raise_classified_error` 的分类不回归。

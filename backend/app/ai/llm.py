@@ -17,7 +17,9 @@ from app.models.context_config import ContextConfig
 from app.chat import chat_api
 from app.services.memory.memory_service import recall_relevant_memories
 from app.utils.display_name import display_name
-from app.utils.pure.chat_template import ANYWHERE, fit_system_layout
+from app.utils.pure.chat_template import (
+    ANYWHERE, fit_system_layout, is_system_layout_error,
+)
 from app.utils.pure.llm_endpoint import chat_completions_url, is_local_endpoint
 from app.utils.pure.llm_capability import (
     is_tools_unsupported_error, remember_no_tools, supports_tools,
@@ -60,6 +62,18 @@ class RateLimitError(Exception):
     def __init__(self, message: str, pool_key_id: int | None = None):
         self.message = message
         self.pool_key_id = pool_key_id
+
+
+class SystemLayoutError(Exception):
+    """对端模板要求 system 必须在开头：不是网络/凭证问题，是布局结论错了。
+
+    调用方拿 base_url 去把这条通道的结论纠正为 leading（下一轮生效）。
+    """
+
+    def __init__(self, base_url: str, message: str):
+        self.base_url = base_url
+        self.message = message
+        super().__init__(message)
 
 
 class ServerError(Exception):
@@ -383,7 +397,9 @@ async def _chat_completion_non_streaming(
         if response.status_code != 200:
             error_text = response.text[:500]
             logger.error(f"LLM API 错误 ({response.status_code}): {error_text}")
-            _raise_classified_error(response.status_code, error_text, pool_key_id=pool_key_id)
+            _raise_classified_error(response.status_code, error_text,
+                                    pool_key_id=pool_key_id,
+                                    base_url=api_base_url)
             return {}  # unreachable, 但保持类型安全
 
         data = response.json()
@@ -462,7 +478,9 @@ async def _chat_completion_streaming(
             if response.status_code != 200:
                 error_text = (await response.aread()).decode()[:500]
                 logger.error(f"LLM API 错误 ({response.status_code}): {error_text}")
-                _raise_classified_error(response.status_code, error_text, pool_key_id=pool_key_id)
+                _raise_classified_error(response.status_code, error_text,
+                                    pool_key_id=pool_key_id,
+                                    base_url=api_base_url)
 
             async for line in response.aiter_lines():
                 line = line.strip()
@@ -572,14 +590,19 @@ async def _chat_completion_streaming(
     return result
 
 
-def _raise_classified_error(status_code: int, error_text: str, pool_key_id: int | None = None):
+def _raise_classified_error(status_code: int, error_text: str,
+                            pool_key_id: int | None = None,
+                            base_url: str = ""):
     """
     按状态码分类抛出对应的异常：
+    - 400 + 模板报错 → SystemLayoutError（布局结论错了，学习后下一轮生效）
     - 429 → RateLimitError（换 Key 重试）
     - 500/503 → ServerError（同 Key 等待重试）
     - 402/401 → KeyFatalError（跳过此 Key）
     - 其他 → 普通 Exception
     """
+    if status_code == 400 and is_system_layout_error(error_text):
+        raise SystemLayoutError(base_url, error_text)
     if status_code == 429:
         raise RateLimitError(error_text, pool_key_id=pool_key_id)
     elif status_code in (500, 503):

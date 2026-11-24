@@ -23,7 +23,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from app.utils.pure.chat_template import (
-    LAYOUTS, guess_layout_from_host, normalize_layout,
+    LAYOUTS, LEADING, guess_layout_from_host, is_system_layout_error,
+    normalize_layout,
 )
 
 logger = logging.getLogger(__name__)
@@ -89,3 +90,57 @@ async def decide_system_layout(
 
     return LayoutDecision(guess_layout_from_host(base_url), "host",
                           message="未识别到模板，按地址保守取值")
+
+
+# 同一通道 10 分钟内只学一次：多轮连续失败不该反复写库，也不该把日志刷满
+_learned_at: dict[str, float] = {}
+LEARN_INTERVAL_SECONDS = 600
+
+
+async def learn_from_error(db, base_url: str, error_text: str = "") -> bool:
+    """把「对端要求 system 放开头」学进这条通道的结论（下一轮生效）。
+
+    只写用户厂商行：系统预设是管理员维护的模板，自动改写会让「我只填了个地址，
+    配置怎么自己变了」无从解释；系统预设那条只在日志里提示管理员。
+    返回是否真的写了一次（调用方据此决定给用户的话）。
+    """
+    import time
+
+    from sqlalchemy import select
+
+    from app.models.api_profile import UserApiProvider
+    from app.utils.pure.llm_endpoint import server_root
+
+    if not (base_url or "").strip() or not is_system_layout_error(error_text):
+        return False
+
+    root = server_root(base_url)
+    now = time.monotonic()
+    last = _learned_at.get(root)
+    if last is not None and now - last < LEARN_INTERVAL_SECONDS:
+        return False
+    _learned_at[root] = now
+
+    rows = (await db.execute(
+        select(UserApiProvider).where(UserApiProvider.kind == "llm")
+    )).scalars().all()
+    for row in rows:
+        if server_root(row.base_url) != root:
+            continue
+        if row.system_layout == LEADING and row.system_layout_source == "detected":
+            return False
+        row.system_layout = LEADING
+        row.system_layout_source = "detected"
+        row.system_layout_checked_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        await db.commit()
+        logger.info(
+            "通道 %s 的 system 摆放已纠正为 leading（对端模板报错，下一轮生效）",
+            row.base_url,
+        )
+        return True
+
+    logger.warning(
+        "对端要求 system 放开头，但没找到匹配的用户厂商行（系统预设不自动改）：%s",
+        base_url,
+    )
+    return False

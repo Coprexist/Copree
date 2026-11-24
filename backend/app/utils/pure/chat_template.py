@@ -310,3 +310,15 @@ def _prepend_text(prefix: str, content: object, *, separator: str = "") -> objec
         return [{"type": "text", "text": prefix}, *content]
     body = content if isinstance(content, str) else ""
     return f"{prefix}{separator}{body}" if body else prefix.rstrip()
+
+
+_SYSTEM_MUST_BE_LEADING = "system message must be at the beginning"
+
+
+def is_system_layout_error(error_text: str) -> bool:
+    """对端模板拒绝了中段 system（大小写、前后缀都不影响判定）。
+
+    这句话是 llama.cpp / 部分 vLLM 的 Jinja 模板原样报出来的，是「布局结论错了」
+    唯一可靠的信号——比按地址猜准，也不像每轮探测那样付 5 秒。
+    """
+    return _SYSTEM_MUST_BE_LEADING in (error_text or "").lower()

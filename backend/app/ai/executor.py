@@ -906,7 +906,9 @@ async def _tool_call_loop(
                     })
                     break
             # ── v0.1.5: 带分类重试的 LLM 调用 ──
-            from app.ai.llm import RateLimitError, ServerError, KeyFatalError
+            from app.ai.llm import (
+                KeyFatalError, RateLimitError, ServerError, SystemLayoutError,
+            )
             from app.services.infrastructure.api_key_concurrency import concurrency_mgr
 
             MAX_SERVER_RETRIES = 2
@@ -1260,6 +1262,25 @@ async def _tool_call_loop(
                                 raise  # 同 Key 重试耗尽，抛出给外层
 
                     break  # 成功，退出 Key 切换循环
+
+                except SystemLayoutError as e:
+                    # 布局结论错了：学一次（下一轮生效）。本轮不重放——换新布局要重建
+                    # 整个请求，风险与收益不划算；换 Key 也没用，所以不 continue。
+                    corrected = False
+                    try:
+                        from app.services.agent.channel_layout import learn_from_error
+                        corrected = await learn_from_error(db, e.base_url, e.message)
+                    except Exception:  # noqa: BLE001 —— 学习失败不能盖住本轮错误
+                        logger.warning("system 布局自纠正失败（不影响本轮）", exc_info=True)
+                    last_error_type = "system_layout_mismatch"
+                    last_error_detail = (
+                        "已自动记录：这条通道要求 system 放在开头，下一轮生效。" if corrected
+                        else "自动记录失败，请手动把「system 摆放」改成「只在开头」。"
+                    )
+                    logger.error(
+                        f"AI {agent.name}({agent.id}) 通道 {e.base_url} 要求 system 在开头"
+                        f"（{'已纠正' if corrected else '未纠正'}）"
+                    )
 
                 except RateLimitError as e:
                     last_error_type = "rate_limited"

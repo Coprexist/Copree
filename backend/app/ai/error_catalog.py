@@ -95,6 +95,16 @@ CATALOG: dict[str, ErrorSpec] = {
         template="⚠️ AI「{agent_name}」的工具 {tool} 执行超时，已经跳过。\n\n原因：{detail}",
         retryable=True,
     ),
+    "system_layout_mismatch": ErrorSpec(
+        code="system_layout_mismatch",
+        template=(
+            "⚠️ AI「{agent_name}」的通道要求 system 放在开头，这一轮没能请求成功。\n\n"
+            "{detail}\n\n"
+            "也可以在 [AI 设置页](/agents/{agent_id}) 的通道设置里，把「system 摆放」"
+            "改成「只在开头」。"
+        ),
+        retryable=True,
+    ),
     "session_polluted": ErrorSpec(
         code="session_polluted",
         template=(
