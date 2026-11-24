@@ -274,6 +274,35 @@ async def _shutdown_step(name: str, factory, budget: float = 2.0) -> None:
         logger.info("[STOP] %s 完成（%.2fs）", name, time.perf_counter() - started)
 
 
+async def _api_config_selfcheck() -> None:
+    """API 配置卫生自检（docs/dev/api_config_chain.md §7）：只 WARN，不阻塞启动。
+
+    静态检查（不联网）：裸 Key 列残留、默认档缺失/重复、配置档指向的厂商不对、
+    池分配悬空。连通性不在启动时测——那是管理台「测试连接」的事。
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.database import engine
+    from app.services.agent.config_selfcheck import (
+        INFO_SYSTEM_PRESETS, collect_api_config_problems,
+    )
+
+    try:
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with factory() as db:
+            problems = await collect_api_config_problems(db)
+    except Exception as e:  # noqa: BLE001 —— 自检失败不阻塞启动
+        logger.info("[INFO] API 配置自检跳过: %s", e)
+        return
+
+    for problem in problems:
+        logger.warning("[API 配置自检] %s", problem)
+    if problems:
+        logger.warning(
+            "[API 配置自检] 共 %d 项，按 docs/dev/api_config_chain.md §7 处理", len(problems))
+    logger.info("[API 配置自检] %s", INFO_SYSTEM_PRESETS)
+
+
 async def _embedding_dimension_selfcheck() -> None:
     """向量维度自检（原在 prestart 里阻塞启动）。
 
@@ -551,6 +580,7 @@ async def lifespan(app: FastAPI):
     await _startup_db()
     # 自检不挡启动：跑完自己打日志
     spawn_task(_embedding_dimension_selfcheck, "_embedding_dimension_selfcheck")
+    spawn_task(_api_config_selfcheck, "_api_config_selfcheck")
     # 压缩段过期清理（同上，旁路）
     spawn_task(_purge_expired_context_segments, "_purge_expired_context_segments")
     await _upgrade_stored_model_names()
