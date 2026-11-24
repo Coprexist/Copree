@@ -1346,6 +1346,15 @@ async def _tool_call_loop(
             # 累积 token 消耗 + API 调用计数
             total_usage["api_calls"] += 1
             usage = response.get("usage", {})
+            # 被输出额度/上下文截断、正文一个字都没有的一轮：思考把名额写满了。
+            # 本地通道开着思考时已经不发 max_tokens（见 llm._build_chat_payload），这里只留证据——
+            # 真发生了要能查出来，而不是只表现为「AI 没回」。不往群里塞提示：那是产品决定，
+            # 而且群聊没有 notice 通道（创建助手那套是流式表单才有）。
+            if finish_reason == "length" and not (content or "").strip() and not tool_calls:
+                logger.warning(
+                    f"⚠️ AI {agent.name}({agent.id}) 本轮被截断：finish_reason=length、正文为空，"
+                    f"model={model}、usage={usage}"
+                )
             if usage:
                 for k in ("prompt_tokens", "completion_tokens", "total_tokens", "reasoning_tokens", "cached_tokens"):
                     total_usage[k] += usage.get(k, 0)
