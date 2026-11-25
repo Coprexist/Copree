@@ -220,6 +220,8 @@
 
 - DeepSeek 图片改走 Files API：上传一次拿 `file_id`（`{"type":"file"}` 引用，不占 48 MiB 请求体、单图可到 64 MiB），新增 `deepseek_upload_files` 索引表（迁移 0133）按内容 sha256 去重、7 天过期、剩余寿命不足 1 小时重传、配额满时回收该作用域最老的 100 个；只有 `deepseek-flash` 走这条，其余通道仍 base64。
 
+- 重启 / OOM / 强杀后的残留帧恢复：`turn_state=running` 且最后活动早于本进程启动的帧判为中断，走统一出口出链并写 cutoff 告知（`recover_interrupted`），免得残影占着 active、新刺激永远排不上队。
+
 ### 🐛 修复
 
 - **滚动条不再并排出现两条**：iOS / iPadOS 的滚动指示器是系统 overlay，`scrollbar-width`
@@ -592,6 +594,10 @@
 
 - DeepSeek 的 AI 在群里被 @ 后不回复：运行中的进程里 `app.utils.multimodal` 还是旧版（容器挂载代码但 uvicorn 没开 `--reload`），而新代码的 `app.ai.llm` 在首次延迟导入时引用了新常量 `IMAGE_CHAR_HEADROOM`，ImportError 打断了那一轮的判定与构建。重启后端后 `migration=0133`、启动无报错、QQ 通道就绪。
 
+- 帧只挂不弹导致 AI 卡死：额度耗尽时 `close()` 只改 `turn_state`、不改 `status`，帧一直占着 active；现在出链统一走 `end_frames(code=, reason=, by=)`，被动出链（额度耗尽 / 异常 / 重启残留 / 回收）固定给该会话账本写一条 cutoff 告知，`close()` 同时置 `status=ended` 并记 `ended_code` / `ended_reason`。
+
+- 「忙」被误判成「链上有帧」：链是活跃链，有帧不等于有一轮在跑。现在刺激到达分两种——空闲则**挂帧即唤醒**（成为当前帧、清未读、重置额度），有轮在跑才只挂帧 + 记未读；`_save` 对账把 `turn_state != running` 的帧从 active 降为 suspended，修掉「同时两个 active」。
+
 ### 🔧 变更
 
 - **评论通知只在需要动手时报**：一次回十条评论时，十条「公开成功」对 AI 没有任何增量信息，
@@ -627,6 +633,8 @@
 - 图片折算进字数预算时**打五折**（图片不是文字）；同一条消息多图时保留**第一张**，跨消息按「最近的带图消息优先」分配额度——不再是「从最后一张往前」。
 
 - 包断额度（`agents.api_credit_cost`）功能暂时关闭：创建 AI 时拒绝非 0 包断、编辑只允许保持原值。排查发现它从未真正生效——创建不扣 `agent_bundle_credit`、删除却返回到 `api_credit`、`quota_service.charge` 也不识别包断 AI，先不让用户为它付费。
+
+- 帧额度改为**只存剩余步数** `steps_left`（替换 `steps_used` + `steps_limit`）：判断额度看 `> 0`、赋值一行、借还两边加减；旧帧按「上限 − 已用」换算一次，不清零。
 
 ### ♻️ 重构
 

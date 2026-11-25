@@ -367,6 +367,14 @@ async def _process_dm_event(db, event: dict):
 
     logger.info(f"私信 {session_id} 触发 AI {agent.name}({agent.id}) 回复")
 
+    # 重启/异常留下的残影帧：先清理，不然它们占着 active，新刺激永远排不上队
+    try:
+        from app.services.agent.state_stack_service import recover_interrupted
+        await recover_interrupted(db, agent.id)
+        await db.commit()
+    except Exception as e:
+        logger.warning(f"中断残留帧清理失败（非致命）: {e}")
+
     # ── 2026-08-09: 聊天即情景——自动维护会话帧（无论是否真正回复，先记录「有人找过」）──
     stimulus = None
     try:
@@ -876,6 +884,14 @@ async def _maybe_trigger_ai_reply(
 
     # 统一使用 agent.id（数据库主键）作为后续内部标识
     resolved_agent_id = agent.id
+
+    # 重启/异常留下的残影帧：先清理，不然它们占着 active，新刺激永远排不上队
+    try:
+        from app.services.agent.state_stack_service import recover_interrupted
+        await recover_interrupted(db, resolved_agent_id)
+        await db.commit()
+    except Exception as e:
+        logger.warning(f"中断残留帧清理失败（非致命）: {e}")
 
     # ── 2026-08-09: 聊天即情景——群聊触发时维护会话帧（即使 DND/意愿不回复也记录「有人找过」）──
     stimulus = None

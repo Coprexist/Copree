@@ -104,17 +104,24 @@ def resume(frame: dict) -> dict:
     return frame
 
 
-def close(frame: dict) -> dict:
-    """出链（end_turn / 额度耗尽）：剩余步数清零（§4.3 显式回收）。
+def close(frame: dict, *, code: str = "", reason: str = "") -> dict:
+    """出链（end_turn / 额度耗尽 / 异常中断）：剩余步数清零（§4.3 显式回收）。
 
     **同时把 status 置 ended**：is_running / current 读的是 status，只改 turn_state 的话
     这帧仍然算「在跑」、仍然占着 active——额度耗尽后它就永远卡在「当前帧但 0 额度」，
     别的会话的刺激进来也轮不到（2026-11-25 线上：私信帧 15/15 卡死，群消息全不回）。
+
+    code / reason 记在帧上（ended_code / ended_reason）：「怎么没的」要能被下一个自己读到，
+    被动结束（额度耗尽、异常、重启残留）尤其需要——主动 end_turn 时 AI 自己知道。
     """
     ensure_fields(frame)
     frame[STEPS_FIELD] = 0
     frame["turn_state"] = CLOSED
     frame["status"] = "ended"      # 与 state_stack.ENDED_STATUS 同值
+    if code:
+        frame["ended_code"] = code
+    if reason:
+        frame["ended_reason"] = reason
     return frame
 
 

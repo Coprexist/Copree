@@ -23,6 +23,7 @@
 """
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from sqlalchemy import text, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -334,6 +335,13 @@ async def _save(db: AsyncSession, agent_id: int, stack: list[dict]) -> list[dict
     db = _ensure_repo(db)
     # ① 先按 status 归一（链还没建时这是唯一依据）
     stack[:] = normalize_order(stack)
+    # ①.5 没有在跑的轮不能占 active：链是「活跃链」，空闲时链上不该有当前帧。
+    # 之前只有「窗口内提 active」，没有「窗口外降下来」，于是会同时存在两个 active、
+    # 额度耗尽的那一帧永远当当前帧（2026-11-25 线上：私信帧与群 81 帧同时 active）。
+    for frame in stack:
+        turn.ensure_fields(frame)
+        if frame.get("status") == "active" and frame["turn_state"] != turn.RUNNING:
+            frame["status"] = "suspended"
     # 沉睡标记只属于"预建、还没进过"的帧：上了链就不再沉睡。收敛在这一个写入点，
     # 各条进帧路径不必各自记得清
     for frame in stack:
@@ -760,6 +768,81 @@ async def borrow_steps(
     return 0, "上一帧也没有可借的步数（每帧至少给自己留 1 步）"
 
 
+async def end_frames(
+    db: AsyncSession, agent_id: int, frames: list[dict], *,
+    code: str, reason: str, by: str = "platform",
+) -> None:
+    """帧出链的**唯一出口**：主动（AI 自己）与被动（额度耗尽 / 异常 / 重启残留 / 回收）都走这里。
+
+    by="ai"：AI 自己结束（end_turn / 它选的「回去并结束」）——它知道发生了什么，不补告知。
+    by="platform"：被动结束——它不知道，必须在那一帧的会话账本里留一条 cutoff，
+    否则下一轮从账本重建时它根本不知道自己上一段是怎么没的（§8 职责边界：结构由系统给）。
+
+    code 是机器可读的原因（steps_exhausted / crash / interrupted / reclaimed / done_by_ai），
+    reason 是人话；两者都落在帧上（ended_code / ended_reason），排查与排查后复现都用得上。
+    """
+    if not frames:
+        return
+    stack = await _get_stack(db, agent_id)
+    ids = {str(f.get("id") or "") for f in frames}
+    targets = [f for f in stack if str(f.get("id") or "") in ids] or list(frames)
+    for frame in targets:
+        turn.close(frame, code=code, reason=reason)
+    await _save(db, agent_id, stack)
+
+    if by != "ai":
+        from app.models.agent import Agent
+        from app.services.history.context_sync import append_events
+        from app.utils.pure.history import cutoff_entry
+
+        agent = await db.get(Agent, agent_id)
+        if agent is not None:
+            for frame in targets:
+                ref = frame.get("context_ref") or ""
+                if not ref:
+                    continue
+                doing = (frame.get("doing") or "").strip()
+                text = reason if not doing else f"{reason}（当时在做：{doing}）"
+                await append_events(db, agent, ref, [cutoff_entry(text)])
+    logger.info(f"Agent({agent_id}) 帧出链 {len(targets)} 个（by={by}, code={code}）：{reason}")
+
+
+# 本进程启动时间：用来识别「上一个进程留下的 running 帧」——重启后它们不可能真在跑。
+_BOOT_TS = time.time()
+
+
+def _frame_last_active_ts(frame: dict) -> float:
+    """帧上最后一次活动的绝对时间（epoch 秒）；认不出就算 0（越早越可疑）。"""
+    raw = frame.get("turn_started_at") or frame.get("last_active_at") or ""
+    try:
+        return datetime.fromisoformat(str(raw)).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
+async def recover_interrupted(db: AsyncSession, agent_id: int) -> list[dict]:
+    """把**上一个进程**留下的 running 帧判为中断并出链（重启 / OOM / 强杀后的恢复）。
+
+    判据：turn_state=running 且最后一次活动早于本进程启动——重启后没有任何线程在跑它们，
+    它们只是「像在跑」的残影。不清理的话 active 被它们占着，新刺激永远排不上队
+    （2026-11-25 线上：私信帧卡成 active+0 额度，群消息全不回）。
+
+    出链走统一出口 by="platform"：会给对应会话写一条 cutoff，让下一个自己知道
+    「上一段是平台重启中断的」，而不是莫名其妙发现自己在别处。
+    """
+    stack = await _get_stack(db, agent_id)
+    stale: list[dict] = []
+    for frame in stack:
+        turn.ensure_fields(frame)
+        if (frame["turn_state"] == turn.RUNNING
+                and _frame_last_active_ts(frame) < _BOOT_TS):
+            stale.append(frame)
+    if stale:
+        await end_frames(db, agent_id, stale, code="interrupted",
+                         reason="平台重启，这一段被中断", by="platform")
+    return stale
+
+
 async def consume_step(db: AsyncSession, agent_id: int, n: int = 1,
                        context_ref: str | None = None) -> tuple[int, str]:
     """扣一步额度（step = 一次模型调用），返回 (剩余步数, 停下的原因)。
@@ -805,11 +888,17 @@ async def consume_step(db: AsyncSession, agent_id: int, n: int = 1,
                 frame[turn.STEPS_FIELD] += take
                 need -= take
     if turn.steps_left(frame) < n:
-        turn.close(frame)
-        await _save(db, agent_id, stack)
+        # 被动出链：走统一出口（自动写 cutoff 告知下一个自己「这一轮怎么没的」）
+        await end_frames(
+            db, agent_id, [frame], code="steps_exhausted",
+            reason="这一段因为本帧的步数用完了被平台结束",
+            by="platform",
+        )
         return 0, "本帧剩余步数已用完，上一帧也没有可借的"
     frame[turn.STEPS_FIELD] -= n
     frame["turn_state"] = turn.RUNNING
+    # 每次扣步刷新「这轮还活着」的时间戳：重启后靠它区分「真在跑」与「上个进程的残影」
+    frame["turn_started_at"] = datetime.now(timezone.utc).isoformat()
     await _save(db, agent_id, stack)
     return turn.steps_left(frame), ""
 
@@ -840,7 +929,7 @@ async def pop_state(
 
     popped = live[-1]                     # 只弹当前这一帧
     popped["status"] = ENDED_STATUS       # 出状态链；记录留在存储里，等他以后交接
-    turn.close(popped)                    # §4.3：剩余额度清零
+    turn.close(popped, code="done_by_ai")  # §4.3：剩余额度清零（主动出链，不补 cutoff）
     resume = resume_target(stack)         # 链尾自然落到它的前驱——就是拉取那一刻的来处
     if resume is not None:
         resume["status"] = "active"
@@ -871,7 +960,7 @@ def _close_frame(stack: list[dict], frame: dict) -> None:
     统一提为 active——否则会出现"状态链里一个 active 都没有"，摘要就没有当前帧可念。
     """
     frame["status"] = ENDED_STATUS
-    turn.close(frame)
+    turn.close(frame, code="done_by_ai")
     nxt = resume_target(stack)
     if nxt is not None:
         nxt["status"] = "active"
@@ -1443,8 +1532,12 @@ async def attach_stimulus(
         and turn.ensure_fields(f).get("turn_state") == turn.RUNNING
     ]
     if not others_running:
-        # 空闲：挂帧就是唤醒——链上没有一轮在跑，这一帧直接成为当前帧
+        # 空闲：挂帧就是唤醒——链上没有一轮在跑，这一帧直接成为当前帧。
+        # 唤醒就该把未读认领掉：这一轮正在处理它们，摘要里再挂「有 N 条未读」只会误导
+        # （2026-11-25：群 81 已经在跑，unread 还写着 32）。
         frame["status"] = "active"
+        frame["unread"] = 0
+        frame["waiting_since"] = ""
         await _save(db, agent_id, stack)
         logger.info(f"Agent({agent_id}) 收到刺激并唤醒：{label}")
         return frame
