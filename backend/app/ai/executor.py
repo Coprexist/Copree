@@ -401,6 +401,21 @@ async def _send_system_error_notification(db, agent, content: str) -> None:
 # API 配置获取
 # ============================================================
 
+def _api_meta_of(res, base_url: str) -> dict:
+    """把这次解析的结论压成日志要的几项（与 API 页签 stepper 同源，只是字段更少）。
+
+    label 取命中那一档的配置名：source 说的是"走的哪一档"，label 回答"哪条"。
+    排障时要同时知道这两件事——只看 model 分不清是 AI 绑定还是池。
+    """
+    hit = next((step for step in res.chain if step.level == res.source), None)
+    return {
+        "source": res.source,
+        "label": hit.label if hit else "",
+        "model": res.chat_model or "",
+        "base_url": base_url,
+    }
+
+
 async def _get_api_config(
     db, agent,
     exclude_pool_key_id: int | None = None,
@@ -459,6 +474,7 @@ async def _get_api_config(
     # 能不能真的请求：本地自建服务可以没有 Key（F4）。调用方一律看这个，
     # 不要再各自猜「api_key is None 就是没配」——池里那条本地配置会被误判。
     provider_info["usable"] = res.usable
+    provider_info["api_meta"] = _api_meta_of(res, api_base)
     return res.api_key, api_base, res.credit_source, res.pool_key_id, provider_info
 
 
@@ -646,6 +662,7 @@ async def _tool_call_loop(
     is_federated: bool = False,
     pending_delivery: list[dict] | None = None,
     frame_budget_check=None,
+    api_meta: dict | None = None,
 ) -> None:
     """
     工具调用循环：LLM 必须通过工具调用来执行所有操作（包括发消息）。
@@ -665,6 +682,12 @@ async def _tool_call_loop(
     """
     if effective_cfg is None:
         effective_cfg = {}
+
+    async def _save_log(*args, **kwargs):
+        """本轮日志统一带上「用了哪条配置」——Resolution 只在调 LLM 的那层有，别丢在半路。"""
+        kwargs.setdefault("api_meta", api_meta)
+        await _save_conversation_log_safe(*args, **kwargs)
+
     from app.ai.llm import chat_completion, set_round_budget
     from app.services.tool_registry import dispatch_tool_call
 
@@ -779,7 +802,7 @@ async def _tool_call_loop(
         """
         try:
             await _seal("", cutoff=_cutoff_text(reason))
-            await _save_conversation_log_safe(
+            await _save_log(
                 db, agent, messages, conversation_type,
                 group_id, session_id,
                 has_output=_has_sent_message, model=model,
@@ -1360,7 +1383,7 @@ async def _tool_call_loop(
             # ── 全部重试失败 ──
             if response is None:
                 logger.error(f"AI {agent.name}({agent.id}) LLM 调用全部重试失败，last_error={last_error_type}")
-                await _save_conversation_log_safe(
+                await _save_log(
                     db, agent, messages, conversation_type,
                     group_id, session_id, has_output=False, model=model,
                 )
@@ -1393,7 +1416,7 @@ async def _tool_call_loop(
                     f"（结算：keep_thinking={bool(_settlement.get('keep_thinking'))}，"
                     f"key_note={'有' if _settlement.get('key_note') else '无'}）"
                 )
-                await _save_conversation_log_safe(
+                await _save_log(
                     db, agent, messages, conversation_type,
                     group_id, session_id, has_output=_has_sent_message, model=model,
                     token_usage=total_usage,
@@ -1449,7 +1472,7 @@ async def _tool_call_loop(
                         )
                     except Exception:
                         pass
-                await _save_conversation_log_safe(
+                await _save_log(
                     db, agent, messages, conversation_type,
                     group_id, session_id,
                     has_output=_has_sent_message, model=model,
@@ -1479,7 +1502,7 @@ async def _tool_call_loop(
                     f"文字收进账本不发: {content[:60]}"
                 )
                 await _seal(response.get("reasoning_content") or "")
-                await _save_conversation_log_safe(
+                await _save_log(
                     db, agent, messages, conversation_type,
                     group_id, session_id,
                     has_output=_has_sent_message, model=model, token_usage=total_usage,
@@ -1506,7 +1529,7 @@ async def _tool_call_loop(
                         _unsent_text = ""
                         _has_sent_message = True
                         await _seal(response.get("reasoning_content") or "")
-                        await _save_conversation_log_safe(
+                        await _save_log(
                             db, agent, messages, conversation_type,
                             group_id, session_id,
                             has_output=True, model=model, token_usage=total_usage,
@@ -1521,7 +1544,7 @@ async def _tool_call_loop(
                         f"AI {agent.name}({agent.id}) 提醒后仍只返回文字，不代发、写入账本: {content[:60]}"
                     )
                     await _seal(response.get("reasoning_content") or "")
-                    await _save_conversation_log_safe(
+                    await _save_log(
                         db, agent, messages, conversation_type,
                         group_id, session_id,
                         has_output=_has_sent_message, model=model, token_usage=total_usage,
@@ -1581,7 +1604,7 @@ async def _tool_call_loop(
                 await _seal(response.get("reasoning_content") or "", cutoff=_cutoff_text(
                     "模型只回了文字、没调用工具，本轮由平台结束，没走 end_turn。"
                 ))
-                await _save_conversation_log_safe(
+                await _save_log(
                     db, agent, messages, conversation_type,
                     group_id, session_id,
                     has_output=_has_sent_message, model=model,
@@ -1661,7 +1684,7 @@ async def _tool_call_loop(
                 await _seal(response.get("reasoning_content") or "", cutoff=_cutoff_text(
                     "模型没请求工具就结束了本轮，没走 end_turn。"
                 ))
-                await _save_conversation_log_safe(
+                await _save_log(
                     db, agent, messages, conversation_type,
                     group_id, session_id,
                     has_output=_has_sent_message, model=model,
@@ -1715,7 +1738,7 @@ async def _tool_call_loop(
             logger.warning(f"  扣除额度失败（不阻塞主流程）: {e}")
 
     await _seal(response.get("reasoning_content") or "", cutoff=cutoff)
-    await _save_conversation_log_safe(
+    await _save_log(
         db, agent, messages, conversation_type,
         group_id, session_id,
         has_output=_has_sent_message, model=model,
@@ -1778,6 +1801,7 @@ async def _save_conversation_log_safe(
     has_output: bool = False,
     model: str | None = None,
     token_usage: dict | None = None,
+    api_meta: dict | None = None,
 ) -> None:
     """安全保存对话日志（失败不影响主流程）
 
@@ -1798,6 +1822,7 @@ async def _save_conversation_log_safe(
             has_output=has_output,
             model=model,
             thinking_enabled=bool(agent.thinking_enabled),
+            api_meta=api_meta,
         )
     except Exception as e:
         logger.warning(f"保存对话日志失败 (agent={agent.id}): {e}")

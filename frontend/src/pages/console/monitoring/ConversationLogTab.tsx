@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { api } from '../../../api/client'
 import { useT } from '../../../i18n/I18nContext'
 import { Settings, Bot, Eye, Loader2, Save, Sliders } from 'lucide-react'
@@ -63,8 +64,9 @@ export default function ConversationLogTab() {
 
   // Log viewer
   // ?agent=<id>：从 AI 详情的「请求链路 →」进来时直接定位到那个 AI（默认展开最新一条）
+  const [searchParams] = useSearchParams()
   const [viewAgentId, setViewAgentId] = useState<number | null>(() => {
-    const raw = new URLSearchParams(window.location.search).get('agent')
+    const raw = searchParams.get('agent')
     const id = raw ? parseInt(raw, 10) : NaN
     return Number.isFinite(id) ? id : null
   })

@@ -222,6 +222,8 @@
 
 - 重启 / OOM / 强杀后的残留帧恢复：`turn_state=running` 且最后活动早于本进程启动的帧判为中断，走统一出口出链并写 cutoff 告知（`recover_interrupted`），免得残影占着 active、新刺激永远排不上队。
 
+- 对话日志详情显示「这一轮实际用了哪条配置」：迁移 0134 给 `ai_conversation_logs` 加 `api_meta`（`{source, label, model, base_url}`），由请求时那个 `Resolution` 直接写入（与 API 页签 stepper 同源），详情头部渲染成 `配置：AI 绑定（默认）`。排障时不必再拿 model 反推走的是绑定还是池。
+
 ### 🐛 修复
 
 - **滚动条不再并排出现两条**：iOS / iPadOS 的滚动指示器是系统 overlay，`scrollbar-width`
@@ -600,6 +602,8 @@
 
 - 网页上传的同名附件会互相覆盖（手机照片常叫 `image.jpg`）：连发两张只保住最后一张，旧消息的附件也跟着变成最新那张，AI 收到的可能不是用户发的那张。现在 `file_service` 按内容区分——同名同内容仍复用合并，同名不同内容按序加后缀 `image (2).jpg`，绝不覆盖。
 
+- API 页签「请求链路 →」点了 404：跳转目标写成了后端接口路径 `/admin/conversation-log`，而页面早已收进控制台 `/admin?tab=convlog`。前端路由与接口路径的混用一并收口——新增 `utils/routes.ts`（`CONSOLE_PATH` / `consoleTab()`），跳转只引用它；`ConversationLogTab` 改用自己的 `useSearchParams` 读 `?agent=`，不再碰 `window.location`。
+
 ### 🔧 变更
 
 - **评论通知只在需要动手时报**：一次回十条评论时，十条「公开成功」对 AI 没有任何增量信息，
@@ -756,6 +760,8 @@
   `docs/dev/ui_system.md` 的语音条目里，以后只调 `taper` 一个常量。
 
 - API 配置的「系统消息位置」多了「自动识别」，旁边多了「重新识别」：自己填的本地 / 中转地址在保存后点一下就能拿到精确结论，不必手动猜该给 `leading` 还是 `anywhere`。
+
+- API 页签的「实际使用」由四个等宽卡片改成一行结论胶囊：命中项描边提亮，跳过项压暗成小字，窄屏自然换行；不再靠大色块撑层级，也不再竖排占半屏。
 
 ### 🧹 清理
 

@@ -548,6 +548,7 @@ async def _process_alarm_event(db, event: dict):
             pool_key_id=pool_key_id,
             provider_supports_thinking=provider_info.get("thinking_supported"),
             system_layout=provider_info.get("system_layout"),
+            api_meta=provider_info.get("api_meta"),
             trigger="auto",
             frame_budget_check=budget.check,
         ))
@@ -610,6 +611,7 @@ async def _standalone_agent_turn(db, agent, *, session_block: str, user_content:
             credit_source=credit_source, pool_key_id=pool_key_id,
             provider_supports_thinking=provider_info.get("thinking_supported"),
             system_layout=provider_info.get("system_layout"),
+            api_meta=provider_info.get("api_meta"),
             trigger="auto",
             frame_budget_check=budget.check,
         ))

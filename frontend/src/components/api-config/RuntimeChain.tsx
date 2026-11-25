@@ -13,6 +13,7 @@ import { useNavigate } from 'react-router-dom'
 import { api } from '../../api/client'
 import { useAuth } from '../../context/AuthContext'
 import { useT } from '../../i18n/I18nContext'
+import { consoleTab } from '../../utils/routes'
 import { Button } from '../ui'
 
 interface ChainStep {
@@ -104,45 +105,47 @@ export default function RuntimeChain({
         <h4 className="text-xs font-semibold text-textPrimary">{t('apiConfig:runtimeChainTitle')}</h4>
         {user?.role === 'admin' && (
           <Button variant="ghost" size="sm" className="ml-auto"
-            onClick={() => navigate('/admin/conversation-log?agent=' + agentId)}>
+            onClick={() => navigate(consoleTab('convlog', { agent: agentId }))}>
             {t('apiConfig:openRequestLog')} →
           </Button>
         )}
       </div>
 
-      {/* 桌面四列等宽；窄屏竖排，左侧一条竖线把它们串起来 */}
-      <div className="relative flex flex-col gap-1.5 border-l border-border pl-3
-                      sm:flex-row sm:items-stretch sm:border-l-0 sm:pl-0">
+      {/* 结论链：一行胶囊，命中项描边提亮、跳过项压暗；窄屏自然换行，不重排层级 */}
+      <div className="flex flex-wrap items-center gap-1.5">
         {LEVELS.map((level, i) => {
           const step = byLevel.get(level)
           const hit = step?.status === 'hit'
           const isFail = level === 'fail' && failed
-          const tone = hit ? 'is-live' : isFail ? 'is-fail' : 'opacity-55'
           const clickable = (level === 'bound' || level === 'fail') && !!onGoBind
-          const box = (
+          const tone = hit
+            ? 'border-mint-500/40 bg-mint-500/10'
+            : isFail
+              ? 'border-rose-500/40 bg-rose-500/10'
+              : 'border-border/70 opacity-55'
+          const pill = 'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 ' + tone
+          const body = (
             <>
-              <div className="text-3xs text-textMuted">{title(level)}</div>
-              <div className="text-xs text-textPrimary truncate">
+              <span className="text-3xs text-textMuted">{title(level)}</span>
+              <span className={'text-xs ' + (hit ? 'text-textPrimary' : 'text-textMuted')}>
                 {sub(level, step)}
-              </div>
+              </span>
               {hit && step?.model && (
-                <div className="text-3xs text-textMuted truncate">{step.model}</div>
+                <span className="text-3xs text-textMuted">· {step.model}</span>
               )}
             </>
           )
           return (
             <div key={level} className="contents">
-              {i > 0 && (
-                <div className="hidden sm:flex items-center text-textMuted text-xs shrink-0">›</div>
-              )}
+              {i > 0 && <span className="text-3xs text-textMuted">›</span>}
               {clickable ? (
-                // ui-standard-ignore: 整块可点的结论卡片（.card.card-interactive），不是按钮形态
+                // ui-standard-ignore: 结论胶囊，整块可点，不是标准按钮
                 <button type="button" onClick={onGoBind}
-                  className={'card card-interactive p-2.5 min-w-0 flex-1 text-left ' + tone}>
-                  {box}
+                  className={pill + ' card-interactive text-left'}>
+                  {body}
                 </button>
               ) : (
-                <div className={'card p-2.5 min-w-0 flex-1 ' + tone}>{box}</div>
+                <span className={pill}>{body}</span>
               )}
             </div>
           )

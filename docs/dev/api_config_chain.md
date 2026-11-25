@@ -261,8 +261,14 @@ class User:   default: Config | None
 > 数据来自 GET /agents/{id}/api-chain（与真实请求共用 resolve_llm，显示即实跑）；列表的
 > 「生效中 / 未生效」徽标与设置页的绑定数浮标在 ProviderCards.tsx，绑定数由
 > /user/api-config/providers 的 used_by / used_by_count 一次查出（LLM 与语音两处都算）。
-> 「请求链路 →」只对管理员显示，跳到 /admin/conversation-log?agent=<id> 并定位到该 AI。
+> 「请求链路 →」只对管理员显示，跳到 `/console?tab=convlog&agent=<id>` 并定位到该 AI。
+> **前端路由与后端接口路径不是一回事**：日志接口本来就叫 `/admin/conversation-log`
+> （`LogBrowser` 的 `basePath`），页面地址却是 `/console?tab=convlog`——把接口路径当页面
+> 地址写，就是 2026-11-26 那个 404 的成因。
 > ② 池节点暂不可点：池还没有独立界面，点了会进死链——等池改配置表（0132）时一起做。
+> **日志里的「这一轮用了哪条配置」**：详情头部显示 `配置：AI 绑定（默认）`，来自
+> `ai_conversation_logs.api_meta`（`{source, label, model, base_url}`，迁移 0134）——写它的
+> 是请求时的同一个 `Resolution`，所以日志和 stepper 不可能各说各话（§F5 的结构性保证）。
 
 ### 6.1 三个位置的职责
 
@@ -400,7 +406,7 @@ stepper 回答的是「**现在**用哪条」，一次性的结论。要看「**
 
 | 批次 | 内容 | 进度 |
 |---|---|---|
-| 一 | #3 无 Key 判断（已做）+ #4 展示（stepper / 列表 / 浮标 / 请求链路入口）+ 日志补列 0133 | 一半：#3 与 usable 判定已落地；展示与日志未做 |
+| 一 | #3 无 Key 判断 + #4 展示（stepper / 列表 / 浮标 / 请求链路入口）+ 日志补列 | ✅ 2026-11-26：stepper 与入口（3d7480a7）、日志补列 0134（`ai_conversation_logs.api_meta`，与 stepper 同一个 Resolution 写入） |
 | 二 | 单一解析器 + 删两档裸 Key + 自检 + 三条机械测试 | ✅ 2026-11-25：resolve_llm / resolve_user_llm、test_api_config_contract.py、test_api_config_resolver.py |
 | 三 | 池迁移（0132）+ 清列（0131） | 清列 ✅ 2026-11-25（含补建孤儿 Key 的配置档）；池改表未做 |
 | 四 | #7 模板自纠正（任意自建 / 中转通道的 system 摆放） | ✅ 2026-11-25，见 §11.4 |

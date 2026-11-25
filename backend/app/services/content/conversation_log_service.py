@@ -101,6 +101,7 @@ async def save_conversation_log(
     user_id: int | None = None,
     origin: str = "call",
     state_key: str | None = None,
+    api_meta: dict | None = None,
 ) -> int | None:
     """保存一次完整对话，自动清理超出限制的旧记录
 
@@ -133,6 +134,8 @@ async def save_conversation_log(
             origin=origin,
             # 状态身份在这里算一次存下：裁剪按它分桶、列表按它归堆，都不必回读整份 messages
             state_key=state_key if state_key is not None else state_key_of(state_frame_of(messages)),
+            # 用了哪条配置由请求层给（它才知道 Resolution）；存储层不自作聪明地反推
+            api_meta=api_meta,
         )
         content_repo.add(log)
         await content_repo.flush()
@@ -1104,6 +1107,7 @@ def _log_to_detail(log: ConversationLog) -> dict:
         "state_frame": _state_frame_of_log(log),
         "model": log.model,
         "thinking_enabled": log.thinking_enabled,
+        "api_meta": log.api_meta,
         "created_at": str(log.created_at) if log.created_at else None,
     }
 

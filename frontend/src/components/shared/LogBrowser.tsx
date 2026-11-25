@@ -16,6 +16,31 @@ import { fmtDateTime } from '../../utils/time'
 import RequestBodyViewer, { type RequestBodyViewerApi } from './RequestBodyViewer'
 import OutlineNav, { type OutlineEntry } from './OutlineNav'
 import { RunStatusChip } from './RunStatus'
+
+interface ApiMeta {
+  /** bound | pool | default | none —— 与 API 页签 stepper 的 source 同词表 */
+  source?: string
+  /** 命中的那条配置名（AI 绑定名 / 池 Key 备注 / 用户默认） */
+  label?: string
+  model?: string
+  base_url?: string
+}
+
+/** 这一轮实际用的配置：来源档 + 配置名。后端 api_meta 由请求时的 Resolution 写入，与 stepper 同源 */
+function ApiMetaChip({ meta }: { meta?: ApiMeta | null }) {
+  const t = useT()
+  if (!meta?.source) return null
+  const sourceLabel = meta.source === 'bound' ? t('logs:apiSourceBound')
+    : meta.source === 'pool' ? t('logs:apiSourcePool')
+    : meta.source === 'default' ? t('logs:apiSourceDefault')
+    : t('logs:apiSourceNone')
+  const name = meta.label || meta.model
+  return (
+    <span className="text-3xs text-textMuted truncate" title={meta.base_url || ''}>
+      {t('logs:apiConfig')}：{sourceLabel}{name ? `（${name}）` : ''}
+    </span>
+  )
+}
 import {
   StateChip, SwitchChip, groupByState, isSwitchRow, logStateOf, stateKeyOf,
   type LogStateFrame,
@@ -325,6 +350,7 @@ export default function LogBrowser({ agentId, basePath = '/conversation-log', ex
             <div data-export-stick-head className="flex items-center gap-2 py-1 sticky top-0 z-20 bg-surface">
               <span className="text-3xs font-mono text-textMuted">#{currentId}</span>
               <SwitchChip origin={detail?.origin} />
+              <ApiMetaChip meta={detail?.api_meta} />
               {exportLog && (
                 <>
                   <button

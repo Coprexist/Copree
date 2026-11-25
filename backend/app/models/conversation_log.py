@@ -77,4 +77,8 @@ class ConversationLog(Base):
     origin = Column(String(16), nullable=False, server_default="call", default="call",
                     comment="call = 一次模型调用；switch = 离开状态帧时落的那一段")
 
+    # 本轮实际用的配置：{source, label, model, base_url}。写入方是请求时的同一个 Resolution
+    # （与 API 页签的 stepper 同源），排障时不必再靠 model 猜走的是绑定还是池。
+    api_meta = Column(json_column(), nullable=True)
+
     created_at = Column(DateTime, server_default=func.now(), index=True)
