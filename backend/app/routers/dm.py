@@ -555,7 +555,10 @@ async def _maybe_trigger_dm_ai_reply(
 
     # ── 忙时中断注入：AI 正在执行，直接注入当前 tool loop ──
     from app.ai.executor import add_pending_interrupt, is_agent_running
-    if await is_agent_running(agent.id):
+    # 必须按会话问「这个会话忙吗」：不带会话时，AI 在别的群/私信里跑一轮也会被当成忙，
+    # 消息只进中断缓冲、不排本轮——而兜底重排只在这个会话自己跑完时才触发，结果是这条
+    # 消息一直等下一次有人在这个会话说话（表现为「中途发的消息她没看到」）。
+    if await is_agent_running(agent.id, ("dm", session_id)):
         await add_pending_interrupt(agent.id, {
             "type": "user_message",
             "content": msg["content"],

@@ -976,7 +976,9 @@ async def _maybe_trigger_ai_reply(
     # 等本会话下一轮再投出去——绝不拼进别的会话的上下文里，见 executor.conversation_of）
     # 必须排在限流之前：注入不调用 LLM，却会占掉限流槽位；被注入的消息会在轮末原地重排
     # （_requeue_leftover_interrupts），重排那一轮立刻到达，占过槽位就只剩「跳过」一条路。
-    if await is_agent_running(agent.id):
+    # 按会话问「这个群忙吗」：不带会话会把「AI 在别的群跑」也当成忙——消息进缓冲后
+    # 兜底重排只在这个群自己跑完时才触发，那条消息就要等到下次有人在这个群说话
+    if await is_agent_running(agent.id, ("group", group_id)):
         await add_pending_interrupt(agent.id, {
             "type": "user_message",
             "content": content,
@@ -1292,7 +1294,7 @@ async def _trigger_dm_ai_reply(
     # 顺序要紧：忙时注入这条路径不会调用 LLM，却会占掉限流槽位；消息注入后会在当前这一轮
     # 结束时被重排成单独一轮（_requeue_leftover_dm_interrupts），那一轮往往在同一毫秒内到达，
     # 于是被判成刷屏直接丢掉——表现出来就是「给 AI 发了私信，它永远不回」。
-    if await is_agent_running(agent_id):
+    if await is_agent_running(agent_id, ("dm", session_id)):
         await add_pending_interrupt(agent_id, {
             "type": "user_message",
             "content": content,
