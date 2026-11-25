@@ -155,6 +155,16 @@ import { Slider, SliderField } from '../components/ui'
 
 徽标色：`chip-primary` 紫 · `chip-mint` 绿 · `chip-accent` 琥珀 · `chip-rose` 危险 · `chip-muted` 中性。
 
+悬浮说明（tooltip）全站只有一个实现：`HelpTip`（portal 到 body、量触发点定位、样式走 `MenuPanel`）。
+不要用 `title` 属性（移动端不显示、长句被截成一行），也不要手写气泡——它挂在 `AutoHeight`
+或对话框这类 `overflow-hidden` 的父级里会被裁成一条边。
+
+- 说明类内容：`HelpTip` 内部已固定 `p-2.5 text-3xs leading-relaxed text-textSecondary`，调用方不要再传排版；
+- 角标/图标上的说明（如已存 Key 的那把小钥匙 `KeyMark`）：`openOn="both"`（悬停 150ms + 点击）——
+  鼠标停上去的人不会先点一下；
+- 要能点的列表（选一项、跳一条）：`MenuPanel` + `MenuItem`，定位交给调用方，但同样必须 portal 到 body。
+- 闸门：源码里出现 `role="tooltip"` 即红（`node scripts/check-ui.mjs`）。
+
 ---
 
 ## 4. 组件（写页面时优先用）

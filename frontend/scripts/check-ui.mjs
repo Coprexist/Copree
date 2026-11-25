@@ -58,6 +58,12 @@ const CLASS_RE = new RegExp('className=\\{?(["\'' + String.fromCharCode(96) + ']
 
 function scan(path) {
   const src = readFileSync(path, 'utf8')
+  // 悬浮说明只有 HelpTip 一个实现：手写气泡挂在 AutoHeight / 对话框里会被 overflow-hidden 裁掉
+  if (src.includes('role="tooltip"')) {
+    const tipIndex = src.indexOf('role="tooltip"')
+    const tipLine = src.slice(0, tipIndex).split('\n').length
+    problems.push([path, tipLine, '悬浮说明改用 HelpTip（portal + MenuPanel），不要手写 role="tooltip" 气泡'])
+  }
   const startLines = src.split('\n')
   TAG_RE.lastIndex = 0
   let m
