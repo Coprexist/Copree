@@ -876,6 +876,10 @@ async def _tool_call_loop(
         logger.warning(f"调用前空闲压缩跳过（非致命）: {e}")
 
     loop_idx = 0
+    # 一轮可能一步都没跑就退出（帧预算用满、步数账借不到），而收尾要用 response 里的
+    # reasoning_content。不预置就会在循环耗尽那条路上 UnboundLocalError——整轮异常、
+    # 对方一条回复都收不到（2026-11-25 10:29 的线上现象就是它）。
+    response: dict = {}
     try:
         while loop_idx < max_loops + _reminder_extra + _closing_extra:
             # 帧预算：小时 / 天的调用次数用满了就停，别把剩下的次数烧在已经没额度的帧里
