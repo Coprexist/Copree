@@ -74,7 +74,7 @@ async def test_body_prompt_change_notifies_and_only_unlock_applies_it(migrated_d
         second = await _msgs(db)
         assert await _versions(db, "agent-prompt-1") == [1, 2], "改了要写新版本"
         assert "回答前先想一步" in second[0]["content"], "锁定态前缀仍是旧人格"
-        notice = [m["content"] for m in second if "能力变更通知" in (m.get("content") or "")]
+        notice = [m["content"] for m in second if (m.get("content") or "").startswith("【能力变更通知")]
         assert notice and "回答前先想两步再开口" in notice[0], notice
         assert "- 回答前先想一步。" in notice[0] and "+ 回答前先想两步再开口。" in notice[0], notice[0]
 
@@ -112,7 +112,7 @@ async def test_per_user_override_gets_its_own_source(migrated_db):
         second = await _msgs(db, system_prompt_override="你是乙，只跟乙说话，且先报时间。", prompt_owner=7)
         assert await _versions(db, "agent-prompt-1-u7") == [1, 2]
         assert "只跟乙说话。" in second[0]["content"], "锁定态仍是旧覆盖"
-        notice = [m["content"] for m in second if "能力变更通知" in (m.get("content") or "")]
+        notice = [m["content"] for m in second if (m.get("content") or "").startswith("【能力变更通知")]
         assert notice and "用户7的覆盖" in notice[0], notice
 
 

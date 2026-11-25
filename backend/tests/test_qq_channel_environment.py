@@ -1,5 +1,4 @@
 """QQ 插件接入环境接口：只读内存（零新增网络往返），事实不再由 brief 重复第二遍。"""
-import importlib.util
 import time
 from pathlib import Path
 
@@ -14,12 +13,12 @@ _MOD = None
 
 
 def _module():
+    """按包加载插件（不是按路径 exec 一个文件）：plugin.py 里有 `from .common import …`，
+    没有父包就 import 不了。packages.load 是生产用的同一套加载器。"""
     global _MOD
     if _MOD is None:
-        spec = importlib.util.spec_from_file_location("qq_channel_env_probe", PLUGIN_PATH)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        _MOD = mod
+        from app.services.plugin import packages
+        _MOD = packages.load("qq-channel", PLUGIN_PATH.parent)
     return _MOD
 
 

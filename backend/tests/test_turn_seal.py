@@ -12,7 +12,10 @@ pytestmark = pytest.mark.anyio
 async def _seed(db):
     from db_reset import clear
 
-    await clear(db, "agents", "users", "messages", "groups", "group_members")
+    # agent_experiences 也要清：封存会往它写一行，前面用例留下的行会让
+    # `select(AgentExperience)).scalars().one()` 变成多行——单跑绿、全量红就是这个
+    await clear(db, "agent_experiences", "agent_history_entries",
+                "agents", "users", "messages", "groups", "group_members")
     await db.execute(text(
         "INSERT INTO users (id, username, password_hash, type) VALUES "
         "(1, '测试用户', 'x', 'human'), (2, '测试AI账号', 'x', 'ai')"

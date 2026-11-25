@@ -50,9 +50,9 @@ class AgentExperience(Base):
     summary = Column(Text, nullable=False, comment="一行：场景 + 干了什么（≤400 字）")
     tools = Column(Text, nullable=False, default="", comment="当轮工具总账（可选）")
     refs = Column(json_column(), default=dict, comment="关联：消息 id 范围 / 帧 id")
-    started_at = Column(DateTime(timezone=True), nullable=True, comment="这一场的起点")
-    ended_at = Column(DateTime(timezone=True), server_default=func.now(), comment="写下这一行的时间")
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    started_at = Column(DateTime, nullable=True, comment="这一场的起点（UTC，无时区）")
+    ended_at = Column(DateTime, server_default=func.now(), comment="写下这一行的时间（UTC，无时区）")
+    created_at = Column(DateTime, server_default=func.now())
 
     __table_args__ = (
         # 切场景时按 scene_key 取最新几行；也用于判断「这一场有没有写过」

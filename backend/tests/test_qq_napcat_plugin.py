@@ -473,11 +473,11 @@ async def test_multi_instance_one_channel_per_ai(migrated_db):
         assert a is not None and b is not None, "每个 AI 一条通道没有被建起来"
         assert a.multi_instance is True and b.multi_instance is True
         a_cfg, b_cfg = await a.config(), await b.config()
-        # 平台托管协议端时地址由平台给（客户端传什么都不算）；没托管才用各自传的值。
-        # 真正"每个实例各自一份"的是落点与目标 AI —— 这两项必须互不串。
-        hosted_ws = os.environ.get("NAPCAT_WS_URL", "").strip()
-        assert a_cfg["ws_url"] == (hosted_ws or "ws://ai-a.invalid:3000"), a_cfg
-        assert b_cfg["ws_url"] == (hosted_ws or "ws://ai-b.invalid:3000"), b_cfg
+        # 每个实例各存一份配置：地址、落点、目标 AI 都不串。
+        # 部署方预置的 NAPCAT_WS_URL 只是 config_schema 的缺省值（没配才用），
+        # 配了就以实例自己的为准——否则多实例共用同一个协议端会串号。
+        assert a_cfg["ws_url"] == "ws://ai-a.invalid:3000", a_cfg
+        assert b_cfg["ws_url"] == "ws://ai-b.invalid:3000", b_cfg
         assert a_cfg["copree_group_id"] == "11" and b_cfg["copree_group_id"] == "12"
         assert PluginRegistry.keys_of("qq-napcat") == ["qq-napcat:agent-11", "qq-napcat:agent-12"]
 
