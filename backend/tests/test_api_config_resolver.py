@@ -1,7 +1,8 @@
 """配置解析的三档链 —— 守四条：
 
 1. **整条命中**：一档要么整套（地址 + Key + 模型）命中，要么整条跳过，没有跨档拼接；
-2. **顺序固定**：① 绑定 → ② 池 → ③ 用户默认（池在默认之前，prefer_own_key 已删除）；
+2. **两套顺序**：默认按额度（① 绑定 → ② 池 → ③ 用户默认）；用户开「优先使用本人配置」
+   时改为 ① 绑定 → ② 用户默认 → ③ 池兜底（AI 绑定始终第一）；
 3. **不兜底**：三档都没命中就是失败，不再拿 settings.deepseek_base_url 假装配好了；
 4. **本地模型不需要 Key**：判定按「这条通道需不需要 Key」，不是「有没有 Key」。
 """
@@ -53,11 +54,21 @@ def test_same_provider_by_host():
     assert not same_provider(None, DEEPSEEK)
 
 
-def test_bound_hits_first_and_is_whole_package():
-    """① 命中就不再往下看：池里有额度也不用"""
+def test_pool_hits_first_by_default():
+    """默认按额度：池有额度就用池，即使这个 AI 绑定了自己的配置（用户 2026-11-25）"""
+    out = resolve(bound=_cand(LEVEL_BOUND, base_url=QWEN, api_key="profile-key"),
+                  pool=_cand(LEVEL_POOL, api_key="pool-key"),
+                  default=_cand(LEVEL_DEFAULT, api_key="user-key"))
+    assert out.source == LEVEL_POOL
+    assert [s.level for s in out.chain] == [LEVEL_POOL], "池命中就不再往下看"
+    assert [s.status for s in out.chain] == ["hit"]
+
+
+def test_bound_is_a_whole_package_when_pool_misses():
+    """池没额度 → 落到 AI 绑定，且整条命中（地址/Key/模型一起取，不跨档拼）"""
     out = resolve(bound=_cand(LEVEL_BOUND, base_url=QWEN, api_key="profile-key",
                               chat_model="qwen3-max", work_model=None),
-                  pool=_cand(LEVEL_POOL, api_key="pool-key"),
+                  pool=_cand(LEVEL_POOL, REASON_NO_QUOTA),
                   default=_cand(LEVEL_DEFAULT, api_key="user-key"))
     assert out.source == LEVEL_BOUND
     assert out.credit_source == "profile"
@@ -66,20 +77,6 @@ def test_bound_hits_first_and_is_whole_package():
     assert out.chat_model == "qwen3-max"
     # 副型号没填 → 厂商默认，不往下一档借
     assert out.work_model == "w"
-    assert [s.status for s in out.chain] == ["hit"]
-
-
-def test_pool_comes_before_default():
-    out = resolve(bound=_cand(LEVEL_BOUND, REASON_NO_BIND),
-                  pool=_cand(LEVEL_POOL, api_key="pool-key", pool_key_id=7),
-                  default=_cand(LEVEL_DEFAULT, api_key="user-key"))
-    assert out.source == LEVEL_POOL
-    assert out.credit_source == "pool_key"
-    assert out.pool_key_id == 7
-    assert out.api_key == "pool-key"
-    # ①② 两步都记进 chain：跳过的那步要能说出原因
-    assert [s.level for s in out.chain] == [LEVEL_BOUND, LEVEL_POOL]
-    assert out.chain[0].reason == REASON_NO_BIND
 
 
 def test_default_is_the_last_resort():
@@ -88,7 +85,7 @@ def test_default_is_the_last_resort():
                   default=_cand(LEVEL_DEFAULT, api_key="user-key"))
     assert out.source == LEVEL_DEFAULT
     assert out.credit_source == "user_key"
-    assert out.chain[1].reason == REASON_NO_QUOTA
+    assert out.chain[0].reason == REASON_NO_QUOTA
 
 
 def test_no_tier_hit_is_a_failure_not_a_fake_default():
@@ -142,12 +139,35 @@ def test_bad_key_skips_and_records_the_source():
 
 
 def test_own_key_only_mode_skips_pool():
-    """force_own_key（私信「只用自己的」）→ ② 记录为 own_key_only，不查池"""
+    """force_own_key（私信「只用自己的」）→ 池那一步记为 own_key_only，不查池"""
     out = resolve(bound=_cand(LEVEL_BOUND, REASON_NO_BIND),
                   pool=_cand(LEVEL_POOL, REASON_OWN_KEY_ONLY),
                   default=_cand(LEVEL_DEFAULT, api_key="user-key"))
     assert out.source == LEVEL_DEFAULT
-    assert out.chain[1].reason == REASON_OWN_KEY_ONLY
+    assert out.chain[0].reason == REASON_OWN_KEY_ONLY
+
+
+def test_prefer_own_config_moves_user_default_before_pool():
+    """「优先使用本人配置」= 用户默认档排在池之前；关闭时池优先（按额度）"""
+    bound = _cand(LEVEL_BOUND, REASON_NO_BIND)
+    pool = _cand(LEVEL_POOL)
+    default = _cand(LEVEL_DEFAULT, api_key="user-key")
+
+    by_credit = resolve(bound=bound, pool=pool, default=default)
+    assert by_credit.source == LEVEL_POOL, "默认按额度：有池额度先用池"
+
+    own_first = resolve(bound=bound, pool=pool, default=default, prefer_own=True)
+    assert own_first.source == LEVEL_DEFAULT, "开启后本人配置优先"
+    assert [s.level for s in own_first.chain][:2] == [LEVEL_BOUND, LEVEL_DEFAULT]
+
+
+def test_prefer_own_config_still_uses_pool_as_fallback():
+    """本人配置不可用（没配默认档）时，池仍是兜底"""
+    out = resolve(bound=_cand(LEVEL_BOUND, REASON_NO_BIND),
+                  pool=_cand(LEVEL_POOL),
+                  default=_cand(LEVEL_DEFAULT, REASON_NO_DEFAULT),
+                  prefer_own=True)
+    assert out.source == LEVEL_POOL
 
 
 def test_profile_key_falls_back_only_within_its_provider():

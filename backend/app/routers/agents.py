@@ -233,6 +233,15 @@ async def create_new_agent(
     不再新建。并发（双击、手机 + 电脑同时点）由草稿行的原子占用裁决——谁抢到谁赢，
     输的那次把自己刚建的这个撤掉、返回赢家。没带 draft_id 的老调用保持原样。
     """
+    # 包断额度：功能暂时关闭（2026-11-25 排查发现它从没真正生效——创建不扣、
+    # 删除返回到 api_credit、charge 也不认包断）。在补齐之前先不接受新包断，
+    # 免得用户付了钱却按普通 AI 扣额度。存量包断 AI 的编辑不受影响。
+    if req.api_credit_cost:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "包断额度功能暂未开放，请把包断额度设为 0",
+        )
+
     draft = None
     if req.draft_id is not None:
         draft = await creator.get_draft_for_update(db, current_user["user_id"], req.draft_id)

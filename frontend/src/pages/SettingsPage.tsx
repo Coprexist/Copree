@@ -504,7 +504,7 @@ export default function SettingsPage() {
           <ApiConfigSection kind="llm" />
           <ApiConfigSection kind="voice" />
 
-          {/* 优先使用本人 API Key 开关 */}
+          {/* 优先使用本人配置开关（关 = 按额度：有池额度先用池） */}
           <div className="flex items-center justify-between py-3 border-t border-border mt-3">
             <div className="flex-1">
               <span className="text-sm font-medium text-textPrimary">{t('settings:preferOwnKey')}</span>

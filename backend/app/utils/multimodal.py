@@ -27,6 +27,9 @@ MAX_IMAGE_BYTES = 4 * 1024 * 1024  # 单图上限，与模型侧限制对齐
 # 图片不再按「张数」限制——那是 base64 时代的拍脑袋数；现在按单条消息的字数上限判定，
 # 一张图 = 276~1536 字（见 utils/pure/image_tokens.py）。
 IMAGE_CHARS_PER_TOKEN = 1.5
+# 图片折算进字数预算时**打五折**（用户 2026-11-25：图片不是文字，不能按全价占正文额度）。
+# 一张 1024×1024 的图：652 token × 1.5 × 0.5 ≈ 489 字（不是 978）。
+IMAGE_BUDGET_WEIGHT = 0.5
 # 图片的额外字数余量：0 = 图片与正文**共用**同一个字数上限（用户 2026-11-25 的口径：
 # 上限本身就提到 3840 了，不再单独给图片开口子）。
 IMAGE_CHAR_HEADROOM = 0
@@ -117,28 +120,30 @@ def image_display_chars(att: dict, data_dir: str, provider: str = "other") -> in
     size = image_pixel_size(att, data_dir)
     if not size:
         return 0
-    return int(estimate_image_tokens(*size, provider) * IMAGE_CHARS_PER_TOKEN)
+    return int(estimate_image_tokens(*size, provider) * IMAGE_CHARS_PER_TOKEN * IMAGE_BUDGET_WEIGHT)
 
 
 def select_images_for_budget(
     images: list[dict], data_dir: str, budget_chars: int | None, provider: str = "other",
 ) -> list[dict]:
-    """按字数预算选图：从**最新**往后累加，超出预算的图降级成占位。
+    """按字数预算选图：**从第一张往后**保留，超预算就停（同一条消息里先发的更重要）。
+
+    用户 2026-11-25 纠正过顺序：同一条消息带多张图时保留的是**第一张**；
+    跨消息的"最近一条优先"由调用方倒序处理（见 llm._attach_attachments_to_message 的调用处）。
 
     budget_chars 为 None = 不限制（没有字数上限判定的路径，比如世界对话）。
-    至少保留最新的一张：一张都不给等于这次消息的图彻底丢了，而超支一张最多也就 1536 字。
+    第一张无条件保留：一张都不给等于这次消息的图彻底丢了，而超支一张最多也就千把字。
     """
     if budget_chars is None:
         return list(images)
     selected: list[dict] = []
     used = 0
-    for att in reversed(images):
+    for att in images:
         cost = image_display_chars(att, data_dir, provider)
         if selected and used + cost > budget_chars:
-            continue
+            break
         selected.append(att)
         used += cost
-    selected.reverse()
     return selected
 
 

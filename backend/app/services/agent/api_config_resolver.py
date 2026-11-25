@@ -183,15 +183,23 @@ def _resolution(candidate: Candidate, chain: list[ChainStep],
     )
 
 
-def resolve(*, bound: Candidate, pool: Candidate, default: Candidate) -> Resolution:
-    """纯判断：按 ① → ② → ③ 取第一个命中，没命中就是 ④ 失败
+def resolve(*, bound: Candidate, pool: Candidate, default: Candidate,
+            prefer_own: bool = False) -> Resolution:
+    """纯判断：按顺序取第一个命中，没命中就是 ④ 失败
 
-    顺序固定（池在用户默认之前）。旧开关 prefer_own_key 的「打开」就是这个顺序，
-    已被用户的意图取代 —— 不再保留一个能改变优先级的开关。
+    两套顺序，由用户的「优先使用本人配置」决定：
+    - 关（默认）= **按额度**：① 平台池 → ② AI 绑定 → ③ 用户默认。
+      池那一步自带额度判断（credit > 0），清零时自然跳过，不用每次先撞一次 402；
+    - 开 = **优先本人配置**：① AI 绑定 → ② 用户默认 → ③ 池兜底。
+
+    顺序由用户 2026-11-25 拍定：平台送的那份额度先用，用完再用自己的。
+    语义从旧的「优先使用本人 API Key」改成「优先使用本人配置」——现在是一整条配置档
+    （地址 + Key + 模型 + 能力），不再是单个 Key。
     """
     chain: list[ChainStep] = []
     failures = tuple(f for c in (bound, pool, default) for f in c.decrypt_failures)
-    for candidate in (bound, pool, default):
+    order = (bound, default, pool) if prefer_own else (pool, bound, default)
+    for candidate in order:
         chain.append(ChainStep(
             level=candidate.level,
             status=STATUS_HIT if candidate.hit else STATUS_SKIP,
@@ -393,6 +401,8 @@ async def resolve_llm(
 
     bill_user_id = bill_to or _owner_of(agent)
     user = await db.get(User, bill_user_id) if bill_user_id else None
+    # 账单人的「优先使用本人配置」：关 = 按额度（池优先），开 = 本人配置优先、池兜底
+    prefer_own = bool(getattr(user, "prefer_own_key", False)) if user is not None else False
 
     # ① AI 绑定的配置
     if LEVEL_BOUND in exclude:
@@ -426,7 +436,7 @@ async def resolve_llm(
         else:
             default = _profile_candidate(LEVEL_DEFAULT, profile, provider)
 
-    resolution = resolve(bound=bound, pool=pool, default=default)
+    resolution = resolve(bound=bound, pool=pool, default=default, prefer_own=prefer_own)
     if not resolution.usable:
         logger.info(
             "AI %s(%s) 没有可用 API 配置：%s",

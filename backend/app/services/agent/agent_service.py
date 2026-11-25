@@ -953,7 +953,12 @@ async def update_agent_config(
 
     # 每条回复的额度成本 / 暂停开关（设置面板会一起提交）
     if "api_credit_cost" in updates and updates["api_credit_cost"] is not None:
-        agent.api_credit_cost = int(updates["api_credit_cost"])
+        new_cost = int(updates["api_credit_cost"])
+        # 包断额度功能暂时关闭（2026-11-25）：只允许保持原值——存量 AI 的编辑会原样提交，
+        # 不让它报错；真要改成新值就明确拒绝，免得"设了钱却没生效"。
+        if new_cost != int(agent.api_credit_cost or 0):
+            raise ValueError("包断额度功能暂未开放，暂时不能修改")
+        agent.api_credit_cost = new_cost
     if "is_paused" in updates and updates["is_paused"] is not None:
         agent.is_paused = bool(updates["is_paused"])
 

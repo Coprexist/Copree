@@ -191,8 +191,8 @@ export const settingsZh: TranslationDict = {
   'modelPlaceholderChat': '例如：mimo-v2.6-flash',
   'modelPlaceholderWork': '例如：mimo-v2.6-pro',
   'emptyUsesGlobalDefault': '留空则使用系统全局默认',
-  'preferOwnKey': '优先使用本人 API Key',
-  'preferOwnKeyDesc': '开启后优先使用自己的 API Key，再尝试系统额度',
+  'preferOwnKey': '优先使用本人配置',
+  'preferOwnKeyDesc': '开启后先用自己的配置档（地址、Key、模型），再走平台池；关闭时按额度优先——有池额度先用池，清零自动用你自己的',
   'providerPreset': '厂商预设',
 }
 
@@ -378,8 +378,8 @@ export const settingsEn: TranslationDict = {
   'modelPlaceholderChat': 'e.g. mimo-v2.6-flash',
   'modelPlaceholderWork': 'e.g. mimo-v2.6-pro',
   'emptyUsesGlobalDefault': 'Leave empty to use the system default',
-  'preferOwnKey': 'Prefer my own API Key',
-  'preferOwnKeyDesc': 'When on, your own API Key is used first, then platform credit',
+  'preferOwnKey': 'Prefer my own configuration',
+  'preferOwnKeyDesc': 'When on, your own API profile (endpoint, key, model) is used first, then the platform pool; when off, quota comes first',
   'providerPreset': 'Provider presets',
 }
 
@@ -565,7 +565,7 @@ export const settingsJa: TranslationDict = {
   'modelPlaceholderChat': '例：mimo-v2.6-flash',
   'modelPlaceholderWork': '例：mimo-v2.6-pro',
   'emptyUsesGlobalDefault': '空欄の場合はシステム既定を使用',
-  'preferOwnKey': '自分の API Key を優先',
-  'preferOwnKeyDesc': 'オンの場合、自分の API Key を先に使い、次にシステム枠を使用します',
+  'preferOwnKey': '自分の設定を優先',
+  'preferOwnKeyDesc': 'オンの場合、自分の API 設定（URL・Key・モデル）を先に使い、その後にプラットフォームのプールを使用します。オフの場合は枠が優先です',
   'providerPreset': 'プロバイダープリセット',
 }

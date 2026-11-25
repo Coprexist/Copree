@@ -1,5 +1,7 @@
 """设置面板提交的字段要真的落到 agent 上（AI 类型 / 可自改 / 可发现 / 额度成本 / 暂停）
 
+额度成本（包断）自 2026-11-25 起暂时关闭：只允许保持原值提交，改成别的值要明确拒绝。
+
 来源：设置弹窗把这些字段塞进 PUT /agents/{id}/config，但请求 schema 里没有它们 ——
 Pydantic 默认丢弃未知字段，于是界面上"改了保存了"，库里一点没变。
 """
@@ -38,7 +40,8 @@ async def test_settings_panel_fields_reach_the_agent(migrated_db):
             "ai_type": "resonance",
             "is_ai_editable": True,
             "discoverable": False,
-            "api_credit_cost": 3,
+            # 包断暂时关闭：原值（0）照常提交，不能被这次"整包提交"误伤
+            "api_credit_cost": 0,
             "is_paused": True,
         }, is_admin=True)
         await db.commit()
@@ -47,8 +50,20 @@ async def test_settings_panel_fields_reach_the_agent(migrated_db):
     assert agent.ai_type == "resonance"
     assert agent.is_ai_editable is True
     assert agent.discoverable is False
-    assert agent.api_credit_cost == 3
+    assert agent.api_credit_cost == 0
     assert agent.is_paused is True
+
+
+async def test_bundle_credit_cannot_be_changed_while_disabled(migrated_db):
+    """包断功能关闭期间，改额度成本要被拒绝（存量 AI 保持原值不受影响）"""
+    from app.database import async_session
+    from app.services.agent.agent_service import update_agent_config
+
+    async with async_session() as db:
+        await _seed(db)
+        with pytest.raises(ValueError, match="包断额度"):
+            await update_agent_config(db, AGENT_ID, OWNER, {"api_credit_cost": 5},
+                                      is_admin=True)
 
 
 async def test_unknown_ai_type_is_rejected(migrated_db):

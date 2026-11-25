@@ -71,18 +71,21 @@ def test_provider_branches_share_one_entry():
     assert estimate_image_tokens(1080, 1920, "openai") == 2125
 
 
-async def test_budget_keeps_newest_images_first():
-    """预算放不下全部时：从**最新**往回保留，旧的降级成 [图片]。"""
-    with tempfile.TemporaryDirectory() as data_dir:
-        old = _write_png(data_dir, "attachments/old.png", 1024, 1024)   # 652 token ≈ 978 字
-        new = _write_png(data_dir, "attachments/new.png", 1024, 1024)
-        # 预算只够一张：旧的被丢
-        kept = select_images_for_budget([old, new], data_dir, 1000, "deepseek")
-        assert kept == [new]
+async def test_budget_keeps_the_first_image_in_a_message():
+    """同一条消息多图：保留**第一张**（用户 2026-11-25 的口径），后面的降级成 [图片]。
 
-        # 预算够两张：都给，且保持原顺序
-        kept2 = select_images_for_budget([old, new], data_dir, 3000, "deepseek")
-        assert kept2 == [old, new]
+    跨消息的"最近一条优先"由调用方倒序处理，不在这个纯函数里。
+    """
+    with tempfile.TemporaryDirectory() as data_dir:
+        first = _write_png(data_dir, "attachments/first.png", 1024, 1024)   # 652 token × 1.5 × 0.5 ≈ 489 字
+        second = _write_png(data_dir, "attachments/second.png", 1024, 1024)
+        # 预算只够一张：第一张留下，第二张被砍
+        kept = select_images_for_budget([first, second], data_dir, 600, "deepseek")
+        assert kept == [first]
+
+        # 预算够两张：按原顺序都给
+        kept2 = select_images_for_budget([first, second], data_dir, 2000, "deepseek")
+        assert kept2 == [first, second]
 
 
 async def test_budget_none_means_unlimited():
@@ -93,18 +96,19 @@ async def test_budget_none_means_unlimited():
 
 
 async def test_budget_always_keeps_at_least_one():
-    """预算为 0 也至少给最新一张：一张都不给等于这次消息的图彻底丢了。"""
+    """预算为 0 也至少给第一张：一张都不给等于这次消息的图彻底丢了。"""
     with tempfile.TemporaryDirectory() as data_dir:
-        old = _write_png(data_dir, "attachments/old.png", 1024, 1024)
-        new = _write_png(data_dir, "attachments/new.png", 1024, 1024)
-        assert select_images_for_budget([old, new], data_dir, 0, "deepseek") == [new]
+        first = _write_png(data_dir, "attachments/first.png", 1024, 1024)
+        second = _write_png(data_dir, "attachments/second.png", 1024, 1024)
+        assert select_images_for_budget([first, second], data_dir, 0, "deepseek") == [first]
 
 
-async def test_image_display_chars_uses_provider_branch():
+async def test_image_display_chars_uses_provider_branch_and_half_weight():
+    """图片按**五折**计入字数预算：图片不是文字，不该按全价挤占正文额度。"""
     with tempfile.TemporaryDirectory() as data_dir:
         att = _write_png(data_dir, "attachments/a.png", 1080, 1920)
-        assert image_display_chars(att, data_dir, "deepseek") == int(986 * 1.5)
-        assert image_display_chars(att, data_dir, "other") == int(1024 * 1.5)
+        assert image_display_chars(att, data_dir, "deepseek") == int(986 * 1.5 * 0.5)
+        assert image_display_chars(att, data_dir, "other") == int(1024 * 1.5 * 0.5)
 
 
 async def test_missing_file_costs_nothing():

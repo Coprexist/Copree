@@ -1793,7 +1793,8 @@ async def build_messages(
                 db, turn_user_slots, MessageModel, last_user_idx, last_user_orm,
             )
             _n_img = 0
-            for _idx, _orm in image_msgs:
+            # 最近的带图消息先拿额度（同一条消息内保留第一张，由 select_images_for_budget 保证）
+            for _idx, _orm in reversed(image_msgs):
                 _n_img += await _attach_attachments_to_message(
                     db, messages, _idx, _orm, settings.data_dir,
                     agent_id=agent.id, context_ref=session_ref,
@@ -2142,7 +2143,7 @@ async def build_dm_messages(
     image_msgs = await _turn_image_messages(
         db, turn_user_slots, DMMessageModel, last_user_idx, last_user_orm)
     _n_img = 0
-    for _idx, _orm in image_msgs:
+    for _idx, _orm in reversed(image_msgs):
         _n_img += await _attach_attachments_to_message(
             db, messages, _idx, _orm, settings.data_dir,
             agent_id=agent.id, context_ref=_context_ref(session_id=session_id),
