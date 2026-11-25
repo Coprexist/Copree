@@ -7,7 +7,8 @@
  * 抽成一个组件而不是写两遍：卡片头、折叠、⋯ 菜单这些一处改就行了，
  * 两处各写一份迟早漂成两种长相。
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { Check, ChevronDown, MoreHorizontal, Plus } from 'lucide-react'
 import { api, errorText } from '../../api/client'
@@ -77,17 +78,44 @@ function RowMenu({
   )
 }
 
-/** 「几个 AI 绑着这条配置」：点开列名字，点了跳那个 AI 的详情（反向索引，静态） */
+/**
+ * 「几个 AI 绑着这条配置」：点开列名字，点了跳那个 AI 的详情（反向索引，静态）。
+ *
+ * 面板必须 portal 到 body：它挂在 AutoHeight 里面，而 AutoHeight 外层是 overflow-hidden
+ * （折叠动画要用），行内 absolute 会被裁成一条边——HelpTip 用的是同一套做法：
+ * fixed 定位 + 量触发点、样式仍走 MenuPanel。
+ */
 function UsageMenu({ profile }: { profile: ApiProfile }) {
   const t = useT()
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState({ left: 0, top: 0, ready: false })
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+
+  useLayoutEffect(() => {
+    if (!open || !btnRef.current) return
+    const anchor = btnRef.current.getBoundingClientRect()
+    const width = Math.min(208, window.innerWidth - 16)
+    const height = panelRef.current?.offsetHeight ?? 0
+    const below = window.innerHeight - anchor.bottom
+    // 下面放不下就翻到上面；两边都放不下时贴着下沿
+    const top = below < height + 12 && anchor.top > height + 12
+      ? anchor.top - height - 6
+      : Math.min(anchor.bottom + 6, window.innerHeight - height - 8)
+    setPos({
+      left: Math.max(8, Math.min(anchor.right - width, window.innerWidth - width - 8)),
+      top,
+      ready: true,
+    })
+  }, [open])
 
   useEffect(() => {
     if (!open) return
     const onDoc = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      const target = e.target as Node
+      if (panelRef.current?.contains(target) || btnRef.current?.contains(target)) return
+      setOpen(false)
     }
     document.addEventListener('mousedown', onDoc)
     return () => document.removeEventListener('mousedown', onDoc)
@@ -96,24 +124,33 @@ function UsageMenu({ profile }: { profile: ApiProfile }) {
   if (!profile.used_by_count) return null
   const users = profile.used_by || []
   return (
-    <div className="relative shrink-0" ref={ref}>
-      <button type="button" aria-label={t('apiConfig:usageCount')}
-        onClick={() => setOpen((v) => !v)}>
+    <>
+      <button ref={btnRef} type="button" aria-label={t('apiConfig:usageCount')}
+        aria-expanded={open}
+        onClick={() => { setPos({ left: 0, top: 0, ready: false }); setOpen((v) => !v) }}>
         <Badge tone="muted">{profile.used_by_count}</Badge>
       </button>
-      {open && (
-        <MenuPanel className="absolute right-0 top-full mt-1 z-50 min-w-[10rem] py-1">
-          {users.length === 0 ? (
-            <div className="px-2 py-1 text-3xs text-textMuted">{t('apiConfig:usageEmpty')}</div>
-          ) : users.map((a) => (
-            <MenuItem key={a.id}
-              onClick={() => { setOpen(false); navigate('/agents/' + a.id) }}>
-              {a.name}
-            </MenuItem>
-          ))}
-        </MenuPanel>
+      {open && createPortal(
+        <div ref={panelRef}
+          style={{
+            position: 'fixed', left: pos.left, top: pos.top,
+            width: 208, visibility: pos.ready ? 'visible' : 'hidden',
+          }}
+          className="z-modal">
+          <MenuPanel className="py-1">
+            {users.length === 0 ? (
+              <div className="px-3 py-1.5 text-3xs text-textMuted">{t('apiConfig:usageEmpty')}</div>
+            ) : users.map((a) => (
+              <MenuItem key={a.id}
+                onClick={() => { setOpen(false); navigate('/agents/' + a.id) }}>
+                {a.name}
+              </MenuItem>
+            ))}
+          </MenuPanel>
+        </div>,
+        document.body,
       )}
-    </div>
+    </>
   )
 }
 
