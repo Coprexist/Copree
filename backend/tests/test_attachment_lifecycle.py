@@ -193,7 +193,8 @@ async def test_overwriting_a_path_transfers_the_physical_key(migrated_db):
         async with async_session() as db:
             # 同名同路径、内容不同 → 新建一行（内容相同的话会走去重分支，不建新行）
             second = await file_service.upload_file(
-                db, "attachments/qq", "图.png", b"version-two-longer", "image/png", "human", HUMAN)
+                db, "attachments/qq", "图.png", b"version-two-longer", "image/png", "human", HUMAN,
+                overwrite=True)
             second_id = int(second.id)
             await db.commit()
             assert second_id != first_id

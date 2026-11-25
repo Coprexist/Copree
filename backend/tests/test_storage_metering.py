@@ -345,9 +345,9 @@ async def test_quota_replacing_same_name_deducts_the_old_bytes(migrated_db):
 
             await upload_file(db, user_space_dir(HUMAN), "a.txt", b"a" * 600_000,
                               "text/plain", "human", HUMAN)
-            # 换内容再传同名：总量仍是 600 KB，装得下
+            # 换内容再传同名、**显式要求覆盖**：总量仍是 600 KB，装得下
             again = await upload_file(db, user_space_dir(HUMAN), "a.txt", b"b" * 600_000,
-                                      "text/plain", "human", HUMAN)
+                                      "text/plain", "human", HUMAN, overwrite=True)
             assert again.path == "users/1/files/a.txt"
     finally:
         settings.data_dir = original

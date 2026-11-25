@@ -65,10 +65,11 @@ def _clear_counters():
     _OPS.clear(f"ai:{AI_AGENT}")
 
 
-async def _upload(db, path, name, body, owner_type="human", owner_id=HUMAN):
+async def _upload(db, path, name, body, owner_type="human", owner_id=HUMAN, overwrite=False):
     from app.services.content.file_service import upload_file
 
-    return await upload_file(db, path, name, body, "application/octet-stream", owner_type, owner_id)
+    return await upload_file(db, path, name, body, "application/octet-stream", owner_type, owner_id,
+                             overwrite=overwrite)
 
 
 async def test_daily_bytes_stop_the_next_write(migrated_db):
@@ -146,7 +147,8 @@ async def test_overwriting_the_same_path_is_not_a_new_file(migrated_db):
             await _seed(db)
             await _upload(db, user_chat_dir(HUMAN), "one.bin", b"x" * 1000)
             await db.commit()
-            await _upload(db, user_chat_dir(HUMAN), "one.bin", b"y" * 2000)   # 同一路径，内容不同
+            # 同一路径、内容不同——**显式要求覆盖**才走这条（默认会换名，见 _next_free_path）
+            await _upload(db, user_chat_dir(HUMAN), "one.bin", b"y" * 2000, overwrite=True)
             await db.commit()
     finally:
         _restore(saved)

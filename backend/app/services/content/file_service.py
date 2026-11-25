@@ -585,6 +585,35 @@ async def ensure_quota(
         raise StorageQuotaExceeded(used, quota, int(incoming))
 
 
+async def _next_free_path(db: AsyncSession, relative_path: str, owner_type: str,
+                        owner_id: int) -> str:
+    """同名但内容不同 → 按序加后缀：`image.jpg` → `image (2).jpg`。
+
+    为什么必须换名：附件上传直接用客户端文件名（手机拍的照片常叫 image.jpg），
+    同名不同图会覆盖同一个 path，旧消息的附件跟着变成最新那张（2026-11-25 线上：
+    连发两张只保住最后一张，AI 看到的和用户发的不是同一张）。
+
+    **内容相同的不走这里**——那种在上面的去重里已经复用同一行（同一张图重复发送
+    仍然是合并成一份），后缀只加给真正不同的文件。
+
+    DB 与磁盘都要查：DB 行可能因墓碑/覆盖留下的历史版本不全，磁盘才是字节真相。
+    """
+    directory, name = os.path.split(relative_path)
+    stem, ext = os.path.splitext(name)
+    for seq in range(2, 1000):
+        candidate = os.path.join(directory, f"{stem} ({seq}){ext}")
+        taken = (await db.execute(
+            select(FileMetadata.id).where(
+                FileMetadata.path == candidate,
+                FileMetadata.owner_type == owner_type,
+                FileMetadata.owner_id == owner_id,
+            ).limit(1)
+        )).scalar_one_or_none()
+        if taken is None and not os.path.exists(disk_path(candidate)):
+            return candidate
+    return os.path.join(directory, f"{stem} {uuid.uuid4().hex[:8]}{ext}")
+
+
 async def upload_file(
     db: AsyncSession,
     path: str,
@@ -594,6 +623,7 @@ async def upload_file(
     owner_type: str,
     owner_id: int,
     collaboration_mode: str = "solo",
+    overwrite: bool = False,
 ) -> FileMetadata:
     db = _ensure_repo(db)
     """上传文件到指定路径（含三级去重：文件名 → 大小 → 内容哈希）"""
@@ -644,6 +674,15 @@ async def upload_file(
                 await db.flush()
             logger.info(f"文件去重复用: {relative_path} (SHA256={content_hash[:8]}…)")
             return existing
+
+    if existing is not None and not overwrite:
+        # 同名但内容不同（内容相同的已在上面 return 复用）→ 按序换个名字，绝不覆盖。
+        # 为什么默认换名：附件上传直接用客户端文件名（手机照片常叫 image.jpg），不同图会
+        # 覆盖同一个 path，旧消息的附件跟着变成最新那张（2026-11-25 线上：连发两张只保住
+        # 最后一张，AI 看到的和用户发的不是同一张）。
+        # overwrite=True 留给"确实要原地更新同一个文件"的场景（世界文件写回等）。
+        relative_path = await _next_free_path(db, relative_path, owner_type, owner_id)
+        existing = None
 
     # ── 配额闸：放在去重之后 ──
     # 同一个文件再传一次不写字节（上面已经 return），不该因为"空间不够"被拦；
