@@ -14,7 +14,11 @@
   个再重试一次；只删自己登记过的，绝不按账号盲删。
 
 引用方隔离（用户 2026-11-25 拍定）：
-- `scope = sha256(base_url | api_key)`：不同 key 一律不共享——无法判断两把 key 是否同一账号；
+- `scope = sha256(base_url | api_key)`：不同 key 一律不共享。
+- 官方文档说"文件归属于你的账号：同一账号下的所有 API key 共享文件"，但我们仍按 key 隔离：
+  key 来源是混的（平台池 / 用户自备 / 管理员配置），**只有 key 本身可判，没有可靠办法确认
+  两把 key 属于同一账号**；而拿 A 账号的 file_id 去 B 账号请求会 404/400，一次就丢整条消息的图。
+  隔离的代价只是同一张图多传一次，正确性优先。
 - 一行 = 一个引用方 `(scope, content_sha256, agent_id, context_ref)`，多行共用一个
   `remote_file_id`；某个 remote 的最后一行消失时才 `DELETE` 远端。
 """
@@ -56,7 +60,11 @@ class _QuotaExceeded(Exception):
 
 
 def file_scope(base_url: str, api_key: str | None) -> str:
-    """作用域：sha256(base_url | api_key)。不同 key 永不共享。"""
+    """作用域：sha256(base_url | api_key)。不同 key 永不共享。
+
+    官方说同一账号下所有 key 共享文件，但「是否同账号」我们无从验证（池 key / 用户自带 key
+    混用）；跨账号引用 file_id 只会 400。隔离的代价是多传一次，正确性优先。
+    """
     raw = f"{(base_url or '').strip().rstrip('/')}|{(api_key or '').strip()}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 

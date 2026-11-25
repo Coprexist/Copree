@@ -1252,12 +1252,14 @@ async def _attach_attachments_to_message(
 ) -> int:
     """把 messages[index] 的附件升级成模型能读的内容（图片 parts / 文本正文块）。
 
-    只让"最新一条用户消息"携带真实图片与文件内容，历史消息保持纯文本——既护住
-    prompt cache，也避免 token 爆炸（历史里留的是渲染层铺的 [图片]/[文件] 标记）。
+    只让"本轮"的带图消息携带真实图片，历史消息保持纯文本。这不是为了护 prompt cache：
+    历史那段的图早在进账本时就已经定成 [图片]，尾巴上的"真图 → 标记"变化本来就不在前缀里
+    （见 docs/dev/conversation_history.md §7）。这里只负责省钱——历史每轮重带图要多花
+    vision token。文本文件同理，只在最新一条消息里内联正文。
 
     图片有两条路（2026-11-25）：
     - DeepSeek 官方端点 + `deepseek-flash` → 上传一次拿 `file_id`，请求里用
-      `{"type":"file"}` 引用（不占 48 MiB 请求体，单图可到 64 MiB）；
+      `{"type": "file"}` 引用（不占 48 MiB 请求体，单图可到 64 MiB）；
     - 其他通道 → 继续 base64 内联（它们没有 Files API，硬发只会 404）。
     上传失败一律回退 base64：宁可多占点请求体，也不能让这张图凭空消失。
 

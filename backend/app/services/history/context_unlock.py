@@ -52,7 +52,8 @@ async def unlock_context(db: AsyncSession, agent, *, group_id: int | None, sessi
             await rewrite_context(db, agent, ref, summary=summary, keep_last=DEFAULT_KEEP_LAST_N)
 
     async def _release_remote_images():
-        # 图片进账本的是 file_id（DeepSeek Files API），被折叠掉之后那个 file 就没人引用了。
+        # 上传时按 context_ref 登记了该会话用到的远端图（deepseek_upload_files）；历史里只有
+        # [图片] 标记、不带 file_id，所以压缩重写账本之后这些引用就没人用了，按会话卸载。
         # 卸载放在 rewrite_history 之后：账本已经换上摘要，再删远端就不会有半截引用。
         # 失败只记日志——卸载是省配额，不能让压缩本身跟着失败。
         from app.services.ai.deepseek_files import release_context_images

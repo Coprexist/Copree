@@ -1202,7 +1202,7 @@ def _args_summary(arguments: str) -> str:
 
 
 def _history_text(text: str, attachments) -> str:
-    """历史消息里的图片降级成 [图片] 标记：让模型知道当时有图，但不给字节。"""
+    """历史消息里的图片降级成 [图片] 标记：让模型知道当时有图，但不给字节（见 §7：省 token，不是护缓存）。"""
     placeholder = image_placeholder(attachments)
     if not placeholder:
         return text or ""
@@ -1351,8 +1351,8 @@ async def _prepare_world_chat(
     if summary:
         messages.append({"role": "system", "content": summary})
     messages += hist_llm
-    # 只有最后一条带真实图片字节（同批靠前的降级成 [图片]）——既护住 prompt cache，
-    # 也避免一次塞进多张图把 token 顶爆
+    # 只有最后一条带真实图片字节（同批靠前的降级成 [图片]）——省 token：历史每轮重带图要多花
+    # vision token；图在进账本前属尾部动态内容，不构成缓存断点（见 conversation_history.md §7）
     _last_idx = len(items) - 1
     for _idx, it in enumerate(items):
         content = (

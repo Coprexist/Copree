@@ -824,6 +824,8 @@
 
 - 发版文档补「预览期：日常更新不是发版」一节：版本号在正式发布前恒为 `-preview`、日常 pull 不动版本号、`/health` 的 `version`/`build`/`migration` 三个指纹的用途与三种部署形态的来源，以及 `APP_VERSION` 环境变量覆盖 `config.py` 的坑；同一份规则同步进 `.dsh/skills/release`。
 
+- 订正图片进上下文的缓存口径：当轮注入真实图片、进账本即渲染成 `[图片]` 并从此固定；「真图 → 标记」的变化只发生在还没进账本的尾部动态段，**不构成前缀缓存断点**（此前 `conversation_history.md` §7 把这条写成「现状是 bug」，是错的，已删）。同步订正 `llm._attach_attachments_to_message`、`file_fetch` 工具描述、世界侧 `world_chat_service` 的注释（「护 prompt cache」不是理由，省 vision token 才是），并补 §7.4「历史里只有标记、回看旧图拿不到指定那张」的已知缺口。
+
 ## [v0.4.16] - 2026-10-30
 
 ### ✨ 新增
