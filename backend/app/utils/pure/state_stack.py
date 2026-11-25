@@ -81,7 +81,7 @@ _FRAME_FIELDS = (
     # notes：投递进这段会话的跨状态便签副本（固化在前缀里，直到 compact/clear）
     "notes",
     # 帧的轮生命周期（docs/dev/frame_turn_lifecycle.md）：三态 + 额度 + 借贷账
-    "turn_state", "steps_used", "steps_limit", "lent_out", "borrow_from",
+    "turn_state", "steps_left", "lent_out", "borrow_from",
     # semantic_focus：这段会话当前的语义焦段（焦段本体存在 agents.foci）
     "semantic_focus",
     # env_locked：写进前缀的那份环境（含平台的通道规矩；解锁点对齐现值）；
@@ -148,10 +148,10 @@ def make_state_frame(type_: str, context_ref: str = "", **extras) -> dict:
         "handoff": {},
         "completed_handoff": {},
         "last_active_at": datetime.now(timezone.utc).isoformat(),
-        # 轮三态与额度：新帧还没有未完成的轮，额度在第一次被刺激时给出
+        # 轮三态与额度：新帧还没有未完成的轮，额度在第一次被刺激时给出。
+        # 额度只存「还剩多少步」——判断/赋值都是一行，不会出现 used/limit 不同步
         "turn_state": "closed",
-        "steps_used": 0,
-        "steps_limit": 0,
+        "steps_left": 0,
         "lent_out": 0,
         "borrow_from": [],
         # 未读刺激：别的会话里有人找他。去不去由他定，pull 过去才认领

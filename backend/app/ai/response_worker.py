@@ -368,15 +368,25 @@ async def _process_dm_event(db, event: dict):
     logger.info(f"私信 {session_id} 触发 AI {agent.name}({agent.id}) 回复")
 
     # ── 2026-08-09: 聊天即情景——自动维护会话帧（无论是否真正回复，先记录「有人找过」）──
+    stimulus = None
     try:
         from app.services.agent.state_stack_service import attach_stimulus
         sender_name = await display_name(db, sender_id)
-        await attach_stimulus(
+        stimulus = await attach_stimulus(
             db, agent.id, "dm", session_id,
             title=sender_name, actor_name=sender_name, summary=content,
         )
     except Exception as e:
         logger.warning(f"DM 会话帧维护失败（非致命）: {e}")
+
+    # 别处有人找：只摆帧、记未读，**不烧这一轮**（frame_turn_lifecycle §7.3）。
+    # 他就在这一段里时 attach_stimulus 返回的就是当前帧（active）；否则返回挂起帧。
+    # 漏了这条判定会出现：拿「别处」的上下文构建一轮、却扣当前帧的步数，
+    # 几个会话的刺激就把当前帧耗光，之后谁都动不了（2026-11-25 线上）。
+    if stimulus and stimulus.get("status") != "active":
+        await db.commit()
+        logger.info(f"AI {agent.name}: 私信不在当前帧，只记未读，不唤起本轮")
+        return
 
     # DM 链条深度限制
     if chain_depth > 10:
@@ -868,6 +878,7 @@ async def _maybe_trigger_ai_reply(
     resolved_agent_id = agent.id
 
     # ── 2026-08-09: 聊天即情景——群聊触发时维护会话帧（即使 DND/意愿不回复也记录「有人找过」）──
+    stimulus = None
     try:
         from app.services.agent.state_stack_service import attach_stimulus
         from app.models.user import User as UserModel
@@ -875,13 +886,21 @@ async def _maybe_trigger_ai_reply(
         if sender_id is not None:
             srow = await db.execute(select(UserModel.username).where(UserModel.id == sender_id))
             sender_name = srow.scalar_one_or_none() or f"用户{sender_id}"
-        await attach_stimulus(
+        stimulus = await attach_stimulus(
             db, resolved_agent_id, "group_chat", f"group:{group_id}",
             title=(group.name if group and getattr(group, "name", None) else f"群{group_id}"),
             actor_name=sender_name, summary=content,
         )
     except Exception as e:
         logger.warning(f"群会话帧维护失败（非致命）: {e}")
+
+    # 别处有人找：只摆帧、记未读，不烧这一轮（frame_turn_lifecycle §7.3）。
+    # 他就在这一段里时返回的才是 active 帧；否则是挂起帧。漏了这条判定，
+    # 群消息会拿群上下文构建一轮、却扣当前帧（别的会话）的步数（2026-11-25 线上）。
+    if stimulus and stimulus.get("status") != "active":
+        await db.commit()
+        logger.info(f"AI {agent.name}: 群 {group_id} 不在当前帧，只记未读，不唤起本轮")
+        return
 
     logger.info(f"🔍 检查 AI {agent.name}(id={resolved_agent_id}, user_id={agent.user_id}), state={agent.state}")
 

@@ -700,6 +700,13 @@ async def _tool_call_loop(
     # 收尾轮：轮次用尽却一句话没发时白送一轮（只送一次），否则整轮检索等于白做
     _closing_extra = 0
     _closing_active = False
+    # 本轮是否已用 end_turn 收尾 / 轮末结算内容。
+    # 这两个必须**在循环之前**初始化：循环可能在第一步之前就 break（帧预算用满、帧额度
+    # 借不到），而收尾与嵌套函数（_finish / _dispatch_one_tool）会读它们——只在循环内
+    # 赋值的话，那条路径上就是 "free variable '_end_turn' ... in enclosing scope"，
+    # 整轮异常、一条回复都发不出去（2026-11-25 22:39 群 81 的线上现象）。
+    _end_turn = False
+    _settlement: dict = {}
     # 下一个 LLM 调用是额度外白送的轮次（提醒轮 / 收尾轮）
     _free_next = False
     # 本轮是 AI 自己收的尾（end_turn 工具 / intent=end_turn），不是被平台结束的
@@ -902,7 +909,12 @@ async def _tool_call_loop(
             # 白送的那一轮（收尾 / 提醒）不扣：它是平台给的，不是刺激给的。
             if not _free_round:
                 from app.services.agent.state_stack_service import consume_step
-                _steps_left, _no_steps = await consume_step(db, agent.id)
+                _steps_left, _no_steps = await consume_step(
+                    db, agent.id,
+                    # 扣**本轮处理的会话**那一帧，不是「当前帧」：刺激到达时只摆帧不切帧，
+                    # 两者可能不是同一个（2026-11-25 线上就是这么扣错的）
+                    context_ref=_context_ref(group_id, session_id, conversation_type),
+                )
                 if not _steps_left:
                     logger.info(f"AI {agent.name}({agent.id}) 帧额度用尽，本轮停止：{_no_steps}")
                     messages.append({

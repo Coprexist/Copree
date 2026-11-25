@@ -500,7 +500,7 @@ async def _pull(db: AsyncSession, agent_id: int, stack: list[dict], frame: dict,
         frame["waiting_since"] = ""
         turn.new_stimulus(frame, await _agent_step_limit(db, agent_id))
     else:
-        turn.resume(frame)            # 无新刺激的切回：沿用 steps_used（§4.1）
+        turn.resume(frame)            # 无新刺激的切回：沿用剩余步数（§4.1）
     touch(frame)
     await _save(db, agent_id, stack)
     logger.info(f"Agent({agent_id}) pull [{frame.get('type')}]({frame.get('id')})"
@@ -702,8 +702,8 @@ async def push_state(
     # 新帧：给出初始额度（不是刺激重置——他没收到外部消息，只是自己切过来）；
     # 链上已有帧：resume，沿用已用步数
     turn.ensure_fields(target)
-    if existing is None and target["steps_limit"] <= 0:
-        target["steps_limit"] = turn.DEFAULT_STEPS_LIMIT
+    if existing is None and turn.steps_left(target) <= 0:
+        target[turn.STEPS_FIELD] = turn.DEFAULT_STEPS_LIMIT
         target["turn_state"] = turn.RUNNING
     else:
         turn.resume(target)
@@ -728,7 +728,7 @@ async def borrow_steps(
 ) -> tuple[int, str]:
     """从当前帧沿链向父帧借步数（§4.2；I3 每个父帧留 1 步；I6 只向上借）。
 
-    额度只转移、不创造（I2）：父帧 steps_used 与 lent_out 同增，子帧 steps_limit 同增。
+    额度只转移、不创造（I2）：父帧剩余步数与 lent_out 同减同增，子帧剩余步数增加。
     链底仍不够就如实拒绝——不把父帧的收尾步也借走。
     """
     db = _ensure_repo(db)
@@ -753,30 +753,44 @@ async def borrow_steps(
             borrowed += take
     if borrowed:
         turn.ensure_fields(child)
-        child["steps_limit"] += borrowed
+        child[turn.STEPS_FIELD] += borrowed
         await _save(db, agent_id, stack)
         logger.info(f"Agent({agent_id}) 借额度 {borrowed} 步（frame={child.get('id')}）")
         return borrowed, f"已从上一帧借到 {borrowed} 步"
     return 0, "上一帧也没有可借的步数（每帧至少给自己留 1 步）"
 
 
-async def consume_step(db: AsyncSession, agent_id: int, n: int = 1) -> tuple[int, str]:
+async def consume_step(db: AsyncSession, agent_id: int, n: int = 1,
+                       context_ref: str | None = None) -> tuple[int, str]:
     """扣一步额度（step = 一次模型调用），返回 (剩余步数, 停下的原因)。
 
     这是「额度不创造」的执行侧落点（§4.4）：不够时先沿链向父帧借（每个父帧保留
     1 步，I3），链底也借不到才返回 0，调用方据此结束本轮。
     没有帧的 AI（老路径 / 插件帧）不限制，返回一个足够大的数。
+
+    context_ref：**这一轮实际处理的会话**。额度必须记在它对应的帧上——
+    只传 agent 时取的是「当前帧」，于是「在群 A 的画面里干活、扣群 B 帧的额度」，
+    群 B 的步数被别人的消息吃掉（2026-11-25 线上：3 个群的刺激把私信帧的 15 步耗光）。
+    找不到对应帧才退回当前帧（平台兜底，不能让这一轮没账可记）。
     """
     stack = await _get_stack(db, agent_id)
     live = running(stack)
     if not live:
         return 999, ""
-    frame = live[-1]
+    frame = None
+    if context_ref:
+        frame = next((f for f in reversed(live)
+                      if (f.get("context_ref") or "") == context_ref), None)
+        if frame is None:
+            logger.debug(
+                f"Agent({agent_id}) 会话 {context_ref} 没有帧，额度记到当前帧")
+    if frame is None:
+        frame = live[-1]
     turn.ensure_fields(frame)
-    if frame["steps_limit"] <= 0:
-        # 老帧从没记过额度：给它一次初始额度，别把「没有账」当成「用完了」
-        frame["steps_limit"] = await _agent_step_limit(db, agent_id)
-        frame["steps_used"] = 0
+    if turn.steps_left(frame) <= 0 and frame.get("turn_state") != turn.RUNNING:
+        # 没有账的老帧：给一次初始额度，别把「没有账」当成「用完了」。
+        # 正在跑的帧为 0 是**真用完**（等下一轮被 close），不能在这里补。
+        frame[turn.STEPS_FIELD] = await _agent_step_limit(db, agent_id)
     need = n - turn.steps_left(frame)
     if need > 0:
         idx = stack.index(frame)
@@ -788,13 +802,13 @@ async def consume_step(db: AsyncSession, agent_id: int, n: int = 1) -> tuple[int
             take = turn.borrow(need, parent)
             if take:
                 turn.record_borrow(frame, parent, take)
-                frame["steps_limit"] += take
+                frame[turn.STEPS_FIELD] += take
                 need -= take
     if turn.steps_left(frame) < n:
         turn.close(frame)
         await _save(db, agent_id, stack)
-        return 0, f"本轮 {frame.get('steps_limit')} 步已用完，上一帧也没有可借的"
-    frame["steps_used"] += n
+        return 0, "本帧剩余步数已用完，上一帧也没有可借的"
+    frame[turn.STEPS_FIELD] -= n
     frame["turn_state"] = turn.RUNNING
     await _save(db, agent_id, stack)
     return turn.steps_left(frame), ""
@@ -1376,15 +1390,18 @@ async def attach_stimulus(
     conv_type: str, context_ref: str,
     title: str, actor_name: str, summary: str = "",
 ) -> dict:
-    """外界在某个会话里找他：把那一帧摆上状态链并记一条未读，**不动当前帧**。
+    """外界在某个会话里找他：摆帧 + 决定此刻要不要唤醒（**空闲即唤醒，忙才只挂帧**）。
 
-    与 ensure_active_frame 的分界（docs/dev/frame_turn_lifecycle.md 刺激传导）：
-    那个是「把他拉过去」（他自己切帧、进世界）；这个是「把帧摆好、把事实告诉他」，
-    去不去、什么时候去由他定——正在跑的那一轮不被打断，要过去就自己 pop_state。
+    与 ensure_active_frame 的分界（docs/dev/frame_turn_lifecycle.md §7.3）：
+    那个是「他自己切帧/进世界」；这个是「外界找他」。
+
+    - **空闲**（没有一轮在跑）：挂帧就是唤醒——这一帧直接成为当前帧，调用方照常跑这一轮；
+    - **忙**（已有帧在 running）：只挂到链上对应位置、记未读并告知，**不拉起**——能拉起
+      几帧归链的并发窗口（max_active）管，直接拉起会突破并发。正在跑的那一轮不被打断。
 
     帧已在链上就原地记号（不新建、不换 id：闹钟与计划板记着的长期指针不能换人），
-    已结束的复活成挂起。**链尾仍还给原来那帧**：链尾是「正在跑的那一帧」，
-    新挂上的这条只是排在链上等着。返回那一帧（调用方若要投递告知可用）。
+    已结束的复活成挂起。返回那一帧：`status == "active"` = 这次挂帧唤醒了它；
+    `suspended` = 窗口被占、只记了未读（调用方不该再为它烧一轮）。
     """
     db = _ensure_repo(db)
     if conv_type not in ("dm", "group_chat"):
@@ -1394,10 +1411,13 @@ async def attach_stimulus(
     conv_label = "私信" if conv_type == "dm" else "群"
     label = f"{conv_label}「{title}」"
     now = datetime.now(timezone.utc).isoformat()
+    limit = await _agent_step_limit(db, agent_id)
 
     frame = frame_of(stack, context_ref)
     if frame is not None and prev is not None and frame.get("id") == prev.get("id"):
-        # 他就在这一段里：消息本来就该在这一轮处理，不算「别处有人找」
+        # 他就在这一段里：消息本来就该在这一轮处理，不算「别处有人找」；额度照样重置
+        turn.new_stimulus(frame, limit)
+        await _save(db, agent_id, stack)
         return frame
     if frame is None:
         frame = make_state_frame(
@@ -1412,10 +1432,21 @@ async def attach_stimulus(
         frame["label"] = label
         if not frame.get("doing"):
             frame["doing"] = f"{conv_label}「{title}」里有人在等你"
-    if prev is None:
-        # 他不在任何帧里：这一条就是当前帧，消息在该轮处理，不算「别处有人找」
+    turn.new_stimulus(frame, limit)     # 刺激落在这一帧：步数额度恢复（§4.1）
+
+    # 「忙」= **真有一轮在跑**（帧 turn_state=running），不是「链上有帧」。
+    # 链上挂着别的会话的帧、却没有任何轮在跑时，它其实空闲——2026-11-25 线上就是
+    # 把这种状态误判成忙，群消息全被压成未读、永远不回复。
+    others_running = [
+        f for f in running(stack)
+        if f.get("id") != frame.get("id")
+        and turn.ensure_fields(f).get("turn_state") == turn.RUNNING
+    ]
+    if not others_running:
+        # 空闲：挂帧就是唤醒——链上没有一轮在跑，这一帧直接成为当前帧
         frame["status"] = "active"
         await _save(db, agent_id, stack)
+        logger.info(f"Agent({agent_id}) 收到刺激并唤醒：{label}")
         return frame
     frame["unread"] = int(frame.get("unread") or 0) + 1
     frame["waiting_since"] = frame.get("waiting_since") or now
@@ -1435,7 +1466,7 @@ async def attach_stimulus(
     await _save(db, agent_id, stack)
     logger.info(
         f"Agent({agent_id}) 收到别处刺激：{label}（未读 {frame.get('unread')} 条）"
-        f"，当前帧不动 [{(prev or {}).get('id')}]")
+        f"，窗口被占（[{(prev or {}).get('id')}] 在跑），只挂帧记未读")
     return frame
 
 

@@ -122,8 +122,7 @@ async def test_pulling_that_frame_adopts_the_stimulus(migrated_db):
         current = await get_current_frame(db, AI_ID)
         assert current["context_ref"] == "group:58"
         assert int(current.get("unread") or 0) == 0
-        assert current["steps_used"] == 0
-        assert current["steps_limit"] > 0
+        assert current["steps_left"] > 0
         assert current["turn_state"] == "running"
 
 

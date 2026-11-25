@@ -38,7 +38,7 @@ class AgentStateChain(Base):
     tail_id = Column(Integer, comment="链尾节点号（最后加入的一端 = 正在执行）")
     max_active = Column(
         Integer, nullable=False, server_default="1",
-        comment="执行窗口：链尾起算的并发帧数（默认 1；将来按 AI 配置改这一列即可）",
+        comment="执行窗口：链尾起算**同时能拉起几帧**（默认 1；将来按 AI 配置改这一列即可）",
     )
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
