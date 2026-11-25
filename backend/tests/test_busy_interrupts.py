@@ -72,3 +72,20 @@ async def test_leftover_dm_messages_are_requeued():
             break
     mine = [q for q in queued if q.get("session_id") == "1_2"]
     assert mine and mine[0]["content"] == "第二条", queued
+
+
+async def test_serialized_run_marks_the_conversation():
+    """加锁串行那一层必须按会话打标记：不带会话等于往集合里塞空串，
+    "这个会话忙吗"永远答否——中途消息就全去排队了（2026-11-25 的三条重复回复）。"""
+    from app.ai import response_worker
+    from app.ai.executor import is_agent_running
+
+    agent = type("A", (), {"id": 999004, "ai_type": "resonance"})()
+
+    async def body():
+        assert await is_agent_running(999004, ("dm", "1_2")) is True
+        assert await is_agent_running(999004) is True
+
+    await response_worker._run_serialized(agent, body(), conversation=("dm", "1_2"))
+    assert await is_agent_running(999004) is False, "跑完要摘掉标记"
+    assert await is_agent_running(999004, ("dm", "1_2")) is False

@@ -74,8 +74,13 @@ def get_thinking_state(conv_key: str) -> dict[int, dict]:
     return _thinking_state.get(conv_key, {})
 
 
-async def _run_serialized(agent, coro):
-    """resonance/custom 类型加锁串行，general/semi_general 直接执行"""
+async def _run_serialized(agent, coro, conversation=None):
+    """resonance/custom 类型加锁串行，general/semi_general 直接执行。
+
+    conversation 是**这个轮次跑在哪个会话**（与 executor.conversation_of 同形：
+    ("group", id) / ("dm", session_id)）。忙时注入按会话判断，标记必须带同一个键——
+    不带会话只会往集合里塞一个空串，于是"这个会话忙吗"永远答否，中途消息全去排队。
+    """
     if agent.ai_type in ("general", "semi_general"):
         return await coro
     lock = _agent_locks.get(agent.id)
@@ -83,11 +88,11 @@ async def _run_serialized(agent, coro):
         lock = asyncio.Lock()
         _agent_locks[agent.id] = lock
     async with lock:
-        await mark_agent_running(agent.id)
+        await mark_agent_running(agent.id, conversation)
         try:
             return await coro
         finally:
-            await unmark_agent_running(agent.id)
+            await unmark_agent_running(agent.id, conversation)
 
 
 # ============================================================
@@ -1228,7 +1233,7 @@ async def _maybe_trigger_ai_reply(
             is_federated=False,
             pending_delivery=pending_delivery,
             frame_budget_check=budget.check,
-        ))
+        ), conversation=("group", group_id))
     except Exception as e:
         logger.error(f"❌ AI {agent.name} 群聊回复异常 (group={group_id}): {e}", exc_info=True)
     finally:
@@ -1443,7 +1448,7 @@ async def _trigger_dm_ai_reply(
             trigger="user",
             pending_delivery=pending_delivery,
             frame_budget_check=budget.check,
-        ))
+        ), conversation=("dm", session_id))
     except Exception as e:
         logger.error(f"❌ AI {agent_name} DM 回复异常 (session={session_id}): {e}", exc_info=True)
     finally:
