@@ -11,6 +11,7 @@ from sqlalchemy import select, desc, and_, or_, update, delete, func as sqlfunc
 from app.models.group import DEFAULT_CONCURRENT_AI_LIMIT, Group, GroupMember
 from app.models.message import Message
 from app.models.agent import Agent as AgentModel
+from app.utils.message_serializer import mention_names, preview_of, revoked_preview
 from app.utils.multimodal import attachment_marks, with_transcripts
 from app.utils.text import render_mention_with_names
 from app.utils.pure.history import make_entry
@@ -82,6 +83,37 @@ async def get_group(db: AsyncSession, group_id: int) -> Group | None:
     return result.scalar_one_or_none()
 
 
+def last_message_summary(
+    last_msg,
+    *,
+    sender_names_map: dict,
+    names: dict,
+    max_len: int = 50,
+) -> tuple[str | None, str | None, str | None]:
+    """群列表「最后一条消息」的三个同源字段：预览、时间、撤回者名字（没有消息时全 None）。
+
+    三个字段必须一起给：撤回那行要把名字单独给出去（侧栏宽度不够先缩名字），
+    预览则拼「名字: 内容」。以前这段散在循环里，`revoked_name` 只在 `if last_msg:`
+    分支内赋值、payload 却无条件使用——列表里有一个空群就 UnboundLocalError → 500
+    （2026-11-23 外部反馈）。默认值跟着函数走，调用方不再自己初始化。
+    """
+    if last_msg is None:
+        return None, None, None
+    at = str(last_msg.created_at) if last_msg.created_at else None
+    if last_msg.sender_type == "system":
+        sender = "系统"
+    else:
+        # 人 / AI / 群助手：名字都来自 sender_names，别再手抄一套 if
+        sender = sender_names_map.get((last_msg.sender_type, last_msg.sender_id)) or "用户"
+    if getattr(last_msg, "revoked_at", None):
+        # 群里的撤回写"谁撤回了一条消息"（名字完整），不套 "名字: 内容" 那个冒号口径——
+        # 这里没有内容可给，冒号只会显得话没说完
+        return revoked_preview(sender), at, sender
+    # 正文里存的是 <@!id>（聊天界面由前端渲染成名字）；这里是"顺手给人看"的地方，
+    # 后端自己换名字，预览口径由 preview_of 统一收口，别在这里另写一套判断
+    return f"{sender}: {preview_of(last_msg, names, max_len=max_len)}", at, None
+
+
 def group_settings_payload(group: Group) -> dict:
     """群级设置的单一份序列化（列表 / 详情 / PATCH 回包共用）。
 
@@ -120,7 +152,6 @@ async def list_user_groups(db: AsyncSession, user_id: int) -> list[dict]:
     侧栏每次刷新都要跑它，逐群查（二十几个群就是一百多条 SQL）会让列表刷新肉眼可见地卡。
     """
     from app.models.user import User
-    from app.utils.message_serializer import mention_names, preview_of, revoked_preview
     from app.utils.text import mention_token
 
     # 成员关系连着群本身一起取（内连接：群没了就该跳过，与原先 db.get 取不到时 continue 一致）
@@ -290,26 +321,13 @@ async def list_user_groups(db: AsyncSession, user_id: int) -> list[dict]:
 
         unread_count = unread.get(group.id, 0)
 
-        last_message_preview = None
-        last_message_at = None
-        last_msg = last_msgs.get(group.id)
-        if last_msg:
-            last_message_at = str(last_msg.created_at) if last_msg.created_at else None
-            if last_msg.sender_type == "system":
-                sender = "系统"
-            else:
-                # 人 / AI / 群助手：名字都来自 sender_names，别再手抄一套 if
-                sender = last_sender_names.get((last_msg.sender_type, last_msg.sender_id)) or "用户"
-            revoked_name = None
-            if getattr(last_msg, "revoked_at", None):
-                # 群里的撤回写"谁撤回了一条消息"（名字完整），不套 "名字: 内容" 那个冒号口径——
-                # 这里没有内容可给，冒号只会显得话没说完
-                revoked_name = sender
-                last_message_preview = revoked_preview(sender)
-            else:
-                # 正文里存的是 <@!id>（聊天界面由前端渲染成名字）；这里是"顺手给人看"的地方，
-                # 后端自己换名字，预览口径由 preview_of 统一收口，别在这里另写一套判断
-                last_message_preview = f"{sender}: {preview_of(last_msg, names, max_len=50)}"
+        # 三个字段同源，一起从纯函数拿（没有消息时三个都是 None）：
+        # 形状与默认值只维护在 last_message_summary 一处，循环里不再自己初始化。
+        last_message_preview, last_message_at, revoked_name = last_message_summary(
+            last_msgs.get(group.id),
+            sender_names_map=last_sender_names,
+            names=names,
+        )
 
         payload = group_settings_payload(group)
         payload.update({

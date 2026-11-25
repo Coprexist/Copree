@@ -203,8 +203,19 @@ borrow(f):
 `code` 是机器可读原因（`steps_exhausted` / `crash` / `interrupted` / `reclaimed` / `done_by_ai`），
 `reason` 是人话；两者都记在帧上（`ended_code` / `ended_reason`），排查与复现都用得上。
 
+轮末归位走**轮次入口** `end_turn_frame(turn_id=, context_ref=)`（2026-11-26 补）：
+
+1. 开场 `begin_turn(context_ref, turn_id)` 认领「这一轮演的是哪一帧」，把 `turn_id` 写进帧——
+   免费轮（提醒 / 收尾）一步都不扣，只靠扣步打标识会漏掉它们；
+2. 收尾按 `turn_id` 找回来，统一交给 `end_frames`。给了 `turn_id` 却找不到帧，说明这一轮的帧
+   已经不在了（中途被切帧 / 已出链），**直接返回、不拿栈顶凑数**——关错一帧等于掐掉另一个会话的轮；
+3. 只有没有 `turn_id` 的老路径才退回会话键（`context_ref`）。
+
+**为什么不按栈顶**：一个 AI 会在几个会话之间被切来切去，栈顶帧未必是这一轮演的那一帧
+（`consume_step` 已经因为同一件事改过口径，见 §4.4）。
+
 **意外分两类**：
-- **进程内异常**：收尾路径把出链放进同一个兜底里，code=`crash`；
+- **进程内异常**：收尾路径把出链放进同一个兜底里，code=`crash`（`_seal_aborted`，2026-11-26 接上）；
 - **进程没了**（重启 / OOM / 强杀）：代码来不及跑，只能在**恢复时**补——判据是
   `turn_state = running` 且最后一次活动早于本进程启动（`recover_interrupted`），
   这种帧是「像在跑」的残影，走 `end_frames(code="interrupted")` 出链并告知。
@@ -501,6 +512,8 @@ completed_handoff = {
   **空闲（没有一轮在跑）→ 挂帧即唤醒**，该帧直接成为当前帧、未读清零、额度按刺激重置；
   **忙（已有帧在 running）→ 只挂帧 + 记未读 + 告知**，不拉起（拉起数归链的并发窗口）。
   「忙」看的是**有没有一轮在跑**，不是「链上有没有帧」——链上挂着别的会话的帧但没轮在跑时是空闲。
+  真挂起时三态置 `open`（`turn.suspend`）：留着 running 的话，它和正在跑的长得一样，
+  下一条消息会把等待中的帧也算成「在跑」，于是几个会话互相以为对方在跑、谁都不被唤醒。
 
 ### 已完成（第三批：出链与恢复，2026-11-25）
 
@@ -512,10 +525,16 @@ completed_handoff = {
   判为中断，出链并告知——重启后没有线程在跑它们，不清理会一直占着 active。
 - `_save` 链对账：`turn_state != running` 的帧不能是 active（修「同时两个 active」）；
   唤醒时清 `unread`（已在处理，再挂「有 N 条未读」只会误导）。
+- **轮末归位**（2026-11-26，外部反馈）：`begin_turn` 开场认领 + `end_turn_frame` 按 `turn_id` 出链，
+  `_seal` / `_seal_aborted` 都在收尾调用（code=`done_by_ai` / `crash`）。此前正常一轮结束不关帧，
+  `turn_state` 停在 running，别的会话的刺激全被判「窗口被占」——表现是「群里说完一轮，私信永远不回」。
+- **挂起帧三态**（同上）：`attach_stimulus` 真挂起时 `turn.suspend`（running → open），
+  否则等着被唤醒的帧和正在跑的长得一样，几个会话互相以为对方在跑、谁都不被唤醒。
 
 ### 未完成（第四批：交接与投递）
 
 1. **批量交接**（§6）：end_scope=segment 与逐帧 completed_handoff。
-2. **进程内异常的出链兜底**：把出链放进 executor 收尾的同一个 `finally`（code="crash"）。
-3. **触发器作用域**：agent_triggers.origin_context_ref。
-4. **总量闸**：小时 / 天调用上限（§10 F1）。
+2. **触发器作用域**：agent_triggers.origin_context_ref。
+3. **总量闸**：小时 / 天调用上限（§10 F1）。
+4. **轮末主动唤醒挂起的未读**：窗口一空，挂起且有 unread 的会话目前要等下一条消息才被唤醒；
+   归位之后由谁触发那一轮还没定（executor 不该替别的会话决定）。

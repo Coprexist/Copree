@@ -190,6 +190,16 @@ async def remove_friend(
     return {"status": "removed"}
 
 
+async def purge_links_of_user(*, friend_repo: FriendRepository, user_id: int) -> int:
+    """清掉所有引用这个用户的好友关系与申请（删账号 / 删 AI 的统一入口）。
+
+    `friendships.friend_id` 是多态裸 id（friend_type + friend_id），数据库没有外键可级联：
+    删掉账号后，指向它的那些行会一直留着，好友列表就成了「未知N」（2026-11-23 外部反馈，
+    实测删一个 AI 再建一个必现）。删除路径只该调这里，别各自写一份删法。
+    """
+    return await friend_repo.delete_links_of_user(user_id)
+
+
 async def list_friends(
     *,
     friend_repo: FriendRepository,

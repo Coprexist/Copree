@@ -13,6 +13,7 @@ import json
 import logging
 import re
 import time
+import uuid
 from datetime import datetime, timezone
 from sqlalchemy import select
 from app.config import settings
@@ -718,6 +719,9 @@ async def _tool_call_loop(
     _has_sent_message = False
     # 轮末封存用的工具总账（工具轮历史 → 账本）
     _tool_log: list[dict] = []
+    # 本轮的唯一标识：开场写到帧上，收尾按它找回同一帧（§4.3）。
+    # 用会话键反推是猜——同一会话先后两轮、一轮中途被切帧都会猜错。
+    _turn_id = uuid.uuid4().hex[:12]
     # 已经就"Key 不可用"给用户发过一条带降级上下文的私信：末尾别再补一条同义的
     _notified_fatal = False
     # 收尾轮：轮次用尽却一句话没发时白送一轮（只送一次），否则整轮检索等于白做
@@ -745,6 +749,18 @@ async def _tool_call_loop(
     _failed_tools: list[str] = []
     _outward_failures: list[dict] = []
 
+    # 开场认领：这一轮演的是哪一帧，先记下来。免费轮（提醒 / 收尾）一步都不扣额度，
+    # 但收尾同样要出链——不在这里打标识，收尾时就找不到该关哪一帧。
+    try:
+        from app.services.agent.state_stack_service import begin_turn
+        await begin_turn(
+            db, agent.id,
+            _context_ref(group_id, session_id, conversation_type),
+            _turn_id,
+        )
+    except Exception as e:
+        logger.warning(f"AI {agent.name}({agent.id}) 轮次开场认领帧失败（非致命）: {e}")
+
     def _did_real_work() -> bool:
         """本轮除了发消息/结束，还干过别的事没有。"""
         return any(
@@ -766,7 +782,9 @@ async def _tool_call_loop(
                 else "一条消息都没发出去——上面的工具过程别当成已经说过的话。")
         return f"{reason}{tail}"
 
-    async def _seal(reasoning: str = "", cutoff: str = "") -> None:
+    async def _seal(reasoning: str = "", cutoff: str = "", *,
+                    ended_code: str = "done_by_ai",
+                    ended_reason: str = "本轮正常结束") -> None:
         """所有出口（end_turn 工具 / intent=end_turn / 循环走完 / 中断）共用这一次封存。
 
         不是 AI 自己收的尾（轮次用尽、模型只回了文字）时思考必须留：它是「为什么在干这件事」
@@ -794,6 +812,23 @@ async def _tool_call_loop(
         except Exception as e:
             logger.warning(f"轮末封存失败（非致命，下一轮只少了这一笔）: {e}")
 
+        # 帧归位：这一轮演完了，把**这一轮演的帧**从 running 收回（按 turn_id，
+        # 不猜栈顶——收尾不该去关别的会话的帧）。
+        # 少了这一步帧会一直停在 running：下一个别的会话有人找它时，attach_stimulus 判
+        # 「窗口被占」，只挂帧记未读、不唤醒——表现就是「群里说完一轮，私信永远不回」
+        # （2026-11-23 外部反馈，实测必现）。by="ai"：告知已由上面 _seal_turn(cutoff=…)
+        # 写进账本，这里 by="platform" 再写一条就是重复。
+        try:
+            from app.services.agent.state_stack_service import end_turn_frame
+            await end_turn_frame(
+                db, agent.id,
+                turn_id=_turn_id,
+                context_ref=_context_ref(group_id, session_id, conversation_type),
+                code=ended_code, reason=ended_reason, by="ai",
+            )
+        except Exception as e:
+            logger.warning(f"轮末帧归位失败（非致命，别的会话可能误判为忙）: {e}")
+
     async def _seal_aborted(reason: str) -> None:
         """取消/异常也是收尾出口：不在这里封存，这一轮就只剩用户那条消息。
 
@@ -801,7 +836,8 @@ async def _tool_call_loop(
         两种都没走 end_turn，所以思考照收（判据在 _seal 里），并如实说明是怎么断的。
         """
         try:
-            await _seal("", cutoff=_cutoff_text(reason))
+            await _seal("", cutoff=_cutoff_text(reason),
+                        ended_code="crash", ended_reason=reason)
             await _save_log(
                 db, agent, messages, conversation_type,
                 group_id, session_id,
@@ -937,6 +973,7 @@ async def _tool_call_loop(
                     # 扣**本轮处理的会话**那一帧，不是「当前帧」：刺激到达时只摆帧不切帧，
                     # 两者可能不是同一个（2026-11-25 线上就是这么扣错的）
                     context_ref=_context_ref(group_id, session_id, conversation_type),
+                    turn_id=_turn_id,
                 )
                 if not _steps_left:
                     logger.info(f"AI {agent.name}({agent.id}) 帧额度用尽，本轮停止：{_no_steps}")

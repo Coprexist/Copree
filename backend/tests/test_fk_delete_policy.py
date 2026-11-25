@@ -103,12 +103,15 @@ async def test_delete_agent_cascades_and_keeps_facts(migrated_db):
     from app.models.api_usage_log import ApiUsageLog
     from app.models.conversation_log import ConversationLog
     from app.models.dm import DMMessage, DMSession
+    from app.models.friendship import Friendship, FriendshipRequest
     from app.models.memory import RoughMemory
     from app.models.user import User
     from app.services.agent.agent_service import delete_agent
 
     async with async_session() as db:
-        await clear(db, "agents", "users")
+        # friendship_requests 没有外键，clear 的 users 闭包带不走别的用例留下的行；
+        # 下面断言的是全表计数，所以这里显式点名清干净
+        await clear(db, "agents", "users", "friendships", "friendship_requests")
 
         owner = User(username="删号测试主人", password_hash="x", type="human")
         ai_user = User(username="待删AI", password_hash="x", type="ai")
@@ -125,6 +128,11 @@ async def test_delete_agent_cascades_and_keeps_facts(migrated_db):
             RoughMemory(owner_type="ai", owner_id=agent.id, title="称呼", user_id=ai_user.id),
             DMSession(session_id=session_id, user1_id=min(owner.id, ai_user.id),
                       user2_id=max(owner.id, ai_user.id)),
+            # 好友关系/申请没有外键可依赖（friend_id 是多态裸 id）：删号后不清就是「未知N」
+            Friendship(user_id=owner.id, friend_type="ai", friend_id=ai_user.id),
+            Friendship(user_id=ai_user.id, friend_type="human", friend_id=owner.id),
+            FriendshipRequest(requester_id=owner.id, target_type="ai", target_id=ai_user.id),
+            FriendshipRequest(requester_id=ai_user.id, target_type="human", target_id=owner.id),
         ])
         # 先落会话再插消息：两者没有 ORM 关系，flush 顺序不会自己排好
         await db.flush()
@@ -142,8 +150,8 @@ async def test_delete_agent_cascades_and_keeps_facts(migrated_db):
         assert (await db.execute(select(User).where(User.id == ai_user_id))).scalar_one_or_none() is None
         assert (await db.execute(select(Agent).where(Agent.id == agent_id))).scalar_one_or_none() is None
 
-        # 从属数据：跟着一起没
-        for model in (AgentConfig, RoughMemory, DMSession, DMMessage):
+        # 从属数据：跟着一起没（friendships 没有外键，必须由 delete_agent 显式清）
+        for model in (AgentConfig, RoughMemory, DMSession, DMMessage, Friendship, FriendshipRequest):
             assert await _count(db, model) == 0, f"{model.__tablename__} 应随删号清空"
 
         # 事实记录：行还在，主体列变 NULL

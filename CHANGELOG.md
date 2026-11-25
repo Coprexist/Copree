@@ -604,6 +604,14 @@
 
 - API 页签「请求链路 →」点了 404：跳转目标写成了后端接口路径 `/admin/conversation-log`，而页面早已收进控制台 `/admin?tab=convlog`。前端路由与接口路径的混用一并收口——新增 `utils/routes.ts`（`CONSOLE_PATH` / `consoleTab()`），跳转只引用它；`ConversationLogTab` 改用自己的 `useSearchParams` 读 `?agent=`，不再碰 `window.location`。
 
+- **群列表遇到空群不再整体 500**：`revoked_name` 原来只在「有最后一条消息」的分支里赋值，payload 却无条件使用——列表里只要有一个没发过消息的群，`GET /groups` 就 UnboundLocalError。把「最后一条消息」的预览 / 时间 / 撤回者名字收成纯函数 `last_message_summary()`，默认值跟着形状走，循环里不再自己初始化（2026-11-23 外部反馈）
+
+- **一轮说完后帧不归位，别的会话永远不回**：正常结束只扣步数、不关帧，`turn_state` 停在 running，下一个会话的刺激全被判「窗口被占」，只挂帧记未读（表现为「群里说完一轮，私信永远不回」）。现在轮次开场 `begin_turn(context_ref, turn_id)` 认领帧并写标识，收尾 `end_turn_frame(turn_id=…)` 按同一个标识走唯一出口 `end_frames`；免费轮（提醒 / 收尾）不扣步也不会漏。异常/取消路径一并接上（`code="crash"`）
+
+- **挂起帧不再被当成「正在跑」**：`attach_stimulus` 真挂起时把三态归 `open`（`turn.suspend`），否则等待中的帧和正在跑的长得一样，几个会话互相以为对方在跑、谁都不被唤醒；当前帧若是挂起等着，新消息直接唤醒并认领未读
+
+- **删 AI 后好友列表出现「未知N」**：`friendships.friend_id` 是多态裸 id，没有外键可级联，指向被删账号的那侧会一直留着。删除入口改为统一调用 `friend_service.purge_links_of_user()`（仓储 `delete_links_of_user` 两侧都清，好友申请同样处理），删号与删 AI 共用一个口径
+
 ### 🔧 变更
 
 - **评论通知只在需要动手时报**：一次回十条评论时，十条「公开成功」对 AI 没有任何增量信息，
@@ -762,6 +770,8 @@
 - API 配置的「系统消息位置」多了「自动识别」，旁边多了「重新识别」：自己填的本地 / 中转地址在保存后点一下就能拿到精确结论，不必手动猜该给 `leading` 还是 `anywhere`。
 
 - API 页签的「实际使用」由四个等宽卡片改成一行结论胶囊：命中项描边提亮，跳过项压暗成小字，窄屏自然换行；不再靠大色块撑层级，也不再竖排占半屏。
+
+- **插件配置按 `config_schema` 类型渲染控件**：`integer` / `number` 用数字框，`boolean` 用勾选框，`array` / `object` 用 JSON 多行，长文本（`format: "textarea"` 或 >120 字 / 含换行）自动多行。此前所有非机密字段都是单行 `<input>`，workflow JSON 这类配置看不全也改不了（2026-11-23 外部反馈）
 
 ### 🧹 清理
 

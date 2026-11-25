@@ -807,6 +807,78 @@ async def end_frames(
     logger.info(f"Agent({agent_id}) 帧出链 {len(targets)} 个（by={by}, code={code}）：{reason}")
 
 
+async def begin_turn(
+    db: AsyncSession, agent_id: int, context_ref: str, turn_id: str,
+) -> dict | None:
+    """轮次开场：认领「这一轮演的是哪一帧」，把 turn_id 写上去。
+
+    必须在扣步之前、且**不管后面扣不扣步**都要做：免费轮（提醒 / 收尾）一步都不扣，
+    收尾时却同样要出链——帧上没打标识就不知道该关哪一帧。
+
+    按会话键认领（不是栈顶）：刺激到达时只摆帧不切帧，栈顶未必是这一轮要演的；
+    consume_step 同样按会话键扣，三处口径一致。找不到归属就不认领（返回 None）——
+    这一轮可能根本没有自己的帧（老路径 / 插件帧），收尾时也不该去关别人的。
+    """
+    stack = await _get_stack(db, agent_id)
+    ref = (context_ref or "").strip()
+    frame = next(
+        (f for f in reversed(running(stack))
+         if (f.get("context_ref") or "") == ref),
+        None,
+    )
+    if frame is None:
+        fallback = current(stack)
+        if fallback is None or (fallback.get("context_ref") or "") not in ("", ref):
+            return None
+        frame = fallback
+    turn.mark_turn(frame, turn_id)
+    # 开场即占窗口：免费轮（提醒 / 收尾）一步都不扣，但确实在跑——
+    # 只靠扣步置 RUNNING 的话，别的会话会在这一轮跑到一半时被唤醒，两个会话同时跑。
+    frame["turn_state"] = turn.RUNNING
+    await _save(db, agent_id, stack)
+    return frame
+
+
+async def end_turn_frame(
+    db: AsyncSession, agent_id: int, *,
+    turn_id: str = "", context_ref: str = "",
+    code: str = "done_by_ai", reason: str = "", by: str = "ai",
+) -> bool:
+    """轮末归位：把**这一轮演的帧**从 running 收回（end_frames 的轮次入口）。
+
+    先按 turn_id 找——它和扣步时写的是同一个标识，不靠推断。给了 turn_id 却找不到，
+    说明这一轮的帧已经不在了（中途被切帧 / 已被别人出链）：直接返回，不拿别的凑。
+    只有没给 turn_id（老路径 / 轻量调用）才退回会话键；连会话键都匹配不上时，
+    只有当前帧也没有别的会话归属才关——关错一帧等于掐掉另一个会话的轮。
+
+    返回是否真的关了一帧。
+    """
+    stack = await _get_stack(db, agent_id)
+    live = running(stack)
+    target = None
+    if turn_id:
+        target = next(
+            (f for f in reversed(live) if (f.get("turn_id") or "") == turn_id),
+            None,
+        )
+        if target is None:
+            return False
+    if target is None:
+        ref = (context_ref or "").strip()
+        if ref:
+            target = next(
+                (f for f in reversed(live) if (f.get("context_ref") or "") == ref),
+                None,
+            )
+        if target is None:
+            fallback = current(stack)
+            if fallback is None or (fallback.get("context_ref") or "") not in ("", ref):
+                return False
+            target = fallback
+    await end_frames(db, agent_id, [target], code=code, reason=reason, by=by)
+    return True
+
+
 # 本进程启动时间：用来识别「上一个进程留下的 running 帧」——重启后它们不可能真在跑。
 _BOOT_TS = time.time()
 
@@ -844,7 +916,8 @@ async def recover_interrupted(db: AsyncSession, agent_id: int) -> list[dict]:
 
 
 async def consume_step(db: AsyncSession, agent_id: int, n: int = 1,
-                       context_ref: str | None = None) -> tuple[int, str]:
+                       context_ref: str | None = None,
+                       turn_id: str = "") -> tuple[int, str]:
     """扣一步额度（step = 一次模型调用），返回 (剩余步数, 停下的原因)。
 
     这是「额度不创造」的执行侧落点（§4.4）：不够时先沿链向父帧借（每个父帧保留
@@ -897,6 +970,8 @@ async def consume_step(db: AsyncSession, agent_id: int, n: int = 1,
         return 0, "本帧剩余步数已用完，上一帧也没有可借的"
     frame[turn.STEPS_FIELD] -= n
     frame["turn_state"] = turn.RUNNING
+    # 打上本轮标识：收尾按它找回来（begin_turn 已经打过的话这里是同值覆盖）
+    turn.mark_turn(frame, turn_id)
     # 每次扣步刷新「这轮还活着」的时间戳：重启后靠它区分「真在跑」与「上个进程的残影」
     frame["turn_started_at"] = datetime.now(timezone.utc).isoformat()
     await _save(db, agent_id, stack)
@@ -1504,8 +1579,18 @@ async def attach_stimulus(
 
     frame = frame_of(stack, context_ref)
     if frame is not None and prev is not None and frame.get("id") == prev.get("id"):
-        # 他就在这一段里：消息本来就该在这一轮处理，不算「别处有人找」；额度照样重置
+        # 他就在这一段里：消息本来就该在这一轮处理，不算「别处有人找」；额度照样重置。
+        # 但「当前帧」不等于「有一轮在跑」：这一帧也可能是挂起等着（窗口其实空着）。
+        # 挂起就是没人处理，来了消息就该唤醒并认领未读——否则它永远停在 suspended，
+        # 下一条消息继续被记未读（2026-11-26 修完轮末归位后实测）。
+        # 先记旧状态再重置：new_stimulus 会把 turn_state 置成 running，之后就看不出
+        # 这一帧原来是不是挂起等着了（读晚了就永远判成「正在跑」，未读一直挂着）。
+        was_running = turn.ensure_fields(frame).get("turn_state") == turn.RUNNING
         turn.new_stimulus(frame, limit)
+        if not was_running:
+            frame["status"] = "active"
+            frame["unread"] = 0
+            frame["waiting_since"] = ""
         await _save(db, agent_id, stack)
         return frame
     if frame is None:
@@ -1541,6 +1626,10 @@ async def attach_stimulus(
         await _save(db, agent_id, stack)
         logger.info(f"Agent({agent_id}) 收到刺激并唤醒：{label}")
         return frame
+    # 真挂起时三态必须是 open：留着 running 的话，它和正在跑的那一帧长得一样，
+    # 下一条消息判「忙」就会把这条等着被唤醒的帧也算进去——几个会话互相以为对方在跑，
+    # 谁都不被唤醒（2026-11-26 修轮末归位后实测）。
+    turn.suspend(frame)
     frame["unread"] = int(frame.get("unread") or 0) + 1
     frame["waiting_since"] = frame.get("waiting_since") or now
     frame["last_stimulus"] = {

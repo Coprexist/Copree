@@ -2,8 +2,22 @@ import { useState } from 'react'
 import {   Play, Plus, RefreshCw, Settings2, Square, Trash2 } from 'lucide-react'
 import { api } from '../../../api/client'
 import { useT } from '../../../i18n/I18nContext'
-import type { PluginServiceInstance, PluginView } from '../../../utils/skin'
+import type { PluginConfigField, PluginServiceInstance, PluginView } from '../../../utils/skin'
 import { Button, SecretInput } from '../../../components/ui'
+
+/**
+ * config_schema 的 type → 控件。旧代码把所有非机密字段都渲染成单行 input，
+ * 长文本（ComfyUI 的 workflow JSON 这类）既看不全也改不了（2026-11-23 外部反馈）。
+ * 判据只放在这一处，别在 JSX 里再抄一套。
+ */
+function controlOf(field: PluginConfigField, value: string): 'text' | 'number' | 'textarea' | 'boolean' {
+  if (field.type === 'boolean') return 'boolean'
+  if (field.type === 'integer' || field.type === 'number') return 'number'
+  if (field.type === 'array' || field.type === 'object') return 'textarea'
+  // 声明了要多行，或值本身已经放不进一行（换行 / 太长）——单行框对它没有意义
+  if (field.format === 'textarea' || value.includes('\n') || value.length > 120) return 'textarea'
+  return 'text'
+}
 
 /**
  * service 类插件的实例管理（一个插件多份配置：每个 QQ 机器人一份）
@@ -208,6 +222,7 @@ export default function PluginServiceInstances({ plugin, onChanged, onMessage, s
                   const value = secret
                     ? (secretDraft[inst.instance]?.[key] ?? '')
                     : (draft[inst.instance]?.[key] ?? inst.values[key] ?? '')
+                  const control = controlOf(field, value)
                   return (
                     <label key={key} className="block">
                       <span className="text-xs text-textSecondary">
@@ -233,9 +248,28 @@ export default function PluginServiceInstances({ plugin, onChanged, onMessage, s
                           disabled={isCleared}
                           wrapperClassName="mt-1 w-full"
                         />
+                      ) : control === 'boolean' ? (
+                        <input
+                          type="checkbox"
+                          checked={value === 'true'}
+                          onChange={(e) => setValue(inst.instance, key, e.target.checked ? 'true' : 'false')}
+                          disabled={isCleared}
+                          aria-label={field.title || key}
+                          className="mt-1 h-4 w-4 accent-accent-500"
+                        />
+                      ) : control === 'textarea' ? (
+                        <textarea
+                          value={value}
+                          onChange={(e) => setValue(inst.instance, key, e.target.value)}
+                          placeholder={field.description || ''}
+                          disabled={isCleared}
+                          rows={6}
+                          spellCheck={false}
+                          className="field field-sm mt-1 w-full font-mono text-xs"
+                        />
                       ) : (
                         <input
-                          type="text"
+                          type={control === 'number' ? 'number' : 'text'}
                           value={value}
                           onChange={(e) => setValue(inst.instance, key, e.target.value)}
                           placeholder={field.description || ''}

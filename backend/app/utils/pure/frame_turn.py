@@ -33,6 +33,19 @@ RESERVE_STEPS = 1
 # 帧上唯一的额度字段：还剩多少步
 STEPS_FIELD = "steps_left"
 
+# 帧上「这一轮」的标识：开场认领时写进去，收尾按它找回来。
+# 用会话键反推是猜（同一会话先后两轮、一轮中途被切帧都会猜错）；
+# turn_id 让「扣的是哪一轮」与「关的是哪一轮」共享同一个事实。
+TURN_ID_FIELD = "turn_id"
+
+
+def mark_turn(frame: dict, turn_id: str) -> dict:
+    """给帧打上本轮标识（轮次开场认领时调用；同一轮重复调用只是覆盖同值）。"""
+    ensure_fields(frame)
+    if turn_id:
+        frame[TURN_ID_FIELD] = turn_id
+    return frame
+
 
 def ensure_fields(frame: dict) -> dict:
     """老帧没有这些字段：读时补默认（缺失 = closed / 0 步）。
@@ -85,6 +98,9 @@ def new_stimulus(frame: dict, limit: int = DEFAULT_STEPS_LIMIT) -> dict:
     frame[STEPS_FIELD] = max(1, int(limit or DEFAULT_STEPS_LIMIT))
     frame["lent_out"] = 0
     frame["borrow_from"] = []
+    # 刺激到达 = 这一帧要动起来（常态下 attach 完就开跑，所以先标 running）。
+    # 但「挂着等窗口」的那一帧必须由挂起方改回 open（turn.suspend）：否则它看起来
+    # 和正在跑一样，attach_stimulus 判「忙」时会把等着的那一帧也算进去（2026-11-26）。
     frame["turn_state"] = RUNNING
     return frame
 

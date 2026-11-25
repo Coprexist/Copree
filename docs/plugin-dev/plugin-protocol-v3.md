@@ -71,7 +71,8 @@ from app.services.plugin.api import service, ServicePlugin
     config_schema={
         "app_id": {"type": "string", "title": "AppID", "required": True},
         "client_secret": {"type": "string", "title": "ClientSecret", "secret": True, "required": True},
-        # 本期表单只支持 string：多值先用逗号分隔，插件自己 split（不做"看起来支持数组"的假支持）
+        # 表单按 type 渲染控件（string / integer / number / boolean / array / object）；
+        # 这里仍用 string 是为了配置好读：多群号逗号分隔，插件自己 split
         "group_allowlist": {"type": "string", "title": "允许接入的群号", "description": "多个群号用逗号分隔"},
     },
 )
@@ -163,7 +164,13 @@ class QqChannelPlugin(ServicePlugin):
 `PluginManager.tsx`：
 
 - `CATEGORY_ICON/LABEL` 增加 `service`（`Server` / 「服务」）
-- **service 卡片落在「统一插件」区**：运行状态徽标 + 待配置提示 + 启动/停止 + 「配置」展开（schema 驱动表单，`secret` 用 password）
+- **service 卡片落在「统一插件」区**：运行状态徽标 + 待配置提示 + 启动/停止 + 「配置」展开（schema 驱动表单）
+- 控件按 `config_schema[key].type` 选（唯一映射点 `PluginServiceInstances.tsx` 的 `controlOf`）：
+  `integer` / `number` → 数字框，`boolean` → 勾选框，`array` / `object` → JSON 多行，
+  `string` 在 `format: "textarea"` 或内容较长（>120 字 / 含换行）时用多行；
+  `secret` 仍只渲染密码框，且只回「已保存 / 未保存」
+- 旧版把所有字段都渲染成单行 `<input>`，长文本（如 ComfyUI 的 workflow JSON）看不全也改不了
+  （2026-11-23 外部反馈）
 - 下半屏改为只列**内置服务**（`owner == null`，如 browser）——目录插件归统一插件区，**同一个插件只出现一次**
 - service 类不显示用户个人开关：服务是全局资源，"用户个人启用某个后台服务"是假语义
 - 文案走 i18n（`tool:pluginService.*`，zh/en/ja 三份），无 emoji

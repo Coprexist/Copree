@@ -23,6 +23,8 @@ export interface PluginConfigField {
   required?: boolean
   /** true = 机密项：后端加密落库、接口只回"有没有填"，前端用 password 输入 */
   secret?: boolean
+  /** JSON Schema 的 format（'textarea' = 明确要多行；长文本不靠这个也能自动升格） */
+  format?: string
   items?: { type?: string }
 }
 

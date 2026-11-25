@@ -640,6 +640,15 @@ async def delete_agent(
     await db.flush()
 
     if ai_user_id:
+        # 好友关系/申请没有外键可依赖（friendships.friend_id 是多态裸 id）：删掉虚拟账号后，
+        # 指向它的那些行会一直留着，好友列表就成了「未知N」（2026-11-23 外部反馈）。
+        # 清理口径只维护在 friend_service 一处——删账号与删 AI 共用，别在这里另写一份删法。
+        from app.repositories.friend_repo import SQLAlchemyFriendRepository
+        from app.services.social.friend_service import purge_links_of_user
+
+        await purge_links_of_user(
+            friend_repo=SQLAlchemyFriendRepository(db), user_id=ai_user_id,
+        )
         ai_user = (await db.execute(select(User).where(User.id == ai_user_id))).scalar_one_or_none()
         if ai_user:
             await db.delete(ai_user)

@@ -3,7 +3,7 @@
 """
 from datetime import datetime, timezone
 from typing import Optional, Protocol
-from sqlalchemy import select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,6 +35,7 @@ class FriendRepository(Protocol):
     async def get_pending_requests_for_ai(self, agent_user_id: int) -> list[FriendshipRequest]: ...
     async def list_friend_requests(self, user_id: int, status: str, received_only: bool) -> list[FriendshipRequest]: ...
     async def is_friend(self, user_id: int, friend_type: str, friend_id: int) -> bool: ...
+    async def delete_links_of_user(self, user_id: int) -> int: ...
     async def flush(self) -> None: ...
     async def refresh(self, obj) -> None: ...
     def add(self, obj) -> None: ...
@@ -135,6 +136,23 @@ class SQLAlchemyFriendRepository:
 
     async def delete_friendship(self, friendship: Friendship) -> None:
         await self.session.delete(friendship)
+
+    async def delete_links_of_user(self, user_id: int) -> int:
+        """删掉所有引用这个用户的好友关系与申请，返回行数。
+
+        friend_type + friend_id 是多态裸 id（没有外键）：`user_id` 那侧有 FK CASCADE，
+        **指向被删账号的那一侧没有**——删 AI 后好友列表出现「未知N」就是这些残留
+        （2026-11-23 外部反馈）。两侧都清，才是「这个用户不存在了」的完整语义。
+        """
+        friendships = await self.session.execute(delete(Friendship).where(or_(
+            Friendship.user_id == user_id,
+            Friendship.friend_id == user_id,
+        )))
+        requests = await self.session.execute(delete(FriendshipRequest).where(or_(
+            FriendshipRequest.requester_id == user_id,
+            FriendshipRequest.target_id == user_id,
+        )))
+        return (friendships.rowcount or 0) + (requests.rowcount or 0)
 
     async def update_request_status(self, request: FriendshipRequest, status: str) -> None:
         request.status = status

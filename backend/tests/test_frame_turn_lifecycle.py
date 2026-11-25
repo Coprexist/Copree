@@ -34,6 +34,11 @@ def test_old_frames_are_converted_not_zeroed():
 
 
 def test_new_stimulus_resets_quota_and_clears_debts():
+    """刺激到达：额度重置、标 running（常态下接着就开跑）。
+
+    但「挂着等窗口」的帧必须由挂起方 suspend 回 open——不然它和正在跑的长得一样，
+    attach_stimulus 判「忙」时会把等着的那一帧也算进去（2026-11-26 修轮末归位时发现）。
+    """
     f = _frame(turn_state=OPEN, steps_left=5, lent_out=3,
                borrow_from=[{"frame": "p", "n": 2}])
     new_stimulus(f, limit=8)
