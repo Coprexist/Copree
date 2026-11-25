@@ -132,12 +132,20 @@ def test_build_content_falls_back_when_oversized():
 
 
 def test_build_content_declares_skipped_images():
-    """单条默认只注入 1 张，其余须注明未提供，否则模型会引用不存在的图片。"""
+    """显式限量时，没给的那几张必须注明——否则模型会引用不存在的图片。"""
+    with _data_dir({"a.png": PNG_1PX, "b.png": PNG_1PX}) as data_dir:
+        attachments = (IMG, {**IMG, "file_id": 2, "path": "b.png"})
+        parts = build_content("看图", attachments, data_dir, max_images=1)
+    assert injected_image_count(parts) == 1
+    assert any("另有 1 张图片未提供" in p.get("text", "") for p in parts)
+
+
+def test_build_content_defaults_to_every_image():
+    """默认**不**限量：张数已交给字数预算判（见 test_image_budget.py），这里不该再砍。"""
     with _data_dir({"a.png": PNG_1PX, "b.png": PNG_1PX}) as data_dir:
         attachments = (IMG, {**IMG, "file_id": 2, "path": "b.png"})
         parts = build_content("看图", attachments, data_dir)
-    assert injected_image_count(parts) == 1
-    assert any("另有 1 张图片未提供" in p.get("text", "") for p in parts)
+    assert injected_image_count(parts) == 2
 
 
 # 便签与视觉降级

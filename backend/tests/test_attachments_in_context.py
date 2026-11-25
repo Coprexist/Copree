@@ -114,7 +114,7 @@ def test_oversized_text_attachment_is_not_inlined():
     assert "x" * 100 not in block
 
 
-def test_latest_message_gets_the_file_content():
+async def test_latest_message_gets_the_file_content():
     from app.ai.llm import _attach_attachments_to_message
 
     with tempfile.TemporaryDirectory() as data_dir:
@@ -122,7 +122,8 @@ def test_latest_message_gets_the_file_content():
         messages = [{"role": "system", "content": "在群聊「测试」中："},
                     {"role": "user", "content": "[文件] 幻想小说创作自测试卷.txt（13.6 KB） 我帮你发过来。"}]
 
-        injected = _attach_attachments_to_message(messages, 1, _Msg("我帮你发过来。", [TXT]), data_dir)
+        injected = await _attach_attachments_to_message(
+            None, messages, 1, _Msg("我帮你发过来。", [TXT]), data_dir)
 
     assert injected == 0, "没有图片"
     assert "[文件内容]" in messages[1]["content"]
@@ -136,7 +137,7 @@ async def test_picture_followed_by_a_text_message_still_reaches_the_ai():
     用户消息"没有附件，图就成了历史里的 [图片] 标记，于是回"我这边没收到内容"。所以要在
     本轮范围内往回找最近的一张图（仍只注入一张，不跨轮）。
     """
-    from app.ai.llm import _turn_image_of
+    from app.ai.llm import _turn_image_messages
 
     class _Row:
         def __init__(self, attachments):
@@ -155,11 +156,12 @@ async def test_picture_followed_by_a_text_message_still_reaches_the_ai():
     slots = [(3, {"actor": "user", "ref": "100"}), (4, {"actor": "user", "ref": "101"})]
 
     db = _Db(rows)
-    index, orm = await _turn_image_of(db, slots, object, 4, rows[101])
-    assert (index, orm) == (3, rows[100]), (index, orm)
+    found = await _turn_image_messages(db, slots, object, 4, rows[101])
+    assert found == [(3, rows[100])], found
 
-    # 最后一条自己带图：直接用，不必往回翻
+    # 本轮所有带图消息都收进来（不只最近一条），同一行不重复
     db2 = _Db(rows)
-    index2, orm2 = await _turn_image_of(db2, slots, object, 4, rows[100])
-    assert index2 == 4 and orm2 is rows[100]
-    assert db2.asked == [], db2.asked
+    found2 = await _turn_image_messages(db2, slots, object, 4, rows[100])
+    assert found2 == [(3, rows[100]), (4, rows[100])], found2
+    # 扫过整轮 slots：100 有图留下，101 没图被跳过
+    assert db2.asked == [100, 101], db2.asked

@@ -871,6 +871,7 @@ async def _tool_call_loop(
                     conversation_type=conversation_type,
                     summary=(compress_stats.get("summary") or ""),
                     trigger_user_id=trigger_user_id,
+                    api_base_url=api_base_url, api_key=api_key,
                 )
     except Exception as e:
         logger.warning(f"调用前空闲压缩跳过（非致命）: {e}")
@@ -1168,6 +1169,7 @@ async def _tool_call_loop(
                                     conversation_type=conversation_type,
                                     summary=(compress_stats.get("summary") or ""),
                                     trigger_user_id=trigger_user_id,
+                                    api_base_url=current_api_base, api_key=current_api_key,
                                 )
                                 await db.commit()
                             except Exception:
@@ -1942,12 +1944,19 @@ async def _record_key_note_experience(db, agent, context_ref: str, group_id: int
 
 
 async def _unlock_context(db, agent, *, group_id, session_id, conversation_type,
-                          summary: str, trigger_user_id: int | None = None) -> tuple[str, ...]:
-    """解锁点收尾——实现在 services/history/context_unlock.py（工具压缩也要走同一份）"""
+                          summary: str, trigger_user_id: int | None = None,
+                          api_base_url: str | None = None,
+                          api_key: str | None = None) -> tuple[str, ...]:
+    """解锁点收尾——实现在 services/history/context_unlock.py（工具压缩也要走同一份）
+
+    api_base_url / api_key 是这一轮真正走的通道：压缩后要按它卸载远端图片，
+    换过 key 的话旧作用域的行也会一起减掉（见 deepseek_files.release_context_images）。
+    """
     return await unlock_context(
         db, agent,
         group_id=group_id, session_id=session_id, conversation_type=conversation_type,
         summary=summary, trigger_user_id=trigger_user_id,
+        api_base_url=api_base_url, api_key=api_key,
     )
 
 

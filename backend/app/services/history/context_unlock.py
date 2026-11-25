@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 # 对账（顺序也算）——清单里加了步骤却没人实现会当场 KeyError，不会悄悄半解锁。
 UNLOCK_STEPS = (
     "rewrite_history",        # 重写账本（摘要 + 事件 + 最近 N 条）
+    "release_remote_images",  # 被折叠掉的图片：卸载远端文件（DeepSeek Files API）
     "clear_note_copies",      # 便签副本（连同撤下通知）随上下文重建离场
     "reset_trigger_state",    # 触发规则状态复位（scope=frame 在新上下文里从零开始）
     "apply_pending_config",   # 应用挂起的配置
@@ -38,7 +39,9 @@ def context_ref_for(conversation_type: str, *, group_id: int | None, session_id:
 
 async def unlock_context(db: AsyncSession, agent, *, group_id: int | None, session_id: str | None,
                          conversation_type: str, summary: str,
-                         trigger_user_id: int | None = None) -> tuple[str, ...]:
+                         trigger_user_id: int | None = None,
+                         api_base_url: str | None = None,
+                         api_key: str | None = None) -> tuple[str, ...]:
     """解锁点（压缩成功）的一整套收尾：按 UNLOCK_STEPS 顺序执行，返回实际执行的步骤名。"""
     from app.services.history.context_sync import rewrite_context
     from app.services.memory.context_compression_service import DEFAULT_KEEP_LAST_N
@@ -47,6 +50,18 @@ async def unlock_context(db: AsyncSession, agent, *, group_id: int | None, sessi
     async def _rewrite_history():
         if ref:
             await rewrite_context(db, agent, ref, summary=summary, keep_last=DEFAULT_KEEP_LAST_N)
+
+    async def _release_remote_images():
+        # 图片进账本的是 file_id（DeepSeek Files API），被折叠掉之后那个 file 就没人引用了。
+        # 卸载放在 rewrite_history 之后：账本已经换上摘要，再删远端就不会有半截引用。
+        # 失败只记日志——卸载是省配额，不能让压缩本身跟着失败。
+        from app.services.ai.deepseek_files import release_context_images
+        if not api_base_url:
+            return
+        await release_context_images(
+            db, agent_id=agent.id, context_ref=ref,
+            base_url=api_base_url, api_key=api_key,
+        )
 
     async def _clear_note_copies():
         from app.services.agent.state_stack_service import release_active_frame_notes
@@ -105,6 +120,7 @@ async def unlock_context(db: AsyncSession, agent, *, group_id: int | None, sessi
 
     runners = {
         "rewrite_history": _rewrite_history,
+        "release_remote_images": _release_remote_images,
         "clear_note_copies": _clear_note_copies,
         "reset_trigger_state": _reset_trigger_state,
         "apply_pending_config": _apply_pending_config,

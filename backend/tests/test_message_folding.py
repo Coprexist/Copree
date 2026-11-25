@@ -25,7 +25,8 @@ def test_long_text_keeps_head_and_tail():
 
 
 def test_expand_id_is_optional():
-    out = fold_text("x" * 3000)
+    # 显式给 limit：默认值是 FOLD_LIMIT，写死长度会随它一起漂（2026-11-25 提到 3840 时踩过）
+    out = fold_text("x" * 3000, limit=1024)
     assert "省略" in out and "[展开 id=" not in out
 
 
@@ -37,7 +38,8 @@ def test_group_entry_folds_with_the_message_id():
 
     class _Msg:
         id = 1359
-        content = "头" * 1500 + "丢" * 1500 + "尾" * 1000
+        # 要显著超过 FOLD_LIMIT（3840），否则省略窗口太小、整段"丢"还落在保留区里
+        content = "头" * 3000 + "丢" * 4000 + "尾" * 1000
         sender_type = "ai"
         sender_id = 2
         sender_name = None

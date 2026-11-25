@@ -10,7 +10,8 @@ import pytest
 
 pytestmark = pytest.mark.anyio
 
-LONG = "长" * 3000
+# 超过 FOLD_LIMIT（3840）才折得动；写死 3000 的话默认值一提就静默失效
+LONG = "长" * 5000
 
 
 async def _seed(db, display_len):
@@ -71,4 +72,4 @@ async def test_group_without_a_limit_folds_at_the_default(migrated_db):
         body = await _context_body(db)
 
     assert "第一句" in body, "没设过的群也要有历史"
-    assert "…（中间省略" in body, "没设过的群按 FOLD_LIMIT 折叠，3000 字那条要折"
+    assert "…（中间省略" in body, "没设过的群按 FOLD_LIMIT 折叠，超过上限那条要折"

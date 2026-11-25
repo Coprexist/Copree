@@ -22,7 +22,17 @@ logger = logging.getLogger(__name__)
 
 IMAGE_PLACEHOLDER = "[图片]"
 MAX_IMAGE_BYTES = 4 * 1024 * 1024  # 单图上限，与模型侧限制对齐
-DEFAULT_MAX_IMAGES = 1  # 单条消息最多注入几张真实图片
+
+# 一张图折算成多少「字」：官方视觉 token × 项目的 1.5 字/token（estimate_tokens 的口径）。
+# 图片不再按「张数」限制——那是 base64 时代的拍脑袋数；现在按单条消息的字数上限判定，
+# 一张图 = 276~1536 字（见 utils/pure/image_tokens.py）。
+IMAGE_CHARS_PER_TOKEN = 1.5
+# 图片的额外字数余量：0 = 图片与正文**共用**同一个字数上限（用户 2026-11-25 的口径：
+# 上限本身就提到 3840 了，不再单独给图片开口子）。
+IMAGE_CHAR_HEADROOM = 0
+
+# 单条消息最多注入几张真实图片：None = 不限制（受字数预算约束，见 select_images_for_budget）
+DEFAULT_MAX_IMAGES = None
 
 # 尾部 system 便签的识别标记：降级时要靠它把"你能看图"改写成"你看不到图"
 IMAGE_NOTE_PREFIX = "【本轮附图】"
@@ -77,26 +87,87 @@ def image_placeholder(attachments) -> str:
     return IMAGE_PLACEHOLDER if n == 1 else f"{IMAGE_PLACEHOLDER}×{n}"
 
 
+def image_pixel_size(att: dict, data_dir: str) -> tuple[int, int] | None:
+    """图片的像素宽高（只读文件头，不解码整张图）。读不到返回 None。"""
+    rel = att.get("path") or ""
+    if not rel:
+        return None
+    physical = os.path.join(data_dir, rel)
+    if not os.path.isfile(physical):
+        return None
+    try:
+        from PIL import Image  # 随镜像提供；调用点是 IO，延迟导入不拖慢模块加载
+
+        with Image.open(physical) as img:
+            width, height = img.size
+        return (int(width), int(height)) if width and height else None
+    except Exception as e:
+        logger.warning(f"🖼️ 读取图片尺寸失败（按 0 字算）{physical}: {e}")
+        return None
+
+
+def image_display_chars(att: dict, data_dir: str, provider: str = "other") -> int:
+    """这张图折算成多少「字」：厂商视觉 token × IMAGE_CHARS_PER_TOKEN。
+
+    只有 DeepSeek 有精确公式；其他厂商走 estimate_image_tokens 的分支（未知 = 1024）。
+    读不到尺寸按 0 算——宁可多给一张，也不要因为一个坏文件把整条消息的额度吃掉。
+    """
+    from app.utils.pure.image_tokens import estimate_image_tokens
+
+    size = image_pixel_size(att, data_dir)
+    if not size:
+        return 0
+    return int(estimate_image_tokens(*size, provider) * IMAGE_CHARS_PER_TOKEN)
+
+
+def select_images_for_budget(
+    images: list[dict], data_dir: str, budget_chars: int | None, provider: str = "other",
+) -> list[dict]:
+    """按字数预算选图：从**最新**往后累加，超出预算的图降级成占位。
+
+    budget_chars 为 None = 不限制（没有字数上限判定的路径，比如世界对话）。
+    至少保留最新的一张：一张都不给等于这次消息的图彻底丢了，而超支一张最多也就 1536 字。
+    """
+    if budget_chars is None:
+        return list(images)
+    selected: list[dict] = []
+    used = 0
+    for att in reversed(images):
+        cost = image_display_chars(att, data_dir, provider)
+        if selected and used + cost > budget_chars:
+            continue
+        selected.append(att)
+        used += cost
+    selected.reverse()
+    return selected
+
+
 def build_content(
     text: str | None,
     attachments,
     data_dir: str,
     *,
-    max_images: int = DEFAULT_MAX_IMAGES,
+    max_images: int | None = DEFAULT_MAX_IMAGES,
     max_bytes: int = MAX_IMAGE_BYTES,
+    images: list[dict] | None = None,
 ) -> str | list[dict]:
     """构建一条消息的 LLM content。
 
     无可用图片 → 原样返回 text（str）；
     有图       → 返回 parts 列表 [{type: text}, {type: image_url, image_url: {url}}, ...]。
+
+    images：调用方已经按字数预算挑好的图（见 select_images_for_budget）；
+    不传则退化成"这条消息里所有可注入的图"。
     """
-    images = image_attachments(attachments)
+    if images is None:
+        images = image_attachments(attachments)
     if not images:
         return text or ""
 
     parts: list[dict] = [{"type": "text", "text": text or IMAGE_PLACEHOLDER}]
     injected = 0
-    for att in images[:max_images]:
+    chosen = images if max_images is None else images[:max_images]
+    for att in chosen:
         url = _read_data_url(att, data_dir, max_bytes)
         if url is None:
             continue

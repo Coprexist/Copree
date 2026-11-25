@@ -5,6 +5,8 @@ LLM 调用抽象层
 """
 import json
 import logging
+import re
+
 import httpx
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -34,12 +36,52 @@ from app.utils.pure.prompting import (
     chronological,
 )
 from app.utils.multimodal import (
+    IMAGE_CHAR_HEADROOM, IMAGE_PLACEHOLDER,
     build_content, image_attachments, image_note, injected_image_count,
     messages_have_images, strip_image_parts, is_vision_unsupported_error,
-    text_attachment_blocks,
+    select_images_for_budget, text_attachment_blocks,
 )
 
 logger = logging.getLogger(__name__)
+
+# 厂商说"这个 file_id 不可用"的文案特征（DeepSeek 与 Anthropic/OpenAI 的措辞都覆盖）。
+# 2026-11-25：云端删过/过期/被配额回收的图，chat 请求会被整体 400 打回——不兜底就是整轮失败。
+_STALE_FILE_HINT = re.compile(r"file(?:[_\s-]?(?:id|api|not[_\s-]?found|deleted|expired))?", re.I)
+_STALE_FILE_REASON = re.compile(
+    r"(?:expired|not[_\s-]?found|deleted|does not exist|not created under)", re.I)
+
+
+def _looks_like_stale_file(detail: str) -> bool:
+    """这条 400 是不是"引用的远端文件没了"。"""
+    return bool(_STALE_FILE_HINT.search(detail or "") and _STALE_FILE_REASON.search(detail or ""))
+
+
+def _degrade_file_blocks(messages: list[dict]) -> tuple[int, list[str]]:
+    """把消息里的 {"type":"file"} 就地换成 [图片] 占位，返回 (换掉几张, 失效的 file_id)。
+
+    降级而不是重传：这时已经在请求路径里，拿不到 db / 原图；先让这一轮发出去（AI 知道
+    "这里有图但看不到"），下一轮注入时 ensure_uploaded 会重新上传。
+    """
+    replaced = 0
+    stale: list[str] = []
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        parts: list[dict] = []
+        changed = False
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "file":
+                if part.get("file_id"):
+                    stale.append(str(part["file_id"]))
+                parts.append({"type": "text", "text": IMAGE_PLACEHOLDER})
+                replaced += 1
+                changed = True
+            else:
+                parts.append(part)
+        if changed:
+            message["content"] = parts
+    return replaced, stale
 
 # ══════════════════════════════════════════════════════════════
 # 常量
@@ -381,18 +423,30 @@ async def _chat_completion_non_streaming(
     非流式聊天补全 — 当前生产路径。
     """
     url, headers = _build_request_url_and_headers(api_base_url, api_key)
-    payload = _build_chat_payload(
-        messages=messages, model=model, api_base_url=api_base_url,
-        temperature=temperature, top_p=top_p,
-        max_tokens=max_tokens, tools=tools, response_format=response_format,
-        presence_penalty=presence_penalty, frequency_penalty=frequency_penalty,
-        thinking_enabled=thinking_enabled, user_id=user_id,
-        provider_supports_thinking=provider_supports_thinking,
-        system_layout=system_layout,
-    )
+    def _payload() -> dict:
+        return _build_chat_payload(
+            messages=messages, model=model, api_base_url=api_base_url,
+            temperature=temperature, top_p=top_p,
+            max_tokens=max_tokens, tools=tools, response_format=response_format,
+            presence_penalty=presence_penalty, frequency_penalty=frequency_penalty,
+            thinking_enabled=thinking_enabled, user_id=user_id,
+            provider_supports_thinking=provider_supports_thinking,
+            system_layout=system_layout,
+        )
 
     async with httpx.AsyncClient(timeout=_request_timeout(api_base_url)) as client:
-        response = await client.post(url, json=payload, headers=headers)
+        response = await client.post(url, json=_payload(), headers=headers)
+
+        # 400 且错误指向「引用的文件没了」→ 把 file 块降级成 [图片] 占位，重发一次。
+        # 只重试一次：第二次还报 file 错说明不是失效问题，再试就是死循环。
+        if response.status_code == 400 and _looks_like_stale_file(response.text):
+            replaced, stale = _degrade_file_blocks(messages)
+            if replaced:
+                if stale:
+                    from app.services.ai.deepseek_files import invalidate
+                    invalidate(stale)
+                logger.warning(f"🖼️ 远端图片已失效，{replaced} 张降级为占位后重发一次")
+                response = await client.post(url, json=_payload(), headers=headers)
 
         if response.status_code != 200:
             error_text = response.text[:500]
@@ -1182,16 +1236,30 @@ async def _build_memory_index(db, agent, state: str | None = None) -> str:
         return ""
 
 
-def _attach_attachments_to_message(
+async def _attach_attachments_to_message(
+    db,
     messages: list[dict],
     index: int | None,
     orm_message,
     data_dir: str,
+    *,
+    agent_id: int | None = None,
+    context_ref: str | None = None,
+    api_base_url: str | None = None,
+    api_key: str | None = None,
+    model: str | None = None,
+    max_len: int | None = None,
 ) -> int:
     """把 messages[index] 的附件升级成模型能读的内容（图片 parts / 文本正文块）。
 
-    只让"最新一条用户消息"携带真实图片字节与文件内容，历史消息保持纯文本——既护住
+    只让"最新一条用户消息"携带真实图片与文件内容，历史消息保持纯文本——既护住
     prompt cache，也避免 token 爆炸（历史里留的是渲染层铺的 [图片]/[文件] 标记）。
+
+    图片有两条路（2026-11-25）：
+    - DeepSeek 官方端点 + `deepseek-flash` → 上传一次拿 `file_id`，请求里用
+      `{"type":"file"}` 引用（不占 48 MiB 请求体，单图可到 64 MiB）；
+    - 其他通道 → 继续 base64 内联（它们没有 Files API，硬发只会 404）。
+    上传失败一律回退 base64：宁可多占点请求体，也不能让这张图凭空消失。
 
     返回实际注入的图片数（文本内容不计）。
 
@@ -1205,11 +1273,64 @@ def _attach_attachments_to_message(
         return 0
 
     injected = 0
-    if image_attachments(attachments):
-        content = build_content(messages[index].get("content"), attachments, data_dir)
-        if isinstance(content, list):      # 一张图都没读出来时保持纯文本
-            messages[index]["content"] = content
-            injected = injected_image_count(content)
+    images = image_attachments(attachments)
+    if images:
+        # 字数预算：文字先占，剩下的给图，另加一点余量。
+        # **不按张数限制**——图片折算是官方视觉 token × 1.5 字/token（一张 276~1536 字），
+        # max_len 是这条消息喂给 AI 时的字数上限（群设置 max_msg_display_len）；没有它的
+        # 路径（私信 / 世界）传 None，即不限制。
+        budget: int | None = None
+        if max_len and max_len > 0:
+            current = messages[index].get("content")
+            text_len = len(current) if isinstance(current, str) else 0
+            budget = max(0, max_len - text_len) + IMAGE_CHAR_HEADROOM
+        from app.utils.pure.image_tokens import provider_of
+
+        chosen = select_images_for_budget(
+            images, data_dir, budget, provider_of(api_base_url, model))
+
+        remote_ids: list[str] = []
+        if chosen and agent_id is not None and context_ref:
+            from app.services.ai.deepseek_files import (
+                ensure_uploaded, file_scope, release_foreign_images,
+                request_image_hashes, supports_files_api,
+            )
+
+            if supports_files_api(api_base_url or "", model):
+                try:
+                    # 换 key 的对账是**请求级**的：把这个请求体原本要用的所有图，
+                    # 一起从旧作用域减掉；本次没用到的不动（换回来还能复用）
+                    await release_foreign_images(
+                        db, agent_id=agent_id, context_ref=context_ref,
+                        keep_scope=file_scope(api_base_url or "", api_key),
+                        content_hashes=await request_image_hashes(chosen, data_dir, len(chosen)),
+                    )
+                    for att in chosen:
+                        remote = await ensure_uploaded(
+                            db, agent_id=agent_id, context_ref=context_ref,
+                            base_url=api_base_url or "", api_key=api_key,
+                            data_dir=data_dir, att=att,
+                        )
+                        if not remote:
+                            # 一张失败就整条回退 base64：别让同一条消息一半 file 一半 image_url
+                            remote_ids = []
+                            break
+                        remote_ids.append(remote)
+                except Exception as e:
+                    logger.warning(f"🖼️ Files API 解析失败，回退 base64: {e}")
+                    remote_ids = []
+
+        if remote_ids:
+            parts = [{"type": "text", "text": messages[index].get("content") or IMAGE_PLACEHOLDER}]
+            parts.extend({"type": "file", "file_id": fid} for fid in remote_ids)
+            messages[index]["content"] = parts
+            injected = len(remote_ids)
+        else:
+            content = build_content(messages[index].get("content"), attachments, data_dir,
+                                    images=chosen)
+            if isinstance(content, list):      # 一张图都没读出来时保持纯文本
+                messages[index]["content"] = content
+                injected = injected_image_count(content)
 
     block = text_attachment_blocks(attachments, data_dir)
     if block:
@@ -1221,28 +1342,30 @@ def _attach_attachments_to_message(
     return injected
 
 
-async def _turn_image_of(db, slots: list, orm_model, fallback_idx, fallback_orm):
-    """本轮用户消息里最近的一张带图消息 → (下标, ORM)；没有就回落到最后一条
+async def _turn_image_messages(db, slots: list, orm_model, fallback_idx, fallback_orm):
+    """本轮用户消息里**所有**带图消息 → [(下标, ORM)]（按时间正序）；没有就空列表。
 
     为什么不是"只认最后一条"：先发图、再补一句"收到了吗"是群里最常见的连发。只认最后一条
     时，那句文字会成为"最新一条用户消息"，图退化成历史里的 [图片] 标记——2026-11-14 真机
     上 AI 就是回"还是只有[图片]，我这边没收到内容"。
 
-    仍然只注入一张图（默认 max_images=1）、只在本轮里找：不跨轮（上一轮的老图不该当新图），
-    也不因为往回找就多塞字节——token 与 prompt cache 的账没变。
+    为什么不是"只给一张"（2026-11-25 改）：群友连发三张，AI 只收到一张却按三条 [图片] 标记
+    说"都看到了"。张数不该拍脑袋定——图片折算成字数，由注入层按每条消息的字数上限决定
+    给几张（见 _attach_attachments_to_message 的 max_len）。
     """
     from app.utils.multimodal import image_attachments
 
-    if image_attachments(getattr(fallback_orm, "attachments", None)):
-        return fallback_idx, fallback_orm
-    for index, entry in reversed(slots or []):
+    found: dict[int, object] = {}
+    if fallback_orm is not None and image_attachments(getattr(fallback_orm, "attachments", None)):
+        found[fallback_idx] = fallback_orm
+    for index, entry in slots or []:
         ref = entry.get("ref")
         if not ref:
             continue
         orm = await db.get(orm_model, int(ref))
         if orm is not None and image_attachments(getattr(orm, "attachments", None)):
-            return index, orm
-    return fallback_idx, fallback_orm
+            found[index] = orm
+    return sorted(found.items())
 
 # _format_time ——已迁移到 utils/pure/prompting.py，导入为 format_time_shanghai
 # format_message ——已迁移到 utils/pure/prompting.py
@@ -1367,6 +1490,7 @@ async def build_messages(
     prompt_owner: int | None = None,
     context_config: ContextConfig | None = None,
     pending_delivery: list[dict] | None = None,
+    model: str | None = None,
 ) -> list[dict]:
     """
     构建发送给 LLM 的消息列表（6 段系统提示词 + 历史消息）。
@@ -1665,12 +1789,21 @@ async def build_messages(
             pending_delivery.extend(undelivered(ledger))
 
         if context_config_parser.should_inject_image(context_config):
-            image_idx, image_orm = await _turn_image_of(
+            image_msgs = await _turn_image_messages(
                 db, turn_user_slots, MessageModel, last_user_idx, last_user_orm,
             )
-            _n_img = _attach_attachments_to_message(messages, image_idx, image_orm, settings.data_dir)
+            _n_img = 0
+            for _idx, _orm in image_msgs:
+                _n_img += await _attach_attachments_to_message(
+                    db, messages, _idx, _orm, settings.data_dir,
+                    agent_id=agent.id, context_ref=session_ref,
+                    api_base_url=api_base_url, api_key=api_key, model=model,
+                    # 群聊消息喂给 AI 的字数上限（群设置 max_msg_display_len）：
+                    # 图片折算成字数后与正文一起受它约束，0 = 不折叠 = 图片不限制
+                    max_len=max_len,
+                )
             if _n_img:
-                messages.append({"role": "system", "content": image_note(_n_img)})
+                messages.append({"role": "system", "content": image_note(_n_img, source="本轮消息")})
 
         # 兜底（2026-09-25 漂移事故）：上下文最后一条不该落后于群内最新一条。
         # 真落后了（窗口/压缩吃掉了新消息）就至少把"还有几条没看"说清楚，
@@ -1814,6 +1947,7 @@ async def build_dm_messages(
     system_prompt_override: str | None = None,
     prompt_owner: int | None = None,
     pending_delivery: list[dict] | None = None,
+    model: str | None = None,
 ) -> list[dict]:
     """构建 DM 私信的消息列表（6 段系统提示词 + DM 历史消息；pending_delivery 同 build_messages）"""
     from app.models.dm import DMMessage, DMSession
@@ -2005,11 +2139,19 @@ async def build_dm_messages(
         pending_delivery.extend(undelivered(ledger))
 
     # 🖼️ 本轮里最近的一条带图消息注入真图（先图后文也认）
-    image_idx, image_orm = await _turn_image_of(
+    image_msgs = await _turn_image_messages(
         db, turn_user_slots, DMMessageModel, last_user_idx, last_user_orm)
-    _n_img = _attach_attachments_to_message(messages, image_idx, image_orm, settings.data_dir)
+    _n_img = 0
+    for _idx, _orm in image_msgs:
+        _n_img += await _attach_attachments_to_message(
+            db, messages, _idx, _orm, settings.data_dir,
+            agent_id=agent.id, context_ref=_context_ref(session_id=session_id),
+            api_base_url=api_base_url, api_key=api_key, model=model,
+            # 私信没有群设置的字数上限 → 图片不限制（用户 2026-11-25 的口径）
+            max_len=None,
+        )
     if _n_img:
-        messages.append({"role": "system", "content": image_note(_n_img)})
+        messages.append({"role": "system", "content": image_note(_n_img, source="本轮消息")})
 
     # 上一轮工具失败不再当轮 append：账本的 [本轮工具] 条目已记了同一笔（含失败原因，
     # 见 utils/pure/history.tool_ledger_note）。同一件事两处说，而且它在尾部——每轮按未命中计价。

@@ -31,6 +31,7 @@ def test_unlock_steps_is_the_agreed_set():
 
     assert UNLOCK_STEPS == (
         "rewrite_history",
+        "release_remote_images",   # 2026-11-25：被折叠掉的图要卸载远端（Files API）
         "clear_note_copies",
         "reset_trigger_state",
         "apply_pending_config",

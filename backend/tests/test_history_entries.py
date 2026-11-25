@@ -190,15 +190,16 @@ async def test_rewrite_keeps_summary_events_and_tail(migrated_db):
 
 
 def test_window_budget_counts_the_rendered_bytes():
-    """字数预算按**渲染后**算：折过的长消息只占 2048 + 省略标记，不该按原文算"""
+    """字数预算按**渲染后**算：折过的长消息只占 FOLD_LIMIT + 省略标记，不该按原文算"""
     from app.utils.pure.history import FOLD_LIMIT, fold_text, make_entry, take_newest_within
 
     folded = fold_text("字" * 30_000, limit=FOLD_LIMIT, expand_id=7)
-    assert len(folded) < 3_000, len(folded)
+    # 上限跟着 FOLD_LIMIT 走：写死 3000 在下限一提就静默失效（2026-11-25 提到 3840 时踩过）
+    assert len(folded) < FOLD_LIMIT + 500, len(folded)
 
     entries = [make_entry("message", f"短{i}", ref=str(i)) for i in (1, 2, 3)]
     entries.append(make_entry("message", folded, ref="4"))
-    kept = take_newest_within(entries, max_chars=3_000)
+    kept = take_newest_within(entries, max_chars=FOLD_LIMIT + 500)
     assert [e["ref"] for e in kept] == ["1", "2", "3", "4"], "折过的长消息不该把前面的挤掉（按原文算会）"
 
     huge = make_entry("message", "字" * 25_000, ref="9")

@@ -1076,6 +1076,8 @@ async def _maybe_trigger_ai_reply(
         pending_delivery=pending_delivery,
         api_base_url=api_base,
         api_key=api_key,
+        # 图片走不走 Files API 取决于模型：只有 deepseek-flash 支持 file_id 引用
+        model=resolve_model(agent, provider_info=provider_info),
         trigger_user_id=trigger_user_id,
         # 只传"覆盖本身"，不传解析后的人格：解析后的值永远非空，会让拼前缀那层以为
         # 每个 AI 都有人格覆盖，于是本体人格永远走"直接生效"、整条版本链一次都不跑
@@ -1361,7 +1363,7 @@ async def _trigger_dm_ai_reply(
     # v0.1.3: DM 中 sender_id 即为触发用户
     # 同上：覆盖本身 + 覆盖属于谁（人格版本源要按它分）
     pending_delivery: list[dict] = []
-    messages = await build_dm_messages(db, agent, session_id, api_base_url=api_base, api_key=api_key, trigger_user_id=sender_id, system_prompt_override=effective_cfg.get("system_prompt_override"), prompt_owner=sender_id, pending_delivery=pending_delivery)
+    messages = await build_dm_messages(db, agent, session_id, api_base_url=api_base, api_key=api_key, trigger_user_id=sender_id, system_prompt_override=effective_cfg.get("system_prompt_override"), prompt_owner=sender_id, pending_delivery=pending_delivery, model=resolve_model(agent, provider_info=provider_info))
 
     # 获取工具：用当前值（与群聊 7.5 同一口径——tools 在请求最后，改了只重算工具段）
     from app.services.tool_registry import get_allowed_tools
