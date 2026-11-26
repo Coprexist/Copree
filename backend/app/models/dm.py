@@ -57,6 +57,11 @@ class DMMessage(Base):
     # 联邦来源：NULL=本地消息，非空=来自对应 public_id 的远程实例
     source_public_id = Column(String(50), nullable=True)
 
+    # 消息入口通道：NULL=站内；import=从别处导入的历史。
+    # 与 Message.via 同一套语义（qq=QQ 通道），渲染侧只认这个值——
+    # 「来自导入」的标签就来自它，不另存布尔位。
+    via = Column(String(16), nullable=True)
+
     # 撤回（与群消息同一套语义，见 app/chat/revoke.py）
     revoked_at = Column(DateTime, nullable=True)
     revoked_by = Column(Integer, nullable=True)

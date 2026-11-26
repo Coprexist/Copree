@@ -18,6 +18,7 @@ from app.utils.multimodal import (
     IMAGE_PLACEHOLDER,
     VISION_UNSUPPORTED_HINT,
     build_content,
+    emoji_mark,
     image_attachments,
     image_note,
     image_placeholder,
@@ -64,6 +65,26 @@ def test_image_attachments_filters_non_images():
     assert image_attachments([IMG, TXT]) == [IMG]
     assert image_attachments("[]") == []
     assert image_attachments([TXT]) == []
+
+
+# 表情：它在上下文里只要那句 [表情:名字]
+EMOJI = {
+    "file_id": 3, "path": "emoji/default/smile.png", "name": "微笑.png",
+    "size": len(PNG_1PX), "mime_type": "image/png",
+    "emoji": {"pack": "default", "id": "smile", "name": "微笑"},
+}
+
+
+def test_emoji_attachments_stay_out_of_vision():
+    """表情不发字节：文字标记已经把「发生了什么」说清楚了。
+
+    一旦把那张 PNG 也发过去，模型会收到两条互相冗余的信息——「[表情:微笑]」
+    和一张笑脸图——它就会去解读图片（有时还把两者当成两件事）。表情只需要 emoji_mark。
+    """
+    assert image_attachments([EMOJI]) == []
+    assert image_attachments([EMOJI, IMG]) == [IMG], "同一消息里的真图片仍要进多模态"
+    assert emoji_mark(EMOJI) == "[表情:微笑]"
+    assert emoji_mark(IMG) == "", "普通图片不是表情"
 
 
 def test_is_image_looks_at_mime_type_only():

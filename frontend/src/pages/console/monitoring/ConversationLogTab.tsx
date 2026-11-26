@@ -318,7 +318,7 @@ export default function ConversationLogTab() {
                   {t('admin:allowUserViewLogs')}
                   <span className="text-textMuted ml-1">（{agentSettings.system_default_access ? t('admin:defaultOn') : t('admin:defaultOff')}）</span>
                 </label>
-                // ui-standard-ignore: 三态开关（开/关/继承），Toggle 只有两态
+                {/* ui-standard-ignore: 三态开关（开/关/继承），Toggle 只有两态 */}
                 <button
                   onClick={() => {
                     if (agentAccess === null) setAgentAccess(true)

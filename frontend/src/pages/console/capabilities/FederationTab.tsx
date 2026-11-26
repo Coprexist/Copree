@@ -473,7 +473,7 @@ export default function FederationTab() {
                   <option value="wss">wss://</option>
                   <option value="ws">ws://</option>
                 </select>
-                // ui-standard-ignore: 三段拼接的地址输入框（协议下拉 + 主机名 + 固定后缀连成一体），单挂 .field 会断开拼接
+                {/* ui-standard-ignore: 三段拼接的地址输入框（协议下拉 + 主机名 + 固定后缀连成一体），单挂 .field 会断开拼接 */}
                 <input
                   value={(() => {
                     const m = instanceForm.public_url.match(/^(wss?):\/\/(.+?)\/federation\/ws$/)
@@ -750,7 +750,7 @@ export default function FederationTab() {
                     <option value="wss">wss://</option>
                     <option value="ws">ws://</option>
                   </select>
-                  // ui-standard-ignore: 三段拼接的地址输入框（协议下拉 + 主机名 + 固定后缀连成一体），单挂 .field 会断开拼接
+                  {/* ui-standard-ignore: 三段拼接的地址输入框（协议下拉 + 主机名 + 固定后缀连成一体），单挂 .field 会断开拼接 */}
                   <input
                     value={(() => {
                       const m = newPeer.remote_url.match(/^(wss?):\/\/(.+?)\/federation\/ws$/)
@@ -882,7 +882,7 @@ export default function FederationTab() {
                           <option value="wss">wss://</option>
                           <option value="ws">ws://</option>
                         </select>
-                        // ui-standard-ignore: 三段拼接的地址输入框，单挂 .field 会断开拼接
+                        {/* ui-standard-ignore: 三段拼接的地址输入框，单挂 .field 会断开拼接 */}
                         <input
                           value={(() => {
                             const m = editPeerForm.remote_url.match(/^(wss?):\/\/(.+?)\/federation\/ws$/)
@@ -937,7 +937,7 @@ export default function FederationTab() {
                       <option value="wss://">wss://</option>
                       <option value="ws://">ws://</option>
                     </select>
-                    // ui-standard-ignore: 拼接地址输入框（与前后 select/后缀连成一体）
+                    {/* ui-standard-ignore: 拼接地址输入框（与前后 select/后缀连成一体） */}
                     <input
                       value={rotateUrl.replace(/^(wss?):\/\//, '').replace(/\/federation\/ws$/, '')}
                       onChange={e => setRotateUrl((rotateUrl.startsWith('wss://') ? 'wss://' : 'ws://') + e.target.value + '/federation/ws')}

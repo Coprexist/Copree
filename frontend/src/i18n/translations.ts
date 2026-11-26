@@ -37,6 +37,7 @@ import { groupSettingsZh, groupSettingsEn, groupSettingsJa } from './ns/groupSet
 import { dmSettingsZh, dmSettingsEn, dmSettingsJa } from './ns/dmSettings'
 import { profileCardZh, profileCardEn, profileCardJa } from './ns/profileCard'
 import { avatarCropZh, avatarCropEn, avatarCropJa } from './ns/avatarCrop'
+import { configFallbackZh, configFallbackEn, configFallbackJa } from './ns/configFallback'
 import { modalZh, modalEn, modalJa } from './ns/modal'
 import { presetZh, presetEn, presetJa } from './ns/preset'
 import { aiTypeZh, aiTypeEn, aiTypeJa } from './ns/aiType'
@@ -67,6 +68,7 @@ export const translations: Record<Lang, NamespacedDict> = {
     error: errorZh, time: timeZh, opencli: opencliZh, backpack: backpackZh,
     desktop: desktopZh, tool: toolZh, adminConfig: adminConfigZh, logs: logsZh,
     outline: outlineZh, update: updateZh, apiConfig: apiConfigZh,
+    configFallback: configFallbackZh,
   },
   en: {
     common: commonEn, nav: navEn, sidebar: sidebarEn, notFound: notFoundEn,
@@ -80,6 +82,7 @@ export const translations: Record<Lang, NamespacedDict> = {
     error: errorEn, time: timeEn, opencli: opencliEn, backpack: backpackEn,
     desktop: desktopEn, tool: toolEn, adminConfig: adminConfigEn, logs: logsEn,
     outline: outlineEn, update: updateEn, apiConfig: apiConfigEn,
+    configFallback: configFallbackEn,
   },
   ja: {
     common: commonJa, nav: navJa, sidebar: sidebarJa, notFound: notFoundJa,
@@ -93,6 +96,7 @@ export const translations: Record<Lang, NamespacedDict> = {
     error: errorJa, time: timeJa, opencli: opencliJa, backpack: backpackJa,
     desktop: desktopJa, tool: toolJa, adminConfig: adminConfigJa, logs: logsJa,
     outline: outlineJa, update: updateJa, apiConfig: apiConfigJa,
+    configFallback: configFallbackJa,
   },
 }
 

@@ -74,6 +74,26 @@ function MarkdownContent({ content, isMine = false }: { content: string; isMine?
         inlinecode: ({ children }: any) => (
           <code className="bg-black/5 dark:bg-white/10 rounded px-1 py-0.5 text-[0.85em] inline-block max-w-full break-words">{children}</code>
         ),
+        // 表情图按行内尺寸画：renderEmojiMarkers 把 `:id:` 换成插件资源地址，交给
+        // react-markdown 就会按源图尺寸铺开（128×128），情绪标记反而抢了正文的重心。
+        // 判据是插件资源路径前缀：emoji.json 里 file 写的是 "assets/x.png"，
+        // 而 faceAssetUrl 又拼了一层 /assets/，所以实际是 /plugins/<id>/assets/assets/…
+        // （看着像双写，但后端白名单按的正是这个相对路径，不能只改一边）。
+        img: ({ node, src, alt, ...props }: any) => {
+          const isEmoji = typeof src === 'string' && /\/plugins\/[^/]+\/assets\//.test(src)
+          if (isEmoji) {
+            return (
+              <img
+                src={src}
+                alt={alt || ''}
+                title={alt || undefined}
+                loading="lazy"
+                className="inline-block w-[1.15em] h-[1.15em] align-[-0.2em]"
+              />
+            )
+          }
+          return <img src={src} alt={alt || ''} {...props} />
+        },
         table: ({ node, ...props }: any) => <div className="markdown-table-wrapper"><table {...props} /></div>,
         th: ({ node, ...props }: any) => <th {...props} />,
         td: ({ node, ...props }: any) => <td {...props} />,

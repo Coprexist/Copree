@@ -7,7 +7,8 @@
  * 抽成一个组件而不是写两遍：卡片头、折叠、⋯ 菜单这些一处改就行了，
  * 两处各写一份迟早漂成两种长相。
  */
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { Check, ChevronDown, MoreHorizontal, Plus } from 'lucide-react'
 import { api, errorText } from '../../api/client'
@@ -22,7 +23,11 @@ interface MenuAction {
   danger?: boolean
 }
 
-/** 行内菜单：点外面自动收起（面板挂在卡片里，卡片不能 overflow-hidden 否则会被裁） */
+// 菜单离视口边缘的最小留白，以及触发器与菜单之间的间距
+const MENU_MARGIN = 8
+const MENU_GAP = 4
+
+/** 行内菜单：点外面 / ESC 收起，浮层 portal 到 body 并按视口自动翻转 */
 function RowMenu({
   label,
   items,
@@ -37,43 +42,99 @@ function RowMenu({
   direction?: 'down' | 'up'
 }) {
   const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState({ left: 0, top: 0, ready: false })
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const panelRef = useRef<HTMLDivElement | null>(null)
 
+  // 点外面 / ESC 收起。portal 之后浮层不在触发器子树里，两棵都要看
   useEffect(() => {
     if (!open) return
     const onDoc = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      const target = e.target as Node
+      if (rootRef.current?.contains(target) || panelRef.current?.contains(target)) return
+      setOpen(false)
     }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
     document.addEventListener('mousedown', onDoc)
-    return () => document.removeEventListener('mousedown', onDoc)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDoc)
+      document.removeEventListener('keydown', onKey)
+    }
   }, [open])
 
+  // 定位：先按触发器算，量完实际尺寸再夹进视口、上下自动翻转。
+  // 为什么必须量：菜单宽度随文案变，高度随条目数变，任何写死的估算都会在
+  // "条目多/窄屏"时出界——而一出去就被视口切掉一半。
+  const place = useCallback(() => {
+    const anchor = rootRef.current?.getBoundingClientRect()
+    if (!anchor) return
+    const panel = panelRef.current
+    const width = panel?.offsetWidth || 160
+    const height = panel?.offsetHeight || 0
+    let left = trigger === 'text' ? anchor.left : anchor.right - width
+    left = Math.min(Math.max(MENU_MARGIN, left), window.innerWidth - width - MENU_MARGIN)
+    let top = direction === 'up' ? anchor.top - height - MENU_GAP : anchor.bottom + MENU_GAP
+    if (top < MENU_MARGIN) top = anchor.bottom + MENU_GAP                     // 上方不够翻到下方
+    if (top + height > window.innerHeight - MENU_MARGIN) {                    // 下方不够翻回上方
+      top = Math.max(MENU_MARGIN, anchor.top - height - MENU_GAP)
+    }
+    setPos({ left, top, ready: true })
+  }, [trigger, direction])
+
+  useLayoutEffect(() => {
+    if (!open) { setPos({ left: 0, top: 0, ready: false }); return }
+    place()
+    // 滚动与缩放都要重算：fixed 不跟随祖先滚动，卡片会从菜单底下走开
+    const onMove = () => place()
+    window.addEventListener('resize', onMove)
+    window.addEventListener('scroll', onMove, true)
+    return () => {
+      window.removeEventListener('resize', onMove)
+      window.removeEventListener('scroll', onMove, true)
+    }
+  }, [open, place])
+
   return (
-    <div className="relative shrink-0" ref={ref}>
-      {trigger === 'icon' ? (
-        <IconButton icon={<MoreHorizontal size={14} />} label={label} size="sm"
-          onClick={() => setOpen((v) => !v)} />
-      ) : (
-        <Button variant="ghost" size="sm" onClick={() => setOpen((v) => !v)}>
-          {label}
-        </Button>
+    <>
+      <div className="relative shrink-0" ref={rootRef}>
+        {trigger === 'icon' ? (
+          <IconButton icon={<MoreHorizontal size={14} />} label={label} size="sm"
+            onClick={() => setOpen((v) => !v)} />
+        ) : (
+          <Button variant="ghost" size="sm" onClick={() => setOpen((v) => !v)}>
+            {label}
+          </Button>
+        )}
+      </div>
+      {/* 挂到 body：菜单与卡片同为 surface 色，叠在卡片里只剩 1px 边框的差别，
+          阴影又被卡片自身的阴影淹没——看上去像没弹出来。portal 出去背景变 canvas，
+          对比度才出得来；顺带摆脱祖先 overflow / 层叠上下文。 */}
+      {open && createPortal(
+        <div
+          ref={panelRef}
+          style={{
+            position: 'fixed',
+            left: pos.left,
+            top: pos.top,
+            width: 'max-content',
+            visibility: pos.ready ? 'visible' : 'hidden',
+          }}
+          className="z-modal"
+        >
+          <MenuPanel role="menu" aria-label={label} className="min-w-[10rem] py-1">
+            {items.map((it) => (
+              <MenuItem key={it.label}
+                className={it.danger ? 'text-rose-400 hover:text-rose-300' : ''}
+                onClick={() => { setOpen(false); it.onSelect() }}>
+                {it.label}
+              </MenuItem>
+            ))}
+          </MenuPanel>
+        </div>,
+        document.body,
       )}
-      {open && (
-        <MenuPanel className={
-          'absolute z-50 min-w-[10rem] py-1 ' +
-          (trigger === 'text' ? 'left-0 ' : 'right-0 ') +
-          (direction === 'up' ? 'bottom-full mb-1' : 'top-full mt-1')
-        }>
-          {items.map((it) => (
-            <MenuItem key={it.label}
-              className={it.danger ? 'text-rose-400 hover:text-rose-300' : ''}
-              onClick={() => { setOpen(false); it.onSelect() }}>
-              {it.label}
-            </MenuItem>
-          ))}
-        </MenuPanel>
-      )}
-    </div>
+    </>
   )
 }
 

@@ -70,7 +70,13 @@ interface MessageBubbleProps {
   sourcePublicId?: string | null
   /** 消息入口通道：'qq' = 从 QQ 进来的（界面画来源标识用） */
   via?: string | null
-  attachments?: Array<{file_id?: number, name?: string, size?: number, mime_type?: string, transcript?: string, type?: string, invitation_id?: number, group_name?: string, inviter_name?: string, status?: string}> | null
+  attachments?: Array<{file_id?: number, name?: string, size?: number, mime_type?: string, transcript?: string, type?: string, invitation_id?: number, group_name?: string, inviter_name?: string, status?: string,
+    // 导入别处历史时，有些附件只有元数据：available=false 表示「无原文件」，
+    // 它没有 file_id，不能走下载/预览，渲染成另一种胶囊（见 missingAtts）
+    available?: boolean, reason?: string,
+    // 表情身份：入口把 [表情:名字] 摘成了图片附件（见 plugin.catalog.take_image_faces），
+    // 字节层面它和普通图片一样，只有这份元数据能区分
+    emoji?: { pack?: string; id?: string; name?: string }}> | null
   messageType?: string
   messageId?: number
   /** 回复引用：image 是被引用那条里的第一张图，显示成小图（纯文字的消息没有） */
@@ -165,7 +171,11 @@ const MessageBubble = memo(function MessageBubble({
   const invAtt = attachments?.find(a => a.type === 'group_invitation')
   const isInvitation = messageType === 'group_invitation' && invAtt
   const currentStatus = invStatus || invAtt?.status || 'pending'
-  const fileAtts = attachments?.filter(a => a.type !== 'group_invitation') || []
+  // 附件分两类：能下载的（有 file_id）与「只有元数据」的（导入的历史里常见）。
+  // 后者的 available=false，统一渲染成「无原文件」胶囊，不假装有原图。
+  const allFileAtts = attachments?.filter(a => a.type !== 'group_invitation') || []
+  const missingAtts = allFileAtts.filter(a => a.available === false)
+  const fileAtts = allFileAtts.filter(a => a.available !== false)
   // 可下载的附件（邀请卡片不是文件）。单附件下它自己，多附件一次下全部：
   // 菜单文案跟着数量走，不能还写"下载"却只给第一个
   const downloadable = fileAtts.filter(a => a.file_id)
@@ -500,6 +510,11 @@ const MessageBubble = memo(function MessageBubble({
               <MessageSquare size={10} className="inline" /> {t('chat:fromQq')}
             </span>
           )}
+          {via === 'import' && (
+            <span className="chip chip-mint shrink-0" title={t('chat:fromImportHint')}>
+              <Download size={10} className="inline" /> {t('chat:fromImport')}
+            </span>
+          )}
           {sourcePublicId && (
             <span className="chip chip-primary shrink-0" title={t('chat:fromInstance').replace('{publicId}', sourcePublicId)}>
               <Globe size={10} className="inline" /> {sourcePublicId.length > 15 ? sourcePublicId.slice(0, 15) + '...' : sourcePublicId}
@@ -552,6 +567,22 @@ const MessageBubble = memo(function MessageBubble({
                 const fsize = att.size!
                 const fmime = att.mime_type!
                 const menuKey = 'a:' + fid
+                // 表情是情绪标记，不是内容：按行内尺寸画（与 Markdown 里的表情图、
+                // 单行预览的 EmojiText 同一档 1.15em），不铺成 280×200 的图
+                if (att.emoji) return (
+                  <span key={fid} className="relative inline-block group/att">
+                    <img
+                      src={dlUrl}
+                      alt={att.emoji.name || fname}
+                      title={att.emoji.name || fname}
+                      loading="lazy"
+                      className="inline-block w-[1.15em] h-[1.15em] align-[-0.2em]"
+                    />
+                    <span className={`absolute -top-4 ${isMine ? 'left-0' : 'right-0'} opacity-0 group-hover/att:opacity-100 transition-opacity`}>
+                      {menuLayer(menuKey, 'attach', attachmentMenuItems(att))}
+                    </span>
+                  </span>
+                )
                 if (fmime.startsWith('image/')) return (
                   // 每张图带自己的三点：图多的时候"收进我的文件"得知道是哪张
                   <span key={fid} className="relative inline-block max-w-full group/att">
@@ -602,6 +633,23 @@ const MessageBubble = memo(function MessageBubble({
                   </span>
                 )
               })}
+            </div>
+          )}
+          {/* 只有元数据的附件：说清「无原文件」——它有名字、但没有原图可打开。
+              不做成按钮，因为点开也没有东西；悬停给一句解释就够。 */}
+          {missingAtts.length > 0 && (
+            <div className={`${displayContent ? 'mt-2 pt-2 border-t' : ''} flex flex-wrap gap-1.5 ${isMine ? 'border-white/20' : 'border-border'}`}>
+              {missingAtts.map((att, i) => (
+                <span
+                  key={'missing-' + i}
+                  className={`inline-flex items-center gap-1 rounded-control border px-2.5 py-1 text-xs ${isMine ? 'border-white/20 bg-white/5 text-white/70' : 'border-border bg-canvas text-textMuted'}`}
+                  title={t('chat:attachmentNoSourceHint')}
+                >
+                  <FileIcon size={12} className="shrink-0 opacity-70" />
+                  <span className="max-w-[140px] truncate">{att.name || t('chat:fromImport')}</span>
+                  <span className="text-3xs opacity-70">· {t('chat:attachmentNoSource')}</span>
+                </span>
+              ))}
             </div>
           )}
 

@@ -81,6 +81,8 @@ FK_POLICY: Final[dict[tuple[str, str], str]] = {
     ("agents", "user_id"): SET_NULL,  # 影子账号：删账号不静默删 AI，见文件头约定 1
 
     # ── 用户的从属数据 ──────────────────────────────────────────────
+    ("chat_imports", "agent_id"): CASCADE,      # 导入记账：AI 没了，这批记账也就没有主体
+    ("chat_imports", "creator_user_id"): CASCADE,
     ("dm_messages", "sender_id"): CASCADE,  # 与 dm_sessions 的级联同向
     ("dm_sessions", "user1_id"): CASCADE,
     ("dm_sessions", "user2_id"): CASCADE,

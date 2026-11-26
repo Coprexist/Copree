@@ -15,6 +15,7 @@ from app.models.system_log import SystemLog
 from app.models.summary_cache import UnreadSummaryCache
 from app.models.friendship import Friendship, FriendshipRequest
 from app.models.dm import DMSession, DMMessage
+from app.models.chat_import import ChatImport
 from app.models.agent_skill import AgentSkill
 from app.models.agent_knowledge import AgentKnowledge
 from app.models.federation import InstanceConfig, FederationPeer, FederatedEntity, PendingProfileUpdate
@@ -92,6 +93,7 @@ __all__ = [
     "FriendshipRequest",
     "DMSession",
     "DMMessage",
+    "ChatImport",
     "AgentSkill",
     "InstanceConfig",
     "FederationPeer",

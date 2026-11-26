@@ -26,7 +26,8 @@ import { useStickToBottom } from '../hooks/useStickToBottom'
 import { streamSse } from '../utils/sse'
 import {
   imageMarker, imageRefsIn,
-  stripImageMarkers, supportsImageAttachments, type DshAttachmentRef, type DshImageRef,
+  imageAttachmentsState, MIN_ATTACHMENT_VERSION, stripImageMarkers,
+  type DshAttachmentRef, type DshImageRef,
 } from '../utils/dshAttachments'
 
 interface Status {
@@ -521,7 +522,8 @@ export default function DshChatPage() {
   // 附件：与主站聊天/群视界对话共用的 hook（点选、拖拽、Ctrl+V 都走它）
   const attachments = useAttachmentUpload({ imagesOnly: true })
   const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const imagesSupported = supportsImageAttachments(status?.version)
+  // 三态：只有 ok 才发附件引用；unknown（版本还没到）与 unsupported 分开提示，不叫人去升级
+  const attachSupport = imageAttachmentsState(status?.version)
 
   const loadStatus = useCallback(async () => {
     try {
@@ -656,7 +658,7 @@ export default function DshChatPage() {
       // 正文只带「人也能读懂」的标记；附件另给一份引用，避免 base64 把请求撑爆链路上的代理
       const marks = ready.map((att) => imageMarker(att.file_id, att.name))
       const body = [text, ...marks].filter(Boolean).join('\n\n')
-      const attachments: DshAttachmentRef[] | undefined = ready.length > 0 && imagesSupported
+      const attachments: DshAttachmentRef[] | undefined = ready.length > 0 && attachSupport === 'ok'
         ? ready.map((att) => ({ fileId: att.file_id, name: att.name, mime: att.mime_type }))
         : undefined
       // cwd 一起带上：图片要落到这条会话自己的工作区，插件不必再反查
@@ -673,7 +675,7 @@ export default function DshChatPage() {
       setBusy(false)
       setError(e && e.message ? e.message : String(e))
     }
-  }, [imagesSupported, sessionId, sessions, loadSessions])
+  }, [attachSupport, sessionId, sessions, loadSessions])
 
   /**
    * 执行一条斜杠命令：与发消息分开——命令不进模型，由 DSH 的 commands 服务直接跑。
@@ -1003,8 +1005,15 @@ export default function DshChatPage() {
         <div className="p-3 relative" {...attachments.zoneProps('input')} {...attachments.pasteProps}>
           <DropMask {...attachments.dropState('input')} label={t('tool:dsh.attach.drop')} />
           <AttachmentChips items={attachments.items} onRemove={attachments.remove} />
-          {attachments.ready.length > 0 && !imagesSupported && (
-            <p className="mb-2 text-3xs text-accent-400">{t('tool:dsh.attach.unsupported')}</p>
+          {attachments.ready.length > 0 && attachSupport !== 'ok' && (
+            <p className="mb-2 text-3xs text-accent-400">
+              {attachSupport === 'unknown'
+                ? t('tool:dsh.attach.unknown')
+                : t('tool:dsh.attach.unsupported', {
+                    version: status?.version || '',
+                    min: MIN_ATTACHMENT_VERSION,
+                  })}
+            </p>
           )}
           <div
             className="glass-float mx-auto w-full"

@@ -8,13 +8,17 @@
  * 窄屏退回单列，顺序与原来一致（继续上一次 → 开始新的 → 未完成列表）。
  */
 import { useEffect, useState } from 'react'
-import { CheckCircle2, Clock, Plus, Sparkles, Trash2 } from 'lucide-react'
+import { CheckCircle2, Clock, Download, FileJson, Plus, Sparkles, Trash2 } from 'lucide-react'
 import { useT } from '../../i18n/I18nContext'
 import { createDraft, deleteDraft, listDrafts, type CreationDraft } from './creationApi'
 
-export default function CreationDraftPicker({ onPick, onPlain }: {
+export default function CreationDraftPicker({ onPick, onPlain, onImport, onImportSoul }: {
   onPick: (draft: CreationDraft) => void
   onPlain: () => void
+  /** 先把别处的对话导进来，再带着它去创建（见 ChatImportPanel） */
+  onImport: () => void
+  /** 导入灵魂档案：那份文件里已经是一个完整的 AI，导完就建好了（见 SoulImportDialog） */
+  onImportSoul: () => void
 }) {
   const t = useT()
   const [drafts, setDrafts] = useState<CreationDraft[] | null>(null)
@@ -69,7 +73,7 @@ export default function CreationDraftPicker({ onPick, onPlain }: {
                   </button>
                 )}
 
-                // ui-standard-ignore: 整块可点的新建入口卡片（图标+标题+说明），padding 属卡片内距
+                {/* ui-standard-ignore: 整块可点的新建入口卡片（图标+标题+说明），padding 属卡片内距 */}
                 <button
                   onClick={startNew}
                   disabled={busy}
@@ -81,6 +85,28 @@ export default function CreationDraftPicker({ onPick, onPlain }: {
                   <p className="text-xs text-textSecondary mt-1 flex items-center gap-1">
                     <Sparkles size={12} /> {t('modal:createStartNewHint')}
                   </p>
+                </button>
+
+                {/* ui-standard-ignore: 与上面两个入口同构的整块可点卡片（图标+标题+说明） */}
+                <button
+                  onClick={onImport}
+                  className="card card-interactive w-full p-4 text-left"
+                >
+                  <div className="flex items-center gap-1.5 text-sm font-semibold text-textPrimary">
+                    <Download size={14} /> {t('modal:createStartImport')}
+                  </div>
+                  <p className="text-xs text-textSecondary mt-1">{t('modal:createStartImportHint')}</p>
+                </button>
+
+                {/* ui-standard-ignore: 与上面同构的整块可点卡片（图标+标题+说明） */}
+                <button
+                  onClick={onImportSoul}
+                  className="card card-interactive w-full p-4 text-left"
+                >
+                  <div className="flex items-center gap-1.5 text-sm font-semibold text-textPrimary">
+                    <FileJson size={14} /> {t('modal:createStartImportSoul')}
+                  </div>
+                  <p className="text-xs text-textSecondary mt-1">{t('modal:createStartImportSoulHint')}</p>
                 </button>
               </div>
 

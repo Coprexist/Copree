@@ -1,0 +1,10 @@
+{
+  "id": "chat-import",
+  "name": "聊天记录抓取",
+  "description": "把各平台的公开分享链接抓成统一结构，供「从聊天记录导入」使用。拉的是各平台未公开的第一方接口——不合它们的规，所以整条网络路径隔离在这个插件里：卸载或关闭它，导入功能的「粘贴全文 / 上传文件」照常可用，平台代码里不留一条出站请求。",
+  "category": "service",
+  "version": "0.1.0",
+  "author": "Copree",
+  "icon": "Download",
+  "default_enabled": true
+}

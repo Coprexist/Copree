@@ -104,7 +104,7 @@ export default function CreateAgentPanel({
   draft = null,
 }: {
   onClose: () => void
-  onCreated: (agentName?: string) => void
+  onCreated: (agent?: { id: number; name: string }) => void
   /** 创建助手的草稿：给了就是左右两栏（左对话、右表单），并把表单快照自动回写 */
   draft?: CreationDraft | null
 }) {
@@ -165,7 +165,8 @@ export default function CreateAgentPanel({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   // 建号成功但收尾失败时留住的名字：窗口要停在原地把话说清楚
-  const [createdAgent, setCreatedAgent] = useState<string | null>(null)
+  // 建成之后留着整条（id + name）：父组件要拿 id 把导入的历史写进这个 AI 的私信
+  const [createdAgent, setCreatedAgent] = useState<{ id: number; name: string } | null>(null)
   // 窄屏两个屏：填写配置 / 创建助手（桌面端两栏并排，不靠这个）
   const [mobileTab, setMobileTab] = useState<'form' | 'chat'>('form')
 
@@ -307,13 +308,13 @@ export default function CreateAgentPanel({
           })
         } catch (err: any) {
           // AI 已经建好，只是独立 API 配置没落库：先别关窗——关掉就没人看得见这句话了
-          setCreatedAgent(agent.name)
+          setCreatedAgent(agent)
           setError(err?.message || t('modal:createAgentApiConfigFailed'))
           return
         }
       }
       // 草稿的 created 状态与 agent_id 由后端在同一个事务里写（这次创建算数的唯一开关）
-      onCreated(agent.name)
+      onCreated(agent)
     } catch (err: any) {
       setError(err.message || t('modal:createAgentFailed'))
     } finally {

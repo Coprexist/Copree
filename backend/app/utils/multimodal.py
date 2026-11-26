@@ -72,10 +72,19 @@ def is_vision_image(att: dict) -> bool:
 
 
 def image_attachments(attachments) -> list[dict]:
-    """取出可进多模态的图片附件（纯函数，兼容 JSON 字符串 / None / 非法值）。"""
+    """取出可进多模态的图片附件（纯函数，兼容 JSON 字符串 / None / 非法值）。
+
+    **表情不算**：它在上下文里由 emoji_mark 渲染成 `[表情:名字]`，文字已经把
+    「发生了什么」说清楚了。再把那张 PNG 一并发给视觉模型，等于同一件事说两遍——
+    模型会去解读那张笑脸（有时还把 "表情:微笑" 和图上的人脸当成两条信息），
+    而且白花一份视觉 token。表情只需要那个文本标记。
+    """
     # normalize_attachments 的契约是 list | None（JSON 坏了 / 传入 None 都返回 None），
     # 所以必须 `or []` 兜底——漏了它会让"没有附件的普通消息"整条路径抛 TypeError
-    return [a for a in (normalize_attachments(attachments) or []) if is_vision_image(a)]
+    return [
+        a for a in (normalize_attachments(attachments) or [])
+        if is_vision_image(a) and not is_emoji(a)
+    ]
 
 
 def image_placeholder(attachments) -> str:
@@ -372,17 +381,27 @@ def with_transcripts(attachments, transcripts: dict[int, str] | None) -> list | 
     return out
 
 
-def emoji_mark(att: dict) -> str:
-    """表情附件 → "[表情:名字]"；不是表情返回空串。
+def is_emoji(att: dict) -> bool:
+    """这个附件是不是表情。
 
     为什么不让标记层自己猜：入口已经把表情落成**普通图片附件**（见
     plugin.catalog.take_image_faces），字节层面它和随手发的一张图完全一样。
-    身份只来自 `emoji_asset_file` 写进附件快照的元数据，也只有新消息有——
-    已经进账本的旧消息不回溯，仍旧渲染成 [图片]（2026-11-22 定的口径）。
+    身份只来自 `emoji_asset_file` 写进附件快照的元数据，也只有新消息有。
+
+    「是不是表情」只有这一处判断：标记层（emoji_mark）与多模态（image_attachments）
+    都认它——两个地方各写一遍 `a.get("emoji")`，迟早有一处忘了改。
     """
-    face = att.get("emoji")
-    if not isinstance(face, dict):
+    return isinstance(att.get("emoji"), dict)
+
+
+def emoji_mark(att: dict) -> str:
+    """表情附件 → "[表情:名字]"；不是表情返回空串。
+
+    已经进账本的旧消息没有该元数据，不回溯，仍旧渲染成 [图片]（2026-11-22 定的口径）。
+    """
+    if not is_emoji(att):
         return ""
+    face = att.get("emoji")
     name = " ".join(str(face.get("name") or "").split())
     return "[表情:" + name + "]" if name else "[表情]"
 

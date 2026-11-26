@@ -45,14 +45,27 @@ export function stripImageMarkers(text: string): string {
     .trim()
 }
 
+/** 插件能收附件引用的最低版本；界面文案里的数字从这里取，不各处手写 */
+export const MIN_ATTACHMENT_VERSION = '0.3'
+
 /**
- * 插件是否吃附件引用。用版本号做能力开关：只送标记不会出事，参考旧插件（<0.3）
- * 也没有回取字节的能力，所以宁可退化成只发标记。
+ * 附件能力三态。
+ *
+ * unknown 单独一档：「还没取到版本」与「版本太低」是两件事，混成一个 false 会让
+ * 用户看到「请升级到 0.2」这种与实际版本无关的指引——插件 0.7.2 也被这么提示过
+ * （2026-11-26 反馈）。桥接抖动、首帧未加载都落在 unknown，不该指人去升级。
  */
-export function supportsImageAttachments(version?: string): boolean {
-  if (!version) return false
+export type AttachmentSupport = 'ok' | 'unsupported' | 'unknown'
+
+export function imageAttachmentsState(version?: string): AttachmentSupport {
+  if (!version) return 'unknown'
   const [major, minor] = version.split('.').map((n) => Number(n))
-  if (!Number.isFinite(major) || !Number.isFinite(minor)) return false
-  return major > 0 || minor >= 3
+  if (!Number.isFinite(major) || !Number.isFinite(minor)) return 'unknown'
+  return major > 0 || minor >= 3 ? 'ok' : 'unsupported'
+}
+
+/** 布尔便捷层：只有确定支持才算 true，未知一律按不支持处理（只发标记不会出错） */
+export function supportsImageAttachments(version?: string): boolean {
+  return imageAttachmentsState(version) === 'ok'
 }
 
