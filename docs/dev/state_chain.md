@@ -127,13 +127,27 @@ stateDiagram-v2
 ```
 
 调大窗口就是改一列（`set_chain_max_active`）：窗口内所有帧一律 `active`，不必动任何帧记录。
-**但一轮唤醒目前仍只驱动链尾那一帧**——真正的并行执行是运行时要接的活，不是链要接的活：
+
+**谁把窗口里的帧跑起来：泵（pump）。** 链只回答「轮到谁」，拉起执行归运行时**一处**：
+
+- `due_frames(agent_id)`：窗口内「有未读 / 有未完成的轮」的帧，链尾在前，最多 `max_active` 个；
+- `response_worker._pump(agent_id)`：逐个入队开轮，已在跑的那一帧跳过（幂等）。
+
+于是「出一帧、起一帧」是窗口的自然结果，不需要等下一条消息：
 
 ```mermaid
 flowchart LR
-    NOW["max_active = 1：链尾在跑"] --> NEXT["max_active = n：链尾 n 帧都算 active"]
-    NEXT --> TODO["待接：一轮唤醒并行驱动这 n 帧（LLM 侧调度）"]
+    OUT["链尾一帧出链"] --> FILL["下一帧进窗口（_reconcile_chain 置 active）"]
+    FILL --> PUMP["_pump：due_frames 非空"]
+    PUMP --> RUN["入队 → 开轮"]
+    RUN --> OUT
 ```
+
+原先「一轮唤醒只驱动链尾那一帧」不是链的语义缺东西，而是**执行驱动挂错了位置**：它只挂在
+「消息到达」这条路径上，出链之后没有人回头认窗口（见 frame_turn_lifecycle §7.3 的订正）。
+调大 `max_active` 之后泵自然拉起多帧，链与运行时都不必再改。
+
+额度的恢复与这里无关：**收到刺激才恢复**，泵是轮转、不调 `new_stimulus`（frame_turn_lifecycle §4.1）。
 
 ## 6. 谁维护链：一个写入点
 

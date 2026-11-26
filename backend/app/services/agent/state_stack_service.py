@@ -448,6 +448,42 @@ async def get_chain(db: AsyncSession, agent_id: int) -> dict:
     }
 
 
+async def due_frames(db: AsyncSession, agent_id: int) -> list[dict]:
+    """窗口里**该跑**的帧（链尾在前，最多 `max_active` 个）——只读，不改任何状态。
+
+    判据两条，缺一不可：
+
+    * **在窗口内**：链尾起 `max_active` 个节点，这就是「轮到谁」；
+    * **确实有事要办**：`unread > 0`（有人找过还没处理）或 `turn_state == open`（上一轮被切走、没做完）。
+
+    窗口里有帧却没这两样，说明只是排队路过，不为它烧一次调用。
+
+    与 `attach_stimulus` 判「忙」的分工：那个回答「新刺激现在能不能直接开轮」，这个回答
+    「窗口腾出来了，还有谁该跑」。两处都按 `max_active` 算，不再假设窗口等于 1。
+    没有链的老 AI 按数组顺序现算窗口（与 :func:`get_chain` 的只读口径一致）。
+    """
+    db = _ensure_repo(db)
+    stack = await _get_stack(db, agent_id)
+    if not stack:
+        return []
+    chain = await _load_chain(db, agent_id)
+    if chain is None:
+        ordered = list(reversed(running(stack)))   # 数组末尾是当前帧，反转为链尾在前
+    else:
+        ordered = [by_id(stack, fid) for fid in state_chain.executing_frames(chain)]
+    due: list[dict] = []
+    for frame in ordered:
+        if frame is None:
+            continue
+        turn.ensure_fields(frame)
+        if frame["turn_state"] == turn.RUNNING:
+            continue                                # 这一帧已经有轮在跑
+        if int(frame.get("unread") or 0) <= 0 and frame["turn_state"] != turn.OPEN:
+            continue                                # 轮到它了，但没有要办的事
+        due.append(frame)
+    return due
+
+
 async def set_chain_max_active(db: AsyncSession, agent_id: int, value) -> int:
     """改这个 AI 的执行窗口（并发执行帧数）——将来那个设置项要改的就是这一列。
 
@@ -1608,15 +1644,28 @@ async def attach_stimulus(
             frame["doing"] = f"{conv_label}「{title}」里有人在等你"
     turn.new_stimulus(frame, limit)     # 刺激落在这一帧：步数额度恢复（§4.1）
 
-    # 「忙」= **真有一轮在跑**（帧 turn_state=running），不是「链上有帧」。
-    # 链上挂着别的会话的帧、却没有任何轮在跑时，它其实空闲——2026-11-25 线上就是
-    # 把这种状态误判成忙，群消息全被压成未读、永远不回复。
-    others_running = [
+    # 「窗口满」= 窗口内已经有 max_active 帧在跑。不是「有没有另一帧在 running」——
+    # 那个写法等于把窗口写死成 1，max_active 调大也拉不起第二帧。
+    # 链上挂着别的会话的帧、却没有任何轮在跑时窗口是空的，照样唤醒——
+    # 2026-11-25 线上就是把「链上有帧」误判成忙，群消息全被压成未读、永远不回复。
+    window_chain = await _load_chain(db, agent_id)
+    if window_chain is None:
+        # 老 AI 还没建链：按数组顺序现算窗口（只读；真正的链由随后的 _save 建）
+        window_ids = [
+            str(f.get("id") or "")
+            for f in reversed(running(stack))
+        ][:state_chain.DEFAULT_MAX_ACTIVE]
+        max_active = state_chain.DEFAULT_MAX_ACTIVE
+    else:
+        window_ids = state_chain.executing_frames(window_chain)
+        max_active = int(window_chain.get("max_active") or state_chain.DEFAULT_MAX_ACTIVE)
+    occupied = [
         f for f in running(stack)
         if f.get("id") != frame.get("id")
+        and str(f.get("id") or "") in window_ids
         and turn.ensure_fields(f).get("turn_state") == turn.RUNNING
     ]
-    if not others_running:
+    if len(occupied) < max_active:
         # 空闲：挂帧就是唤醒——链上没有一轮在跑，这一帧直接成为当前帧。
         # 唤醒就该把未读认领掉：这一轮正在处理它们，摘要里再挂「有 N 条未读」只会误导
         # （2026-11-25：群 81 已经在跑，unread 还写着 32）。

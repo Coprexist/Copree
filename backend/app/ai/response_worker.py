@@ -253,6 +253,10 @@ async def ai_response_worker():
                 else:
                     failure_watch.record_success(agent_id)
                     failure_watch_alert = None
+            # 事件处理完（工作块已提交）：链上有该跑的帧就接着开。所有事件都经过这里，
+            # 于是闹钟 / 触发器 / 续跑自身都靠它续上，各分支不必各自记得「跑完再看看链」。
+            if agent_id:
+                await _pump(agent_id)
             if failure_watch_alert is not None:
                 await _report_failure_alert(failure_watch_alert)
             message_queue.task_done()
@@ -277,6 +281,9 @@ async def _process_event(db, event: dict):
         message_id, content, sender_type, sender_id, chain_depth
     """
     event_type = event.get("type", "")
+    if event_type == "resume":
+        await _process_resume_event(db, event)
+        return
     if event_type == "alarm":
         await _process_alarm_event(db, event)
         return
@@ -294,6 +301,109 @@ async def _process_event(db, event: dict):
         await _process_dm_event(db, event)
     else:
         await _process_group_event(db, event)
+
+
+# ============================================================
+# 窗口泵：链的排队轮到谁，就拉起谁
+# ============================================================
+
+async def _pump(agent_id: int) -> None:
+    """窗口泵——链的排队轮到谁，就把谁开起来。
+
+    只有这一处「拉起」：判据只看 `due_frames`（窗口内、有未读或没做完的轮），不看是谁
+    触发的。于是消息到达、一轮结束、闹钟、触发器都只是**通知**，不各自开轮；出链之后
+    下一帧自然被这里接上，不需要等下一条消息。
+
+    幂等：同一会话已经有轮在跑就跳过（重复通知起不了第二轮）。额度不在这里重置——
+    收到刺激才恢复（frame_turn_lifecycle §4.1），泵是轮转。
+    """
+    try:
+        from app.models.agent import Agent as AgentModel
+        from app.services.agent.state_stack_service import due_frames
+
+        async with work_session() as db:
+            frames = await due_frames(db, agent_id)
+            if not frames:
+                return
+            agent_row = (await db.execute(
+                select(AgentModel.id, AgentModel.user_id).where(AgentModel.id == agent_id)
+            )).first()
+        if agent_row is None:
+            return
+        ai_user_id = int(agent_row[1])
+
+        for frame in frames:
+            ctx = str(frame.get("context_ref") or "")
+            conv_type, sep, conv_id = ctx.partition(":")
+            if not sep or conv_type not in ("group", "dm"):
+                continue          # 世界 / 闹钟帧各有自己的唤醒路径，不走会话轮转
+            if conv_type == "dm":
+                key = ("dm", conv_id)
+                conv_fields: dict = {"session_id": conv_id}
+            else:
+                try:
+                    group_id = int(conv_id)
+                except ValueError:
+                    continue
+                key = ("group", group_id)
+                conv_fields = {"group_id": group_id}
+            if await is_agent_running(agent_id, key):
+                continue          # 已经在跑：这条通知重复了
+            stim = frame.get("last_stimulus") or {}
+            try:
+                message_queue.put_nowait({
+                    "type": "resume",
+                    "agent_id": agent_id,
+                    "ai_user_id": ai_user_id,
+                    "conversation_type": conv_type,
+                    "content": str(stim.get("summary") or ""),
+                    "sender_name": str(stim.get("actor") or ""),
+                    **conv_fields,
+                })
+            except asyncio.QueueFull:
+                logger.warning(f"Agent({agent_id}) 窗口续跑入队失败：队列已满")
+                return
+            logger.info(
+                f"🔁 Agent({agent_id}) 窗口轮转：{ctx} 接着跑"
+                f"（未读 {frame.get('unread') or 0} 条）")
+    except Exception as e:
+        logger.warning(f"Agent({agent_id}) 窗口续跑失败（非致命）: {e}")
+
+
+async def _process_resume_event(db, event: dict):
+    """窗口轮转唤起的一轮：**不是新刺激**，所以不重置额度、不走 attach_stimulus。
+
+    带的只是「哪个会话轮到了」+ 帧上记的 last_stimulus（谁、说了什么）。上下文由这一轮
+    自己读会话历史；DND / 意愿 / 决策仍走各自入口，不因为「轮到」就绕过（半夜挂起的群
+    不该被主动回）。
+    """
+    from app.models.agent import Agent as AgentModel
+
+    agent = (await db.execute(
+        select(AgentModel).where(AgentModel.id == int(event.get("agent_id") or 0))
+    )).scalar_one_or_none()
+    if agent is None:
+        return
+    content = str(event.get("content") or "")
+    actor = str(event.get("sender_name") or "")
+
+    if event.get("conversation_type") == "dm":
+        await _trigger_dm_ai_reply(
+            db, agent, str(event.get("session_id") or ""), content, 0,
+            chain_depth=0, resume=True,
+        )
+        return
+
+    group_id = int(event.get("group_id") or 0)
+    group = (await db.execute(select(Group).where(Group.id == group_id))).scalar_one_or_none()
+    if group is None:
+        return
+    await _maybe_trigger_ai_reply(
+        db, agent.user_id, group_id, group, content, 0,
+        chain_depth=0, sender_type="human", sender_id=None,
+        message_type="normal", world_trigger_mode=None, decision_rules=None,
+        resume=True, actor_name=actor,
+    )
 
 
 async def _process_trigger_event(db, event: dict):
@@ -425,6 +535,8 @@ async def _process_dm_event(db, event: dict):
     finally:
         # 收尾兜底：这一轮没赶上的忙时私信自己排一轮（与群聊侧同一套口径）
         await _requeue_leftover_dm_interrupts(agent.id, session_id, chain_depth + 1)
+        # 窗口腾出来了：链上还有谁在等就接着开（与群聊侧同一个泵）
+        await _pump(agent.id)
 
 
 async def _publish_skill_event(event: dict) -> None:
@@ -638,6 +750,8 @@ async def _process_group_event(db, event: dict):
                         _agent_id = agent_id_by_user.get(int(aid))
                         if _agent_id is not None:
                             await _requeue_leftover_interrupts(_agent_id, aid, group_id, chain_depth)
+                            # 窗口腾出来了：链上还有谁在等就接着开（队列走完，不用再等下一条消息）
+                            await _pump(_agent_id)
                         # 端到端含排队：只记执行时间会让"用户在等"这件事从面板上消失
                         await metrics.record_turn(time.monotonic() - started, queued)
 
@@ -860,10 +974,16 @@ async def _maybe_trigger_ai_reply(
     message_type: str = "normal",
     world_trigger_mode: str | None = None,
     decision_rules: list | None = None,
+    resume: bool = False,
+    actor_name: str = "",
 ):
     """检查单个 AI 是否应该回复，如果是则调用 LLM 生成回复
 
     decision_rules：调用方批量预取的该 AI 决策规则（全量消息下省掉每个 AI 一次查库）
+
+    resume=True：这一轮是**窗口轮转**唤起的（上一轮结束、轮到这个会话），不是新刺激。
+    所以不调 attach_stimulus——额度只由刺激恢复，轮转不恢复；正文用帧上记的
+    last_stimulus（actor_name 就是那个人），上下文由这一轮自己读会话历史。
     """
     from app.services.agent.agent_service import get_agent
     from app.ai.decider import decide_action, ActionContext, ActionType
@@ -885,30 +1005,37 @@ async def _maybe_trigger_ai_reply(
     # 统一使用 agent.id（数据库主键）作为后续内部标识
     resolved_agent_id = agent.id
 
-    # 重启/异常留下的残影帧：先清理，不然它们占着 active，新刺激永远排不上队
-    try:
-        from app.services.agent.state_stack_service import recover_interrupted
-        await recover_interrupted(db, resolved_agent_id)
-        await db.commit()
-    except Exception as e:
-        logger.warning(f"中断残留帧清理失败（非致命）: {e}")
+    # 重启/异常留下的残影帧：先清理，不然它们占着 active，新刺激永远排不上队。
+    # 续跑不动它：这一轮要演的就是链上那一帧，清理留给真有新刺激的路径。
+    if not resume:
+        try:
+            from app.services.agent.state_stack_service import recover_interrupted
+            await recover_interrupted(db, resolved_agent_id)
+            await db.commit()
+        except Exception as e:
+            logger.warning(f"中断残留帧清理失败（非致命）: {e}")
 
     # ── 2026-08-09: 聊天即情景——群聊触发时维护会话帧（即使 DND/意愿不回复也记录「有人找过」）──
+    # resume（窗口轮转）跳过这一段：**额度只由刺激恢复**，这一轮的额度早在挂帧时就赋好了，
+    # 这里再调一次 new_stimulus 等于同一句话续两次命（frame_turn_lifecycle §4.1）。
     stimulus = None
-    try:
-        from app.services.agent.state_stack_service import attach_stimulus
-        from app.models.user import User as UserModel
-        sender_name = "群成员"
-        if sender_id is not None:
-            srow = await db.execute(select(UserModel.username).where(UserModel.id == sender_id))
-            sender_name = srow.scalar_one_or_none() or f"用户{sender_id}"
-        stimulus = await attach_stimulus(
-            db, resolved_agent_id, "group_chat", f"group:{group_id}",
-            title=(group.name if group and getattr(group, "name", None) else f"群{group_id}"),
-            actor_name=sender_name, summary=content,
-        )
-    except Exception as e:
-        logger.warning(f"群会话帧维护失败（非致命）: {e}")
+    sender_name = "群成员"
+    if resume:
+        sender_name = actor_name or sender_name
+    else:
+        try:
+            from app.services.agent.state_stack_service import attach_stimulus
+            from app.models.user import User as UserModel
+            if sender_id is not None:
+                srow = await db.execute(select(UserModel.username).where(UserModel.id == sender_id))
+                sender_name = srow.scalar_one_or_none() or f"用户{sender_id}"
+            stimulus = await attach_stimulus(
+                db, resolved_agent_id, "group_chat", f"group:{group_id}",
+                title=(group.name if group and getattr(group, "name", None) else f"群{group_id}"),
+                actor_name=sender_name, summary=content,
+            )
+        except Exception as e:
+            logger.warning(f"群会话帧维护失败（非致命）: {e}")
 
     # 别处有人找：只摆帧、记未读，不烧这一轮（frame_turn_lifecycle §7.3）。
     # 他就在这一段里时返回的才是 active 帧；否则是挂起帧。漏了这条判定，
@@ -1315,8 +1442,12 @@ async def _trigger_dm_ai_reply(
     chain_depth: int = 0,
     sender_id: int | None = None,
     force_own_key: bool = False,
+    resume: bool = False,
 ):
-    """触发 AI 对私信的自动回复"""
+    """触发 AI 对私信的自动回复
+
+    resume=True：窗口轮转唤起的续跑，不是新消息——不注入忙时中断、不重置额度。
+    """
     from app.services.agent.agent_service import get_agent
     from app.models.user import User as UserModel
 
@@ -1337,6 +1468,9 @@ async def _trigger_dm_ai_reply(
     # 顺序要紧：忙时注入这条路径不会调用 LLM，却会占掉限流槽位；消息注入后会在当前这一轮
     # 结束时被重排成单独一轮（_requeue_leftover_dm_interrupts），那一轮往往在同一毫秒内到达，
     # 于是被判成刷屏直接丢掉——表现出来就是「给 AI 发了私信，它永远不回」。
+    if resume:
+        # 续跑只可能由「窗口空出来」触发；这时还忙说明这条通知重复了，直接跳过
+        return
     if await is_agent_running(agent_id, ("dm", session_id)):
         await add_pending_interrupt(agent_id, {
             "type": "user_message",
