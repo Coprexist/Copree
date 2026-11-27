@@ -242,6 +242,8 @@
 
 - 前端 i18n 多一道**三语对齐闸** `frontend/scripts/check-i18n-parity.mjs`：查字典自身的缺键、占位符不一致（`{count}` / `{name}`）、空/纯空白值。前两条闸都从「源码里用了什么 key」出发，字典之间对不对得上它们看不见——某键只有 zh 有、ja 少一个占位符都不报错，只在某一种语言的界面上静默变形，且没有调用点可循。随 `npm run i18n:check` 跑，CI 自动生效；不该一致的情况在 `EXEMPT` 里登记理由，登记了却不再命中会报「过期例外」。
 
+- 前端加**硬编码文案闸**（`check-i18n-hardcoded.mjs`，随 `npm run i18n:check` 进 CI）：前三道闸都以「文案已走 `t()`」为前提，看不见「可见文案压根没走 i18n」。新闸用 TypeScript AST 只审确定的文案位置（JSX 文本 + `title` / `placeholder` / `aria-label` 等），`className` / `href` / `data-*` 不审；语言无关文本（`UTF-8` / `worlds/` / `yyyy-MM-dd`）按 `scripts/lib/i18n-hardcoded-policy.mjs` 自动放行。存量 59 文件 / 516 处记入 `frontend/i18n-hardcoded-baseline.json`，只减不增；有意不翻的写 `// i18n-exempt: 理由`，理由必填、过期豁免会报错
+
 ### 🐛 修复
 
 - **滚动条不再并排出现两条**：iOS / iPadOS 的滚动指示器是系统 overlay，`scrollbar-width`

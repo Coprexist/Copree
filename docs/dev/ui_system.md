@@ -327,10 +327,11 @@ if (await confirmAsync({ title: '删除？', message: '不可恢复', danger: tr
 ```bash
 # 前端在容器里跑，容器内不装依赖
 docker exec -w /app ai_group_frontend node_modules/.bin/tsc --noEmit
-# i18n 三道闸门（等价于 npm run i18n:check）
+# i18n 四道闸门（等价于 npm run i18n:check）
 docker exec -w /app ai_group_frontend node scripts/check-i18n.mjs
 docker exec -w /app ai_group_frontend node scripts/check-i18n-keys.mjs
 docker exec -w /app ai_group_frontend node scripts/check-i18n-parity.mjs
+docker exec -w /app ai_group_frontend node scripts/check-i18n-hardcoded.mjs
 
 # 别让旧的裸写法回流（数字应逐步下降，不应上升）
 cd frontend/src
@@ -365,17 +366,24 @@ node scripts/screenshot/run.mjs --only ui-components,ui-convlog
   匹配不上中文关键词，红色提示会变绿。语气在产生提示的那一刻就是确定的（try/catch 走哪一支），
   用 `src/hooks/useNotice.ts`：`ok()/fail()/clear()` + `NOTICE_TEXT_CLASS` / `NOTICE_BOX_CLASS`，配色也只在那里定义。
 
-三道闸门（`npm run i18n:check` 一次跑完，CI 阻断）：
+四道闸门（`npm run i18n:check` 一次跑完，CI 阻断）：
 
 | 闸门 | 抓什么 |
 | --- | --- |
 | `scripts/check-i18n.mjs` | 静态字面量：用了但字典里没有、字典文件没在 `translations.ts` 登记（漏登记＝整段裸 key） |
 | `scripts/check-i18n-keys.mjs` | 拿**真字典**（esbuild 就地转译 `ns/*.ts`）逐个解析调用点，含动态 key 的数据表；另抓点号旧形式、key 字段写成裸文案 |
 | `scripts/check-i18n-parity.mjs` | **字典自身**：三语键集合不一致、同一键的占位符集合不一致（`{count}` / `{name}`）、空值。这类错没有调用点可循，只在某一种语言的界面上静默变形 |
+| `scripts/check-i18n-hardcoded.mjs` | **反方向**：可见文案压根没走 `t()`。用 TypeScript AST 只审白名单位置（JSX 文本 + `title` / `placeholder` / `aria-label` 等属性），`className` / `href` / `data-*` 不审；语言无关文本自动放行；存量棘轮只减不增 |
 
-字典解析只有一处：`scripts/lib/i18n-dicts.mjs`（esbuild 转译后真 import），三条脚本共用。
+字典解析只有一处：`scripts/lib/i18n-dicts.mjs`（esbuild 转译后真 import），前三道共用。
 三语本来就不该一致的情况（例如文案在示范 `{变量名}` 这种格式）在 `check-i18n-parity.mjs` 的
 `EXEMPT` 里登记理由；登记了却不再命中会报「过期例外」，逼你回来删。
+
+第四道是反方向：前三道都从「源码里用了什么 key」出发，看不见「可见文案压根没写 `t()`」。
+判据只有一条——**这段文字会不会被非中文用户看到并需要理解**：会，就必须走 i18n；不会（`UTF-8`、
+`worlds/`、`yyyy-MM-dd`），由 `scripts/lib/i18n-hardcoded-policy.mjs` 的语言无关判据自动放行，
+不往字典里塞三份一样的文案。存量在 `frontend/i18n-hardcoded-baseline.json`，只减不增；
+确属有意不翻的，在上一行写 `// i18n-exempt: 理由`，理由必填，登记了却没命中会报「过期豁免」。
 
 ## 9. 密钥 / Token 输入（SecretInput）
 

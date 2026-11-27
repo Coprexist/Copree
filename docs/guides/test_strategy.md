@@ -198,10 +198,11 @@ assert doc_yaml_block.rstrip() == open(".github/workflows/test.yml").read().rstr
 # 类型检查
 docker exec -w /app ai_group_frontend node_modules/.bin/tsc --noEmit
 
-# i18n 三道闸（npm run i18n:check 就是这三条串联，CI 跑的是同一条）
+# i18n 四道闸（npm run i18n:check 就是这四条串联，CI 跑的是同一条）
 node frontend/scripts/check-i18n.mjs        # 源码里的 t()/tr() + 后端 CONFIG_GROUPS 下发的 key → 字典有没有
 node frontend/scripts/check-i18n-keys.mjs   # 调用点拿去真字典解析一遍（点号形式漏网、字段值硬编码）
 node frontend/scripts/check-i18n-parity.mjs # 三语字典**自身**对齐：缺键 / 占位符不一致 / 空值
+node frontend/scripts/check-i18n-hardcoded.mjs # 反方向：可见文案压根没走 t()（JSX 文本 / 文案属性），存量棘轮
 ```
 
 为什么需要前两条：`getTranslation()` **找不到 key 时原样返回 key**，界面上就会把
@@ -214,9 +215,16 @@ node frontend/scripts/check-i18n-parity.mjs # 三语字典**自身**对齐：缺
 只能三语互比：键集合、占位符集合、空值。三语本来就不该一致的情况（文案在示范 `{变量名}` 这种格式）
 在脚本的 `EXEMPT` 里登记理由；登记了却不再命中会报「过期例外」，避免例外表烂成免死金牌。
 
+为什么还需要第四条：前三条都以「源码里已经用了 key」为前提，**看不见压根没走 i18n 的文案**。
+JSX 里直接写「保存失败」，不报错、不崩溃，只是对英文/日文用户失效。这条用 TypeScript AST 只审
+确定的文案位置（JSX 文本 + `title` / `placeholder` / `aria-label` 等属性），`className`、`href`
+这类位置不审；语言无关文本（`UTF-8`、`worlds/`、`yyyy-MM-dd`）按 `lib/i18n-hardcoded-policy.mjs`
+的判据放行。存量记在 `frontend/i18n-hardcoded-baseline.json`，只减不增（`--update` 拒绝升高）；
+有意不翻的写 `// i18n-exempt: 理由`，理由必填，登记了没命中会报「过期豁免」。
+
 字典解析只有一处：`frontend/scripts/lib/i18n-dicts.mjs`（esbuild 转译 `ns/*.ts` 后真 import）。
 原先 `check-i18n.mjs` 用「正则截对象字面量 + `new Function`」自己解析了一份，两套解析器
-一旦走偏就会出现「一个脚本绿、另一个红」的分裂，现在三条脚本共用它。
+一旦走偏就会出现「一个脚本绿、另一个红」的分裂，现在前三道共用它。
 
 ### 1.5 清表与提速：为什么不用 TRUNCATE … CASCADE（2026-09-25）
 
@@ -854,7 +862,7 @@ jobs:
 | 项 | 现状 |
 |----|------|
 | 触发路径 | `backend/**`、`frontend/**` 与 workflow 自身 |
-| 前端改动（PR） | 类型检查 `tsc --noEmit` + `npm run i18n:check`（源码→字典、调用点真解析、三语对齐三条）+ `ui:check` + `proxy:check`；**没有单元测试** |
+| 前端改动（PR） | 类型检查 `tsc --noEmit` + `npm run i18n:check`（源码→字典、调用点真解析、三语对齐、硬编码文案四条）+ `ui:check` + `proxy:check`；**没有单元测试** |
 | 前端改动（push main） | 另有 `deploy-demo.yml` 跑 `vite build --mode demo`（**不含 tsc**）并发布 Pages |
 | 文档改动 | 不触发（合理）|
 | 依赖安装 | 均已开缓存：后端 `cache: pip`、前端 `cache: npm` |
@@ -870,6 +878,7 @@ jobs:
 | 前端类型检查 | ✅ CI 阻断（`tsc --noEmit`）——2026-09-13 新增 |
 | 前端 i18n key 完整性 | ✅ CI 阻断（`npm run i18n:check`）——2026-09-13 新增 |
 | 前端 i18n 三语对齐 | ✅ CI 阻断（`check-i18n-parity.mjs`，随 `npm run i18n:check`）——2026-11-27 新增 |
+| 前端 i18n 硬编码文案 | ✅ CI 阻断（`check-i18n-hardcoded.mjs`，随 `npm run i18n:check`；存量棘轮只减不增）——2026-11-27 新增 |
 | 增量覆盖率 | ✅ CI 阻断（仅 PR）——2026-09-13 新增 |
 | 整体覆盖率阈值 | ❌ **故意不设**：当门禁只会奖励写"调用了但没断言"的假用例 |
 | 代码风格（Ruff / ESLint）| ❌ 未接入 CI |

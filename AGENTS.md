@@ -19,7 +19,7 @@ docker exec -e TEST_DATABASE_URL="postgresql+asyncpg://<用户>:<密码>@postgre
 cd frontend
 ./node_modules/.bin/tsc -p tsconfig.json --noEmit   # 已开 noUnusedLocals / noUnusedParameters
 node scripts/check-ui.mjs
-node scripts/check-i18n.mjs && node scripts/check-i18n-keys.mjs && node scripts/check-i18n-parity.mjs
+node scripts/check-i18n.mjs && node scripts/check-i18n-keys.mjs && node scripts/check-i18n-parity.mjs && node scripts/check-i18n-hardcoded.mjs
 ```
 
 测试套件里有少量**既有失败**（人格版本、QQ 通道环境、时间戳契约、世界技能文档等），
@@ -34,6 +34,14 @@ node scripts/check-i18n.mjs && node scripts/check-i18n-keys.mjs && node scripts/
 en 少一个键、ja 少一个 `{count}` 都不会崩、不会报错，只在某一种语言的界面上静默变形。
 新增文案时三语一起写。确有不该一致的情况（例如文案本身在示范 `{变量名}` 这种格式），
 在脚本的 `EXEMPT` 里登记并写清理由；登记了却不再命中任何问题会报「过期例外」，逼你回来删。
+
+前端还有一条 **硬编码文案闸**（`frontend/scripts/check-i18n-hardcoded.mjs`，同样随 `npm run i18n:check` 跑）：
+上面三条都以「文案已经走了 `t()`」为前提，看不见「压根没走 i18n 的可见文案」。这条用 TypeScript AST
+只审确定的文案位置（JSX 文本、`title` / `placeholder` / `aria-label` 这类属性），`className`、`href`、
+`data-*` 这类位置根本不审；`UTF-8` / `worlds/` / `yyyy-MM-dd` 这类语言无关文本按
+`scripts/lib/i18n-hardcoded-policy.mjs` 的判据自动放行，不往字典里塞三份一样的文案。
+存量记在 `frontend/i18n-hardcoded-baseline.json`，**只允许下降**（`--update` 会拒绝变高的文件）；
+确属有意不翻的，在上一行写 `// i18n-exempt: 理由`，理由必填、且该行必须真的命中问题，否则报「过期豁免」。
 
 改动要同步 `CHANGELOG.md`（走 `changelog` 工具，它会校验分节名与结构）。
 
