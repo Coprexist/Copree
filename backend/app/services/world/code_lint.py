@@ -155,11 +155,11 @@ def _strip(text: str, *, js: bool) -> tuple[str, dict | None]:
                 blank(i, i + 2)
                 i += 2
                 continue
-            if c == "\`":
+            if c == "`":
                 src[i] = " "
                 stack.pop()
                 i += 1
-                prev = "\`"
+                prev = "`"
                 continue
             if c == "$" and i + 1 < n and text[i + 1] == "{":
                 src[i] = src[i + 1] = " "
@@ -202,11 +202,11 @@ def _strip(text: str, *, js: bool) -> tuple[str, dict | None]:
             prev = "s"
             continue
 
-        if c == "\`" and js:
+        if c == "`" and js:
             src[i] = " "
             stack.append("tpl")
             i += 1
-            prev = "\`"
+            prev = "`"
             continue
 
         if c == "/" and js and _looks_like_regex(text, i, prev):
@@ -246,11 +246,11 @@ def _strip(text: str, *, js: bool) -> tuple[str, dict | None]:
                     prev = "}"
                     continue
                 expr_depth -= 1
-            elif c == "\`":
+            elif c == "`":
                 src[i] = " "
                 stack.append("tpl")
                 i += 1
-                prev = "\`"
+                prev = "`"
                 continue
 
         if c.strip():

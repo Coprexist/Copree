@@ -11,8 +11,8 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from unittest.mock import AsyncMock
 
+from _fakes import async_db
 from app.tools.base import DEFAULT_TOOL_TIMEOUT_SECONDS, ToolErrorCode, ToolRegistry
 
 
@@ -47,10 +47,8 @@ def slow_plugin():
 
 
 def _fake_db():
-    db = AsyncMock()
-    db.get = AsyncMock(return_value=None)   # 状态闸读不到 agent → 不拦
-    db.is_active = False                    # 让 _recover_session 真的走回滚分支
-    return db
+    # 状态闸读不到 agent 不拦；is_active=False 让 _recover_session 真的走回滚分支
+    return async_db(active=False)
 
 
 async def test_dispatch_times_out_and_reports_exec_failed(slow_plugin):

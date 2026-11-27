@@ -1,4 +1,4 @@
-﻿"""
+"""
 AI 配置模型 — AI 的运行时配置
 """
 from sqlalchemy import Column, Integer, String, Boolean, Float, Text, DateTime, ForeignKey, func

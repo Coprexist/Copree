@@ -25,6 +25,10 @@ node scripts/check-i18n.mjs && node scripts/check-i18n-keys.mjs
 测试套件里有少量**既有失败**（人格版本、QQ 通道环境、时间戳契约、世界技能文档等），
 先看基线：只对「这次改动引入的失败」负责，顺手修既有的也可以，但别把基线当成自己弄坏的。
 
+另有一条**源码卫生守卫**（`tests/test_python_hygiene.py`），随全量测试自动跑：拦无效转义序列
+（例如把反引号写成「反斜杠+反引号」；Python 3.12 起会从 DeprecationWarning 升成 SyntaxWarning，
+将来是错误）与 UTF-8 BOM。单跑它只要几秒，写完新文件可以先跑一遍，别等 CI 红了再回来找。
+
 改动要同步 `CHANGELOG.md`（走 `changelog` 工具，它会校验分节名与结构）。
 
 改了 LLM 相关代码（system 布局、凭证解析、世界对话）时，再用本地小模型真跑一遍——

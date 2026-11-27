@@ -103,7 +103,7 @@ def extract_keywords(query: str, max_parts: int = 8) -> list[str]:
     无第三方依赖（不引 jieba），SQLite/PG 通用。
     """
     parts: list[str] = []
-    tokens = re.split(r'[,，。！？、\s\n.!?;；：:()（）""''""【】\[\]]+', query)
+    tokens = re.split(r'''[,，。！？、\s\n.!?;；：:()（）""""【】\[\]]+''', query)
     for t in tokens:
         t = t.strip()
         if not t:

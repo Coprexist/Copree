@@ -1,4 +1,4 @@
-﻿"""
+"""
 触发器模型 — AI 的事件触发器
 """
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, func, Text

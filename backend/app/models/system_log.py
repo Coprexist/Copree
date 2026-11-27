@@ -1,4 +1,4 @@
-﻿"""
+"""
 审计日志模型 — 企业级操作记录，含哈希链防篡改
 """
 from sqlalchemy import Column, Integer, String, Boolean, Text, DateTime, func

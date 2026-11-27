@@ -640,6 +640,8 @@
 
 - 设置 → API 配置的厂商卡片⋯菜单弹出来看不见：`MenuPanel` 与卡片同为 `surface` 色，叠在卡片里只差 1px 边框，阴影又被卡片自身淹没；且 `absolute` 挂在卡片内，受祖先 overflow 与层叠上下文影响、靠近视口底部会整个出界。改成 portal 到 body + `fixed`，先量后定位、上下自动翻转、左右夹进视口，顺带补了 ESC 关闭
 
+- 修掉后端源码里 10 处无效转义序列（Python 3.12 起会从 DeprecationWarning 升成 SyntaxWarning/错误）。其中 world 代码自检的反引号判断写成了「反斜杠+反引号」两个字符，模板串分支从未生效——模板串里的 `//` 会被当行注释剥掉、未闭合的模板串也检测不出来，现在都能正确识别；`text.py` 与 `memory_service.py` 里「单引号被内容中的连续单引号截断、后半段掉进非 raw 串」的两处，改成三引号 raw。另清掉 6 个模型文件的 UTF-8 BOM。
+
 ### 🔧 变更
 
 - **评论通知只在需要动手时报**：一次回十条评论时，十条「公开成功」对 AI 没有任何增量信息，
@@ -804,6 +806,10 @@
 ### 🧹 清理
 
 - 前端清掉 19 处未使用声明（含随输入框抽成 `ChatInput` 后失效的旧 @提及实现），并打开 `noUnusedLocals` / `noUnusedParameters` 编译门禁——以后新增死代码会在 `tsc` 阶段直接失败
+
+### 🧪 测试
+
+- 新增源码卫生守卫 `tests/test_python_hygiene.py`：扫描 `app/` 下全部 `.py`，把无效转义与文件头 BOM 当失败，随全量测试自动跑（CI 的 `pytest tests/` 会捡到）。测试替身收敛到 `tests/_fakes.py`，按 AsyncSession 的真实形状配 mock——`execute()` 返回同步 Result、`begin_nested()` 是同步方法返回 async context manager——消掉了 6 条「coroutine was never awaited」。
 
 ### 📝 文档与工程
 

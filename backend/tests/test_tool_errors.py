@@ -5,10 +5,9 @@ return {"error": True}（没有 code，模型不知道要不要重试）。协�
 """
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
-
 import pytest
 
+from _fakes import async_db
 from app.tools.base import ToolErrorCode, ToolRegistry
 from app.tools.errors import INVALID_ARGS, ToolError
 
@@ -16,10 +15,8 @@ pytestmark = pytest.mark.anyio
 
 
 def _fake_db():
-    db = AsyncMock()
-    db.get = AsyncMock(return_value=None)
-    db.is_active = True          # ToolError 不碰事务：不该触发回滚
-    return db
+    # ToolError 不碰事务：is_active=True，不该触发回滚
+    return async_db(active=True)
 
 
 class _RejectingPlugin:
