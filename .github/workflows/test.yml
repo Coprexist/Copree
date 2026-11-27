@@ -98,8 +98,9 @@ jobs:
       - name: Typecheck
         run: ./node_modules/.bin/tsc --noEmit
 
-      # i18n key 完整性：getTranslation 找不到 key 时会把 key 原样显示到界面上
-      #（用户看到 admin.addProvider 这种源码串），这里用静态检查兜住
+      # i18n 三条：调用点→字典（找不到就原样显示 key，用户看到 admin.addProvider 这种源码串）、
+      # 调用点拿去真字典解析、以及三语字典自身对齐（en 少一个键、ja 少一个占位符都不会报错，
+      # 只在某一种语言的界面上静默变形，没有调用点可循，只能三语互比）
       - name: i18n keys
         run: npm run i18n:check
 

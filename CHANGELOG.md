@@ -240,6 +240,8 @@
 
 - `POST /chat-import/organize`；`/chat-import/apply` 支持一并写入勾选的记忆（rough + detail 两层）与知识库（走既有 `knowledge_service.restore_entry`，路径安全与覆盖规则不重写）
 
+- 前端 i18n 多一道**三语对齐闸** `frontend/scripts/check-i18n-parity.mjs`：查字典自身的缺键、占位符不一致（`{count}` / `{name}`）、空/纯空白值。前两条闸都从「源码里用了什么 key」出发，字典之间对不对得上它们看不见——某键只有 zh 有、ja 少一个占位符都不报错，只在某一种语言的界面上静默变形，且没有调用点可循。随 `npm run i18n:check` 跑，CI 自动生效；不该一致的情况在 `EXEMPT` 里登记理由，登记了却不再命中会报「过期例外」。
+
 ### 🐛 修复
 
 - **滚动条不再并排出现两条**：iOS / iPadOS 的滚动指示器是系统 overlay，`scrollbar-width`
@@ -642,6 +644,8 @@
 
 - 修掉后端源码里 10 处无效转义序列（Python 3.12 起会从 DeprecationWarning 升成 SyntaxWarning/错误）。其中 world 代码自检的反引号判断写成了「反斜杠+反引号」两个字符，模板串分支从未生效——模板串里的 `//` 会被当行注释剥掉、未闭合的模板串也检测不出来，现在都能正确识别；`text.py` 与 `memory_service.py` 里「单引号被内容中的连续单引号截断、后半段掉进非 raw 串」的两处，改成三引号 raw。另清掉 6 个模型文件的 UTF-8 BOM。
 
+- 补齐 `admin.resetPasswordSuccess` / `admin.resetPasswordError` 的日语，清掉三语都不再被引用的死键 `admin.panel`；`admin.emailTemplateVarHint` 的英文 `{variable}` 是给用户看的格式示意、不是运行时插值，登记为例外。
+
 ### 🔧 变更
 
 - **评论通知只在需要动手时报**：一次回十条评论时，十条「公开成功」对 AI 没有任何增量信息，
@@ -679,6 +683,8 @@
 - 包断额度（`agents.api_credit_cost`）功能暂时关闭：创建 AI 时拒绝非 0 包断、编辑只允许保持原值。排查发现它从未真正生效——创建不扣 `agent_bundle_credit`、删除却返回到 `api_credit`、`quota_service.charge` 也不识别包断 AI，先不让用户为它付费。
 
 - 帧额度改为**只存剩余步数** `steps_left`（替换 `steps_used` + `steps_limit`）：判断额度看 `> 0`、赋值一行、借还两边加减；旧帧按「上限 − 已用」换算一次，不清零。
+
+- i18n 字典解析收成一处 `frontend/scripts/lib/i18n-dicts.mjs`（esbuild 转译 `ns/*.ts` 后真 import）。原先 `check-i18n.mjs` 用「正则截对象字面量 + `new Function`」自己解析了一份，两套解析器一旦走偏就会出现「一个脚本绿、另一个红」，查错还会误以为是文案问题。
 
 ### ♻️ 重构
 

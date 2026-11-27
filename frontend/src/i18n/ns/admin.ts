@@ -363,7 +363,6 @@ export const adminZh: TranslationDict = {
   'presets': '预设',
 
   // ======================== 管理员 Tab ========================
-  'panel': '管理面板',
   'overview': '概览',
   'users': '用户',
   'agents': 'AI 管理',
@@ -1506,6 +1505,8 @@ export const adminJa: TranslationDict = {
   'resetPassword': 'パスワードをリセット',
   'resetPasswordTitle': '{username} のパスワードをリセット',
   'resetPasswordPlaceholder': '新しいパスワードを入力（6文字以上）',
+  'resetPasswordSuccess': 'パスワードをリセットしました',
+  'resetPasswordError': 'パスワードのリセットに失敗しました',
   'agentsColId': 'ID',
   'agentsColName': '名前',
   'agentsColOwner': '所有者',
@@ -1790,7 +1791,6 @@ export const adminJa: TranslationDict = {
   'fileQuotaIncreaseConfirm': 'ファイル容量の基本値を増やしますか？\n\n現在 {old}MB → 新規 {new}MB\n全ユーザーに +{delta}MB 追加されます',
   'fileQuotaDecreaseConfirm': 'ファイル容量の基本値を減らしますか？\n\n現在 {old}MB → 新規 {new}MB\n全ユーザーの基本容量が {new}MB になります（交換コード分は保持）。\n\n⚠ 制限を超えているユーザーは新しいファイルをアップロードできなくなります。',
   'presets': 'プリセット',
-  'panel': '管理パネル',
   'overview': '概要',
   'users': 'ユーザー',
   'agents': 'AI管理',

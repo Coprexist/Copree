@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "build:demo": "vite build --mode demo",
     "preview": "vite preview",
-    "i18n:check": "node scripts/check-i18n.mjs && node scripts/check-i18n-keys.mjs",
+    "i18n:check": "node scripts/check-i18n.mjs && node scripts/check-i18n-keys.mjs && node scripts/check-i18n-parity.mjs",
     "ui:check": "node scripts/check-ui.mjs",
     "ui:check:update": "node scripts/check-ui.mjs --update",
     "proxy:check": "node scripts/check-proxy-prefixes.mjs",

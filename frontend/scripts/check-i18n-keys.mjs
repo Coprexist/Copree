@@ -12,31 +12,13 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import esbuild from 'esbuild'
+import { loadDicts, LANGS } from './lib/i18n-dicts.mjs'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const SRC = path.join(ROOT, 'src')
 const NS_DIR = path.join(SRC, 'i18n/ns')
-const LANGS = ['zh', 'en', 'ja']
-const LANG_SUFFIX = { Zh: 'zh', En: 'en', Ja: 'ja' }
 /** 这些字段名后面跟的字符串是 key（散落在各处的数据表） */
 const KEY_FIELDS = ['i18nKey', 'labelKey', 'keyLabel', 'descKey', 'hintKey', 'titleKey']
-
-/** ns/*.ts → { zh: { ns: {key: 文案} }, ... }：转译后 import，避免自己解析 TS */
-async function loadDicts() {
-  const dicts = { zh: {}, en: {}, ja: {} }
-  for (const file of fs.readdirSync(NS_DIR).filter((f) => f.endsWith('.ts'))) {
-    const ns = file.replace(/\.ts$/, '')
-    const code = fs.readFileSync(path.join(NS_DIR, file), 'utf8')
-    const { code: js } = await esbuild.transform(code, { loader: 'ts', format: 'esm' })
-    const mod = await import('data:text/javascript;base64,' + Buffer.from(js).toString('base64'))
-    for (const [name, value] of Object.entries(mod)) {
-      const suffix = name.match(/(Zh|En|Ja)$/)?.[1]
-      if (suffix) dicts[LANG_SUFFIX[suffix]][ns] = value
-    }
-  }
-  return dicts
-}
 
 function* sourceFiles(dir) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -87,7 +69,7 @@ const split = (key) => {
   return i === -1 ? ['common', key] : [key.slice(0, i), key.slice(i + 1)]
 }
 
-const dicts = await loadDicts()
+const dicts = await loadDicts(NS_DIR)
 const namespaces = new Set(Object.keys(dicts.zh))
 const { used, stale } = collectUsed(namespaces)
 

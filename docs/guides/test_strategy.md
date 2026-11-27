@@ -192,19 +192,31 @@ assert doc_yaml_block.rstrip() == open(".github/workflows/test.yml").read().rstr
 只有仓库里缺这两个组件——一直到 CI 跑构建才以「解析不到组件」暴露。
 规则要锚定到它真正指的那一层（`/data/*`），运行时数据目录各自由所属目录的 `.gitignore` 声明。
 
-### 1.4 前端检查（两条，都在容器里跑，不需要装依赖）
+### 1.4 前端检查（都在容器里跑，不需要装依赖）
 
 ```bash
 # 类型检查
 docker exec -w /app ai_group_frontend node_modules/.bin/tsc --noEmit
 
-# i18n key 完整性：源码里的 t()/tr() + 后端 CONFIG_GROUPS 下发的 key 一起核对
-node frontend/scripts/check-i18n.mjs     # 等价于 cd frontend && npm run i18n:check
+# i18n 三道闸（npm run i18n:check 就是这三条串联，CI 跑的是同一条）
+node frontend/scripts/check-i18n.mjs        # 源码里的 t()/tr() + 后端 CONFIG_GROUPS 下发的 key → 字典有没有
+node frontend/scripts/check-i18n-keys.mjs   # 调用点拿去真字典解析一遍（点号形式漏网、字段值硬编码）
+node frontend/scripts/check-i18n-parity.mjs # 三语字典**自身**对齐：缺键 / 占位符不一致 / 空值
 ```
 
-为什么需要 i18n 这条：`getTranslation()` **找不到 key 时原样返回 key**，界面上就会把
+为什么需要前两条：`getTranslation()` **找不到 key 时原样返回 key**，界面上就会把
 `admin.addProvider`、`adminConfig:sourceDb` 这样的源码串显示给用户——不报错、不崩溃，
 只靠肉眼发现。2026-09 就是这么攒出 48 个三语全缺 + 62 处单语缺的 key 的。
+
+为什么还需要第三条：前两条都从「源码里用了什么」出发，**字典侧的对不上它们看不见**。
+某个 key 只在 zh 里有、en/ja 没有，只要没人 `t()` 它就不会被发现；ja 的文案比 zh 少一个
+`{count}` 也不会报错，只是那一种语言的界面上句子缺一块。这类错的共同点是**没有调用点可循**，
+只能三语互比：键集合、占位符集合、空值。三语本来就不该一致的情况（文案在示范 `{变量名}` 这种格式）
+在脚本的 `EXEMPT` 里登记理由；登记了却不再命中会报「过期例外」，避免例外表烂成免死金牌。
+
+字典解析只有一处：`frontend/scripts/lib/i18n-dicts.mjs`（esbuild 转译 `ns/*.ts` 后真 import）。
+原先 `check-i18n.mjs` 用「正则截对象字面量 + `new Function`」自己解析了一份，两套解析器
+一旦走偏就会出现「一个脚本绿、另一个红」的分裂，现在三条脚本共用它。
 
 ### 1.5 清表与提速：为什么不用 TRUNCATE … CASCADE（2026-09-25）
 
@@ -526,8 +538,8 @@ async def migrated_db():
 ### 6.1 现状：没有自动化 E2E
 
 仓库里**没有**前端 E2E 套件：没有 Playwright 依赖、没有 `frontend/e2e/` 目录，
-`frontend/package.json` 的 scripts 只有 `dev` / `build` / `build:demo` / `preview`。
-CI 里有一个前端 job，但它只做**类型检查**（`tsc --noEmit`），不跑任何测试（见第十节）。
+`frontend/package.json` 的 scripts 只有构建、预览与静态闸（`i18n:check` / `ui:check` / `proxy:check`）。
+CI 里有一个前端 job，做**类型检查 + 三条静态闸**，仍然不跑任何测试（见第十节）。
 
 因此「端到端」目前 = **部署后人工回归**，按附录清单走一遍。
 
@@ -842,7 +854,7 @@ jobs:
 | 项 | 现状 |
 |----|------|
 | 触发路径 | `backend/**`、`frontend/**` 与 workflow 自身 |
-| 前端改动（PR） | 类型检查 `tsc --noEmit` + i18n key 完整性 `npm run i18n:check`；**没有单元测试** |
+| 前端改动（PR） | 类型检查 `tsc --noEmit` + `npm run i18n:check`（源码→字典、调用点真解析、三语对齐三条）+ `ui:check` + `proxy:check`；**没有单元测试** |
 | 前端改动（push main） | 另有 `deploy-demo.yml` 跑 `vite build --mode demo`（**不含 tsc**）并发布 Pages |
 | 文档改动 | 不触发（合理）|
 | 依赖安装 | 均已开缓存：后端 `cache: pip`、前端 `cache: npm` |
@@ -857,6 +869,7 @@ jobs:
 | 后端测试全绿 | ✅ CI 阻断（`pytest tests/ -q` 非零即红）|
 | 前端类型检查 | ✅ CI 阻断（`tsc --noEmit`）——2026-09-13 新增 |
 | 前端 i18n key 完整性 | ✅ CI 阻断（`npm run i18n:check`）——2026-09-13 新增 |
+| 前端 i18n 三语对齐 | ✅ CI 阻断（`check-i18n-parity.mjs`，随 `npm run i18n:check`）——2026-11-27 新增 |
 | 增量覆盖率 | ✅ CI 阻断（仅 PR）——2026-09-13 新增 |
 | 整体覆盖率阈值 | ❌ **故意不设**：当门禁只会奖励写"调用了但没断言"的假用例 |
 | 代码风格（Ruff / ESLint）| ❌ 未接入 CI |

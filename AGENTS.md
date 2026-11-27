@@ -19,7 +19,7 @@ docker exec -e TEST_DATABASE_URL="postgresql+asyncpg://<用户>:<密码>@postgre
 cd frontend
 ./node_modules/.bin/tsc -p tsconfig.json --noEmit   # 已开 noUnusedLocals / noUnusedParameters
 node scripts/check-ui.mjs
-node scripts/check-i18n.mjs && node scripts/check-i18n-keys.mjs
+node scripts/check-i18n.mjs && node scripts/check-i18n-keys.mjs && node scripts/check-i18n-parity.mjs
 ```
 
 测试套件里有少量**既有失败**（人格版本、QQ 通道环境、时间戳契约、世界技能文档等），
@@ -28,6 +28,12 @@ node scripts/check-i18n.mjs && node scripts/check-i18n-keys.mjs
 另有一条**源码卫生守卫**（`tests/test_python_hygiene.py`），随全量测试自动跑：拦无效转义序列
 （例如把反引号写成「反斜杠+反引号」；Python 3.12 起会从 DeprecationWarning 升成 SyntaxWarning，
 将来是错误）与 UTF-8 BOM。单跑它只要几秒，写完新文件可以先跑一遍，别等 CI 红了再回来找。
+
+前端另有一条 **i18n 三语对齐闸**（`frontend/scripts/check-i18n-parity.mjs`，随 `npm run i18n:check` 跑）：
+另外两条只看「源码里用了哪个 key → 字典里有没有」，看不见「三语字典互相之间对不对得上」——
+en 少一个键、ja 少一个 `{count}` 都不会崩、不会报错，只在某一种语言的界面上静默变形。
+新增文案时三语一起写。确有不该一致的情况（例如文案本身在示范 `{变量名}` 这种格式），
+在脚本的 `EXEMPT` 里登记并写清理由；登记了却不再命中任何问题会报「过期例外」，逼你回来删。
 
 改动要同步 `CHANGELOG.md`（走 `changelog` 工具，它会校验分节名与结构）。
 

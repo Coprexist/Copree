@@ -327,9 +327,10 @@ if (await confirmAsync({ title: '删除？', message: '不可恢复', danger: tr
 ```bash
 # 前端在容器里跑，容器内不装依赖
 docker exec -w /app ai_group_frontend node_modules/.bin/tsc --noEmit
-# i18n 两道闸门（等价于 yarn i18n:check）
+# i18n 三道闸门（等价于 npm run i18n:check）
 docker exec -w /app ai_group_frontend node scripts/check-i18n.mjs
 docker exec -w /app ai_group_frontend node scripts/check-i18n-keys.mjs
+docker exec -w /app ai_group_frontend node scripts/check-i18n-parity.mjs
 
 # 别让旧的裸写法回流（数字应逐步下降，不应上升）
 cd frontend/src
@@ -364,12 +365,17 @@ node scripts/screenshot/run.mjs --only ui-components,ui-convlog
   匹配不上中文关键词，红色提示会变绿。语气在产生提示的那一刻就是确定的（try/catch 走哪一支），
   用 `src/hooks/useNotice.ts`：`ok()/fail()/clear()` + `NOTICE_TEXT_CLASS` / `NOTICE_BOX_CLASS`，配色也只在那里定义。
 
-两道闸门（`yarn i18n:check` 一次跑完）：
+三道闸门（`npm run i18n:check` 一次跑完，CI 阻断）：
 
 | 闸门 | 抓什么 |
 | --- | --- |
-| `scripts/check-i18n.mjs` | 静态字面量：用了但字典里没有、字典里有但没人用 |
+| `scripts/check-i18n.mjs` | 静态字面量：用了但字典里没有、字典文件没在 `translations.ts` 登记（漏登记＝整段裸 key） |
 | `scripts/check-i18n-keys.mjs` | 拿**真字典**（esbuild 就地转译 `ns/*.ts`）逐个解析调用点，含动态 key 的数据表；另抓点号旧形式、key 字段写成裸文案 |
+| `scripts/check-i18n-parity.mjs` | **字典自身**：三语键集合不一致、同一键的占位符集合不一致（`{count}` / `{name}`）、空值。这类错没有调用点可循，只在某一种语言的界面上静默变形 |
+
+字典解析只有一处：`scripts/lib/i18n-dicts.mjs`（esbuild 转译后真 import），三条脚本共用。
+三语本来就不该一致的情况（例如文案在示范 `{变量名}` 这种格式）在 `check-i18n-parity.mjs` 的
+`EXEMPT` 里登记理由；登记了却不再命中会报「过期例外」，逼你回来删。
 
 ## 9. 密钥 / Token 输入（SecretInput）
 

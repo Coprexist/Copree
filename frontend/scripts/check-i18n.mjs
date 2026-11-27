@@ -13,62 +13,23 @@
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
 import { dirname, join, resolve, extname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { loadDicts, LANGS } from './lib/i18n-dicts.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const FRONTEND = resolve(HERE, '..')
 const REPO = resolve(FRONTEND, '..')
 const SRC = join(FRONTEND, 'src')
-const LANGS = ['zh', 'en', 'ja']
 
 // ── 1. 解析字典 ────────────────────────────────────────────────
-/** 提取 '...' 字符串时跳过转义引号 */
-function matchBrace(text, openIdx) {
-  let depth = 0
-  let quote = null
-  for (let i = openIdx; i < text.length; i++) {
-    const c = text[i]
-    if (quote) {
-      if (c === '\\') i++
-      else if (c === quote) quote = null
-      continue
-    }
-    if (c === "'" || c === '"' || c === '`') { quote = c; continue }
-    if (c === '{') depth++
-    else if (c === '}') { depth--; if (depth === 0) return text.slice(openIdx, i + 1) }
-  }
-  throw new Error('未闭合的对象字面量')
-}
-
-/** 读一个 i18n 定义文件，返回 { ns: { lang: Set<key> } } */
-function loadDictFile(file) {
-  const text = readFileSync(file, 'utf8')
-  const out = {}
-  const re = /const\s+(\w+)\s*:\s*TranslationDict\s*=\s*\{/g
-  let m
-  while ((m = re.exec(text))) {
-    const name = m[1]
-    // 'zh' / 'en' / 'ja' = common 分区；'toolZh' / 'adminConfigEn' = 具名分区
-    const isBare = ['zh', 'en', 'ja'].includes(name)
-    const lang = isBare ? name : name.endsWith('Zh') ? 'zh' : name.endsWith('En') ? 'en' : name.endsWith('Ja') ? 'ja' : null
-    const ns = isBare ? 'common' : name.slice(0, name.length - 2)
-    if (!lang) continue
-    const block = matchBrace(text, text.indexOf('{', m.index + m[0].length - 1))
-    const obj = new Function('return (' + block + ')')()
-    ;(out[ns] ||= {})[lang] = obj
-  }
-  return out
-}
-
-// 自动发现命名空间字典：src/i18n/ns/ 下一个 ns 一个文件，新增分区不用改本脚本。
-// 每个文件导出 <ns>Zh / <ns>En / <ns>Ja，loadDictFile 从导出名反推 ns。
+// 字典解析统一走 lib/i18n-dicts.mjs（esbuild 真跑 TS，不做文本猜测），本脚本只负责
+// 「源码里用了什么 → 字典里有没有」。这里翻成 dicts[ns][lang]，下面四十来处取值就不用跟着改。
 const NS_DIR = join(SRC, 'i18n', 'ns')
-const NS_FILES = readdirSync(NS_DIR).filter(f => f.endsWith('.ts')).sort()
+const byLang = await loadDicts(NS_DIR)
 /** dicts[ns][lang] = { 'key': 'value' } */
 const dicts = {}
-for (const f of NS_FILES) {
-  const loaded = loadDictFile(join(NS_DIR, f))
-  for (const [ns, byLang] of Object.entries(loaded)) {
-    dicts[ns] = { ...(dicts[ns] || {}), ...byLang }
+for (const lang of LANGS) {
+  for (const [ns, obj] of Object.entries(byLang[lang])) {
+    dicts[ns] = { ...(dicts[ns] || {}), [lang]: obj }
   }
 }
 const NS = Object.keys(dicts)
