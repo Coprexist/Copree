@@ -8,6 +8,7 @@ import {  Bell, Pause, BellOff, LogOut, UserX, Shield, ShieldOff, UserPlus, Volu
 import Toggle from './Toggle'
 import { Button, Slider, UnderlineTabs } from './ui'
 import AvatarPickerModal from './AvatarPickerModal'
+import RemarkField from './RemarkField'
 
 // ── 联邦共享状态（v0.2.0: 群主/AI制作者按群控制联邦共享） ──
 
@@ -173,6 +174,8 @@ interface GroupSettings {
   name_from_channel?: boolean
   channel_bound?: boolean
   channel_labels?: string[]
+  /** 我对这个群的备注（只影响我自己的列表显示） */
+  remark?: string
 }
 
 interface Props {
@@ -559,6 +562,22 @@ export default function GroupSettingsPanel({ group, onClose, onUpdate, onLeave }
           {/* === Tab: 基本设置 === */}
           {tab === 'general' && (
             <>
+              {/* 备注：我给它起的称呼，会话列表优先显示它（不改群名，别人看不到） */}
+              {group && (
+                <div>
+                  <label className="text-xs font-medium text-textSecondary">{t('groupSettings:remark')}</label>
+                  <div className="mt-1">
+                    <RemarkField
+                      targetType="group"
+                      targetId={group.id}
+                      placeholder={t('groupSettings:remarkPlaceholder')}
+                      hint={t('groupSettings:remarkHint')}
+                      onError={setError}
+                    />
+                  </div>
+                </div>
+              )}
+
               {/* 群名称 */}
               <div>
                 <label className="text-xs font-medium text-textSecondary">{t('groupSettings:groupName')}</label>

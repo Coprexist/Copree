@@ -130,6 +130,102 @@ async def test_dm_attachment_is_fetched_too(migrated_db):
         settings.data_dir = original
 
 
+async def _group_files(db, *, items, data_dir):
+    """一条消息挂多个附件（file_id, name, mime, body）——编号场景要的就是这个"""
+    import json
+
+    atts = []
+    for fid, name, mime, body in items:
+        rel = f"attachments/qq/{name}"
+        path = os.path.join(data_dir, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(body)
+        await db.execute(text(
+            "INSERT INTO file_metadata (id, path, owner_type, owner_id, size, mime_type, collaboration_mode) "
+            "VALUES (:id, :path, 'human', :owner, :size, :mime, 'solo')"
+        ), {"id": fid, "path": rel, "owner": HUMAN, "size": len(body), "mime": mime})
+        atts.append({"file_id": fid, "path": rel, "name": name, "size": len(body), "mime_type": mime})
+    await db.execute(text(
+        "INSERT INTO messages (id, group_id, sender_type, sender_id, content, attachments) "
+        "VALUES (:mid, :g, 'human', :owner, '[文件]', CAST(:att AS JSONB))"
+    ), {"mid": 990, "g": GROUP, "owner": HUMAN, "att": json.dumps(atts)})
+    await db.commit()
+
+
+async def test_fetch_by_indexes_takes_the_named_one(migrated_db):
+    """[图片 2] 就是 indexes=[2]：编号必须落在同一张图上。"""
+    from app.config import settings
+    from app.database import async_session
+    from app.tools.file_operations.file_fetch import FileFetch
+
+    data_dir = tempfile.mkdtemp(prefix="fetch-index-")
+    original = settings.data_dir
+    settings.data_dir = data_dir
+    try:
+        async with async_session() as db:
+            await _seed(db)
+            await _group_files(db, data_dir=data_dir, items=[
+                (61, "第一张.png", "image/png", b"one"),
+                (62, "第二张.png", "image/png", b"two"),
+            ])
+            result = await FileFetch().execute(db, AI_AGENT, GROUP, {"indexes": [2]}, {})
+            await db.commit()
+
+        assert result["count"] == 1, result
+        assert result["fetched"][0]["path"] == "inbox/第二张.png", result
+    finally:
+        settings.data_dir = original
+
+
+async def test_fetch_without_arguments_takes_the_whole_message(migrated_db):
+    """不传参数 = 收整条消息的全部附件（旧实现只收第一个，那是漏收）。"""
+    from app.config import settings
+    from app.database import async_session
+    from app.tools.file_operations.file_fetch import FileFetch
+
+    data_dir = tempfile.mkdtemp(prefix="fetch-all-")
+    original = settings.data_dir
+    settings.data_dir = data_dir
+    try:
+        async with async_session() as db:
+            await _seed(db)
+            await _group_files(db, data_dir=data_dir, items=[
+                (63, "甲.txt", "text/plain", b"a"),
+                (64, "乙.txt", "text/plain", b"b"),
+            ])
+            result = await FileFetch().execute(db, AI_AGENT, GROUP, {}, {})
+            await db.commit()
+
+        assert result["count"] == 2, result
+        assert [f["path"] for f in result["fetched"]] == ["inbox/甲.txt", "inbox/乙.txt"]
+    finally:
+        settings.data_dir = original
+
+
+async def test_missing_index_says_which_ones_exist(migrated_db):
+    """缺号要报清楚，否则模型会反复猜编号。"""
+    from app.config import settings
+    from app.database import async_session
+    from app.tools.file_operations.file_fetch import FileFetch
+
+    data_dir = tempfile.mkdtemp(prefix="fetch-missing-")
+    original = settings.data_dir
+    settings.data_dir = data_dir
+    try:
+        async with async_session() as db:
+            await _seed(db)
+            await _group_files(db, data_dir=data_dir, items=[
+                (65, "唯一.txt", "text/plain", b"x"),
+            ])
+            result = await FileFetch().execute(db, AI_AGENT, GROUP, {"indexes": [2]}, {})
+
+        assert result["error"] is True
+        assert "2" in result["message"] and "1" in result["message"], result
+    finally:
+        settings.data_dir = original
+
+
 async def test_other_ais_attachment_is_refused(migrated_db):
     from app.config import settings
     from app.database import async_session

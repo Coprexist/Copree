@@ -62,10 +62,16 @@ async def list_my_dm_sessions(
     )
     prefs = {p.session_id: p for p in pref_result.scalars().all()}
 
+    # 备注：列表优先显示它（目标是私信对端那个人）
+    from app.services.social import remark_service
+
+    remarks = await remark_service.remarks_map(db, current_user["user_id"])
+
     for s in sessions:
         p = prefs.get(s["session_id"])
         s["is_pinned"] = p.is_pinned if p else False
         s["is_special_care"] = p.is_special_care if p else False
+        s["remark"] = remarks.get(("user", s["partner"]["id"]), "")
 
     # 置顶优先，然后按最后消息时间降序
     def sort_key(s):

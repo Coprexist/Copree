@@ -74,7 +74,10 @@ SKILL_SEGMENT_META: dict[str, dict] = {
         "trigger_conditions": ["AI 需要持久化信息", "工具调用链中需要文件", "用户请求文件操作"],
         "icon": "folder",
         "usage_notes": [
-            (300, "读文件先 file_grep 定位行号，再用 offset/limit 分页读，别整文件全读。"),
+            (200, "别人发来的图片/文件在上下文里只留一行标记（[图片]、[图片 2]、[文件] 名）；"
+                  "要留下、转发或二次加工，先用 file_fetch 收进自己的文件空间（带编号时可一次收多个），"
+                  "再用 file_share / send_file。只是看一眼不用收。"),
+            (300, "读文件用 offset/limit 分页读，别整文件全读。"),
             (300, "改文件用 file_edit 精确替换原文片段；整份重写用 file_write，两者别混用。"),
         ],
     },

@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
 import { api } from '../api/client'
 import { useT } from '../i18n/I18nContext'
-import { X, Bell, BellOff, Download, Clock, ArrowLeft, Pin, Heart } from 'lucide-react'
+import { X, Bell, BellOff, Download, Clock, ArrowLeft, Pin, Heart, Pencil } from 'lucide-react'
 import Toggle from './Toggle'
+import RemarkField from './RemarkField'
 
 interface Partner {
   id: number
@@ -35,6 +36,7 @@ export default function DMSettingsPanel({ sessionId, partner, myDndUntil, onClos
   const [customMinutes, setCustomMinutes] = useState('')
   const [pinned, setPinned] = useState(false)
   const [specialCare, setSpecialCare] = useState(false)
+
 
   // 加载时从 localStorage / 缓存查询置顶状态
   // 更可靠的做法：从 DM sessions API 获取
@@ -205,6 +207,23 @@ export default function DMSettingsPanel({ sessionId, partner, myDndUntil, onClos
           </div>
 
           <hr className="border-border" />
+
+          {/* === 备注 === */}
+          <div>
+            <h3 className="text-sm font-medium text-textPrimary flex items-center gap-2 mb-3">
+              <Pencil size={14} className="text-textMuted" />
+              {t('dmSettings:remark')}
+            </h3>
+            {partner && (
+              <RemarkField
+                targetType="user"
+                targetId={partner.id}
+                placeholder={t('dmSettings:remarkPlaceholder')}
+                hint={t('dmSettings:remarkHint')}
+                onError={setError}
+              />
+            )}
+          </div>
 
           {/* === 置顶开关 === */}
           <div>

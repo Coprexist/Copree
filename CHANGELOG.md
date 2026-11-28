@@ -253,6 +253,10 @@
   - 场景接口拆到 `routers/user_api_config_scenarios.py`（清单、总开关、整体保存序列、红点已读），数据规则在 `services/agent/api_scenario_service.py`；解析链纯判断拆到 `resolver_core.py`，取数壳保留原入口。
   - 「优先使用本人配置」两级都要：用户级（`users.prefer_own_key`，恢复写入）+ AI 级（`agents.prefer_own_config`，三态：跟随账号 / 开 / 关），AI 级覆盖用户级；AI 详情 → API 页签内显示在「实际使用」上方。
 
+- `file_fetch` 支持一条消息里的多个附件：上下文标记带编号（`[图片 2]`），用 `indexes=[2]` 指认第几个、`file_ids` 按 id 收、一次可收多个；不传参数则收整条消息的全部附件（旧实现只取第一个）。取数与选区下沉到 `services/content/attachment_source.py`，与标记层共用同一份编号口径。
+
+- 会话备注：可以给群聊和私信对端设置备注，会话列表与聊天头部显示「备注（原名）」，备注用主色、原名用弱化色区分；群设置、私信设置、资料卡三处都能设，保存后按钮提示「已保存」。后端为独立表 `user_remarks`（群/人两列 + CHECK 互斥 + 唯一键），外键交给数据库做级联；前端抽 `RemarkField` + `useRemarks` store，备注全局只拉一次。
+
 ### 🐛 修复
 
 - **滚动条不再并排出现两条**：iOS / iPadOS 的滚动指示器是系统 overlay，`scrollbar-width`
@@ -656,6 +660,10 @@
 - 修掉后端源码里 10 处无效转义序列（Python 3.12 起会从 DeprecationWarning 升成 SyntaxWarning/错误）。其中 world 代码自检的反引号判断写成了「反斜杠+反引号」两个字符，模板串分支从未生效——模板串里的 `//` 会被当行注释剥掉、未闭合的模板串也检测不出来，现在都能正确识别；`text.py` 与 `memory_service.py` 里「单引号被内容中的连续单引号截断、后半段掉进非 raw 串」的两处，改成三引号 raw。另清掉 6 个模型文件的 UTF-8 BOM。
 
 - 补齐 `admin.resetPasswordSuccess` / `admin.resetPasswordError` 的日语，清掉三语都不再被引用的死键 `admin.panel`；`admin.emailTemplateVarHint` 的英文 `{variable}` 是给用户看的格式示意、不是运行时插值，登记为例外。
+
+- 文件操作的技能要点里指向了站内并不存在的 `file_grep`（它只在群视界世界工具集里），并补上「别人发来的图片/文件先用 `file_fetch` 收进自己空间，再用 `file_share` / `send_file`」——此前 AI 不知道有这个动作。
+
+- 表情贴纸在消息里被压成行内小图（1.15em）：附件快照现在带上显示档位 `size`（s/m/l），渲染层按档位画——s 行内小表情、m 112px、l 176px，历史消息没有档位按默认 m。
 
 ### 🔧 变更
 

@@ -17,6 +17,7 @@ from app.utils.multimodal import (
     IMAGE_NOTE_PREFIX,
     IMAGE_PLACEHOLDER,
     VISION_UNSUPPORTED_HINT,
+    attachment_marks,
     build_content,
     emoji_mark,
     image_attachments,
@@ -261,6 +262,24 @@ def test_is_vision_unsupported_error_matches_real_wording():
         "unknown modality: image",
     ):
         assert is_vision_unsupported_error(text), text
+
+
+# 多附件编号：file_fetch(indexes=[2]) 的号必须和 AI 在上下文里看到的一致
+
+def test_single_attachment_is_not_numbered():
+    assert attachment_marks([IMG]) == "[图片]"
+    assert emoji_mark(EMOJI) == "[表情:微笑]"
+
+
+def test_multiple_attachments_are_numbered():
+    """一条消息带多个附件时每项都带号，AI 才能指认「第 2 个」。"""
+    assert attachment_marks([IMG, TXT]) == "[图片 1] [文件 2] a.txt（1 B）"
+    assert emoji_mark(EMOJI, index=2) == "[表情 2:微笑]"
+
+
+def test_emoji_takes_a_number_too():
+    """表情不占号的话，AI 数出来的附件数会比实际少一个。"""
+    assert attachment_marks([EMOJI, IMG]) == "[表情 1:微笑] [图片 2]"
 
 
 def test_is_vision_unsupported_error_ignores_unrelated_failures():

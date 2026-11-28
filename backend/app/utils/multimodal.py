@@ -394,21 +394,47 @@ def is_emoji(att: dict) -> bool:
     return isinstance(att.get("emoji"), dict)
 
 
-def emoji_mark(att: dict) -> str:
+def attachment_sequence(attachments) -> list[tuple[int, dict]]:
+    """消息里的附件按出现顺序编号（1 起）：标记层与 file_fetch 共用这一份口径。
+
+    为什么要有编号：一条消息能带多张图/多个文件，AI 想「收第二张」得有个能说出口的
+    指认。编号只在一条消息带多个附件时才写进标记（见 attachment_marks），但两侧必须
+    数同一批东西——一边跳了卡片、另一边没跳，编号就会错位一格。
+    """
+    body = (
+        att for att in (normalize_attachments(attachments) or [])
+        if isinstance(att, dict) and not att.get("type")
+    )
+    return list(enumerate(body, start=1))
+
+
+def _label(base: str, index: int | None) -> str:
+    """一个附件标记：多附件消息带编号（[图片 2]），单附件不带（[图片]）"""
+    return f"[{base} {index}]" if index else f"[{base}]"
+
+
+def emoji_mark(att: dict, *, index: int | None = None) -> str:
     """表情附件 → "[表情:名字]"；不是表情返回空串。
+
+    index 只给「一条消息带多个附件」的标记用：那时每项都带号，表情不能是例外，
+    否则 AI 数出来的附件数会和消息里的实际数量对不上。
 
     已经进账本的旧消息没有该元数据，不回溯，仍旧渲染成 [图片]（2026-11-22 定的口径）。
     """
     if not is_emoji(att):
         return ""
-    face = att.get("emoji")
+    face = att.get("emoji") or {}
     name = " ".join(str(face.get("name") or "").split())
-    return "[表情:" + name + "]" if name else "[表情]"
+    head = f"[表情 {index}" if index else "[表情"
+    return head + (f":{name}]" if name else "]")
 
 
 def attachment_marks(attachments, *, said: str = "") -> str:
     """把附件铺成一行文字标记：表情 [表情:名字]、图片 [图片]、语音 [语音]（带文稿）、
     其余 [文件] 名（大小）。
+
+    一条消息带多个附件时，每项都带编号（[图片 1] [图片 2]）：AI 想收其中一个就用
+    file_fetch(indexes=[2]) 指认，两侧的号由 attachment_sequence 同一份给出。
 
     群聊与私信共用（私信原先自己有套 [文件: a, b] 的写法，两处口径会分叉）。
     卡片类附件（好友/群邀请）没有文件语义，不进标记。
@@ -420,29 +446,32 @@ def attachment_marks(attachments, *, said: str = "") -> str:
     这种文件名——连自己刚说过什么都不知道（AI 的语音就是它自己的文字念出来的，
     文稿是现成的，见 send_voice）。没有 transcript 的（人的语音、还没转写）退回文件名。
     """
+    seq = attachment_sequence(attachments)
+    numbered = len(seq) > 1
     marks: list[str] = []
-    for att in (normalize_attachments(attachments) or []):
-        if not isinstance(att, dict) or att.get("type"):
-            continue
+    for idx, att in seq:
+        num = idx if numbered else None
         if is_image(att):
-            mark = emoji_mark(att)
+            mark = emoji_mark(att, index=num)
             if mark:
                 marks.append(mark)
             elif IMAGE_PLACEHOLDER not in (said or ""):
-                marks.append(IMAGE_PLACEHOLDER)
+                marks.append(_label("图片", num))
             continue
         if is_audio(att):
             said_text = " ".join(str(att.get("transcript") or "").split())
             if said_text:
                 if len(said_text) > TRANSCRIPT_MARK_MAX:
                     said_text = said_text[: TRANSCRIPT_MARK_MAX - 1] + "…"
-                marks.append(f"[语音] {said_text}")
+                marks.append(f"{_label('语音', num)} {said_text}")
             else:
-                marks.append("[语音]")
+                marks.append(_label("语音", num))
             continue
         name = str(att.get("name") or att.get("path") or "文件")
         size = _size_text(att.get("size"))
-        marks.append(f"[文件] {name}（{size}）" if size else f"[文件] {name}")
+        marks.append(
+            f"{_label('文件', num)} {name}（{size}）" if size else f"{_label('文件', num)} {name}"
+        )
     return " ".join(marks)
 
 

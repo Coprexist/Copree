@@ -17,6 +17,9 @@ import ChannelContent from './ChannelContent'
 import VoiceMessage from './VoiceMessage'
 import { parseChannelContent } from '../utils/channelText'
 import { MenuItem, MenuPanel } from './ui'
+import RemarkName from './RemarkName'
+import { avatarInitial } from '../utils/remark'
+import { useRemark } from '../hooks/useRemarks'
 import { useTimeTick } from '../hooks/useTimeTick'
 // CSS 变量：isMine 直接决定配色（不用 getComputedStyle，性能快）
 const DARK_VARS = [
@@ -75,8 +78,9 @@ interface MessageBubbleProps {
     // 它没有 file_id，不能走下载/预览，渲染成另一种胶囊（见 missingAtts）
     available?: boolean, reason?: string,
     // 表情身份：入口把 [表情:名字] 摘成了图片附件（见 plugin.catalog.take_image_faces），
-    // 字节层面它和普通图片一样，只有这份元数据能区分
-    emoji?: { pack?: string; id?: string; name?: string }}> | null
+    // 字节层面它和普通图片一样，只有这份元数据能区分。
+    // size 是显示档位（后端 emoji_face 归一成 s/m/l）：s 是行内小表情，m/l 是贴纸级
+    emoji?: { pack?: string; id?: string; name?: string; size?: 's' | 'm' | 'l' }}> | null
   messageType?: string
   messageId?: number
   /** 回复引用：image 是被引用那条里的第一张图，显示成小图（纯文字的消息没有） */
@@ -88,6 +92,17 @@ interface MessageBubbleProps {
   onRevoke?: (messageId: number) => void
   /** 语音文稿：file_id → 说了什么（家在 file_metadata，按 id 取，不复存在消息里） */
   transcripts?: Record<number, string>
+}
+
+/** 气泡里表情的尺寸：s 是行内小表情（跟 unicode 那档对齐），m/l 是贴纸，按正常图片大小画。
+ *
+ *  2026-11-29 之前这里一律 1.15em，大肥鱼那种整张图也被压成行内小图——档位从后端附件快照的
+ *  emoji.size 来（历史消息没带档位就按默认 m，与后端 EMOJI_SIZE_DEFAULT 一致）。
+ */
+const EMOJI_BUBBLE_SIZE: Record<string, string> = {
+  s: 'inline-block w-[1.15em] h-[1.15em] align-[-0.2em]',
+  m: 'inline-block w-28 h-28 align-middle object-contain',
+  l: 'inline-block w-44 h-44 align-middle object-contain',
 }
 
 function fileIconColor(mimeType: string): string {
@@ -122,6 +137,8 @@ const MessageBubble = memo(function MessageBubble({
   const [showTranscript, setShowTranscript] = useState(true)
   const [copied, setCopied] = useState(false)
   const [avatarBroken, setAvatarBroken] = useState(false)
+  // 发送者备注：群里的成员被设过备注时，头像首字与名字都按「备注（原名）」显示
+  const { value: senderRemark } = useRemark('user', senderId ?? 0)
 
   /** 复制这条消息的正文（就是界面上看到的那份：@ 已经渲染成名字） */
   const handleCopy = async () => {
@@ -497,14 +514,16 @@ const MessageBubble = memo(function MessageBubble({
           >
             {senderType === 'system' ? <ShieldAlert size={16} className="text-white" />
               : (thinking || isTyping) ? <BouncingDots className="text-white/80" />
-              : senderName.charAt(0).toUpperCase()}
+              : avatarInitial(senderRemark, senderName)}
           </div>
         )}
       </div>
 
       <div className={`max-w-[72%] ${isMine ? 'items-end' : 'items-start'}`}>
         <div className={`flex items-center gap-2 mb-1 flex-wrap ${isMine ? 'flex-row-reverse' : ''}`}>
-          <span className={`text-xs font-medium ${senderType === 'system' ? 'text-rose-500' : 'text-textSecondary'}`}>{senderName}</span>
+          <span className={`text-xs font-medium ${senderType === 'system' ? 'text-rose-500' : 'text-textSecondary'}`}>
+            <RemarkName remark={senderRemark} name={senderName} />
+          </span>
           {via === 'qq' && (
             <span className="chip chip-primary shrink-0" title={t('chat:fromQq')}>
               <MessageSquare size={10} className="inline" /> {t('chat:fromQq')}
@@ -567,8 +586,8 @@ const MessageBubble = memo(function MessageBubble({
                 const fsize = att.size!
                 const fmime = att.mime_type!
                 const menuKey = 'a:' + fid
-                // 表情是情绪标记，不是内容：按行内尺寸画（与 Markdown 里的表情图、
-                // 单行预览的 EmojiText 同一档 1.15em），不铺成 280×200 的图
+                // 表情按自己的档位画：s 档是行内小表情（与 Markdown 里的表情图、单行预览的
+                // EmojiText 同一档），m/l 档是贴纸，按正常图片大小铺开——整张图的表情不该被压成行内大小
                 if (att.emoji) return (
                   <span key={fid} className="relative inline-block group/att">
                     <img
@@ -576,7 +595,7 @@ const MessageBubble = memo(function MessageBubble({
                       alt={att.emoji.name || fname}
                       title={att.emoji.name || fname}
                       loading="lazy"
-                      className="inline-block w-[1.15em] h-[1.15em] align-[-0.2em]"
+                      className={EMOJI_BUBBLE_SIZE[att.emoji.size || 'm'] || EMOJI_BUBBLE_SIZE.m}
                     />
                     <span className={`absolute -top-4 ${isMine ? 'left-0' : 'right-0'} opacity-0 group-hover/att:opacity-100 transition-opacity`}>
                       {menuLayer(menuKey, 'attach', attachmentMenuItems(att))}

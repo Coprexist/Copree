@@ -121,8 +121,14 @@ async def list_my_groups(
     )
     prefs = {p.group_id: p.is_pinned for p in pref_result.scalars().all()}
 
+    # 备注：列表优先显示它（见 services/social/remark_service）
+    from app.services.social import remark_service
+
+    remarks = await remark_service.remarks_map(db, current_user["user_id"])
+
     for g in groups:
         g["is_pinned"] = prefs.get(g["id"], False)
+        g["remark"] = remarks.get(("group", g["id"]), "")
 
     # 置顶优先，然后按最后消息时间降序
     def sort_key(g):

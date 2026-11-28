@@ -7,6 +7,7 @@ import DMChatView from './DMChatView'
 import GroupSettingsPanel from './GroupSettingsPanel'
 import { GroupAvatarHeader } from './GroupAvatar'
 import ChatHeader from './shared/ChatHeader'
+import RemarkName from './RemarkName'
 import { CHAT_HEADER_INSET } from './shared/chatHeaderInset'
 import ProfileCard from './ProfileCard'
 import SearchOverlay from './SearchOverlay'
@@ -46,6 +47,7 @@ interface Group {
   avatar_url?: string | null
   include_ai_in_avatar?: boolean
   is_federated?: boolean
+  remark?: string
   // 发现与入群三开关（GET /groups 已返回；可选是为了兼容旧缓存数据）
   searchable?: boolean
   auto_approve_join?: boolean
@@ -200,7 +202,9 @@ export default function ChatArea({ groupId, dmSessionId }: ChatAreaProps) {
             onBack={() => navigate('/chat')}
             backTitle={t('chat:sessionList')}
             avatar={currentGroup ? <GroupAvatarHeader g={currentGroup} onClick={() => setProfileGroup(currentGroup)} /> : null}
-            title={'# ' + (currentGroup?.name || t('chat:loading'))}
+            title={currentGroup
+              ? <><span className="text-textMuted"># </span><RemarkName remark={currentGroup.remark} name={currentGroup.name} /></>
+              : '# ' + t('chat:loading')}
             chips={currentGroup?.is_federated ? (
               <span className="chip chip-primary shrink-0" title={t('chat:federatedGroup')}>
                 <Globe size={11} />

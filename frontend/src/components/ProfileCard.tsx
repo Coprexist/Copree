@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { X, MessageSquare, UserPlus, Star } from 'lucide-react'
+import { X, MessageSquare, UserPlus, Star, Pencil } from 'lucide-react'
 import { api } from '../api/client'
 import { avatarGradient } from '../utils/avatar'
 import { useT, useLang } from '../i18n/I18nContext'
@@ -8,6 +8,9 @@ import { getStatusTextStyle, BG_ELEVATED_LIGHT, BG_ELEVATED_DARK } from '../util
 import { fmtDate, formatMessageTime } from '../utils/time'
 import { useTheme } from '../context/ThemeContext'
 import { Dialog } from './ui'
+import RemarkField from './RemarkField'
+import { avatarInitial } from '../utils/remark'
+import { useRemark } from '../hooks/useRemarks'
 
 interface ChannelGroupInfo {
   kind: string
@@ -65,6 +68,9 @@ export default function ProfileCard({ entityType, entityId, entityName, state, a
   const [addingFriend, setAddingFriend] = useState(false)
   const [requestSent, setRequestSent] = useState(false)
   const [isPriority, setIsPriority] = useState(false)
+  // 备注：资料卡自己的输入框与"头像首字"读同一份 store（不再单独拉接口）
+  const remarkTarget = entityType === 'group' ? 'group' : 'user'
+  const { value: remarkValue } = useRemark(remarkTarget, entityId)
   const [togglingPriority, setTogglingPriority] = useState(false)
 
   // 群聊不需要加载 profile（数据直接从 props 来）
@@ -185,7 +191,7 @@ export default function ProfileCard({ entityType, entityId, entityName, state, a
                 <div className={`w-full h-full ${avatarShape} flex items-center justify-center ${
                   isGroup ? 'bg-primary-500/10' : avatarGradient(entityType, false, false)
                 }`}>
-                  <span className="text-xl font-bold text-white">{name.charAt(0).toUpperCase()}</span>
+                  <span className="text-xl font-bold text-white">{avatarInitial(remarkValue, name)}</span>
                 </div>
               )}
             </button>
@@ -206,6 +212,19 @@ export default function ProfileCard({ entityType, entityId, entityName, state, a
           <button onClick={onClose} className="icon-btn-sm text-textMuted shrink-0">
             <X size={20} />
           </button>
+        </div>
+
+        {/* 备注：我给它的称呼，列表优先显示它（只对我可见） */}
+        <div className="mb-3 flex items-center gap-2">
+          <Pencil size={12} className="text-textMuted shrink-0" />
+          <div className="flex-1 min-w-0">
+            <RemarkField
+              targetType={remarkTarget}
+              targetId={entityId}
+              placeholder={t('profileCard:remarkPlaceholder')}
+              inputClassName="text-xs"
+            />
+          </div>
         </div>
 
         {/* 简介：群自己那份没有就用通道侧的群简介（QQ 群的"群简介"） */}

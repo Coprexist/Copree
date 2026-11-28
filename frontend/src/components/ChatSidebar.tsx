@@ -5,6 +5,8 @@ import { EmptyState, MenuPanel, MenuItem } from './ui'
 import { getStateDotColor, CHAT_REFRESH_EVENT } from '../constants'
 import { formatRelativeTime } from '../utils/time'
 import { GroupAvatarGroup, thumbUrl } from './GroupAvatar'
+import RemarkName from './RemarkName'
+import { avatarInitial } from '../utils/remark'
 import { getStatusTextStyle, BG_SURFACE_LIGHT, BG_SURFACE_DARK } from '../utils/statusColor'
 import { useTheme } from '../context/ThemeContext'
 import EmojiText from './shared/EmojiText'
@@ -80,7 +82,7 @@ function DmAvatar({ session }: { session: DMSession }) {
           {p.type === 'system' ? (
             <ShieldAlert size={16} className="text-white" />
           ) : (
-            <span className="text-xs font-bold text-white">{p.name?.charAt(0)?.toUpperCase() || '?'}</span>
+            <span className="text-xs font-bold text-white">{avatarInitial(session.remark, p.name)}</span>
           )}
         </div>
       )}
@@ -138,6 +140,8 @@ interface Group {
   include_ai_in_avatar?: boolean
   is_federated?: boolean
   is_pinned?: boolean
+  /** 备注：设了就优先显示它（我在这个群上的称呼，只对我可见） */
+  remark?: string
 }
 
 interface DMSession {
@@ -159,6 +163,8 @@ interface DMSession {
   is_federated?: boolean
   is_pinned?: boolean
   is_special_care?: boolean
+  /** 备注：设了就优先显示它（看对端那个人，只对我可见） */
+  remark?: string
 }
 
 interface ChatSidebarProps {
@@ -345,7 +351,10 @@ const ChatSidebar = memo(function ChatSidebar({
       : item.data.session_id === activeSessionId
     const unread = item.data.unread_count || 0
     const mention = item.kind === 'group' ? item.data.has_mention : false
-    const name = item.kind === 'group' ? item.data.name : item.data.partner?.name || ''
+    // 设了备注就显示备注（备注是我对它的称呼，优先于原名）
+  const name = item.kind === 'group'
+    ? (item.data.remark || item.data.name)
+    : (item.data.remark || item.data.partner?.name || '')
     const shape = item.kind === 'dm' ? 'rounded-full' : 'rounded-control'
     return (
       // ui-standard-ignore: 收起态的头像按钮（方图，无文字）
@@ -452,7 +461,7 @@ const ChatSidebar = memo(function ChatSidebar({
             <div className="font-medium flex items-center gap-1 min-w-0">
               {g.is_pinned && <Pin size={10} className="text-primary-400 shrink-0" />}
               {g.is_federated && <Globe size={11} className="text-primary-400 shrink-0" />}
-              <span className="truncate block">{g.name}</span>
+              <RemarkName remark={g.remark} name={g.name} className="truncate block" />
             </div>
             {g.unread_count > 0 && (
               <span className={`shrink-0 ml-1 min-w-[18px] h-[18px] rounded-full flex items-center justify-center text-3xs font-bold text-white ${
@@ -514,7 +523,7 @@ const ChatSidebar = memo(function ChatSidebar({
               {s.partner.type === 'system' && <ShieldAlert size={11} className="shrink-0 text-rose-400" />}
               {s.partner.type === 'ai' && <Bot size={11} className="shrink-0 text-mint-400" />}
               {s.is_federated && <Globe size={11} className="text-primary-400 shrink-0" />}
-              <span className="truncate">{s.partner.name}</span>
+              <RemarkName remark={s.remark} name={s.partner.name} className="truncate" />
               {s.partner.status_text && (
                 <span className="text-2xs font-medium truncate" style={s.partner.status_color
                   ? getStatusTextStyle(s.partner.status_color, theme === 'dark' ? BG_SURFACE_DARK : BG_SURFACE_LIGHT)

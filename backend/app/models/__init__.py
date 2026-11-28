@@ -44,6 +44,7 @@ from app.models.group import MemberSilence
 from app.models.agent_state_stack import AgentStateStack
 from app.models.agent_state_chain import AgentStateChain, AgentStateChainNode
 from app.models.user_preferences import UserGroupPreference, UserDMPreference
+from app.models.user_remark import UserRemark
 from app.models.plugin import Plugin, UserPluginPref
 from app.models.agent_skill_relation import AgentSkillRelation
 from app.models.alarm import AgentAlarm
@@ -151,6 +152,7 @@ __all__ = [
     "AgentKnowledge",
     "UserGroupPreference",
     "UserDMPreference",
+    "UserRemark",
     "Plugin",
     "UserPluginPref",
 ]

@@ -102,6 +102,8 @@ FK_POLICY: Final[dict[tuple[str, str], str]] = {
     ("user_dm_preferences", "user_id"): CASCADE,
     ("user_group_preferences", "user_id"): CASCADE,
     ("user_plugin_prefs", "user_id"): CASCADE,
+    ("user_remarks", "owner_id"): CASCADE,
+    ("user_remarks", "target_user_id"): CASCADE,
     ("worlds", "owner_id"): CASCADE,
 
     # ── 必须是事实的记录：主体没了也要留 ────────────────────────────

@@ -38,7 +38,9 @@ def _write(data_dir: str, rel: str, body: str) -> None:
 
 def test_marks_name_the_file_and_its_size():
     assert attachment_marks([TXT]) == "[文件] 幻想小说创作自测试卷.txt（13.6 KB）"
-    assert attachment_marks([TXT, PNG]) == "[文件] 幻想小说创作自测试卷.txt（13.6 KB） [图片]"
+    # 多附件时每项带号：号就是 file_fetch(indexes=[N]) 要的那个，必须按附件在消息里的
+    # 位置数——即使某一项因为正文已经写了 [图片] 而没显示，号也不能重排。
+    assert attachment_marks([TXT, PNG]) == "[文件 1] 幻想小说创作自测试卷.txt（13.6 KB） [图片 2]"
     assert attachment_marks([CARD]) == "", "邀请卡片不是文件"
     assert attachment_marks(None) == ""
 
@@ -51,7 +53,8 @@ def test_image_mark_is_not_repeated_when_the_text_already_says_it():
     assert attachment_marks([PNG], said="[图片]") == ""
     assert attachment_marks([PNG], said="看这个 [图片] 好看吗") == ""
     assert attachment_marks([PNG], said="看这个") == "[图片]", "正文没提图时仍要补标记"
-    assert attachment_marks([TXT, PNG], said="[图片]") == "[文件] 幻想小说创作自测试卷.txt（13.6 KB）"
+    # 图片被正文吞掉了，文件的号仍是 1（它在消息里就是第一个附件）
+    assert attachment_marks([TXT, PNG], said="[图片]") == "[文件 1] 幻想小说创作自测试卷.txt（13.6 KB）"
 
 
 def test_group_entry_carries_attachments():

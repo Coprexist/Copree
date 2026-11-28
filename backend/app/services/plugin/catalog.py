@@ -667,11 +667,14 @@ async def emoji_asset_file(db: AsyncSession, face: dict[str, Any]) -> dict[str, 
         "size": int(metadata.size or 0),
         "mime_type": metadata.mime_type or guess_mime(rel),
         # 身份随附件走：表情落成普通图片后，字节上和随手一张图没有区别，
-        # 全靠这份元数据让上下文层铺出 [表情:名字]（multimodal.emoji_mark）
+        # 全靠这份元数据让上下文层铺出 [表情:名字]（multimodal.emoji_mark）。
+        # size 是**显示档位**，跟着正文一起落库：渲染层不在请求里重新问一遍表情包，
+        # 历史消息也得能按当初那档画——s 是行内小表情，m/l 是贴纸级。
         "emoji": {
             "pack": pack_id,
             "id": str(face.get("id") or ""),
             "name": str(face.get("name") or ""),
+            "size": emoji_size(face.get("size")),
         },
     }
 

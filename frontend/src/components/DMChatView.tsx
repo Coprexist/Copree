@@ -2,6 +2,9 @@ import { useState, useEffect, type CSSProperties } from 'react'
 import { api } from '../api/client'
 import ChatView from './ChatView'
 import ChatHeader from './shared/ChatHeader'
+import RemarkName from './RemarkName'
+import { avatarInitial } from '../utils/remark'
+import { useRemark } from '../hooks/useRemarks'
 import { CHAT_HEADER_INSET } from './shared/chatHeaderInset'
 import DMSettingsPanel from './DMSettingsPanel'
 import ProfileCard from './ProfileCard'
@@ -66,6 +69,8 @@ export default function DMChatView({ sessionId, onMobileBack }: DMChatViewProps)
     } catch { /* ignore */ }
   }
 
+  // 备注从 store 读（会话列表已经灌过一次）：头部不依赖后端为这个多返一个字段
+  const { value: partnerRemark } = useRemark('user', partner?.id ?? 0)
   const stateColor = getStateDotColor(partner?.state)
   const isActive = partner?.state === 'active'
 
@@ -89,12 +94,14 @@ export default function DMChatView({ sessionId, onMobileBack }: DMChatViewProps)
               <div className={'w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white overflow-hidden ' + avatarGradient(partner?.type, false, false)}>
                 {partner?.type === 'system'
                   ? <ShieldAlert size={14} className="text-white" />
-                  : (partner?.name?.charAt(0)?.toUpperCase() || '?')}
+                  : avatarInitial(partnerRemark, partner?.name)}
               </div>
             )}
           </button>
         }
-        title={partner?.name || t('dm:loading')}
+        title={partner
+          ? <RemarkName remark={partnerRemark} name={partner.name} />
+          : t('dm:loading')}
         chips={partner?.is_federated ? (
           <span className="chip chip-primary shrink-0" title={t('chat:federatedGroup')}>
             <Globe size={11} />

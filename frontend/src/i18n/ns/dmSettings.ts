@@ -11,6 +11,10 @@ export const dmSettingsZh: TranslationDict = {
 
   // ======================== 私信设置 / DMSettings ========================
   'title': '私信设置',
+  'remark': '备注',
+  'remarkPlaceholder': '给这个人起个称呼（只对你可见）',
+  'remarkHint': '会话列表优先显示备注，而不是对方的原名。',
+  'remarkSaveFailed': '备注保存失败',
   'dnd': '消息免打扰',
   'dndEnabled': '免打扰已开启',
   'cancelDnd': '取消免打扰',
@@ -27,6 +31,10 @@ export const dmSettingsZh: TranslationDict = {
 
 export const dmSettingsEn: TranslationDict = {
   'title': 'DM Settings',
+  'remark': 'Remark',
+  'remarkPlaceholder': 'A name only you will see',
+  'remarkHint': 'The conversation list shows this remark instead of the original name.',
+  'remarkSaveFailed': 'Failed to save the remark',
   'dnd': 'Message Mute / DND',
   'dndEnabled': 'DND is on',
   'cancelDnd': 'Cancel DND',
@@ -43,6 +51,10 @@ export const dmSettingsEn: TranslationDict = {
 
 export const dmSettingsJa: TranslationDict = {
   'title': 'DM設定',
+  'remark': 'メモ',
+  'remarkPlaceholder': '自分だけに見える呼び名をつける',
+  'remarkHint': '会話一覧では元の名前よりこのメモを優先して表示します。',
+  'remarkSaveFailed': 'メモを保存できませんでした',
   'dnd': 'メッセージおやすみ',
   'dndEnabled': 'おやすみモード中',
   'cancelDnd': 'おやすみ解除',
