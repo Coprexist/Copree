@@ -40,6 +40,24 @@ async def _ensure_target(db: AsyncSession, target_type: str, target_id: int) -> 
         raise ValueError("用户不存在")
 
 
+async def remark_hit_ids(executor, owner_id: int, query: str, target_type: str) -> list[int]:
+    """备注里含关键词的目标 id——搜索用，让用户按自己起的称呼也能搜到人/群。
+
+    只在这个人的备注里匹配：备注本身是私有称呼，别人搜不到，也不会因此看到它。
+    executor 只需要一个 execute()（搜索仓库与 db session 都满足）。
+    """
+    target_type = _check_target_type(target_type)
+    col = UserRemark.group_id if target_type == TARGET_GROUP else UserRemark.target_user_id
+    rows = await executor.execute(
+        select(col).where(
+            UserRemark.owner_id == int(owner_id),
+            col.isnot(None),
+            UserRemark.remark.ilike(f"%{query}%"),
+        )
+    )
+    return [int(value) for (value,) in rows.all()]
+
+
 def _where(owner_id: int, target_type: str, target_id: int) -> list:
     conds = [UserRemark.owner_id == int(owner_id)]
     conds.append(

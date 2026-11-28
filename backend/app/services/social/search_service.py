@@ -2,9 +2,10 @@
 搜索服务（v0.1.3: 从 friend_service 中提取，不再依赖好友系统）
 """
 import logging
-from sqlalchemy import select, func as sqlfunc
+from sqlalchemy import select, or_, func as sqlfunc
 
 from app.repositories.search_repo import SearchRepository
+from app.services.social.remark_service import TARGET_GROUP, TARGET_USER, remark_hit_ids
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,7 @@ async def search_entities(
     - 人只出 is_active 的人类账号；AI 只出开了「可被发现」且有统一 ID 的
       （没统一 ID 的加不了好友、发不了私信，进结果只会给前端一个点不动的条目）
     - 自己不进结果：人按 user_id 排掉，调用的 AI 也按自己的 user_id 排掉
+    - 名字或「我叫他的备注」命中都算：备注是私有称呼，只在调用者自己的备注里匹配
     - 好友关系与制作者名字各一次批查询——原先按人头各查一次，20 条结果要发 40 条 SQL
     """
     from app.models.user import User
@@ -27,10 +29,17 @@ async def search_entities(
     from app.models.friendship import Friendship
 
     like_pattern = f"%{query}%"
+    remark_user_ids = await remark_hit_ids(search_repo, current_user_id, query, TARGET_USER)
+
+    user_match = User.username.ilike(like_pattern)
+    agent_match = Agent.name.ilike(like_pattern)
+    if remark_user_ids:
+        user_match = or_(user_match, User.id.in_(remark_user_ids))
+        agent_match = or_(agent_match, Agent.user_id.in_(remark_user_ids))
 
     users = list((await search_repo.execute(
         select(User).where(
-            User.username.ilike(like_pattern),
+            user_match,
             User.is_active == True,
             User.type == "human",
         ).limit(limit)
@@ -38,7 +47,7 @@ async def search_entities(
 
     agents = list((await search_repo.execute(
         select(Agent).where(
-            Agent.name.ilike(like_pattern),
+            agent_match,
             Agent.discoverable == True,
             Agent.user_id.isnot(None),
             Agent.user_id != current_user_id,
@@ -100,17 +109,22 @@ async def search_groups(
     current_user_id: int,
     limit: int = 20,
 ) -> list[dict]:
-    """按群名搜索群聊，附带人数和我是否已在群里。
+    """按群名（或我给这个群起的备注）搜索群聊，附带人数和我是否已在群里。
 
     只有群主主动开了「可被搜索」的群才会出现——这是暴露入口的开关，
-    没开的群连名字都搜不到。
+    没开的群连名字都搜不到；备注命中的同样要过这个开关，否则备注会变成绕过开关的入口。
     """
     from app.models.group import Group, GroupMember
 
     like_pattern = f"%{query}%"
+    remark_group_ids = await remark_hit_ids(search_repo, current_user_id, query, TARGET_GROUP)
+    group_match = Group.name.ilike(like_pattern)
+    if remark_group_ids:
+        group_match = or_(group_match, Group.id.in_(remark_group_ids))
+
     groups = (await search_repo.execute(
         select(Group).where(
-            Group.name.ilike(like_pattern),
+            group_match,
             Group.searchable == True,
         ).limit(limit)
     )).scalars().all()

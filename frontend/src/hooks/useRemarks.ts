@@ -12,15 +12,19 @@ export type RemarkTarget = 'group' | 'user'
 
 /** 'group:12' / 'user:7' → 备注。没设过就没有这条键 */
 const store = new Map<string, string>()
+/** store 的只读快照：列表/搜索结果要在 map 里循环取备注，不能逐个调 useRemark */
+let snapshot: ReadonlyMap<string, string> = store
 const listeners = new Set<() => void>()
 let loaded = false
 let inflight: Promise<void> | null = null
 
-function keyOf(targetType: RemarkTarget, targetId: number): string {
+export function remarkKey(targetType: RemarkTarget, targetId: number): string {
   return targetType + ':' + targetId
 }
 
 function notify(): void {
+  // 换引用而不是就地改：经 useSyncExternalStore 订阅的组件才认得出变化
+  snapshot = new Map(store)
   listeners.forEach((fn) => fn())
 }
 
@@ -37,7 +41,7 @@ function ensureLoaded(): Promise<void> {
     .then((data) => {
       store.clear()
       for (const row of data.remarks || []) {
-        if (row.remark) store.set(keyOf(row.target_type as RemarkTarget, row.target_id), row.remark)
+        if (row.remark) store.set(remarkKey(row.target_type as RemarkTarget, row.target_id), row.remark)
       }
       loaded = true
       notify()
@@ -58,7 +62,7 @@ export interface UseRemark {
 export function useRemark(targetType: RemarkTarget, targetId: number): UseRemark {
   const value = useSyncExternalStore(
     subscribe,
-    () => store.get(keyOf(targetType, targetId)) ?? '',
+    () => store.get(remarkKey(targetType, targetId)) ?? '',
   )
   const [saving, setSaving] = useState(false)
 
@@ -69,8 +73,8 @@ export function useRemark(targetType: RemarkTarget, targetId: number): UseRemark
     try {
       await api.put('/user/remarks/' + targetType + '/' + targetId, { remark: next })
       const body = next.trim()
-      if (body) store.set(keyOf(targetType, targetId), body)
-      else store.delete(keyOf(targetType, targetId))
+      if (body) store.set(remarkKey(targetType, targetId), body)
+      else store.delete(remarkKey(targetType, targetId))
       notify()
       // 会话列表优先显示备注：存完让它重拉一次（列表不读这个 store）
       window.dispatchEvent(new CustomEvent('groupListRefresh'))
@@ -80,4 +84,14 @@ export function useRemark(targetType: RemarkTarget, targetId: number): UseRemark
   }, [targetType, targetId])
 
   return { value, saving, save }
+}
+
+/**
+ * 整张备注表（只读快照）：好友列表、搜索结果这类「一次渲染几十行」的地方用它。
+ * 逐行调 useRemark 是 hooks 规则不允许的，而且每行一个订阅也没必要。
+ */
+export function useRemarkIndex(): ReadonlyMap<string, string> {
+  const index = useSyncExternalStore(subscribe, () => snapshot)
+  useEffect(() => { void ensureLoaded() }, [])
+  return index
 }

@@ -13,6 +13,14 @@ export function displayName(remark: string | null | undefined, name: string | nu
   return base ? mark + '（' + base + '）' : mark
 }
 
+/**
+ * 排序用的名字：备注优先，没备注用原名。
+ * 微信 / QQ 通讯录都按「我看到的那个名字」的拼音首字母排——改了备注，位置就跟着变。
+ */
+export function sortName(remark: string | null | undefined, name: string | null | undefined): string {
+  return (remark || '').trim() || (name || '').trim()
+}
+
 /** 头像上的字：有备注用备注首字（一眼认出这是自己起的名），否则原名首字 */
 export function avatarInitial(remark: string | null | undefined, name: string | null | undefined): string {
   const source = (remark || '').trim() || (name || '').trim()

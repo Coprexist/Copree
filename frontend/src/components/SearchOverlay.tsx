@@ -6,7 +6,10 @@ import { getStateDotColor } from '../constants'
 import { avatarGradient } from '../utils/avatar'
 import { useT } from '../i18n/I18nContext'
 import ProfileCard from './ProfileCard'
+import RemarkName from './RemarkName'
 import { MenuPanel } from './ui'
+import { useRemarkIndex, remarkKey } from '../hooks/useRemarks'
+import { avatarInitial } from '../utils/remark'
 
 interface SearchResult {
   id: number
@@ -62,6 +65,8 @@ export default function SearchOverlay() {
 
   const inputRef = useRef<HTMLInputElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  // 搜索结果显示我起的备注：搜「备注词」也能命中（后端同样按备注匹配）
+  const remarkIndex = useRemarkIndex()
 
   // 防抖搜索
   useEffect(() => {
@@ -173,6 +178,7 @@ export default function SearchOverlay() {
   /** 用户/AI 行：好友直接发私信，非好友走加好友（可带附言） */
   const renderPersonRow = (item: SearchResult) => {
     const key = `${item.type}:${item.id}`
+    const remark = remarkIndex.get(remarkKey('user', item.id)) ?? ''
     const isAddingThis = addFriendTarget === key
 
     return (
@@ -187,7 +193,7 @@ export default function SearchOverlay() {
               </>
             ) : (
               <div className={`w-full h-full rounded-full flex items-center justify-center ${avatarGradient(item.type, false, false)}`}>
-                <span className="text-xs font-bold text-white">{item.name.charAt(0).toUpperCase()}</span>
+                <span className="text-xs font-bold text-white">{avatarInitial(remark, item.name)}</span>
               </div>
             )}
           </div>
@@ -196,7 +202,7 @@ export default function SearchOverlay() {
         {/* 信息（可点击 → 资料卡） */}
         <button onClick={() => openProfile(item)} className="flex-1 min-w-0 text-left">
           <div className="flex items-center gap-1.5">
-            <span className="text-sm font-medium text-textPrimary truncate">{item.name}</span>
+            <RemarkName remark={remark} name={item.name} className="text-sm font-medium text-textPrimary truncate" />
             <span className="text-xs text-textMuted shrink-0">
               {item.type === 'ai' ? <Bot size={12} className="inline" /> : <User size={12} className="inline" />}
             </span>
@@ -265,46 +271,49 @@ export default function SearchOverlay() {
   }
 
   /** 群聊行：按钮文案跟着群开关走（加入 / 申请加入），已在群里直接进去 */
-  const renderGroupRow = (group: GroupResult) => (
-    <div key={`group:${group.id}`} className="flex items-center gap-3 px-3 py-2.5 hover:bg-elevated transition-colors">
-      <div className="w-8 h-8 rounded-control shrink-0 overflow-hidden">
-        {group.avatar_url ? (
-          <img src={group.avatar_url} alt={group.name} className="w-full h-full object-cover" loading="lazy" />
+  const renderGroupRow = (group: GroupResult) => {
+    const remark = remarkIndex.get(remarkKey('group', group.id)) ?? ''
+    return (
+      <div key={`group:${group.id}`} className="flex items-center gap-3 px-3 py-2.5 hover:bg-elevated transition-colors">
+        <div className="w-8 h-8 rounded-control shrink-0 overflow-hidden">
+          {group.avatar_url ? (
+            <img src={group.avatar_url} alt={group.name} className="w-full h-full object-cover" loading="lazy" />
+          ) : (
+            <div className="w-full h-full rounded-control bg-gradient-to-bl from-teal-400 to-teal-600 flex items-center justify-center">
+              <span className="text-xs font-bold text-white">{avatarInitial(remark, group.name)}</span>
+            </div>
+          )}
+        </div>
+
+        <div className="flex-1 min-w-0">
+          <RemarkName remark={remark} name={group.name} className="text-sm font-medium text-textPrimary truncate block" />
+          <span className="text-xs text-textMuted">
+            <Users size={12} className="inline" /> {group.member_count} {t('search:members')}
+          </span>
+        </div>
+
+        {group.is_member ? (
+          <button
+            onClick={() => openGroup(group.id)}
+            className="btn btn-xs btn-tinted shrink-0"
+          >
+            {t('search:enterGroup')}
+          </button>
+        ) : requestedGroups.includes(group.id) ? (
+          <span className="text-xs text-textMuted shrink-0">{t('search:requested')}</span>
         ) : (
-          <div className="w-full h-full rounded-control bg-gradient-to-bl from-teal-400 to-teal-600 flex items-center justify-center">
-            <span className="text-xs font-bold text-white">{group.name.charAt(0).toUpperCase()}</span>
-          </div>
+          <button
+            onClick={() => handleJoinGroup(group)}
+            disabled={joiningGroup === group.id}
+            className="btn btn-xs btn-tinted-success shrink-0"
+          >
+            <UserPlus size={12} />
+            {joiningGroup === group.id ? '...' : group.auto_approve_join ? t('search:joinGroup') : t('search:requestJoin')}
+          </button>
         )}
       </div>
-
-      <div className="flex-1 min-w-0">
-        <span className="text-sm font-medium text-textPrimary truncate block">{group.name}</span>
-        <span className="text-xs text-textMuted">
-          <Users size={12} className="inline" /> {group.member_count} {t('search:members')}
-        </span>
-      </div>
-
-      {group.is_member ? (
-        <button
-          onClick={() => openGroup(group.id)}
-          className="btn btn-xs btn-tinted shrink-0"
-        >
-          {t('search:enterGroup')}
-        </button>
-      ) : requestedGroups.includes(group.id) ? (
-        <span className="text-xs text-textMuted shrink-0">{t('search:requested')}</span>
-      ) : (
-        <button
-          onClick={() => handleJoinGroup(group)}
-          disabled={joiningGroup === group.id}
-          className="btn btn-xs btn-tinted-success shrink-0"
-        >
-          <UserPlus size={12} />
-          {joiningGroup === group.id ? '...' : group.auto_approve_join ? t('search:joinGroup') : t('search:requestJoin')}
-        </button>
-      )}
-    </div>
-  )
+    )
+  }
 
   return (
     <div ref={containerRef} className="relative">

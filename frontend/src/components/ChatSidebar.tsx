@@ -6,7 +6,7 @@ import { getStateDotColor, CHAT_REFRESH_EVENT } from '../constants'
 import { formatRelativeTime } from '../utils/time'
 import { GroupAvatarGroup, thumbUrl } from './GroupAvatar'
 import RemarkName from './RemarkName'
-import { avatarInitial } from '../utils/remark'
+import { avatarInitial, displayName } from '../utils/remark'
 import { getStatusTextStyle, BG_SURFACE_LIGHT, BG_SURFACE_DARK } from '../utils/statusColor'
 import { useTheme } from '../context/ThemeContext'
 import EmojiText from './shared/EmojiText'
@@ -351,10 +351,10 @@ const ChatSidebar = memo(function ChatSidebar({
       : item.data.session_id === activeSessionId
     const unread = item.data.unread_count || 0
     const mention = item.kind === 'group' ? item.data.has_mention : false
-    // 设了备注就显示备注（备注是我对它的称呼，优先于原名）
-  const name = item.kind === 'group'
-    ? (item.data.remark || item.data.name)
-    : (item.data.remark || item.data.partner?.name || '')
+    // 收起态只有头像，title/aria-label 用「备注（原名）」，和列表里的口径一致
+    const name = item.kind === 'group'
+      ? displayName(item.data.remark, item.data.name)
+      : displayName(item.data.remark, item.data.partner?.name)
     const shape = item.kind === 'dm' ? 'rounded-full' : 'rounded-control'
     return (
       // ui-standard-ignore: 收起态的头像按钮（方图，无文字）

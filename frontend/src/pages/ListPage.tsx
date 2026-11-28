@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, type ReactNode } from 'react'
+import { useState, useEffect, useMemo, useCallback, type ReactNode } from 'react'
 import { useNavigate, useOutletContext, useSearchParams } from 'react-router-dom'
 import { api } from '../api/client'
 import { useT, useLang } from '../i18n/I18nContext'
@@ -13,6 +13,9 @@ import { avatarGradient, avatarShadowColor } from '../utils/avatar'
 import { getStatusTextStyle, BG_CANVAS_LIGHT, BG_CANVAS_DARK } from '../utils/statusColor.tsx'
 import { IconButton, Select, UnderlineTabs } from '../components/ui'
 import { useTheme } from '../context/ThemeContext'
+import RemarkName from '../components/RemarkName'
+import { useRemarkIndex, remarkKey } from '../hooks/useRemarks'
+import { avatarInitial, displayName, sortName } from '../utils/remark'
 
 interface Friend {
   id: number
@@ -47,7 +50,7 @@ interface FriendRequest {
 
 // 头像组件：优先显示真实头像，否则显示首字母。
 // 配色不在这里写死——统一走 utils/avatar（他人/ AI = 500→300）
-function AvatarPic({ url, name, size = 'md' }: { url: string | null | undefined; name: string; size?: 'sm' | 'md' | 'lg' }) {
+function AvatarPic({ url, name, remark, size = 'md' }: { url: string | null | undefined; name: string; remark?: string | null; size?: 'sm' | 'md' | 'lg' }) {
   const sizeClass = size === 'sm' ? 'w-7 h-7 text-3xs' : size === 'lg' ? 'w-12 h-12 text-xl' : 'w-10 h-10 text-lg'
   return (
     <div className={`${sizeClass} rounded-full shrink-0 overflow-hidden relative ${!url ? `${avatarGradient(undefined, false, false)} flex items-center justify-center shadow ${avatarShadowColor(undefined)}` : ''}`}>
@@ -57,7 +60,7 @@ function AvatarPic({ url, name, size = 'md' }: { url: string | null | undefined;
           <img src={url} alt={name} className="relative w-full h-full rounded-full object-cover" loading="lazy" />
         </>
       ) : (
-        <span className="text-white font-bold">{name.charAt(0)}</span>
+        <span className="text-white font-bold">{avatarInitial(remark, name)}</span>
       )}
     </div>
   )
@@ -80,10 +83,12 @@ function SectionHeader({ label, count }: { label: string; count: number }) {
  * onAccept 省略时只渲染拒绝/撤回按钮（发出的申请只能撤回）。
  */
 function RequestRow({
-  name, avatarUrl, note, badge, onAccept, acceptTitle, onReject, rejectTitle,
+  name, avatarUrl, remark, note, badge, onAccept, acceptTitle, onReject, rejectTitle,
 }: {
   name: string
   avatarUrl?: string | null
+  /** 我对申请人的备注：申请行同样是「我认识的人」，显示口径与好友列表一致 */
+  remark?: string | null
   note: string
   badge?: ReactNode
   onAccept?: () => void
@@ -94,9 +99,9 @@ function RequestRow({
   return (
     <div className="px-4 py-3.5">
       <div className="flex items-center gap-3">
-        <AvatarPic url={avatarUrl} name={name || '?'} />
+        <AvatarPic url={avatarUrl} name={name || '?'} remark={remark} />
         <div className="flex-1 min-w-0">
-          <span className="text-sm font-medium text-textPrimary truncate block">{name}</span>
+          <RemarkName remark={remark} name={name} className="text-sm font-medium text-textPrimary truncate block" />
           <span className="text-xs text-textMuted">{note}</span>
           {badge}
         </div>
@@ -155,22 +160,30 @@ function typeWeight(t: string): number {
   return t === 'human' ? 0 : 1
 }
 
-function sortFriends(friends: Friend[], mode: SortMode, locale: string): Friend[] {
+function sortFriends(
+  friends: Friend[], mode: SortMode, locale: string, remarkOf: (id: number) => string,
+): Friend[] {
   const list = [...friends]
+  // 排序按「我看到的名字」：备注优先，否则列表顺序和自己脑中的称呼对不上
+  // 用 sortName 而不是 displayName——括号里的原名不该参与比较（微信/QQ 同口径）
+  const label = (f: Friend) => sortName(remarkOf(f.friend_id), f.friend_name)
   switch (mode) {
     case 'smart':
-      // 在线在前 → 人类在前 → 字典序（中文首字母）
+      // 星标置顶 → 在线在前 → 人类在前 → 字典序（中文首字母）
+      // 星标单独置顶是微信/QQ 通讯录的口径：设了星标的人不该被在线状态或字母序挤下去
       list.sort((a, b) => {
+        const p = Number(b.is_priority) - Number(a.is_priority)
+        if (p !== 0) return p
         const s = stateWeight(a.state) - stateWeight(b.state)
         if (s !== 0) return s
         const t = typeWeight(a.friend_type) - typeWeight(b.friend_type)
         if (t !== 0) return t
-        return a.friend_name.localeCompare(b.friend_name, locale)
+        return label(a).localeCompare(label(b), locale)
       })
       break
     case 'alpha':
       // 纯字典序
-      list.sort((a, b) => a.friend_name.localeCompare(b.friend_name, locale))
+      list.sort((a, b) => label(a).localeCompare(label(b), locale))
       break
     case 'recent_chat':
       // 最近聊天时间越近越顶（无时间的排末尾）
@@ -206,6 +219,13 @@ export default function ListPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [showSearch, setShowSearch] = useState(false)
   const { theme } = useTheme()
+  // 备注只有一个来源：全局备注表（一次拉全量），列表里逐行取，不给每行各发一个 hook
+  const remarkIndex = useRemarkIndex()
+  const remarkOf = useCallback(
+    (id: number | null | undefined) =>
+      (id ? remarkIndex.get(remarkKey('user', id)) ?? '' : ''),
+    [remarkIndex],
+  )
   const navigate = useNavigate()
   const { openDrawer } = useOutletContext<{ openDrawer: () => void }>()
 
@@ -329,11 +349,12 @@ export default function ListPage() {
 
   // 排序 + 搜索过滤
   const sortedFriends = useMemo(() => {
-    const sorted = sortFriends(friends, sortMode, uiLocale(lang))
+    const sorted = sortFriends(friends, sortMode, uiLocale(lang), remarkOf)
     if (!searchQuery.trim()) return sorted
+    // 备注和原名都算命中：用户记的可能是自己起的称呼，也可能记得真名
     const q = searchQuery.trim().toLowerCase()
-    return sorted.filter(f => f.friend_name.toLowerCase().includes(q))
-  }, [friends, sortMode, searchQuery])
+    return sorted.filter(f => displayName(remarkOf(f.friend_id), f.friend_name).toLowerCase().includes(q))
+  }, [friends, sortMode, searchQuery, remarkOf, lang])
 
   // 搜索框组件（复用，缓存避免无关状态变化时重建）
   const searchBox = useMemo(() => (
@@ -446,12 +467,14 @@ export default function ListPage() {
                   onClick={() => handleStartDM(f.friend_id, f.friend_user_id)}
                   className="w-full flex items-center gap-3 px-4 py-3.5 hover:bg-elevated transition-colors text-left"
                 >
-                  <AvatarPic url={f.avatar_url} name={f.friend_name} />
+                  <AvatarPic url={f.avatar_url} name={f.friend_name} remark={remarkOf(f.friend_id)} />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-textPrimary truncate">
-                        {f.friend_name}
-                      </span>
+                      <RemarkName
+                        remark={remarkOf(f.friend_id)}
+                        name={f.friend_name}
+                        className="text-sm font-medium text-textPrimary truncate"
+                      />
                       {f.status_text && (
                         <span className="text-xs font-medium truncate" style={f.status_color
                           ? getStatusTextStyle(f.status_color, theme === 'dark' ? BG_CANVAS_DARK : BG_CANVAS_LIGHT)
@@ -488,6 +511,7 @@ export default function ListPage() {
                     <RequestRow
                       key={`recv-${req.id}`}
                       name={req.requester_name || `${t('list:userPrefix')}${req.requester_id}`}
+                      remark={remarkOf(req.requester_id)}
                       avatarUrl={req.requester_avatar_url}
                       note={req.message || t('list:defaultRequestMessage')}
                       badge={req.auto_respond_friend_request ? (
@@ -511,6 +535,7 @@ export default function ListPage() {
                     <RequestRow
                       key={`join-${req.id}`}
                       name={req.user_name || `${t('list:userPrefix')}${req.user_id}`}
+                      remark={remarkOf(req.user_id)}
                       avatarUrl={req.avatar_url}
                       note={`${req.message ? `${req.message} · ` : ''}${t('list:applyToJoin')}「${req.group_name || ''}」`}
                       onAccept={() => handleGroupApproval('group_join', req.id, true)}
@@ -529,6 +554,7 @@ export default function ListPage() {
                     <RequestRow
                       key={`invite-${req.id}`}
                       name={req.target_name || `${t('list:userPrefix')}${req.target_id}`}
+                      remark={remarkOf(req.target_id)}
                       avatarUrl={req.avatar_url}
                       note={`${req.user_name || ''} ${t('list:invitedToJoin')}「${req.group_name || ''}」`}
                       onAccept={() => handleGroupApproval('group_invite', req.id, true)}
@@ -547,6 +573,7 @@ export default function ListPage() {
                     <RequestRow
                       key={`sent-${req.id}`}
                       name={req.target_name || `${t('list:userPrefix')}${req.target_id}`}
+                      remark={remarkOf(req.target_id)}
                       avatarUrl={req.target_avatar_url}
                       note={req.message || t('list:sentRequestMessage')}
                       onReject={() => handleCancelSent(req.id)}
@@ -595,7 +622,7 @@ export default function ListPage() {
                     }}
                     className="w-full flex items-center gap-3 px-4 py-3.5 hover:bg-elevated transition-colors text-left"
                   >
-                    <AvatarPic url={f.avatar_url} name={f.friend_name} />
+                    <AvatarPic url={f.avatar_url} name={f.friend_name} remark={remarkOf(f.friend_id)} />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-medium text-textPrimary truncate">{f.friend_name}</span>
@@ -637,10 +664,14 @@ export default function ListPage() {
                           }}
                           className="w-full flex items-center gap-3 px-4 py-3 hover:bg-canvas transition-colors text-left"
                         >
-                          <AvatarPic url={f.avatar_url} name={f.friend_name} size="sm" />
+                          <AvatarPic url={f.avatar_url} name={f.friend_name} remark={remarkOf(f.friend_id)} size="sm" />
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">
-                              <span className="text-sm font-medium text-textPrimary truncate">{f.friend_name}</span>
+                              <RemarkName
+                                remark={remarkOf(f.friend_id)}
+                                name={f.friend_name}
+                                className="text-sm font-medium text-textPrimary truncate"
+                              />
                               {stateIcon(f.state)}
                             </div>
                             <span className="text-3xs text-textMuted">

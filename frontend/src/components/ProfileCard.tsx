@@ -9,6 +9,7 @@ import { fmtDate, formatMessageTime } from '../utils/time'
 import { useTheme } from '../context/ThemeContext'
 import { Dialog } from './ui'
 import RemarkField from './RemarkField'
+import RemarkName from './RemarkName'
 import { avatarInitial } from '../utils/remark'
 import { useRemark } from '../hooks/useRemarks'
 
@@ -196,7 +197,9 @@ export default function ProfileCard({ entityType, entityId, entityName, state, a
               )}
             </button>
             <div className="min-w-0">
-              <h3 className="font-semibold text-textPrimary text-base truncate">{name}</h3>
+              <h3 className="font-semibold text-textPrimary text-base truncate">
+                <RemarkName remark={remarkValue} name={name} />
+              </h3>
               <div className="flex items-center gap-1.5 text-sm text-textSecondary">
                 {entityType === 'ai' && <span>{t('profileCard:aiPrefix')}</span>}
                 {statusText && (
