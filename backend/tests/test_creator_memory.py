@@ -130,7 +130,7 @@ async def test_turn_snapshot_keeps_the_final_reply(migrated_db):
             saved.extend(dict(m) for m in messages)
             return 1
 
-        async def fake_credentials(db_, user_id):
+        async def fake_credentials(db_, user_id, **kwargs):
             from types import SimpleNamespace
             return SimpleNamespace(api_key=None, base_url="http://llm.test")
 
@@ -197,7 +197,7 @@ async def test_round_cap_spends_one_free_closing_round(migrated_db):
             saved.extend(dict(m) for m in messages)
             return 1
 
-        async def fake_credentials(db_, user_id):
+        async def fake_credentials(db_, user_id, **kwargs):
             from types import SimpleNamespace
             return SimpleNamespace(api_key=None, base_url="http://llm.test")
 

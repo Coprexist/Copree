@@ -336,13 +336,20 @@ export default function ProviderCards({
 
         return (
           <div key={provider.id} className="card">
-            <div className="flex items-center gap-2 px-3 py-2.5">
-              <button
-                type="button"
-                className="flex flex-1 items-center gap-3 min-w-0 text-left"
+            <div className="flex items-center gap-2 pr-3">
+              {/* 展开箭头在左、内容紧跟其后：与「默认配置」页的场景卡片同一副头部——
+                  两页都是「一行一个东西、点开看明细」，箭头位置不该一左一右。 */}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="flex-1 min-w-0 !justify-start !gap-3 !h-auto !pl-3 !pr-0 !py-2.5"
                 onClick={() => toggle(provider.id)}
                 aria-expanded={open}
               >
+                <ChevronDown
+                  size={14}
+                  className={'shrink-0 text-textMuted transition-transform ' + (open ? 'rotate-180' : '')}
+                />
                 {/* 钥匙挂在厂商名右上角：绝对定位、不参与布局，长名字也不会把它挤走。
                     图标、说明文案与打开方式（悬停 + 点击）都在 KeyMark 里，别在这里重写。 */}
                 <span className="relative shrink-0 max-w-full">
@@ -362,11 +369,7 @@ export default function ProviderCards({
                 {mode === 'pick' && holdsSelected && !open && (
                   <Badge tone="primary">{t('apiConfig:inUse')}</Badge>
                 )}
-                <ChevronDown
-                  size={14}
-                  className={'ml-auto shrink-0 text-textMuted transition-transform ' + (open ? 'rotate-180' : '')}
-                />
-              </button>
+              </Button>
               <IconButton label={t('apiConfig:newProfile')} size="sm"
                 onClick={() => onNewProfile(provider.id)} icon={<Plus size={14} />} />
               <RowMenu label={t('apiConfig:editProvider')} items={providerMenu} />
@@ -396,7 +399,6 @@ export default function ProviderCards({
                   const body = (
                     <>
                       <span className="text-sm text-textPrimary truncate">{profile.name}</span>
-                      {profile.is_default && <Badge tone="primary">{t('apiConfig:defaultBadge')}</Badge>}
                       {/* 已选是声明，生效中是事实：只有已经选中的那条才会出现这两种 */}
                       {picked && liveProfileId !== null && liveProfileId !== undefined && (
                         profile.id === liveProfileId
@@ -427,10 +429,6 @@ export default function ProviderCards({
                       )}
                       <RowMenu label={t('apiConfig:editProfile')} items={[
                         { label: t('apiConfig:editProfile'), onSelect: () => onEditProfile(profile.id) },
-                        ...(profile.is_default ? [] : [{
-                          label: t('apiConfig:setDefault'),
-                          onSelect: () => act(() => api.post('/user/api-config/profiles/' + profile.id + '/default')),
-                        }]),
                         {
                           label: t('apiConfig:deleteProfile'),
                           danger: true,

@@ -34,10 +34,14 @@ async def test_billing_person_for_group_and_external_dm(migrated_db):
         # 主人的可用配置 = 一条默认配置档（裸 Key 两列已不参与解析）
         from app.services.agent.legacy_config_bridge import upsert_profile
 
-        await upsert_profile(
+        profile_id = await upsert_profile(
             db, user_id=owner.id, kind="llm",
             base_url="https://api.deepseek.com", api_key="sk-owner", make_default=True,
         )
+        # 全局默认档已于 2026-11-28 取消：解析第 ③ 格读的是「该场景的序列」，
+        # 所以要把这条配置挂进 agent_llm 场景，它才会被兜底命中。
+        from app.services.agent.api_scenario_service import add_route
+        await add_route(db, owner.id, "agent_llm", profile_id)
         await db.commit()
         await db.refresh(agent)
 

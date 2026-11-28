@@ -8,13 +8,16 @@
     DELETE /user/api-config/providers/{id}         删一家（名下有档时要 ?force=true）
     POST   /user/api-config/profiles               新建配置档
     PUT    /user/api-config/profiles/{id}          改配置档
-    POST   /user/api-config/profiles/{id}/default  设为默认档
     DELETE /user/api-config/profiles/{id}          删配置档
+
+「默认配置」已于 2026-11-28 从「每个 kind 一条全局默认档」改成「每个场景一条有序序列」，
+相关接口拆到 routers/user_api_config_scenarios.py（清单、总开关、序列、红点已读）。
+本文件只管厂商与配置档本身。
 
 Key 一律加密存、只回末四位；没有"读出明文"的接口——那接口等于把钥匙串挂在门上。
 
-删除是有约束的（不是后路）：默认档不许直接删（要先指认另一条为默认），
-厂商名下还有档时要显式 force。宁可多问一句，也不要让某个 AI 悄悄换了 Key。
+删除是有约束的（不是后路）：厂商名下还有档时要显式 force；删配置档会级联清掉
+引用它的场景序列格。宁可多问一句，也不要让某个 AI 悄悄换了 Key。
 """
 from datetime import datetime
 
@@ -28,8 +31,12 @@ from app.models.api_profile import UserApiProvider, UserApiProfile
 from app.utils.auth import get_current_user
 from app.utils.crypto import decrypt_api_key, encrypt_api_key
 from app.utils.pure.provider_presets import ProviderPreset, get_preset
+from app.routers.user_api_config_scenarios import router as scenarios_router
 
 router = APIRouter(prefix="/user/api-config", tags=["用户 API 配置"])
+# 场景是独立的一组接口（清单 / 总开关 / 序列 / 红点已读），但共用同一前缀：
+# /user/api-config/scenarios。拆文件是因为它和厂商、配置档不是同一份职责。
+router.include_router(scenarios_router)
 
 KINDS = ("llm", "voice")
 
@@ -427,6 +434,8 @@ async def create_profile(
         raise HTTPException(status_code=400, detail="新建配置档要指定厂商")
     provider = await _own_provider(db, req.provider_id, current_user["user_id"])
 
+    # 建档只建档，不替用户决定「在哪用」：全局默认档已于 2026-11-28 取消，
+    # 用在哪由场景序列决定（设置页「默认配置」）。后台不再自动设默认，也不问。
     profile = UserApiProfile(
         user_id=current_user["user_id"],
         provider_id=provider.id,
@@ -436,10 +445,6 @@ async def create_profile(
     )
     _apply_key(profile, req.api_key, PROFILE_KEY_FIELD)
     db.add(profile)
-    await db.flush()
-    # 第一条档自动成为默认档：否则新用户没有默认可用
-    if not await _has_default(db, current_user["user_id"], provider.kind):
-        profile.is_default = True
     await db.flush()
     return _profile_dict(profile)
 
@@ -460,28 +465,14 @@ async def update_profile(
         profile.secondary_model = req.secondary_model
     _apply_key(profile, req.api_key, PROFILE_KEY_FIELD)
     await db.flush()
+    # 语音档是共享的：改完要把绑着它的 AI 全部重测一遍，否则界面还按旧结论说话
+    # （2026-11-28：改档后既不测也不作废，是「明明修好了还报上一版错」的来源）。
+    if "api_key" in req.model_fields_set or "primary_model" in req.model_fields_set:
+        provider = await db.get(UserApiProvider, profile.provider_id)
+        if provider is not None and provider.kind == "voice":
+            from app.services.agent.voice_config import refresh_probes_for_profile
+            await refresh_probes_for_profile(db, profile.id)
     return _profile_dict(profile, (await _profile_usage(db, [profile.id])).get(profile.id))
-
-
-@router.post("/profiles/{profile_id}/default")
-async def set_default_profile(
-    profile_id: int,
-    current_user: dict = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """设为默认档：同一 kind 下只能有一条，所以先把别的同 kind 档清掉"""
-    profile = await _own_profile(db, profile_id, current_user["user_id"])
-    provider = await db.get(UserApiProvider, profile.provider_id)
-    others = (await db.execute(
-        select(UserApiProfile)
-        .join(UserApiProvider, UserApiProfile.provider_id == UserApiProvider.id)
-        .where(UserApiProfile.user_id == current_user["user_id"],
-               UserApiProvider.kind == provider.kind)
-    )).scalars().all()
-    for row in others:
-        row.is_default = row.id == profile.id
-    await db.flush()
-    return {"default_profile_id": profile.id}
 
 
 @router.delete("/profiles/{profile_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -490,21 +481,10 @@ async def delete_profile(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # 删档会级联清掉引用它的场景序列格（迁移 0137 的外键）：这是刻意的——
+    # 序列是「用哪些配置」的表达，配置没了那一格就没有意义，留着只会是悬空引用。
+    # 界面在删之前会告诉用户它挂在哪些场景（GET /scenarios 的 routes 里能查）。
     profile = await _own_profile(db, profile_id, current_user["user_id"])
-    if profile.is_default:
-        provider = await db.get(UserApiProvider, profile.provider_id)
-        rest = (await db.execute(
-            select(UserApiProfile.id)
-            .join(UserApiProvider, UserApiProfile.provider_id == UserApiProvider.id)
-            .where(UserApiProfile.user_id == current_user["user_id"],
-                   UserApiProvider.kind == provider.kind,
-                   UserApiProfile.id != profile.id)
-        )).scalars().all()
-        if rest:
-            raise HTTPException(
-                status_code=409,
-                detail="这是默认档，先把另一条设为默认再删（否则没选配置档的 AI 会跟着变）",
-            )
     await db.delete(profile)
     return None
 
@@ -523,18 +503,6 @@ async def _own_profile(db: AsyncSession, profile_id: int, user_id: int) -> UserA
     if profile is None or profile.user_id != user_id:
         raise HTTPException(status_code=404, detail="配置档不存在")
     return profile
-
-
-async def _has_default(db: AsyncSession, user_id: int, kind: str) -> bool:
-    row = (await db.execute(
-        select(UserApiProfile.id)
-        .join(UserApiProvider, UserApiProfile.provider_id == UserApiProvider.id)
-        .where(UserApiProfile.user_id == user_id,
-               UserApiProvider.kind == kind,
-               UserApiProfile.is_default.is_(True))
-        .limit(1)
-    )).first()
-    return row is not None
 
 
 def _preset_of(key: str | None, kind: str) -> ProviderPreset | None:

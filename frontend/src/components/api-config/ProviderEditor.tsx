@@ -303,14 +303,28 @@ export default function ProviderEditor({
           )}
 
           <div className="grid gap-3 sm:grid-cols-2">
-            <Select
-              label={isVoice ? t('apiConfig:providerVoicePrimary') : t('apiConfig:providerPrimary')}
-              fieldSize="sm"
-              placeholder={t('apiConfig:pickModel')}
-              options={options.filter((o) => o.value).map((o) => ({ value: o.value, label: o.label || o.value }))}
-              value={primary}
-              onChange={(e) => setPrimary(e.target.value)}
-            />
+            {isVoice ? (
+              /* 音色 id 是账号资源，只能由用户填自己账号下的；清单（providerVoices）是他自己维护的，
+                 只用来"点一下填进去"，不能反过来限制填什么。 */
+              <Input
+                label={t('apiConfig:providerVoicePrimary')}
+                fieldSize="sm"
+                className="font-mono"
+                value={primary}
+                onChange={(e) => setPrimary(e.target.value)}
+                placeholder={t('apiConfig:providerVoicePlaceholder')}
+                hint={t('apiConfig:providerVoiceHint')}
+              />
+            ) : (
+              <Select
+                label={t('apiConfig:providerPrimary')}
+                fieldSize="sm"
+                placeholder={t('apiConfig:pickModel')}
+                options={options.filter((o) => o.value).map((o) => ({ value: o.value, label: o.label || o.value }))}
+                value={primary}
+                onChange={(e) => setPrimary(e.target.value)}
+              />
+            )}
             {!isVoice && (
               <Select
                 label={t('apiConfig:providerSecondary')}

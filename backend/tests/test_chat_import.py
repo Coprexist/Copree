@@ -137,7 +137,9 @@ async def test_organize_without_config_asks_for_config(migrated_db):
         try:
             await organize(db, user_id=OWNER, transcript=transcript)
         except OrganizeUnavailable as e:
-            assert e.reason in ("no_quota", "no_default", "not_configured", "no_member")
+            assert e.reason in (
+                    "no_route", "no_quota", "no_default", "not_configured", "no_member"
+                )
         else:
             raise AssertionError("测试库没有配置，不该整理成功")
 

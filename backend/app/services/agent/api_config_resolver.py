@@ -1,219 +1,39 @@
-"""API 配置解析 —— 全仓唯一入口
+"""API 配置解析 —— 全仓唯一入口（取数壳）
 
 三档，每一档**整条命中或整条跳过**（地址、Key、模型一起取，绝不跨档拼接）：
 
-    ① AI 绑定的配置    agents.llm_profile_id → 厂商在、档在、Key 可解
+    ① 池配置           账单人有额度、分得到成员、成员的 kind 与本次请求一致
           ↓ 未命中
-    ② 池配置          账单人有额度、分得到成员、成员的 kind 与本次请求一致
+    ② AI 绑定的配置     agents.llm_profile_id → 厂商在、档在、Key 可解
           ↓ 未命中
-    ③ 用户默认配置    user_api_profiles 里该用户 kind=llm 且 is_default 的那条
+    ③ 该场景的默认配置  场景序列（user_api_scenario_routes）按 position 逐格尝试
           ↓ 未命中
-    ④ 失败            报「未绑定可用配置」，不再打 settings.deepseek_base_url
+    ④ 失败              报「未绑定可用配置」，不再打 settings.deepseek_base_url
 
-为什么收成一个口子：同一件事（用谁的 Key、打哪个地址、用哪个模型）曾有四五份实现，
-每份都自称唯一入口；界面上的「生效中」与实际请求也因此可能不是同一条。这里把判断
-收成 resolve()（纯函数，只吃候选），查库只是取数的壳。
+纯判断在 resolver_core.py（无数据库依赖）；本文件只负责查库、解密、把候选凑齐。
+两边的分工是「规则 vs 取数」——规则改在 core，数据来源改在这里。
 
-**没有第二档兜底地址**：旧链最后一级是 settings.deepseek_base_url + 空 Key，而系统级
-配置按既定口径不存 Key —— 那一级永远打不通，只是把「没配置」伪装成「配置了」。
+**没有第二档兜底地址**：旧链最后一级是 settings.deepseek_base_url + 空 Key，
+而系统级配置按既定口径不存 Key —— 那一级永远打不通，只是把「没配置」伪装成「配置了」。
 """
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from sqlalchemy import select
 
+from app.services.agent.resolver_core import (
+    LEVEL_BOUND, LEVEL_DEFAULT, LEVEL_FAIL, LEVEL_POOL, LEVEL_SCENARIO,
+    REASON_BAD_BIND, REASON_BAD_KEY, REASON_EXCLUDED, REASON_NO_BIND,
+    REASON_NO_DEFAULT, REASON_NO_KEY, REASON_NO_MEMBER, REASON_NO_QUOTA,
+    REASON_NO_ROUTE, REASON_NOT_CONFIGURED, REASON_OK, REASON_OWN_KEY_ONLY,
+    REASON_SCENARIO_OFF, STATUS_HIT, STATUS_SKIP,
+    Candidate, ChainStep, Resolution, resolve,
+)
 from app.utils.pure.llm_endpoint import is_local_endpoint
 
 logger = logging.getLogger(__name__)
-
-# ── 档位 ──────────────────────────────────────────────────────────────
-LEVEL_BOUND = "bound"
-LEVEL_POOL = "pool"
-LEVEL_DEFAULT = "default"
-LEVEL_FAIL = "fail"
-
-STATUS_HIT = "hit"
-STATUS_SKIP = "skip"
-
-# ── 命中 / 跳过原因（界面文案按这个词表查，不要在别处另造一套） ──────
-REASON_OK = "ok"
-REASON_NO_BIND = "no_bind"           # 没绑配置档
-REASON_BAD_BIND = "bad_bind"         # 绑了，但配置档 / 厂商已删或 kind 不符
-REASON_NO_KEY = "no_key"             # 这条配置没有 Key，且地址不是本机
-REASON_BAD_KEY = "bad_key"           # Key 解不出来（加密密钥换过 / 数据损坏）
-REASON_NO_QUOTA = "no_quota"         # 账单人没有可用额度
-REASON_NO_MEMBER = "no_member"       # 池里分不到成员
-REASON_OWN_KEY_ONLY = "own_key_only"  # 本次请求只允许账单人自己的配置
-REASON_NO_DEFAULT = "no_default"     # 用户没设默认配置
-REASON_EXCLUDED = "excluded"         # 上一次已经用这一档失败过
-REASON_NOT_CONFIGURED = "not_configured"
-
-
-@dataclass(frozen=True)
-class ChainStep:
-    """决策轨迹的一步：这一档试没试、为什么、用了谁的哪条配置"""
-
-    level: str
-    status: str
-    reason: str
-    label: str = ""
-    base_url: str = ""
-    model: str = ""
-
-    def as_dict(self) -> dict:
-        return {
-            "level": self.level, "status": self.status, "reason": self.reason,
-            "label": self.label, "base_url": self.base_url, "model": self.model,
-        }
-
-
-@dataclass(frozen=True)
-class Candidate:
-    """一档的候选结果：要么带着整套配置命中，要么带着原因跳过
-
-    reason == REASON_OK 即命中；其余一律跳过。取数壳负责查库与解密，
-    候选本身不含任何判断逻辑，单测可以直接构造。
-    """
-
-    level: str
-    reason: str
-    label: str = ""
-    base_url: str = ""
-    api_key: str | None = None
-    chat_model: str | None = None
-    work_model: str | None = None
-    provider_info: dict = field(default_factory=dict)
-    pool_key_id: int | None = None
-    models: tuple[str, ...] = ()
-    decrypt_failures: tuple[str, ...] = ()
-
-    @property
-    def hit(self) -> bool:
-        return self.reason == REASON_OK
-
-
-@dataclass(frozen=True)
-class Resolution:
-    """这一次请求实际怎么打，以及为什么是它
-
-    source 是事实（① 绑定 / ② 池 / ③ 默认 / none），chain 是决策轨迹。
-    界面上的 stepper 与请求本身共用同一个 Resolution —— 这是「显示即实跑」的结构性保证。
-    """
-
-    base_url: str
-    api_key: str | None
-    chat_model: str | None
-    work_model: str | None
-    source: str                     # bound | pool | default | none
-    credit_source: str              # 记账口径：profile | pool_key | user_key | none
-    pool_key_id: int | None
-    provider_info: dict
-    models: list[str]
-    thinking_supported: bool
-    system_layout: str
-    needs_key: bool
-    chain: list[ChainStep]
-    decrypt_failures: tuple[str, ...] = ()
-
-    @property
-    def usable(self) -> bool:
-        """有可请求的通道；本地自建服务可以没有 Key"""
-        return self.source != "none" and (self.api_key is not None or not self.needs_key)
-
-    @property
-    def missing_reason(self) -> str:
-        """到 ④ 时最有信息量的那句原因：依次看 ①②③ 谁离命中最近"""
-        for step in self.chain:
-            if step.reason in (REASON_BAD_KEY, REASON_NO_KEY):
-                return step.reason
-        for step in self.chain:
-            if step.level == LEVEL_DEFAULT:
-                return step.reason
-        return REASON_NOT_CONFIGURED
-
-    def as_dict(self) -> dict:
-        return {
-            "base_url": self.base_url,
-            "source": self.source,
-            "chat_model": self.chat_model,
-            "work_model": self.work_model,
-            "models": self.models,
-            "needs_key": self.needs_key,
-            "usable": self.usable,
-            "missing_reason": self.missing_reason,
-            "chain": [s.as_dict() for s in self.chain],
-        }
-
-
-def _credit_source_of(level: str) -> str:
-    """记账沿用旧口径：profile / pool_key / user_key —— 额度与并发都按这三个分支走"""
-    return {LEVEL_BOUND: "profile", LEVEL_POOL: "pool_key",
-            LEVEL_DEFAULT: "user_key"}.get(level, "none")
-
-
-def _resolution(candidate: Candidate, chain: list[ChainStep],
-                decrypt_failures: tuple[str, ...] = ()) -> Resolution:
-    if not candidate.hit:
-        return Resolution(
-            base_url="", api_key=None, chat_model=None, work_model=None,
-            source="none", credit_source="none", pool_key_id=None,
-            provider_info={}, models=[], thinking_supported=False,
-            system_layout="anywhere", needs_key=True, chain=chain,
-            decrypt_failures=decrypt_failures,
-        )
-    info = candidate.provider_info or {}
-    base_url = candidate.base_url or ""
-    return Resolution(
-        base_url=base_url,
-        api_key=candidate.api_key,
-        chat_model=candidate.chat_model or (info.get("default_model") or None),
-        work_model=candidate.work_model or (info.get("work_model") or None),
-        source=candidate.level,
-        credit_source=_credit_source_of(candidate.level),
-        pool_key_id=candidate.pool_key_id,
-        provider_info=info,
-        models=list(candidate.models) or list(info.get("models") or []),
-        thinking_supported=bool(info.get("thinking_supported")),
-        system_layout=info.get("system_layout") or "anywhere",
-        needs_key=bool(base_url) and not is_local_endpoint(base_url),
-        chain=chain,
-        decrypt_failures=decrypt_failures,
-    )
-
-
-def resolve(*, bound: Candidate, pool: Candidate, default: Candidate,
-            prefer_own: bool = False) -> Resolution:
-    """纯判断：按顺序取第一个命中，没命中就是 ④ 失败
-
-    两套顺序，由用户的「优先使用本人配置」决定：
-    - 关（默认）= **按额度**：① 平台池 → ② AI 绑定 → ③ 用户默认。
-      池那一步自带额度判断（credit > 0），清零时自然跳过，不用每次先撞一次 402；
-    - 开 = **优先本人配置**：① AI 绑定 → ② 用户默认 → ③ 池兜底。
-
-    顺序由用户 2026-11-25 拍定：平台送的那份额度先用，用完再用自己的。
-    语义从旧的「优先使用本人 API Key」改成「优先使用本人配置」——现在是一整条配置档
-    （地址 + Key + 模型 + 能力），不再是单个 Key。
-    """
-    chain: list[ChainStep] = []
-    failures = tuple(f for c in (bound, pool, default) for f in c.decrypt_failures)
-    order = (bound, default, pool) if prefer_own else (pool, bound, default)
-    for candidate in order:
-        chain.append(ChainStep(
-            level=candidate.level,
-            status=STATUS_HIT if candidate.hit else STATUS_SKIP,
-            reason=candidate.reason,
-            label=candidate.label,
-            base_url=candidate.base_url,
-            model=candidate.chat_model or "",
-        ))
-        if candidate.hit:
-            return _resolution(candidate, chain, failures)
-    chain.append(ChainStep(level=LEVEL_FAIL, status=STATUS_SKIP,
-                           reason=REASON_NOT_CONFIGURED))
-    return _resolution(Candidate(LEVEL_FAIL, REASON_NOT_CONFIGURED), chain, failures)
-
 
 # ── 取数辅助 ──────────────────────────────────────────────────────────
 
@@ -281,6 +101,85 @@ async def _load_profile(db, profile_id: int | None, kind: str):
         return None, None
     return profile, provider
 
+
+async def scenario_enabled(db, user_id: int | None, scenario: str) -> bool:
+    """这个场景允不允许用默认配置兜底
+
+    没有记录 = 开（见 utils/pure/api_scenarios.py）：用户不用先「开启」，
+    只有主动关掉某个场景时库里才有一行。未知 key 按开处理并记一条 warning——
+    拼错场景名不该静默把用户的默认配置断掉，但要在日志里露出来。
+    """
+    from app.models.api_profile import UserApiScenarioOff
+    from app.utils.pure.api_scenarios import get_scenario
+
+    if get_scenario(scenario) is None:
+        logger.warning("未知的默认配置场景 %s，按开启处理（检查调用方拼写）", scenario)
+        return True
+    if not user_id:
+        return True
+    row = (await db.execute(
+        select(UserApiScenarioOff.id).where(
+            UserApiScenarioOff.user_id == user_id,
+            UserApiScenarioOff.scenario == scenario,
+        ).limit(1)
+    )).first()
+    return row is None
+
+
+async def _scenario_route_rows(db, user_id: int | None, scenario: str, kind: str):
+    """场景序列中启用着的格：[(route, profile, provider)]，按 position 升序
+
+    只读路由本身，不判总开关——总开关是调用方的事（要给出不同的跳过原因）。
+    """
+    from app.models.api_profile import (
+        UserApiProfile, UserApiProvider, UserApiScenarioRoute,
+    )
+
+    if not user_id or not scenario:
+        return []
+    rows = (await db.execute(
+        select(UserApiScenarioRoute, UserApiProfile, UserApiProvider)
+        .join(UserApiProfile, UserApiProfile.id == UserApiScenarioRoute.profile_id)
+        .join(UserApiProvider, UserApiProvider.id == UserApiProfile.provider_id)
+        .where(
+            UserApiScenarioRoute.user_id == user_id,
+            UserApiScenarioRoute.scenario == scenario,
+            UserApiScenarioRoute.enabled.is_(True),
+            UserApiProvider.kind == kind,
+        )
+        .order_by(UserApiScenarioRoute.position, UserApiScenarioRoute.id)
+    )).all()
+    return list(rows)
+
+
+async def _scenario_candidates(db, user_id: int | None, scenario: str | None,
+                               kind: str) -> tuple[Candidate, ...]:
+    """第 ③ 格的候选组：正常时多条有序候选，空时一条带原因的占位
+
+    占位刻意放进链里：没有它，界面只能看到「③ 没过」，分不清是「没配序列」
+    还是「这个场景被整体关掉了」。
+    """
+    if not scenario:
+        return ()
+    if not await scenario_enabled(db, user_id, scenario):
+        return (Candidate(LEVEL_SCENARIO, REASON_SCENARIO_OFF),)
+    rows = await _scenario_route_rows(db, user_id, scenario, kind)
+    if not rows:
+        return (Candidate(LEVEL_SCENARIO, REASON_NO_ROUTE),)
+    return tuple(_profile_candidate(LEVEL_SCENARIO, profile, provider)
+                 for _, profile, provider in rows)
+
+
+def _prefer_own(agent, user) -> bool:
+    """两级开关：AI 级（三态）覆盖用户级
+
+    None = 跟随用户级；True / False = 这个 AI 自己定。同一账号下「聊天 AI 用池额度、
+    整理 AI 用自己的 Key」是合理的两种选择，所以 AI 级必须能覆盖用户级，不能只是叠加。
+    """
+    own = getattr(agent, "prefer_own_config", None)
+    if own is not None:
+        return bool(own)
+    return bool(getattr(user, "prefer_own_key", False))
 
 async def _load_default_profile(db, user_id: int | None, kind: str):
     """该用户在 config.kind 下的默认配置档（写入端保证同 kind 只有一条）"""
@@ -391,8 +290,13 @@ async def resolve_llm(
     exclude: set[str] | frozenset[str] = frozenset(),
     exclude_pool_key_id: int | None = None,
     force_own_key: bool = False,
+    scenario: str | None = None,
 ) -> Resolution:
     """查库取数 + 纯判断：给这个 AI 解析一次 LLM 配置
+
+    scenario 是这次请求属于哪个业务场景（见 utils/pure/api_scenarios.py）：
+    只门控 ③ 用户默认档——① AI 绑定的档是用户对这个 AI 的显式指定，不该被场景开关影响；
+    不传 = 不做场景门控（探测、自检这类「只是问一下」的调用）。
 
     bill_to 由调用方算（群聊谁付费、外部通道记主人头上 —— 那是业务规则，
     不是「用哪条配置」的一部分）。不传就是 AI 的主人。
@@ -401,8 +305,8 @@ async def resolve_llm(
 
     bill_user_id = bill_to or _owner_of(agent)
     user = await db.get(User, bill_user_id) if bill_user_id else None
-    # 账单人的「优先使用本人配置」：关 = 按额度（池优先），开 = 本人配置优先、池兜底
-    prefer_own = bool(getattr(user, "prefer_own_key", False)) if user is not None else False
+    # 「优先使用本人配置」：AI 级三态覆盖用户级（见 _prefer_own）
+    prefer_own = _prefer_own(agent, user)
 
     # ① AI 绑定的配置
     if LEVEL_BOUND in exclude:
@@ -424,19 +328,13 @@ async def resolve_llm(
     else:
         pool = await pool_candidate(db, user, exclude_pool_key_id=exclude_pool_key_id)
 
-    # ③ 用户默认配置
-    if LEVEL_DEFAULT in exclude:
-        default = Candidate(LEVEL_DEFAULT, REASON_EXCLUDED)
-    elif user is None:
-        default = Candidate(LEVEL_DEFAULT, REASON_NO_DEFAULT)
+    # ③ 该场景的默认配置序列（没传场景时这一格为空，链上不出现）
+    if LEVEL_SCENARIO in exclude:
+        routes = (Candidate(LEVEL_SCENARIO, REASON_EXCLUDED),)
     else:
-        profile, provider = await _load_default_profile(db, user.id, kind)
-        if profile is None or provider is None:
-            default = Candidate(LEVEL_DEFAULT, REASON_NO_DEFAULT, label=user.username or "")
-        else:
-            default = _profile_candidate(LEVEL_DEFAULT, profile, provider)
+        routes = await _scenario_candidates(db, user.id if user else None, scenario, kind)
 
-    resolution = resolve(bound=bound, pool=pool, default=default, prefer_own=prefer_own)
+    resolution = resolve(bound=bound, pool=pool, scenario=routes, prefer_own=prefer_own)
     if not resolution.usable:
         logger.info(
             "AI %s(%s) 没有可用 API 配置：%s",
@@ -450,6 +348,7 @@ async def resolve_user_llm(
     db, user_id: int | None, *, kind: str = "llm",
     exclude: set[str] | frozenset[str] = frozenset(),
     exclude_pool_key_id: int | None = None,
+    scenario: str | None = None,
 ) -> Resolution:
     """给「某个人」解析一次（世界 AI / 创建助手 / 管理端探测）：没有 ① 绑定档。
 
@@ -465,17 +364,11 @@ async def resolve_user_llm(
         pool = Candidate(LEVEL_POOL, REASON_EXCLUDED)
     else:
         pool = await pool_candidate(db, user, exclude_pool_key_id=exclude_pool_key_id)
-    if LEVEL_DEFAULT in exclude:
-        default = Candidate(LEVEL_DEFAULT, REASON_EXCLUDED)
-    elif user is None:
-        default = Candidate(LEVEL_DEFAULT, REASON_NO_DEFAULT)
+    if LEVEL_SCENARIO in exclude:
+        routes = (Candidate(LEVEL_SCENARIO, REASON_EXCLUDED),)
     else:
-        profile, provider = await _load_default_profile(db, user.id, kind)
-        if profile is None or provider is None:
-            default = Candidate(LEVEL_DEFAULT, REASON_NO_DEFAULT)
-        else:
-            default = _profile_candidate(LEVEL_DEFAULT, profile, provider)
-    return resolve(bound=bound, pool=pool, default=default)
+        routes = await _scenario_candidates(db, user.id if user else None, scenario, kind)
+    return resolve(bound=bound, pool=pool, scenario=routes)
 
 
 # ── 语音（结构与 LLM 同形，链路后续照抄；这里先保持原样） ─────────────
@@ -526,11 +419,16 @@ def resolve_voice_from(*, voice=None, user=None, profile=None, provider=None) ->
                          source="none")
 
 
-async def resolve_voice_config(db, voice, *, owner_user_id=None) -> ResolvedVoice:
+async def resolve_voice_config(
+    db, voice, *, owner_user_id=None, scenario: str | None = None
+) -> ResolvedVoice:
     """查库取数 + 纯判断：给这条语音配置解析一次
 
     owner_user_id 由调用方给（语音行上没有这一列）：只在「没选配置档、地址没填全」时
     用来判断能不能借用户全局那把 Key，传 None 就等于不借。
+
+    兜底顺序：这条语音绑的档 → 这条语音自己填的 → 用户默认语音档（scenario 开着才用）。
+    默认档排在最后，是为了不顶掉已经在用的显式配置——它只补「什么都没填」的那种行。
     """
     from app.models.user import User
 
@@ -539,4 +437,14 @@ async def resolve_voice_config(db, voice, *, owner_user_id=None) -> ResolvedVoic
     profile, provider = await _load_profile(
         db, getattr(voice, "voice_profile_id", None), "voice"
     )
+    # 兜底顺序：这条语音绑的档 → 它自己填的 → 场景序列第一格
+    # 场景排在最后，避免顶掉已经在用的显式配置；总开关关掉时整格跳过。
+    if profile is None:
+        has_own = bool(getattr(voice, "base_url", None)
+                       or getattr(voice, "api_key_encrypted", None))
+        if not has_own and scenario is not None and user is not None:
+            if await scenario_enabled(db, user.id, scenario):
+                rows = await _scenario_route_rows(db, user.id, scenario, "voice")
+                if rows:
+                    _, profile, provider = rows[0]
     return resolve_voice_from(voice=voice, user=user, profile=profile, provider=provider)

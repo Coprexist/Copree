@@ -457,6 +457,7 @@ async def _get_api_config(
     res = await resolve_llm(
         db, agent, bill_to=bill_user_id, exclude=exclude,
         exclude_pool_key_id=exclude_pool_key_id, force_own_key=force_own_key,
+        scenario="agent_llm",
     )
 
     if not res.usable and res.decrypt_failures:

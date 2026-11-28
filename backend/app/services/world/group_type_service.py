@@ -386,7 +386,7 @@ async def apply_global_api(db: AsyncSession, world_id: int, operator_id: int, as
     from app.utils.crypto import encrypt_api_key
 
     # 群主可用配置 → 群助手自己的列（群助手不共用配置档表，见 api_config_chain.md §11.1）
-    resolved = await resolve_user_llm(db, group_owner)
+    resolved = await resolve_user_llm(db, group_owner, scenario="world_ai")
     if not resolved.usable:
         raise ValueError("你还没有配置可用的 API（在「我的」页设置）")
     ga.api_key_encrypted = encrypt_api_key(resolved.api_key) if resolved.api_key else None

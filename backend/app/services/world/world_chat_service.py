@@ -796,7 +796,7 @@ async def _resolve_world_credentials(world_repo: WorldRepository, world) -> tupl
     """世界 AI 计费/凭证：账单人 = 世界主人（唯一链：② 池 → ③ 用户默认）"""
     from app.services.agent.api_config_resolver import resolve_user_llm
 
-    resolved = await resolve_user_llm(world_repo, world.owner_id)
+    resolved = await resolve_user_llm(world_repo, world.owner_id, scenario="world_ai")
     return resolved.api_key, resolved.base_url
 
 

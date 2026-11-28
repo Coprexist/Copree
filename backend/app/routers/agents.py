@@ -1477,15 +1477,19 @@ async def update_voice_settings(
     还得记得去点「测试」，中间那段时间 AI 是哑的（工具表里根本没有 send_voice）。
     没改动的重复保存不会重复打供应商：结论还有效就直接沿用。
     """
-    from app.services.agent.voice_config import probe_now, save_voice_config
+    from app.services.agent.voice_config import probe_now, save_voice_config, voice_of
 
     cfg = await save_voice_config(
         db, agent_id,
         provider=req.provider, base_url=req.base_url, api_key=req.api_key,
         voice_id=req.voice_id, model=req.model,
     )
-    # 没填 base_url 就没什么可测的：那是"清空配置"，状态退回「还没测过」而不是「不可用」
-    if cfg.base_url and not cfg.probe_ok:
+    # 守卫必须看「解析后」那一套，不能看行上的字段：选了语音配置档时，
+    # 行上的 base_url / voice_id 本来就是空的（值在档里），用它判断会让
+    # 「整包选档」这种形态永远不测——D老师（agent 70）就是这样：绑了档、
+    # probe 从未跑过，于是 send_voice 一直被工具门控挡掉。
+    _, eff = await voice_of(db, agent_id)
+    if eff and eff.base_url and eff.voice_id and not cfg.probe_ok:
         await probe_now(db, cfg)
     await db.commit()
     return _voice_payload(cfg)

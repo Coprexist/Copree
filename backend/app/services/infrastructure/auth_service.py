@@ -403,10 +403,11 @@ async def update_user_settings(
         user.status_text = status_text
     if status_color is not None:
         user.status_color = status_color
-    # prefer_own_key 已删除（池固定排在用户默认之前）：参数保留一个版本只为不打断
-    # 老前端，值不再落库。
+    # 用户级「优先使用本人配置」：2026-11-28 恢复写入。
+    # 曾有一版默认把它删掉（池固定优先），但产品口径是「两级都要」——用户级是基线，
+    # AI 级（agents.prefer_own_config）覆盖它。开关不落库的话，界面上点了等于没点。
     if prefer_own_key is not None:
-        logger.info("收到已废弃的 prefer_own_key（忽略）: user=%s", user_id)
+        user.prefer_own_key = prefer_own_key
 
     await user_repo.flush()
     await user_repo.refresh(user)

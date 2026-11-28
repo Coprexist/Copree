@@ -5,8 +5,9 @@ import { useTheme } from '../context/ThemeContext'
 import { useT, useLang } from '../i18n/I18nContext'
 import { fmtDateTime } from '../utils/time'
 import Toggle from '../components/Toggle'
-import { Slider } from '../components/ui'
+import { Slider, UnderlineTabs } from '../components/ui'
 import ApiConfigSection from '../components/api-config/ApiConfigSection'
+import DefaultConfigSection from '../components/api-config/DefaultConfigSection'
 import { IN_APP_NOTIFICATION_KEY } from '../hooks/useNotificationSocket'
 import MagicVisionFilter from '../components/MagicVisionFilter.tsx'
 import ThemeCustomizer from '../components/ThemeCustomizer'
@@ -89,6 +90,8 @@ export default function SettingsPage() {
   }
   const navigate = useNavigate()
   const [preferOwnKey, setPreferOwnKey] = useState(false)
+  // API 配置页里 LLM / 语音 / 默认配置是三个视图（切视图用下划线页签），默认停在 LLM
+  const [apiKind, setApiKind] = useState<'llm' | 'voice' | 'defaults'>('llm')
   const [autoTimeout, setAutoTimeout] = useState(60)
   const [autoDefault, setAutoDefault] = useState(false)
   const [timezone, setTimezone] = useState('Asia/Shanghai')
@@ -500,9 +503,21 @@ export default function SettingsPage() {
         </div>
 
         <div className="space-y-4">
-          {/* LLM / 语音两块同构：厂商 + 配置档，每个 AI 在「API」页签里各挑一条 */}
-          <ApiConfigSection kind="llm" />
-          <ApiConfigSection kind="voice" />
+          {/* LLM / 语音 / 默认配置是三个视图，用下划线页签切；一屏上下堆三块要滚很久。
+              默认配置单开一页：它管的是「哪些场景允许用默认档」，与「配了哪些厂商」不是一件事 */}
+          <UnderlineTabs
+            size="sm"
+            items={[
+              { key: 'llm' as const, label: t('apiConfig:sectionProviders') },
+              { key: 'voice' as const, label: t('apiConfig:sectionVoice') },
+              { key: 'defaults' as const, label: t('apiConfig:sectionDefaults') },
+            ]}
+            value={apiKind}
+            onChange={setApiKind}
+          />
+          {apiKind === 'defaults'
+            ? <DefaultConfigSection />
+            : <ApiConfigSection kind={apiKind} />}
 
           {/* 优先使用本人配置开关（关 = 按额度：有池额度先用池） */}
           <div className="flex items-center justify-between py-3 border-t border-border mt-3">

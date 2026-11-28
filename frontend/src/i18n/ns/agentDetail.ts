@@ -252,7 +252,7 @@ export const agentDetailZh: TranslationDict = {
   'voiceNeverProbed': '还没测过',
   'voiceProbeHint': '测试不花合成额度：Breeze 走官方自检端点，MiniMax 只发一条极小请求。',
   'voiceNoPreset': '自定义',
-  'voicePresetAutoVoice': '音色会自动填成这套预设的默认值，可以改。',
+  'voicePresetAutoVoice': '点一个把它的 id 填进音色；也可以直接手填。',
 }
 
 export const agentDetailEn: TranslationDict = {
@@ -498,7 +498,7 @@ export const agentDetailEn: TranslationDict = {
   'voiceNeverProbed': 'Not tested yet',
   'voiceProbeHint': 'Testing costs no synthesis credits: Breeze uses its own self-check endpoint and MiniMax gets one tiny request.',
   'voiceNoPreset': 'Custom',
-  'voicePresetAutoVoice': 'The voice id is filled with the preset default; you can change it.',
+  'voicePresetAutoVoice': 'Click one to fill in its id; you can type your own too.',
 }
 
 export const agentDetailJa: TranslationDict = {
@@ -744,5 +744,5 @@ export const agentDetailJa: TranslationDict = {
   'voiceNeverProbed': '未テスト',
   'voiceProbeHint': 'テストは合成クレジットを消費しません。Breezeは専用の自己診断エンドポイント、MiniMaxは極小リクエスト1回だけです。',
   'voiceNoPreset': 'カスタム',
-  'voicePresetAutoVoice': '音色IDはプリセットの既定値が入ります。変更できます。',
+  'voicePresetAutoVoice': 'クリックするとそのIDが入ります。手入力もできます。',
 }

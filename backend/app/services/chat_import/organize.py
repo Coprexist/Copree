@@ -171,7 +171,7 @@ async def organize(
 
     :raises OrganizeUnavailable: 没有可用模型（没配、额度用光、Key 坏了）
     """
-    resolved = await resolve_user_llm(db, user_id, kind="llm")
+    resolved = await resolve_user_llm(db, user_id, kind="llm", scenario="smart_organize")
     if not resolved.usable:
         raise OrganizeUnavailable(
             resolved.missing_reason,

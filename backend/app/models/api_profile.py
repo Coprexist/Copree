@@ -126,3 +126,99 @@ class UserApiProfile(Base):
     __table_args__ = (
         UniqueConstraint("provider_id", "name", name="uq_user_api_profile_name"),
     )
+
+
+class UserApiScenarioOff(Base):
+    """用户在某个场景里关掉了「用默认配置兜底」
+
+    只记**关掉的**那一行：没有记录就是开。好处是新场景上线时老用户默认就是开的，
+    不用写数据迁移去把人一个个改成开；勾回来等于删这一行，两个状态不会各存一份。
+    场景清单在 app/utils/pure/api_scenarios.py（唯一来源），这里只存 key。
+    """
+
+    __tablename__ = "user_api_scenario_off"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False,
+        comment="归属用户",
+    )
+    scenario = Column(
+        String(32), nullable=False,
+        comment="见 utils/pure/api_scenarios.SCENARIOS；未知 key 不允许写入",
+    )
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "scenario", name="uq_user_api_scenario_off"),
+    )
+
+class UserApiScenarioRoute(Base):
+    """场景的有序默认配置序列：一场景多格，按 position 升序逐格尝试
+
+    第 ③ 格（见 docs/dev/api_config_chain.md §3.4）不再读全局默认档，而是读这张表：
+    某场景没有行 = 该场景没有默认配置（原因 no_route），而不是「共用别人的默认」。
+    position 由写入端保证连续、唯一；enabled 是子开关，关掉的格保留在序列里但不参与尝试。
+    """
+
+    __tablename__ = "user_api_scenario_routes"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False,
+        comment="归属用户",
+    )
+    scenario = Column(
+        String(32), nullable=False,
+        comment="见 utils/pure/api_scenarios.SCENARIOS",
+    )
+    profile_id = Column(
+        Integer, ForeignKey("user_api_profiles.id", ondelete="CASCADE"), nullable=False,
+        comment="这一格用的配置档；档删了这格跟着删，不留悬空引用",
+    )
+    position = Column(
+        Integer, nullable=False, default=0, server_default="0",
+        comment="尝试顺序，升序；同场景内连续",
+    )
+    enabled = Column(
+        Boolean, nullable=False, default=True, server_default="1",
+        comment="子开关：关掉保留在序列里但不参与尝试",
+    )
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "scenario", "profile_id", name="uq_user_api_scenario_route"),
+    )
+
+
+class UserApiScenarioStatus(Base):
+    """某个场景某一格最近一次尝试的结果（红点与站内消息的依据）
+
+    只记不删：成功一次把 state 转回 ok，但 unread 不自动清——红点消失只走「用户阅读」
+    （§3.4 R8）。同一格连续失败不重复发消息，判断依据就是这里还是不是 failed+unread。
+    """
+
+    __tablename__ = "user_api_scenario_status"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False,
+        comment="归属用户",
+    )
+    scenario = Column(String(32), nullable=False, comment="见 utils/pure/api_scenarios.SCENARIOS")
+    profile_id = Column(
+        Integer, ForeignKey("user_api_profiles.id", ondelete="CASCADE"), nullable=False,
+        comment="这一格用的配置档",
+    )
+    state = Column(String(16), nullable=False, default="ok", server_default="ok",
+                   comment="ok | failed")
+    reason = Column(String(32), nullable=True,
+                    comment="失败原因词（与 resolver 的 REASON_* 同一套）")
+    unread = Column(Boolean, nullable=False, default=False, server_default="0",
+                    comment="未读红点；只有用户阅读后才清")
+    tried_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "scenario", "profile_id", name="uq_user_api_scenario_status"),
+    )
+

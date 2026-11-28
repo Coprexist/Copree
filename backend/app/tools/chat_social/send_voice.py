@@ -78,10 +78,19 @@ class SendVoice(ToolPlugin):
         if cfg is None or eff is None or not eff.base_url or not eff.voice_id:
             return {"error": True, "message": "这个 AI 还没配语音，先用文字说"}
         if not cfg.probe_ok:
+            # 要说清「失败 + 可能原因 + 下一步」。以前这里丢的是「未检测」这种状态词，
+            # 用户拿不到任何可操作的信号（2026-11-28 反馈）。
+            if cfg.probed_at is None:
+                detail = "这套语音配置还没检测过"
+            else:
+                detail = cfg.probe_message or "上次检测没有通过"
             return {
                 "error": True,
-                "message": f"语音暂时不可用（{cfg.probe_kind or '未检测'}）："
-                           f"{cfg.probe_message or '这套配置没测通过'}。先用文字说。",
+                "message": (
+                    f"语音发送失败：{detail}。"
+                    "常见原因是 API Key 无效或填错了字段、服务地址访问不了、音色不属于这个账号；"
+                    "到这个 AI 的语音面板点「测试」能看到具体报错。这条先用文字说。"
+                ),
             }
 
         # ── 合成 ──

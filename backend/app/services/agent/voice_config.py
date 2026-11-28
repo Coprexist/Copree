@@ -62,7 +62,7 @@ async def voice_of(
     if row is None:
         return None, None
     cfg, owner_id = row
-    return cfg, await resolve_voice_config(db, cfg, owner_user_id=owner_id)
+    return cfg, await resolve_voice_config(db, cfg, owner_user_id=owner_id, scenario="voice_default")
 
 
 async def _resolve_of(db: AsyncSession, cfg: AgentVoiceConfig) -> ResolvedVoice:
@@ -70,7 +70,7 @@ async def _resolve_of(db: AsyncSession, cfg: AgentVoiceConfig) -> ResolvedVoice:
     owner_id = (await db.execute(
         select(Agent.owner_id).where(Agent.id == int(cfg.agent_id))
     )).scalar()
-    return await resolve_voice_config(db, cfg, owner_user_id=owner_id)
+    return await resolve_voice_config(db, cfg, owner_user_id=owner_id, scenario="voice_default")
 
 
 async def has_voice_capability(db: AsyncSession, agent_id: int) -> bool:
@@ -112,6 +112,27 @@ async def save_voice_config(
         cfg.probed_at = None
     await db.flush()
     return cfg
+
+
+async def refresh_probes_for_profile(db: AsyncSession, profile_id: int) -> int:
+    """语音配置档改过之后，把所有绑着它的 AI 重测一遍，返回重测个数
+
+    为什么必须在这里做：档是共享的（一条档可以挂多个 AI），改档的人不知道
+    有谁在用；不重测就会留着按旧配置得出的结论——「档已经改了，系统还说能用」
+    或者反过来「明明修好了，还报上一版的错」。结论只有 probe_now 一处写。
+
+    同步重测、不并发：一条档通常 1-3 个 AI，探测本身 2-4 秒，串行更简单也
+    不会在供应商那边瞬间打出十几个请求。
+    """
+    rows = (await db.execute(
+        select(AgentVoiceConfig).where(AgentVoiceConfig.voice_profile_id == int(profile_id))
+    )).scalars().all()
+    for cfg in rows:
+        try:
+            await probe_now(db, cfg)
+        except Exception as e:  # noqa: BLE001 —— 一个 AI 探测失败不该挡住其它
+            logger.warning("语音档变更后重测失败（agent=%s）: %s", cfg.agent_id, e)
+    return len(rows)
 
 
 async def probe_now(

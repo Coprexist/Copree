@@ -692,7 +692,7 @@ async def _run_turn(db: AsyncSession, user_id: int, draft: AgentCreationDraft, m
     if not draft.title:
         await update_draft(db, draft, title=message.strip()[:30])
 
-    resolved = await resolve_user_llm(db, user_id)
+    resolved = await resolve_user_llm(db, user_id, scenario="agent_create")
     api_key, api_base = resolved.api_key, resolved.base_url
     model = await resolve_chat_model(db, api_base, owner_id=user_id)
     tools = creator_tools()

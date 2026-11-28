@@ -9,7 +9,7 @@
 from types import SimpleNamespace
 
 from app.services.agent.api_config_resolver import (
-    LEVEL_BOUND, LEVEL_DEFAULT, LEVEL_POOL, REASON_BAD_KEY, REASON_NO_BIND,
+    LEVEL_BOUND, LEVEL_DEFAULT, LEVEL_POOL, LEVEL_SCENARIO, REASON_BAD_KEY, REASON_NO_BIND,
     REASON_NO_DEFAULT, REASON_NO_KEY, REASON_NO_QUOTA, REASON_OK, REASON_OWN_KEY_ONLY,
     Candidate, _profile_candidate, resolve, resolve_voice_from, same_provider,
 )
@@ -58,7 +58,7 @@ def test_pool_hits_first_by_default():
     """默认按额度：池有额度就用池，即使这个 AI 绑定了自己的配置（用户 2026-11-25）"""
     out = resolve(bound=_cand(LEVEL_BOUND, base_url=QWEN, api_key="profile-key"),
                   pool=_cand(LEVEL_POOL, api_key="pool-key"),
-                  default=_cand(LEVEL_DEFAULT, api_key="user-key"))
+                  scenario=(_cand(LEVEL_SCENARIO, api_key="user-key"),))
     assert out.source == LEVEL_POOL
     assert [s.level for s in out.chain] == [LEVEL_POOL], "池命中就不再往下看"
     assert [s.status for s in out.chain] == ["hit"]
@@ -69,7 +69,7 @@ def test_bound_is_a_whole_package_when_pool_misses():
     out = resolve(bound=_cand(LEVEL_BOUND, base_url=QWEN, api_key="profile-key",
                               chat_model="qwen3-max", work_model=None),
                   pool=_cand(LEVEL_POOL, REASON_NO_QUOTA),
-                  default=_cand(LEVEL_DEFAULT, api_key="user-key"))
+                  scenario=(_cand(LEVEL_SCENARIO, api_key="user-key"),))
     assert out.source == LEVEL_BOUND
     assert out.credit_source == "profile"
     assert out.base_url == QWEN
@@ -82,8 +82,8 @@ def test_bound_is_a_whole_package_when_pool_misses():
 def test_default_is_the_last_resort():
     out = resolve(bound=_cand(LEVEL_BOUND, REASON_NO_BIND),
                   pool=_cand(LEVEL_POOL, REASON_NO_QUOTA),
-                  default=_cand(LEVEL_DEFAULT, api_key="user-key"))
-    assert out.source == LEVEL_DEFAULT
+                  scenario=(_cand(LEVEL_SCENARIO, api_key="user-key"),))
+    assert out.source == LEVEL_SCENARIO
     assert out.credit_source == "user_key"
     assert out.chain[0].reason == REASON_NO_QUOTA
 
@@ -92,7 +92,7 @@ def test_no_tier_hit_is_a_failure_not_a_fake_default():
     """三档都空 → ④ 失败；不再拿 settings.deepseek_base_url 假装配好了"""
     out = resolve(bound=_cand(LEVEL_BOUND, REASON_NO_BIND),
                   pool=_cand(LEVEL_POOL, REASON_NO_QUOTA),
-                  default=_cand(LEVEL_DEFAULT, REASON_NO_DEFAULT))
+                  scenario=(_cand(LEVEL_SCENARIO, REASON_NO_DEFAULT),))
     assert out.source == "none"
     assert out.usable is False
     assert out.base_url == ""
@@ -105,7 +105,7 @@ def test_missing_reason_prefers_the_actionable_one():
     """③ 没配默认、① 的 Key 解不出来 → 先说「Key 坏了」，那才是用户能处理的那一步"""
     out = resolve(bound=_cand(LEVEL_BOUND, REASON_BAD_KEY),
                   pool=_cand(LEVEL_POOL, REASON_NO_QUOTA),
-                  default=_cand(LEVEL_DEFAULT, REASON_NO_DEFAULT))
+                  scenario=(_cand(LEVEL_SCENARIO, REASON_NO_DEFAULT),))
     assert out.missing_reason == REASON_BAD_KEY
 
 
@@ -115,7 +115,7 @@ def test_local_endpoint_needs_no_key():
     assert c.reason == REASON_OK
     assert c.api_key is None
     out = resolve(bound=c, pool=_cand(LEVEL_POOL, REASON_NO_QUOTA),
-                  default=_cand(LEVEL_DEFAULT, REASON_NO_DEFAULT))
+                  scenario=(_cand(LEVEL_SCENARIO, REASON_NO_DEFAULT),))
     assert out.usable is True
     assert out.needs_key is False
 
@@ -133,8 +133,8 @@ def test_bad_key_skips_and_records_the_source():
     assert c.reason == REASON_BAD_KEY
     assert c.decrypt_failures
     out = resolve(bound=c, pool=_cand(LEVEL_POOL, REASON_NO_QUOTA),
-                  default=_cand(LEVEL_DEFAULT, api_key="user-key"))
-    assert out.source == LEVEL_DEFAULT
+                  scenario=(_cand(LEVEL_SCENARIO, api_key="user-key"),))
+    assert out.source == LEVEL_SCENARIO
     assert out.decrypt_failures
 
 
@@ -142,8 +142,8 @@ def test_own_key_only_mode_skips_pool():
     """force_own_key（私信「只用自己的」）→ 池那一步记为 own_key_only，不查池"""
     out = resolve(bound=_cand(LEVEL_BOUND, REASON_NO_BIND),
                   pool=_cand(LEVEL_POOL, REASON_OWN_KEY_ONLY),
-                  default=_cand(LEVEL_DEFAULT, api_key="user-key"))
-    assert out.source == LEVEL_DEFAULT
+                  scenario=(_cand(LEVEL_SCENARIO, api_key="user-key"),))
+    assert out.source == LEVEL_SCENARIO
     assert out.chain[0].reason == REASON_OWN_KEY_ONLY
 
 
@@ -151,21 +151,21 @@ def test_prefer_own_config_moves_user_default_before_pool():
     """「优先使用本人配置」= 用户默认档排在池之前；关闭时池优先（按额度）"""
     bound = _cand(LEVEL_BOUND, REASON_NO_BIND)
     pool = _cand(LEVEL_POOL)
-    default = _cand(LEVEL_DEFAULT, api_key="user-key")
+    route = _cand(LEVEL_SCENARIO, api_key="user-key")
 
-    by_credit = resolve(bound=bound, pool=pool, default=default)
+    by_credit = resolve(bound=bound, pool=pool, scenario=(route,))
     assert by_credit.source == LEVEL_POOL, "默认按额度：有池额度先用池"
 
-    own_first = resolve(bound=bound, pool=pool, default=default, prefer_own=True)
-    assert own_first.source == LEVEL_DEFAULT, "开启后本人配置优先"
-    assert [s.level for s in own_first.chain][:2] == [LEVEL_BOUND, LEVEL_DEFAULT]
+    own_first = resolve(bound=bound, pool=pool, scenario=(route,), prefer_own=True)
+    assert own_first.source == LEVEL_SCENARIO, "开启后本人配置优先"
+    assert [s.level for s in own_first.chain][:2] == [LEVEL_BOUND, LEVEL_SCENARIO]
 
 
 def test_prefer_own_config_still_uses_pool_as_fallback():
     """本人配置不可用（没配默认档）时，池仍是兜底"""
     out = resolve(bound=_cand(LEVEL_BOUND, REASON_NO_BIND),
                   pool=_cand(LEVEL_POOL),
-                  default=_cand(LEVEL_DEFAULT, REASON_NO_DEFAULT),
+                  scenario=(_cand(LEVEL_SCENARIO, REASON_NO_DEFAULT),),
                   prefer_own=True)
     assert out.source == LEVEL_POOL
 

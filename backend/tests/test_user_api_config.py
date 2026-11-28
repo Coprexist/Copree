@@ -1,7 +1,7 @@
 """用户 API 配置的两层 CRUD 与删除约束
 
 守的是三条界面承诺：
-- 第一家配置档自动成为默认档（否则新用户没有默认可用）；
+- 新建的档一律不是默认（默认必须人点，后台不许替用户决定；语音尤其如此）；
 - 默认档不许直接删（否则所有没选配置档的 AI 一起换 Key，没人察觉）；
 - 厂商名下还有档时，删它要显式 force。
 """
@@ -30,10 +30,16 @@ def _me():
 
 
 async def test_two_layers_and_default_protection(migrated_db):
+    """两层结构与删除约束
+
+    「默认档不许直接删」随 2026-11-28 的全局默认档取消一起删除：现在「用在哪」由
+    场景序列表达，删一条档只会级联清掉引用它的序列格，不再需要「先选另一条默认」。
+    厂商名下还有档时仍要显式 force——那条约束针对的是「别让人悄悄换了 Key」。
+    """
     from app.database import async_session
     from app.routers.user_api_config import (
         connect_presets, create_profile, delete_profile, delete_provider,
-        list_providers, set_default_profile, update_profile, ConnectIn, ProfileIn,
+        list_providers, update_profile, ConnectIn, ProfileIn,
     )
 
     async with async_session() as db:
@@ -48,28 +54,19 @@ async def test_two_layers_and_default_protection(migrated_db):
         assert provider["base_url"] and provider["has_key"] is False
         assert provider["options"], "模型清单要从预设带过来"
         pid = provider["id"]
+        assert provider["profiles"] == [], "只在设置里接入，不会自动长出配置档"
 
-        # 只在设置里接入，不会自动长出配置档
-        assert provider["profiles"] == []
-
-        # 第一条档自动成为默认
         first = await create_profile(ProfileIn(provider_id=pid, name="家里"), _me(), db)
-        assert first["is_default"] is True
+        assert first["is_default"] is False, "建档不替用户决定默认（该字段已 deprecated）"
+        assert "kind_has_default" not in first, "不再需要「要不要设为默认」的信号"
         second = await create_profile(ProfileIn(provider_id=pid, name="公司"), _me(), db)
         assert second["is_default"] is False
 
-        # 设默认会互斥
-        await set_default_profile(second["id"], _me(), db)
-        listed = await list_providers("llm", _me(), db)
-        flags = {p["name"]: p["is_default"] for p in listed["providers"][0]["profiles"]}
-        assert flags == {"家里": False, "公司": True}
+        # 改名走部分更新
+        await update_profile(first["id"], ProfileIn(name="家里-改名"), _me(), db)
+        names = {p["name"] for p in (await list_providers("llm", _me(), db))["providers"][0]["profiles"]}
+        assert names == {"家里-改名", "公司"}
 
-        # 默认档不能直接删
-        with pytest.raises(HTTPException) as err:
-            await delete_profile(second["id"], _me(), db)
-        assert err.value.status_code == 409
-
-        # 非默认档可以删
         await delete_profile(first["id"], _me(), db)
 
         # 名下还有档时不能删厂商
@@ -77,7 +74,6 @@ async def test_two_layers_and_default_protection(migrated_db):
             await delete_provider(pid, False, _me(), db)
         assert err.value.status_code == 409
 
-        # force 才删
         await delete_provider(pid, True, _me(), db)
         assert (await list_providers("llm", _me(), db))["providers"] == []
 
@@ -196,22 +192,25 @@ async def test_preset_fields_are_filled_once_and_restorable(migrated_db):
         assert local["base_url"] == get_preset("llama.cpp")["base_url"]
 
 
-async def test_voice_preset_primary_is_its_default_voice(migrated_db):
-    """语音预设的主"模型"是默认音色：LLM 用 chat_model、语音用 voice_id，同一个位置"""
+async def test_voice_preset_fills_nothing_private(migrated_db):
+    """语音预设只带地址与 Key 入口：音色 id 是账号资源，接入时一律不代填
+
+    2026-11-28：预设曾写死我们自己账号下的两条声线当默认音色，别人用自己的 Key
+    接进来第一次合成就 4xx，界面上还把我们私有的 id 当"默认模型"显示出来。
+    """
     from app.database import async_session
     from app.routers.user_api_config import connect_presets, list_providers, ConnectIn
-    from app.utils.pure.provider_presets import get_preset
 
-    preset = get_preset("breeze")
     async with async_session() as db:
         await _seed(db)
         await connect_presets(ConnectIn(kind="voice", preset_keys=["breeze"]), _me(), db)
         provider = (await list_providers("voice", _me(), db))["providers"][0]
 
         assert provider["kind"] == "voice"
-        assert provider["default_primary"] == preset["voice_id"]
+        assert provider["base_url"] == "https://api.breeze.blue/v1"
+        assert provider["default_primary"] is None, "预设不代填音色（只在创建它的账号下有效）"
         assert provider["default_secondary"] is None, "语音没有副模型"
-        assert [o["value"] for o in provider["options"]] == [v["value"] for v in preset["voices"]]
+        assert not provider["options"], "预设不带私有音色清单"
 
 
 async def test_connect_rejects_preset_of_another_kind(migrated_db):
@@ -273,3 +272,160 @@ async def test_probe_uses_only_this_provider_key(migrated_db, monkeypatch):
         await db.commit()
         await test_api_connection(body, me, db)
         assert captured["key"] == "sk-ollama"
+
+
+async def test_scenarios_are_on_by_default_and_toggle(migrated_db):
+    """场景总开关：没有记录就是开；关掉才留一行，开回来删行
+
+    「默认全勾」是产品要求（2026-11-28）：用户不必先开启才能用默认配置。
+    """
+    from app.database import async_session
+    from app.routers.user_api_config_scenarios import list_scenarios, set_scenario, ScenarioIn
+    from app.utils.pure.api_scenarios import SCENARIO_KEYS
+
+    async with async_session() as db:
+        await _seed(db)
+
+        listed = await list_scenarios(_me(), db)
+        assert [s["key"] for s in listed["scenarios"]] == list(SCENARIO_KEYS)
+        assert all(s["enabled"] for s in listed["scenarios"]), "第一次进来必须全开（没有记录 = 开）"
+        assert all(s["routes"] == [] for s in listed["scenarios"]), "全新用户没有序列"
+
+        await set_scenario("agent_llm", ScenarioIn(enabled=False), _me(), db)
+        flags = {s["key"]: s["enabled"] for s in (await list_scenarios(_me(), db))["scenarios"]}
+        assert flags["agent_llm"] is False
+        assert flags["world_ai"] is True, "关一个不影响别的"
+
+        await set_scenario("agent_llm", ScenarioIn(enabled=True), _me(), db)
+        rows = (await db.execute(text(
+            "SELECT count(*) FROM user_api_scenario_off WHERE user_id = :o"
+        ), {"o": OWNER})).scalar()
+        assert rows == 0, "开回来要删行：没有记录 = 开"
+
+        with pytest.raises(HTTPException) as exc:
+            await set_scenario("no_such_scene", ScenarioIn(enabled=False), _me(), db)
+        assert exc.value.status_code == 404, "未知场景要报错，不能静默写进去"
+
+
+async def test_scenario_routes_are_ordered_and_toggleable(migrated_db):
+    """序列：追加、整体保存（顺序 + 子开关）、移除、当前优先格
+
+    界面上的「当前优先使用」是序列里第一条启用的格，不是真实请求结果——
+    真实结果由 AI 详情的 stepper 回答（同一份 Resolution）。
+    """
+    from app.database import async_session
+    from app.routers.user_api_config import (
+        ConnectIn, ProfileIn, connect_presets, create_profile, list_providers,
+    )
+    from app.routers.user_api_config_scenarios import (
+        add_route, list_scenarios, remove_route, save_routes, RouteIn, RoutesIn,
+    )
+
+    async with async_session() as db:
+        await _seed(db)
+        await connect_presets(ConnectIn(kind="llm", preset_keys=["deepseek"]), _me(), db)
+        pid = (await list_providers("llm", _me(), db))["providers"][0]["id"]
+        a = await create_profile(ProfileIn(provider_id=pid, name="家里"), _me(), db)
+        b = await create_profile(ProfileIn(provider_id=pid, name="公司"), _me(), db)
+
+        await add_route("agent_llm", RouteIn(profile_id=a["id"]), _me(), db)
+        await add_route("agent_llm", RouteIn(profile_id=b["id"]), _me(), db)
+        rows = {s["key"]: s for s in (await list_scenarios(_me(), db))["scenarios"]}["agent_llm"]
+        assert [r["profile_id"] for r in rows["routes"]] == [a["id"], b["id"]]
+        assert [r["position"] for r in rows["routes"]] == [1, 2]
+        assert rows["first_enabled_profile_id"] == a["id"]
+
+        # 整体保存：倒序，并且关掉第二格
+        await save_routes("agent_llm", RoutesIn(routes=[
+            RouteIn(profile_id=b["id"], enabled=False),
+            RouteIn(profile_id=a["id"]),
+        ]), _me(), db)
+        rows = {s["key"]: s for s in (await list_scenarios(_me(), db))["scenarios"]}["agent_llm"]
+        assert [r["profile_id"] for r in rows["routes"]] == [b["id"], a["id"]]
+        assert rows["routes"][0]["enabled"] is False, "子开关关掉要保留在序列里"
+        assert rows["first_enabled_profile_id"] == a["id"], "关掉的格不算当前优先"
+
+        await remove_route("agent_llm", b["id"], _me(), db)
+        rows = {s["key"]: s for s in (await list_scenarios(_me(), db))["scenarios"]}["agent_llm"]
+        assert [r["profile_id"] for r in rows["routes"]] == [a["id"]]
+
+        # 序列只能挂自己的配置档：别人的档 id 一律 404，不允许跨账号
+        with pytest.raises(HTTPException) as err:
+            await add_route("agent_llm", RouteIn(profile_id=999999), _me(), db)
+        assert err.value.status_code == 404
+
+
+async def test_failed_route_sets_unread_until_read(migrated_db):
+    """失败状态：红点未读、同格不重复发消息、成功不清未读、阅读才清"""
+    from app.database import async_session
+    from app.routers.user_api_config import (
+        ConnectIn, ProfileIn, connect_presets, create_profile, list_providers,
+    )
+    from app.routers.user_api_config_scenarios import add_route, list_scenarios, RouteIn
+    from app.services.agent.api_scenario_service import ack_status, record_attempt
+
+    async with async_session() as db:
+        await _seed(db)
+        await connect_presets(ConnectIn(kind="llm", preset_keys=["deepseek"]), _me(), db)
+        pid = (await list_providers("llm", _me(), db))["providers"][0]["id"]
+        a = await create_profile(ProfileIn(provider_id=pid, name="家里"), _me(), db)
+        await add_route("agent_llm", RouteIn(profile_id=a["id"]), _me(), db)
+
+        assert await record_attempt(db, OWNER, "agent_llm", a["id"], ok=False, reason="no_key") is True
+        assert await record_attempt(db, OWNER, "agent_llm", a["id"], ok=False, reason="no_key") is False, \
+            "同一格连续失败只发一次消息"
+
+        rows = {s["key"]: s for s in (await list_scenarios(_me(), db))["scenarios"]}["agent_llm"]
+        assert rows["routes"][0]["status"]["unread"] is True
+        assert rows["routes"][0]["status"]["reason"] == "no_key"
+
+        # 成功一次：state 转 ok，但未读不自动清（红点只由阅读消除）
+        await record_attempt(db, OWNER, "agent_llm", a["id"], ok=True)
+        rows = {s["key"]: s for s in (await list_scenarios(_me(), db))["scenarios"]}["agent_llm"]
+        assert rows["routes"][0]["status"]["state"] == "ok"
+        assert rows["routes"][0]["status"]["unread"] is True
+
+        await ack_status(db, OWNER, "agent_llm", a["id"])
+        rows = {s["key"]: s for s in (await list_scenarios(_me(), db))["scenarios"]}["agent_llm"]
+        assert rows["routes"][0]["status"]["unread"] is False
+
+
+async def test_scenario_off_skips_the_whole_tier(migrated_db):
+    """总开关关掉 → 第 ③ 格整档跳过，原因 scenario_off；探测调用不受影响"""
+    from app.database import async_session
+    from app.routers.user_api_config import (
+        ConnectIn, ProfileIn, connect_presets, create_profile, list_providers,
+    )
+    from app.routers.user_api_config_scenarios import add_route, set_scenario, RouteIn, ScenarioIn
+    from app.services.agent.api_config_resolver import (
+        LEVEL_SCENARIO, REASON_NO_ROUTE, REASON_SCENARIO_OFF, resolve_user_llm,
+    )
+
+    async with async_session() as db:
+        await _seed(db)
+        await connect_presets(ConnectIn(kind="llm", preset_keys=["deepseek"]), _me(), db)
+        pid = (await list_providers("llm", _me(), db))["providers"][0]["id"]
+        profile = await create_profile(
+            ProfileIn(provider_id=pid, name="家里", api_key="sk-test"), _me(), db,
+        )
+        await add_route("agent_llm", RouteIn(profile_id=profile["id"]), _me(), db)
+
+        hit = await resolve_user_llm(db, OWNER, scenario="agent_llm")
+        assert hit.source == LEVEL_SCENARIO, "场景开着且有可用格时该命中"
+
+        await set_scenario("agent_llm", ScenarioIn(enabled=False), _me(), db)
+        blocked = await resolve_user_llm(db, OWNER, scenario="agent_llm")
+        assert blocked.source == "none"
+        step = [s for s in blocked.chain if s.level == LEVEL_SCENARIO][0]
+        assert step.reason == REASON_SCENARIO_OFF
+
+        # 别的场景没配序列：给出 no_route，而不是偷偷借 agent_llm 的
+        other = await resolve_user_llm(db, OWNER, scenario="world_ai")
+        step = [s for s in other.chain if s.level == LEVEL_SCENARIO][0]
+        assert step.reason == REASON_NO_ROUTE
+        assert other.source == "none"
+
+        # 探测类调用不传 scenario：链上没有第 ③ 格
+        probe = await resolve_user_llm(db, OWNER)
+        assert probe.source == "none"
+        assert not [s for s in probe.chain if s.level == LEVEL_SCENARIO]

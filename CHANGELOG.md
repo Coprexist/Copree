@@ -244,6 +244,15 @@
 
 - 前端加**硬编码文案闸**（`check-i18n-hardcoded.mjs`，随 `npm run i18n:check` 进 CI）：前三道闸都以「文案已走 `t()`」为前提，看不见「可见文案压根没走 i18n」。新闸用 TypeScript AST 只审确定的文案位置（JSX 文本 + `title` / `placeholder` / `aria-label` 等），`className` / `href` / `data-*` 不审；语言无关文本（`UTF-8` / `worlds/` / `yyyy-MM-dd`）按 `scripts/lib/i18n-hardcoded-policy.mjs` 自动放行。存量 59 文件 / 516 处记入 `frontend/i18n-hardcoded-baseline.json`，只减不增；有意不翻的写 `// i18n-exempt: 理由`，理由必填、过期豁免会报错
 
+- 设置页「API 配置」新增「默认配置」独立页签：上半部分选默认档（选/换/取消），下半部分逐项列出「哪些场景允许用默认配置兜底」（AI 对话、群世界调度、智能整理、创建助手、语音）。场景清单与开关判定都在后端（`utils/pure/api_scenarios.py` + `user_api_scenario_off` 表），前端不写死；没有记录即开启，所以默认全勾，用户关掉才留一行。
+  - `GET /user/api-config/scenarios` / `PUT /user/api-config/scenarios/{key}`：场景清单与开关，行内直接带该种类当前默认档（与 `/defaults` 共用同一份取数，不在两处各查一遍）。
+  - `resolve_llm` / `resolve_user_llm` / `resolve_voice_config` 增加 `scenario` 参数：只门控 ③ 用户默认档，关掉的场景整档跳过并给出 `scenario_off` 原因；探测、自检类调用不传即不受影响。语音默认档同时接进解析链——这条语音既没绑档也没填地址时才用默认档兜底。
+
+- 默认配置改为「场景 = 一条有序的配置路由」：每个场景（AI 对话 / 群世界调度 / 智能整理 / 创建助手 / 语音）可挂多条配置、按序尝试，每格有子开关，场景有总开关；失败格标红点、读过才清。全局默认档（`user_api_profiles.is_default`）取消，迁移 0137 把原默认档复制进每个对应场景的第一格。
+  - `user_api_scenario_routes` / `user_api_scenario_status` 两张新表；设置页「API 配置 → 默认配置」重做为场景卡片（当前优先、排序、添加/移除、子开关、红点）。
+  - 场景接口拆到 `routers/user_api_config_scenarios.py`（清单、总开关、整体保存序列、红点已读），数据规则在 `services/agent/api_scenario_service.py`；解析链纯判断拆到 `resolver_core.py`，取数壳保留原入口。
+  - 「优先使用本人配置」两级都要：用户级（`users.prefer_own_key`，恢复写入）+ AI 级（`agents.prefer_own_config`，三态：跟随账号 / 开 / 关），AI 级覆盖用户级；AI 详情 → API 页签内显示在「实际使用」上方。
+
 ### 🐛 修复
 
 - **滚动条不再并排出现两条**：iOS / iPadOS 的滚动指示器是系统 overlay，`scrollbar-width`

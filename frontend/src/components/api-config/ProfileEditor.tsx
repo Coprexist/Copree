@@ -56,6 +56,7 @@ export default function ProfileEditor({
   const [form, setForm] = useState<ProfileDraft>(draft || EMPTY_DRAFT)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  // 新建成功、而这个种类还没有默认档时，问一次要不要设成默认（后台不再替用户决定）
 
   // 打开时定位到要编辑的那一条；draft 存在说明是"去接入厂商"回来接着填的
   useEffect(() => {
@@ -112,8 +113,15 @@ export default function ProfileEditor({
     }
     if (form.keyTouched) body.api_key = form.apiKey
     try {
-      if (form.id) await api.put('/user/api-config/profiles/' + form.id, body)
-      else await api.post('/user/api-config/profiles', body)
+      if (form.id) {
+        await api.put('/user/api-config/profiles/' + form.id, body)
+        onSaved()
+        onClose()
+        return
+      }
+      // 建档只建档：全局默认档已于 2026-11-28 取消，「在哪用」由设置页的场景序列决定，
+      // 所以这里不再问「要不要设为默认」——问了也没有那个概念了。
+      await api.post('/user/api-config/profiles', body)
       onSaved()
       onClose()
     } catch (e) {
@@ -124,6 +132,7 @@ export default function ProfileEditor({
   }
 
   return (
+    <>
     <Modal
       open={open}
       onClose={onClose}
@@ -178,16 +187,30 @@ export default function ProfileEditor({
         />
 
         <div className="grid gap-3 sm:grid-cols-2">
-          <Select
-            label={isVoice ? t('apiConfig:profileVoice') : t('apiConfig:profilePrimary')}
-            fieldSize="sm"
-            placeholder={provider?.default_primary
-              ? t('apiConfig:profilePrimaryHint', { model: provider.default_primary })
-              : undefined}
-            options={modelOptions.map((o) => ({ value: o.value, label: o.label || o.value }))}
-            value={form.primary}
-            onChange={(e) => update({ primary: e.target.value })}
-          />
+          {isVoice ? (
+            /* 音色不是清单里挑的商品：id 属于用户自己的账号（Breeze 形如 voc_xxxx、MiniMax 如 male-qn-qingse），
+               预设里没有也不该有别人的。用原生下拉会把"清单外但合法"的 id 吞成 empty，所以这里必须能手填。 */
+            <Input
+              label={t('apiConfig:profileVoice')}
+              fieldSize="sm"
+              className="font-mono"
+              value={form.primary}
+              onChange={(e) => update({ primary: e.target.value })}
+              placeholder={t('apiConfig:profileVoicePlaceholder')}
+              hint={t('apiConfig:profileVoiceHint')}
+            />
+          ) : (
+            <Select
+              label={t('apiConfig:profilePrimary')}
+              fieldSize="sm"
+              placeholder={provider?.default_primary
+                ? t('apiConfig:profilePrimaryHint', { model: provider.default_primary })
+                : undefined}
+              options={modelOptions.map((o) => ({ value: o.value, label: o.label || o.value }))}
+              value={form.primary}
+              onChange={(e) => update({ primary: e.target.value })}
+            />
+          )}
           {!isVoice && (
             <Select
               label={t('apiConfig:profileSecondary')}
@@ -203,5 +226,7 @@ export default function ProfileEditor({
         </div>
       </div>
     </Modal>
+
+    </>
   )
 }

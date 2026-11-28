@@ -107,6 +107,13 @@ class Agent(Base):
         Integer, ForeignKey("user_api_profiles.id", ondelete="SET NULL"), nullable=True,
         comment="这个 AI 用哪条配置档；NULL = 不用配置档（看 api_base_url/全局）",
     )
+    # 优先使用本 AI 的配置（三态）：True = 先用自己的再走池；False = 池优先；
+    # NULL = 跟随用户设置（users.prefer_own_key）。AI 级能覆盖，是因为同一个账号下
+    # 「聊天 AI」和「整理用的 AI」对额度与自有 Key 的取舍可以不同。
+    prefer_own_config = Column(
+        Boolean, nullable=True,
+        comment="优先使用本 AI 绑定的配置；NULL = 跟随用户设置",
+    )
     api_base_url = Column(Text)
     api_key_encrypted = Column(Text)
 

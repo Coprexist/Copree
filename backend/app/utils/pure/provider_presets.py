@@ -517,12 +517,11 @@ PRESETS: dict[str, ProviderPreset] = {
         "kind": "voice",
         "base_url": "https://api.breeze.blue/v1",
         "api_key_url": "https://api.breeze.blue",
-        # 大肥鱼的两套声线（用户自己录/调的），默认迷糊版
-        "voice_id": "voc_8yud7hz7c9q2",
-        "voices": [
-            {"value": "voc_8yud7hz7c9q2", "label": "迷糊版（dreamy）"},
-            {"value": "voc_u3nxkd5578wc", "label": "机灵版（clever）"},
-        ],
+        # 音色 id 是账号资源：Breeze 的音色在平台上建/克隆出来才存在，只对创建它的那把 Key 有效。
+        # 预设里代填任何一个具体 id，别人用自己的 Key 接进来第一次合成就是上游 4xx，还看不到原因；
+        # 所以这里只给地址与 Key 入口，音色由用户填自己账号下的（Breeze 形如 voc_xxxx，MiniMax 如 male-qn-qingse）。
+        "voice_id": "",
+        "voices": [],
         # Breeze 吃自由语气描述（请求体的 instructions），AI 想怎么说就怎么写
         "style_hint": True,
     },

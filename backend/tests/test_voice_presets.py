@@ -21,14 +21,25 @@ def test_voice_presets_are_a_separate_group():
         assert p["voices"] == [], "LLM 预设不该有音色"
 
 
-def test_breeze_ships_a_default_voice_and_accepts_style_hint():
+def test_voice_presets_never_ship_a_specific_voice_id():
+    """预设不许代填音色：音色 id 是账号资源，只对创建它的那把 Key 有效
+
+    2026-11-28：breeze 预设曾写死我们自己账号下的两条声线（voc_…）当默认音色，
+    新建语音配置时不填就落库成它——别人用自己的 Key 接进来，第一次合成就上游 4xx，
+    而且界面上还把我们私有的 id 当"默认模型"显示出来。
+    """
+    from app.utils.pure.provider_presets import get_voice_presets
+
+    for p in get_voice_presets():
+        assert p["voice_id"] == "", f"{p['key']} 预设不该代填音色 id（属于各账号，不通用）"
+        assert p["voices"] == [], f"{p['key']} 预设不该内置私有音色清单"
+
+
+def test_breeze_accepts_style_hint():
     from app.utils.pure.provider_presets import get_voice_presets
 
     breeze = next(p for p in get_voice_presets() if p["key"] == "breeze")
-    assert breeze["voice_id"].startswith("voc_"), "默认音色是大肥鱼那两套之一"
-    assert [v["value"] for v in breeze["voices"]] and breeze["style_hint"] is True, (
-        "Breeze 吃自由语气描述（instructions），AI 自己写怎么念"
-    )
+    assert breeze["style_hint"] is True, "Breeze 吃自由语气描述（instructions），AI 自己写怎么念"
 
 
 def test_minimax_has_one_preset_per_region():

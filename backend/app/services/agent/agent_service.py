@@ -737,6 +737,15 @@ async def _bind_profile(
     if voice_cfg is not None:
         voice_cfg.voice_profile_id = profile.id
         _invalidate_voice_probe(voice_cfg)
+        await db.flush()
+        # 绑完立刻测一次：这条路径以前只作废结论、不重测，用户绑完还得回语音面板
+        # 点一次保存才能发（D老师 agent 70 就卡在这里，probe 从未跑过）。
+        # 失败不影响绑定本身——结论留空，下次保存/测试时会再试。
+        from app.services.agent.voice_config import probe_now
+        try:
+            await probe_now(db, voice_cfg)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("绑定语音配置后自动探测失败（不影响绑定）: %s", e)
     else:
         agent.llm_profile_id = profile.id
 
@@ -863,6 +872,11 @@ async def update_agent_config(
     # 头像 URL
     if "avatar_url" in updates:
         agent.avatar_url = updates.get("avatar_url")
+
+    # 优先使用本 AI 的配置（三态）：None = 跟随用户设置，所以不能用 `is not None` 判断，
+    # 必须看这个 key 有没有被显式提交——否则「改成跟随」这个动作永远存不下来。
+    if "prefer_own_config" in updates:
+        agent.prefer_own_config = updates["prefer_own_config"]
 
     # 选哪一条配置档（整包）。LLM 与语音是同一件事，只是写回的位置和种类不同
     for kind, field in (("llm", "llm_profile_id"), ("voice", "voice_profile_id")):
@@ -1725,6 +1739,8 @@ def agent_to_dict(agent: Agent) -> dict:
         "api_base_url": None,
         "has_api_key": bool(getattr(agent, "llm_profile_id", None)),
         "llm_profile_id": getattr(agent, "llm_profile_id", None),
+        # 三态：None = 跟随用户设置，前端据此显示「跟随全局 / 开 / 关」
+        "prefer_own_config": getattr(agent, "prefer_own_config", None),
         "avatar_url": agent.avatar_url,
         "api_token": agent.api_token,
         "created_at": str(agent.created_at) if agent.created_at else None,

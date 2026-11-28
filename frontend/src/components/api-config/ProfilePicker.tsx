@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, errorText } from '../../api/client'
 import { useT } from '../../i18n/I18nContext'
+import { Button } from '../ui'
 import ProviderCards from './ProviderCards'
 import RuntimeChain from './RuntimeChain'
 import { useApiDialogs } from './useApiDialogs'
@@ -27,6 +28,8 @@ export default function ProfilePicker({
   const t = useT()
   const voice = kind === 'voice'
   const [selected, setSelected] = useState<number | null>(null)
+  // 三态：null = 跟随账号级设置；true = 本 AI 优先用自己的配置；false = 池优先
+  const [preferOwn, setPreferOwn] = useState<boolean | null>(null)
   // 「生效中」那条 = Resolution 实际命中的配置；和 stepper 共用一份结论，不另请求
   const [liveProfileId, setLiveProfileId] = useState<number | null>(null)
   const [error, setError] = useState('')
@@ -41,8 +44,13 @@ export default function ProfilePicker({
         .catch(() => { /* 还没配过语音 / 断网：按未选展示 */ })
       return
     }
-    api.get<{ llm_profile_id?: number | null }>('/agents/' + agentId)
-      .then((agent) => setSelected(agent.llm_profile_id ?? null))
+    api.get<{ llm_profile_id?: number | null; prefer_own_config?: boolean | null }>(
+      '/agents/' + agentId,
+    )
+      .then((agent) => {
+        setSelected(agent.llm_profile_id ?? null)
+        setPreferOwn(agent.prefer_own_config ?? null)
+      })
       .catch(() => { /* 未登录/断网：按默认档显示 */ })
   }, [agentId, voice])
 
@@ -70,11 +78,48 @@ export default function ProfilePicker({
     }
   }
 
+  /** 三态写入：null 也要显式提交，否则「改回跟随」这个动作存不下来 */
+  const setPrefer = async (value: boolean | null) => {
+    setError('')
+    try {
+      await api.put('/agents/' + agentId + '/config', { prefer_own_config: value })
+      setPreferOwn(value)
+      onChanged?.()
+    } catch (e) {
+      setError(errorText(e, t('apiConfig:loadFailed')))
+    }
+  }
+
   return (
     <div className="space-y-3">
       {node}
       {error && <p className="text-xs text-rose-400">{error}</p>}
       <p className="text-3xs text-textMuted">{voice ? t('apiConfig:voicePickerHint') : t('apiConfig:pickerHint')}</p>
+
+      {/* AI 级开关：决定这个 AI 的链序（自己优先还是池优先），所以放在「实际使用」上方 */}
+      {!voice && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs text-textSecondary">{t('apiConfig:preferOwnConfig')}</span>
+          <div className="flex items-center gap-1">
+            {([
+              { value: null, label: t('apiConfig:preferOwnInherit') },
+              { value: true, label: t('apiConfig:preferOwnOn') },
+              { value: false, label: t('apiConfig:preferOwnOff') },
+            ] as const).map((opt) => (
+              <Button
+                key={String(opt.value)}
+                variant="ghost"
+                size="sm"
+                className={preferOwn === opt.value ? 'is-active' : ''}
+                onClick={() => void setPrefer(opt.value)}
+              >
+                {opt.label}
+              </Button>
+            ))}
+          </div>
+          <span className="text-3xs text-textMuted w-full">{t('apiConfig:preferOwnHint')}</span>
+        </div>
+      )}
 
       {/* 实际使用：现在真的走哪条、前面为什么跳过（语音不走三档解析，不显示） */}
       {!voice && (

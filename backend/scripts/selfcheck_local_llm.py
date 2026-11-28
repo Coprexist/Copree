@@ -51,15 +51,15 @@ async def step1_layout():
 
 
 async def step2_provider_helper():
-    from types import SimpleNamespace
+    # 判定入口是 pure 层的 resolve_system_layout（吃 dict，不吃 ORM 行）：
+    # 脚本以前 import 的 provider_system_layout 在解析器里从来没有过，这一段一直是坏的。
+    from app.utils.pure.provider_config import resolve_system_layout
 
-    from app.services.agent.api_config_resolver import provider_system_layout
-
-    saved = SimpleNamespace(system_layout="leading", system_layout_source="detected")
-    unsaved = SimpleNamespace(system_layout=None, system_layout_source=None)
-    print(f"[2] 保存过的行 → {provider_system_layout(saved, BASE)}；"
-          f"未判定的行 → {provider_system_layout(unsaved, BASE)}")
-    assert provider_system_layout(saved, BASE) == "leading"
+    saved = {"system_layout": "leading", "system_layout_source": "detected"}
+    unsaved: dict = {}
+    print(f"[2] 保存过的行 → {resolve_system_layout(saved, None, BASE)}；"
+          f"未判定的行 → {resolve_system_layout(unsaved, None, BASE)}")
+    assert resolve_system_layout(saved, None, BASE) == "leading"
 
 
 async def _chat(messages: list, *, label: str) -> tuple[int, str, str]:
